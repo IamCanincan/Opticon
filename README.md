@@ -49,16 +49,33 @@
 
 ## 界面
 
-应用有桌面图标，打开是底部导航的**三个**页面 —— 按**内容归属**分，不按「东西多不多」：
+应用有桌面图标，打开是**四页**，底部一个**悬浮药丸**导航 —— 页面按**内容归属**分，
+不按「东西多不多」：
 
-- **图标** —— 裁圆总开关，以及只跟裁圆有关的注意事项。
-- **通知** —— 通知总开关、图标模式（系统黑白 / 彩色桌面图标）、怎么确认生效。
-- **模块** —— 两个功能**共用**的东西：作用域清单、启用步骤、验证命令、
-  运维按钮（清图标缓存 / 重启进程）、检查更新与关于。
+| 页面 | 内容 |
+|---|---|
+| **图标** | 裁圆总开关、效果示意、只跟裁圆有关的注意事项 |
+| **通知** | 通知总开关、图标模式（系统黑白 / 彩色桌面图标）、怎么确认生效 |
+| **模块** | 两个功能**共用**的东西：作用域清单、启用步骤、验证命令、运维按钮（清图标缓存 / 重启进程） |
+| **关于** | 检查更新与版本信息 |
+
+- **左右滑动也能切页**，和点底栏是双向联动的（当前页由 Pager 统一持有）。
+- 底栏是**悬浮药丸**：内容会从它后面滚过去，选中项展开文字、未选中只留图标。
+  四格是刻意定的 —— 三格时药丸太短，撑不起悬浮药丸该有的形态。
+- **各页不再自带品牌头**：顶栏已经有 App 名，每页再来一遍标记 + 版本是重复。
+  页面直接从内容开始，当前在哪一页由底栏高亮表示。
+- 作用域清单用**分段按钮**（必选 + 推荐 / 全部）左右切换，而不是一个文案会变的
+  "展开 / 收起"按钮 —— 这两档是并列的，分段控件更直白。
+- 动效一律取自 `MaterialTheme.motionScheme`（MD3 Expressive 的弹簧参数），
+  没有硬编码时长的 `tween`：Tab 选中胶囊的展开、颜色过渡、列表展开都跟着主题走。
 
 作用域清单放在「模块」页而不是某个功能页，是因为它本来就有两半：
 launcher / settings / system_server 那几条是给裁圆用的，而 `com.android.systemui`
 同时服务两个功能（它既画通知，也画状态栏和最近任务的图标）。
+
+> 界面全部走 Material 3 Expressive：圆角一律用 `MaterialTheme.shapes.*` 的语义档位、
+> 内容卡一律 `ElevatedCard`、配色只用 `colorScheme` 的语义角色（不写死颜色），
+> 所以浅色 / 深色两套主题都成立。
 
 设置写进自己的 SharedPreferences，模块侧通过本应用暴露的**只读 ContentProvider**
 （`com.iamcanincan.opticon.config`，读取需要签名级权限 `android.permission.STATUS_BAR`）
@@ -313,11 +330,13 @@ com.iamcanincan.opticon
 │   └── OpticonLog             统一的日志 tag
 ├── ui/
 │   ├── MainActivity           入口 Activity（同时是桌面图标）
-│   ├── OpticonApp             外壳：顶栏 + 底部导航 + 三个页面
-│   ├── Common                 两个页面共用的小组件（Section / SectionLabel）
+│   ├── OpticonApp             外壳：顶栏 + 悬浮药丸导航 + Pager（左右滑动切页）
+│   ├── Common                 各页共用：ScreenHero / Section / SectionLabel /
+│   │                          VersionChip / IconTile / FloatingNavSpace
 │   ├── icon/IconScreen        「图标」页（裁圆）
 │   ├── notify/NotifyScreen    「通知」页（通知小图标）
-│   ├── module/ModuleScreen    「模块」页（作用域 / 步骤 / 验证 / 运维 / 更新 / 关于）
+│   ├── module/ModuleScreen    「模块」页（作用域 / 步骤 / 验证 / 运维）
+│   ├── about/AboutScreen      「关于」页（检查更新 / 版本信息）
 │   └── theme/Theme            M3E 主题（动态取色）
 └── update/UpdateChecker       检查更新（唯一的联网点）
 ```

@@ -35,13 +35,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.R
+import com.iamcanincan.opticon.ui.FloatingNavSpace
 import com.iamcanincan.opticon.ui.Section
 import com.iamcanincan.opticon.ui.SectionLabel
-import com.iamcanincan.opticon.ui.VersionChip
 import com.iamcanincan.opticon.runtime.ModulePrefs
 
 /**
@@ -58,57 +57,20 @@ import com.iamcanincan.opticon.runtime.ModulePrefs
 fun IconScreen() {
   LazyColumn(
     modifier = Modifier.fillMaxSize(),
-    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
+    contentPadding = PaddingValues(
+      start = 16.dp,
+      end = 16.dp,
+      top = 4.dp,
+      // 末尾让出悬浮药丸那一段，否则滚到底时最后一张卡会被它压住
+      bottom = 24.dp + FloatingNavSpace,
+    ),
     // 组与组之间 20dp；小标题与它自己的卡片之间只有 10dp（见 [Section]），
     // 这样「标题领着哪张卡」一眼能看出来。
     verticalArrangement = Arrangement.spacedBy(20.dp),
   ) {
-    item { HeroHeader() }
     item { MasterSwitchCard() }
     item { Section(text = stringResource(R.string.section_effect)) { EffectCard() } }
     item { Section(text = stringResource(R.string.section_notes)) { NotesCard() } }
-  }
-}
-
-
-/**
- * 首屏色块：只放「品牌标记方块 + 一句话说明 + 版本 chip」。
- * App 名已经常驻在顶栏里，这里再写一遍纯属重复，所以让位给副标题。
- */
-@Composable
-private fun HeroHeader() {
-  Surface(
-    shape = MaterialTheme.shapes.large,
-    color = MaterialTheme.colorScheme.primaryContainer,
-    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-  ) {
-    Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-      // 在 primaryContainer 背景上，品牌标记方块用 onPrimaryContainer 反色，更突出。
-      Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.12f),
-        modifier = Modifier.size(44.dp),
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(
-            painter = painterResource(R.drawable.ic_brand_mark),
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onPrimaryContainer,
-            modifier = Modifier.size(28.dp),
-          )
-        }
-      }
-      Spacer(modifier = Modifier.width(14.dp))
-      Column(modifier = Modifier.weight(1f)) {
-        Text(
-          text = stringResource(R.string.hero_subtitle),
-          style = MaterialTheme.typography.bodyMedium,
-          color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f),
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        VersionChip()
-      }
-    }
   }
 }
 
@@ -137,7 +99,7 @@ private fun MasterSwitchCard() {
   ) {
     Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
       Surface(
-        shape = RoundedCornerShape(12.dp),
+        shape = MaterialTheme.shapes.small,
         color = MaterialTheme.colorScheme.onPrimaryContainer,
         modifier = Modifier.size(40.dp),
       ) {
@@ -195,7 +157,9 @@ private fun EffectCard() {
       modifier = Modifier.fillMaxWidth().padding(16.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      // 处理前：圆角方 —— 代表「ROM 决定的那个形状」
+      // 处理前：圆角方 —— 代表「ROM 决定的那个形状」。
+      // ⚠ 这里的圆角是**画出来的图形**、不是卡片圆角档位，所以刻意写死：
+      //   它要看起来像"某个 ROM 给的图标形状"，跟着主题 shapes 走反而失去这个意思。
       Box(
         modifier = Modifier
           .size(44.dp)

@@ -21,6 +21,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -43,7 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.runtime.ModulePrefs
-import com.iamcanincan.opticon.ui.VersionChip
+import com.iamcanincan.opticon.ui.FloatingNavSpace
 
 /**
  * 设置界面。
@@ -71,10 +73,10 @@ fun NotifyScreen() {
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp)
-            .padding(top = 12.dp, bottom = 36.dp),
+            // 末尾让出悬浮药丸那一段，否则滚到底时最后一张卡会被它压住
+            .padding(top = 12.dp, bottom = 36.dp + FloatingNavSpace),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        NotifyHero()
         StatusStrip(enabled = enabled, mode = mode)
 
         SectionLabel(stringResource(R.string.notify_section_mode))
@@ -102,12 +104,9 @@ fun NotifyScreen() {
         )
 
         SectionLabel(stringResource(R.string.notify_section_behavior))
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-        ) {
+        // 内容卡一律 ElevatedCard —— 与「图标」「模块」两页同一种卡片语言。
+        // 之前这里是「白底 + 细边框」的 Surface，三页摆在一起像是两个不同的应用。
+        ElevatedCard(shape = MaterialTheme.shapes.large) {
             SwitchRow(
                 icon = R.drawable.ic_power,
                 title = stringResource(R.string.notify_switch_title),
@@ -126,58 +125,6 @@ fun NotifyScreen() {
 }
 
 /**
- * 首屏色块：品牌标记方块 + 一句话说明。
- * App 名已经常驻在顶栏里，这里再写一遍纯属重复，所以让位给副标题
- * （与「图标」页的 HeroHeader 同一个结构）。
- *
- * ⚠ 别改回直接用 ic_launcher_foreground：那份字形硬编码 #031019，
- *   深色模式下画在深底上等于隐形；而且它带 group scale 1.2 是按「占图标 36%」
- *   算的，放进界面的小方框会小得看不清。界面一律用 ic_brand_mark。
- */
-@Composable
-private fun NotifyHero() {
-    val scheme = MaterialTheme.colorScheme
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.large,
-        color = scheme.primaryContainer,
-        contentColor = scheme.onPrimaryContainer
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = scheme.onPrimaryContainer.copy(alpha = 0.12f),
-                modifier = Modifier.size(44.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_brand_mark),
-                        contentDescription = null,
-                        tint = scheme.onPrimaryContainer,
-                        modifier = Modifier.size(28.dp)
-                    )
-                }
-            }
-            Spacer(Modifier.width(14.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.notify_hero_subtitle),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = scheme.onPrimaryContainer.copy(alpha = 0.85f)
-                )
-                Spacer(Modifier.height(8.dp))
-                // 与「图标」页的 Hero 保持同一规格（标记方块 + 一行副标题 + 版本 chip），
-                // 否则切 Tab 时头部高度会跳。
-                VersionChip()
-            }
-        }
-    }
-}
-
-/**
  * 状态条：一行讲清「开没开、用的哪个模式」，第二行是生效时机的说明。
  * 用 container 色和下面的设置卡区分开，但不做成一整块大卡片。
  */
@@ -186,7 +133,7 @@ private fun StatusStrip(enabled: Boolean, mode: Int) {
     val scheme = MaterialTheme.colorScheme
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
+        shape = MaterialTheme.shapes.large,
         color = if (enabled) scheme.primaryContainer else scheme.surfaceVariant,
         contentColor = if (enabled) scheme.onPrimaryContainer else scheme.onSurfaceVariant
     ) {
@@ -264,7 +211,7 @@ private fun IconBadge(
     Box(
         modifier = Modifier
             .size(IconBadgeSize)
-            .clip(RoundedCornerShape(14.dp))
+            .clip(MaterialTheme.shapes.small)
             .background(bg),
         contentAlignment = Alignment.Center
     ) {
@@ -288,7 +235,7 @@ private fun ModeOption(
     onClick: () -> Unit
 ) {
     val scheme = MaterialTheme.colorScheme
-    val shape = RoundedCornerShape(24.dp)
+    val shape = MaterialTheme.shapes.large
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -442,12 +389,15 @@ private fun SwitchRow(
 @Composable
 private fun ScopeCard() {
     val scheme = MaterialTheme.colorScheme
-    Surface(
+    // 与「模块」页的说明卡同一种语言（ElevatedCard）；这里额外用 surfaceVariant 底，
+    // 是为了和上面的「设置项」区分开 —— 它是解释性的，不是可操作的。
+    ElevatedCard(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        color = scheme.surfaceVariant,
-        contentColor = scheme.onSurfaceVariant,
-        border = BorderStroke(1.dp, scheme.outlineVariant)
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = scheme.surfaceVariant,
+            contentColor = scheme.onSurfaceVariant
+        )
     ) {
         Row(
             modifier = Modifier.padding(16.dp),
@@ -480,11 +430,9 @@ private fun ScopeCard() {
 @Composable
 private fun VerifyCard() {
     val scheme = MaterialTheme.colorScheme
-    Surface(
+    ElevatedCard(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        color = scheme.surface,
-        border = BorderStroke(1.dp, scheme.outlineVariant)
+        shape = MaterialTheme.shapes.large,
     ) {
         Row(
             modifier = Modifier.padding(16.dp),

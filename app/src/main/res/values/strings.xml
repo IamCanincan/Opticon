@@ -15,16 +15,17 @@
     -->
     <string name="xposed_description">把应用图标裁成圆形，修好未适配的通知小图标</string>
 
-    <!-- 底部导航：两个功能页 + 一个共用页（作用域 / 步骤 / 验证 / 运维 / 更新 / 关于）-->
+    <!--
+        底部导航：两个功能页 + 模块页（作用域 / 步骤 / 验证 / 运维）+ 关于页（更新 / 版本）。
+        四格 —— 三格时药丸太短，撑不起"悬浮药丸"的形态。
+    -->
     <string name="tab_icon">图标</string>
     <string name="tab_notify">通知</string>
     <string name="tab_module">模块</string>
+    <string name="tab_about">关于</string>
 
     <!-- ============ 「图标」页 ============ -->
 
-    <!-- Hero 顶栏 -->
-    <string name="hero_subtitle">把非圆形的应用图标强制裁成圆形</string>
-    <string name="hero_version_chip">v%1$s · MIT 许可</string>
 
     <!-- 裁圆总开关 -->
     <string name="circle_switch_title">强制圆形图标</string>
@@ -74,9 +75,9 @@
     <string name="scope_wellbeing_title">com.google.android.apps.wellbeing</string>
     <string name="scope_wellbeing_desc">数字健康的应用使用列表</string>
 
-    <!-- 作用域列表的展开/收起（默认只显示必选 + 推荐，可选折叠）-->
-    <string name="scope_show_all">展开其余 %1$d 项可选作用域</string>
-    <string name="scope_show_less">收起可选作用域</string>
+    <!-- 作用域列表的左右两档（分段按钮）：常用那档只列必选 + 推荐 -->
+    <string name="scope_segment_essential">必选 + 推荐</string>
+    <string name="scope_segment_all">全部</string>
 
     <!-- 启用步骤 -->
     <string name="section_steps">启用步骤</string>
@@ -139,15 +140,13 @@
     <string name="update_result_no_release">仓库还没有发布过 Release</string>
     <string name="update_result_failed">检查失败：%1$s</string>
 
-    <!-- 关于 -->
-    <string name="section_about">关于</string>
+
+    <!-- 关于（分区标题直接复用底栏的 tab_about，免得两处文案不一致被判重复）-->
     <string name="about_version">版本 %1$s · MIT 许可</string>
     <string name="about_body">源码与说明在 GitHub。只做两件事：应用图标裁成圆形、修好未适配主题的通知小图标。</string>
 
     <!-- ============ 「通知」页 ============ -->
 
-    <!-- 一行以内：与「图标」页的 Hero 同高，切 Tab 时头部不跳 -->
-    <string name="notify_hero_subtitle">让通知里的小图标一眼认得出是谁</string>
 
     <string name="notify_section_mode">图标模式</string>
 
