@@ -108,7 +108,7 @@
     <string name="cache_sent">已发送：桌面即将重启并重建图标</string>
     <string name="restart_sent">已发送：目标进程即将重启</string>
     <string name="tools_hint">模块不会自动清理：什么时候清由你决定，一般只在桌面图标没跟上变化时才需要点。
-        点了没反应 = 那个进程没有注入本模块（回上面确认框架里勾选过，并重启过设备）。</string>
+        点了没反应 = 那个进程没有注入本模块（去「模块」页确认作用域里勾选过，并重启过设备）。</string>
 
     <!-- 效果示意（形状对比图）-->
     <string name="section_effect">效果</string>
@@ -148,7 +148,8 @@
 
     <!-- 关于（分区标题直接复用底栏的 tab_about，免得两处文案不一致被判重复）-->
     <string name="about_version">版本 %1$s · MIT 许可</string>
-    <string name="about_body">源码与说明在 GitHub。只做两件事：应用图标裁成圆形、修好未适配主题的通知小图标。</string>
+    <!-- Opti = 优化，con = icon。两件事都落在"图标"上，别写成互不相干的两块功能 -->
+    <string name="about_body">源码与说明在 GitHub。Opticon 就是「优化图标」：桌面上的图标裁圆，通知栏里的小图标修好。</string>
 
     <!-- ============ 「通知」页 ============ -->
 

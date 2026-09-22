@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
     主题图标（单色版）：colored 版是淡粉背景 + 大号黑字，这里只留白色 "Oi" 剪影，
-    系统按壁纸取的主题色染色 —— 与 Mihon 的 monochrome 结构同型。
+    系统按壁纸取的主题色染色（monochrome 层只留字形，染色后就是主题色的字）。
 
     ⚠ 字符的 group scale 必须与 ic_launcher_foreground.xml 一致（都是 1.2），
       否则开了「主题图标」后字形大小会和桌面图标对不上。

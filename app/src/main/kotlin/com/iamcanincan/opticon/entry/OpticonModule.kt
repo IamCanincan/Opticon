@@ -16,7 +16,8 @@ import io.github.libxposed.api.XposedModuleInterface
  * 模块入口，由 `META-INF/xposed/java_init.list` 指向。
  *
  * ## 一个模块、两套挂钩
- * 本模块做两件互不相关的事，按**进程**分发：
+ * **Opticon = Optimize + Icon** —— 管的是图标，两处：应用图标被系统套上了不想要的形状，
+ * 通知小图标被系统染成了认不出的颜色。这两处在**进程**上的落点不同，所以按进程分发：
  *
  * | 进程 | 装什么 |
  * |---|---|
