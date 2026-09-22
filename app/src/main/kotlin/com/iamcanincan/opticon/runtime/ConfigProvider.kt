@@ -86,9 +86,19 @@ class ConfigProvider : ContentProvider() {
 
     companion object {
 
-        /** 与 `META-INF/xposed/scope.list` 一致（system_server 的包名就是 `android`） */
+        /**
+         * 与 `META-INF/xposed/scope.list` **逐条对齐**（改一处就要改另一处）。
+         *
+         * 里面有两个特殊包名：
+         * - `android` 是 system_server 的包名 —— 它决定「给不给图标 id 打标记」，
+         *   读不到配置就等于永远开着；
+         * - `system` 与 `android` 同属 uid 1000，实际上会被上面 `SYSTEM_UID` 那条
+         *   直接放行。这里仍然列出来，是为了让这份名单能和 `scope.list` 一眼对上 ——
+         *   靠隐式放行的话，以后调作用域时很容易漏掉它。
+         */
         private val TRUSTED_PACKAGES = setOf(
             "android",
+            "system",
             "com.android.systemui",
             "com.android.launcher3",
             "com.google.android.apps.nexuslauncher",

@@ -138,4 +138,35 @@
     <string name="section_about">关于</string>
     <string name="about_version">版本 %1$s · MIT 许可</string>
     <string name="about_body">源码与说明在 GitHub。只做两件事：应用图标裁成圆形、修好未适配主题的通知小图标。</string>
+
+    <!-- ============ 「通知」页 ============ -->
+
+    <string name="notify_hero_subtitle">把未适配主题的通知小图标换成能认出是谁的样子</string>
+
+    <string name="notify_section_mode">图标模式</string>
+
+    <string name="notify_mode_mono_title">系统黑白通知</string>
+    <string name="notify_mode_mono_desc">把应用自己给的小图标压成单色剪影，由系统按主题统一上色，风格和其它通知一致。</string>
+
+    <string name="notify_mode_color_title">彩色桌面图标</string>
+    <string name="notify_mode_color_desc">把还没做主题适配的彩色小图标，换成应用在桌面上那个图标，颜色原样保留。</string>
+
+    <!-- 模式效果预览里的一句话（小圆点右侧）-->
+    <string name="notify_effect_keep_color">保留原色</string>
+    <string name="notify_effect_tinted">按主题统一上色</string>
+
+    <string name="notify_section_behavior">行为</string>
+    <string name="notify_switch_title">修复通知小图标</string>
+    <string name="notify_switch_desc">关闭后所有通知都不处理</string>
+
+    <!-- 状态条：%1$s 是当前模式名 -->
+    <string name="notify_status_on">已启用 · %1$s</string>
+    <string name="notify_status_off">已停用</string>
+    <string name="notify_status_hint">改动立即生效，新收到的通知会按新模式显示；已经在通知栏里的那条要等它重新加载</string>
+
+    <string name="notify_scope_title">关于作用域</string>
+    <string name="notify_scope_body">通知是系统界面画出来的，所以这一路只注入「系统界面」（com.android.systemui）。作用域整体不固定 —— 图标裁圆需要覆盖桌面、设置等更多进程，你在框架里额外勾选别的应用不会影响这里。如果发现不生效，到框架的模块详情页点一次「应用」（右上角开关 → 底部「应用」），然后重启设备。</string>
+
+    <string name="notify_verify_title">怎么确认生效</string>
+    <string name="notify_verify_body">下拉通知栏看内容区那个小图标：原来是灰白色块的，现在应该能认出是哪个应用。状态栏那一行本来就被系统压成单色，别在那里找差异。\n\n日志确认（adb logcat -s Opticon）：出现 patched &lt;包名&gt; 2-&gt;1 via=monochrome 就是替换成功了。</string>
 </resources>

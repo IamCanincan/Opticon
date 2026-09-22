@@ -70,6 +70,12 @@ object NotificationIconPatch {
     private fun useLauncherIcon(pkg: String, notification: Notification, context: Context): Boolean {
         val packageManager = context.packageManager
         val appInfo = packageManager.getApplicationInfo(pkg, PackageManager.GET_META_DATA)
+        // ⚠ 这个调用会经过本模块自己的裁圆挂钩（ApplicationPackageManager.getDrawable）：
+        // 裁圆开着时，拿回来的是 CircleIconDrawable 而不是原始图标。
+        // 这是**预期行为**，不是 bug —— 用户要的就是「换成桌面上那个图标」，
+        // 而桌面上的那个本来就是圆的。圆形图标圆外透明，下面的 fill() 会把它裁到
+        // 圆的边界框再放大填满，所以通知里看到的就是桌面图标的样子。
+        // 别为了「拿原图」在这里临时关掉裁圆：那样两个功能就不一致了。
         val launcherDrawable = packageManager.getApplicationIcon(appInfo)
         // ⚠ 必须取前景层，不能整张光栅化：自适应图标整张画出来是一块不透明的
         // 彩色方块（遮罩贴边裁到整个画布），而状态栏只拿 alpha 通道上色，

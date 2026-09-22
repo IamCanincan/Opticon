@@ -37,6 +37,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -75,11 +76,11 @@ fun NotifyScreen() {
         NotifyHero()
         StatusStrip(enabled = enabled, mode = mode)
 
-        SectionLabel("图标模式")
+        SectionLabel(stringResource(R.string.notify_section_mode))
         ModeOption(
             icon = R.drawable.ic_mode_mono,
-            title = "系统黑白通知",
-            description = "把应用自己给的小图标压成单色剪影，由系统按主题统一上色，风格和其它通知一致。",
+            title = stringResource(R.string.notify_mode_mono_title),
+            description = stringResource(R.string.notify_mode_mono_desc),
             previewColorful = false,
             selected = mode == ModulePrefs.MODE_MONOCHROME,
             onClick = {
@@ -89,8 +90,8 @@ fun NotifyScreen() {
         )
         ModeOption(
             icon = R.drawable.ic_mode_color,
-            title = "彩色桌面图标",
-            description = "把还没做主题适配的彩色小图标，换成应用在桌面上那个图标，颜色原样保留。",
+            title = stringResource(R.string.notify_mode_color_title),
+            description = stringResource(R.string.notify_mode_color_desc),
             previewColorful = true,
             selected = mode == ModulePrefs.MODE_LAUNCHER_ICON,
             onClick = {
@@ -99,7 +100,7 @@ fun NotifyScreen() {
             }
         )
 
-        SectionLabel("行为")
+        SectionLabel(stringResource(R.string.notify_section_behavior))
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(24.dp),
@@ -108,8 +109,8 @@ fun NotifyScreen() {
         ) {
             SwitchRow(
                 icon = R.drawable.ic_power,
-                title = "修复通知小图标",
-                description = "关闭后所有通知都不处理",
+                title = stringResource(R.string.notify_switch_title),
+                description = stringResource(R.string.notify_switch_desc),
                 checked = enabled,
                 onCheckedChange = {
                     enabled = it
@@ -161,7 +162,7 @@ private fun NotifyHero() {
             }
             Spacer(Modifier.width(14.dp))
             Text(
-                text = "把未适配主题的通知小图标换成能认出是谁的样子",
+                text = stringResource(R.string.notify_hero_subtitle),
                 style = MaterialTheme.typography.bodyMedium,
                 color = scheme.onPrimaryContainer.copy(alpha = 0.85f)
             )
@@ -197,13 +198,17 @@ private fun StatusStrip(enabled: Boolean, mode: Int) {
             Spacer(Modifier.width(12.dp))
             Column {
                 Text(
-                    if (enabled) "已启用 · ${mode.modeName}" else "已停用",
+                    text = if (enabled) {
+                        stringResource(R.string.notify_status_on, modeName(mode))
+                    } else {
+                        stringResource(R.string.notify_status_off)
+                    },
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold
                 )
                 Spacer(Modifier.height(3.dp))
                 Text(
-                    "改动立即生效，新收到的通知会按新模式显示；已经在通知栏里的那条要等它重新加载",
+                    text = stringResource(R.string.notify_status_hint),
                     style = MaterialTheme.typography.bodySmall
                 )
             }
@@ -211,9 +216,12 @@ private fun StatusStrip(enabled: Boolean, mode: Int) {
     }
 }
 
-/** 图标模式的中文名。两处（状态条、模式名）共用，避免写岔 */
-private val Int.modeName: String
-    get() = if (this == ModulePrefs.MODE_MONOCHROME) "系统黑白通知" else "彩色桌面图标"
+/** 图标模式的名字。状态条和模式选项共用同一份字符串，避免两处写岔 */
+@Composable
+private fun modeName(mode: Int): String = stringResource(
+    if (mode == ModulePrefs.MODE_MONOCHROME) R.string.notify_mode_mono_title
+    else R.string.notify_mode_color_title
+)
 
 @Composable
 private fun SectionLabel(text: String) {
@@ -358,7 +366,9 @@ private fun EffectPreview(colorful: Boolean, selected: Boolean) {
         )
         Spacer(Modifier.width(8.dp))
         Text(
-            if (colorful) "保留原色" else "按主题统一上色",
+            text = stringResource(
+                if (colorful) R.string.notify_effect_keep_color else R.string.notify_effect_tinted
+            ),
             style = MaterialTheme.typography.labelSmall,
             color = scheme.onSurfaceVariant
         )
@@ -445,17 +455,13 @@ private fun ScopeCard() {
             Spacer(Modifier.width(14.dp))
             Column {
                 Text(
-                    "关于作用域",
+                    text = stringResource(R.string.notify_scope_title),
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold
                 )
                 Spacer(Modifier.height(5.dp))
                 Text(
-                    "通知是系统界面画出来的，所以这一路只注入「系统界面」（com.android.systemui）。"
-                        + "作用域整体不固定 —— 图标裁圆需要覆盖桌面、设置等更多进程，"
-                        + "你在框架里额外勾选别的应用不会影响这里。"
-                        + "如果发现不生效，到框架的模块详情页点一次「应用」"
-                        + "（右上角开关 → 底部「应用」），然后重启设备。",
+                    text = stringResource(R.string.notify_scope_body),
                     style = MaterialTheme.typography.bodySmall
                 )
             }
@@ -481,16 +487,13 @@ private fun VerifyCard() {
             Spacer(Modifier.width(14.dp))
             Column {
                 Text(
-                    "怎么确认生效",
+                    text = stringResource(R.string.notify_verify_title),
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold
                 )
                 Spacer(Modifier.height(5.dp))
                 Text(
-                    "下拉通知栏看内容区那个小图标：原来是灰白色块的，现在应该能认出是哪个应用。"
-                        + "状态栏那一行本来就被系统压成单色，别在那里找差异。\n\n"
-                        + "日志确认（adb logcat -s Opticon）：出现 "
-                        + "patched <包名> 2->1 via=monochrome 就是替换成功了。",
+                    text = stringResource(R.string.notify_verify_body),
                     style = MaterialTheme.typography.bodySmall
                 )
             }
