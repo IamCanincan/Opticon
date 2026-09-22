@@ -122,7 +122,6 @@ fun OpticonApp() {
                     scrollBehavior = scrollBehavior,
                 )
             },
-            snackbarHost = { SnackbarHost(snackbarHostState) },
         ) { inner ->
             // ⚠ 这里只扣顶栏让出的空间，**不要**再减掉药丸的高度：
             // 内容要一直铺到屏幕底部、从药丸后面滚过去，那才是「悬浮」。
@@ -146,6 +145,14 @@ fun OpticonApp() {
             selected = pagerState.currentPage,
             onSelect = { index -> scope.launch { pagerState.animateScrollToPage(index) } },
             modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 20.dp),
+        )
+
+        // ⚠ Snackbar 必须放在悬浮底栏**之上**：这里既靠后绘制（z 序压过药丸），
+        // 又把位置抬到药丸上方（药丸顶边约 74dp、阴影到 ~84dp，抬到 92dp 留间隙）。
+        // 否则默认贴底的 Snackbar 会被药丸挡住 / 截断（清缓存提示就中过招）。
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 92.dp),
         )
     }
 }
