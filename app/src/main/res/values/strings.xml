@@ -15,9 +15,10 @@
     -->
     <string name="xposed_description">把应用图标裁成圆形，修好未适配的通知小图标</string>
 
-    <!-- 底部导航 -->
+    <!-- 底部导航：两个功能页 + 一个共用页（作用域 / 步骤 / 验证 / 运维 / 更新 / 关于）-->
     <string name="tab_icon">图标</string>
     <string name="tab_notify">通知</string>
+    <string name="tab_module">模块</string>
 
     <!-- ============ 「图标」页 ============ -->
 
@@ -112,7 +113,6 @@
     <string name="section_notes">说明</string>
     <string name="note_adaptive">自适应图标也会被强制裁成圆形：系统给它的形状（圆角方、水滴等）不一定是圆。</string>
     <string name="note_tiles">快捷设置磁贴画的是单色小图形，被排除在外。</string>
-    <string name="note_boot">框架守护进程启动晚于 system_server，刚开机时早期进程可能未注入。</string>
     <string name="note_launcher3">Android 16 及以上会关掉桌面自带的背景板，图标按原样铺满圆形。</string>
     <string name="note_themed_icon">本 App 图标已提供 monochrome 层，在 Android 13+ 启动器的“主题图标”开关下会染成壁纸取色。</string>
 

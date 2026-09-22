@@ -49,11 +49,16 @@
 
 ## 界面
 
-应用有桌面图标，打开是底部导航的两个页面：
+应用有桌面图标，打开是底部导航的**三个**页面 —— 按**内容归属**分，不按「东西多不多」：
 
-- **图标** —— 裁圆总开关、作用域清单、启用步骤、验证命令、运维按钮（清图标缓存 / 重启进程）、
-  检查更新与关于。
-- **通知** —— 通知总开关、图标模式（系统黑白 / 彩色桌面图标）、作用域说明、验证方式。
+- **图标** —— 裁圆总开关，以及只跟裁圆有关的注意事项。
+- **通知** —— 通知总开关、图标模式（系统黑白 / 彩色桌面图标）、怎么确认生效。
+- **模块** —— 两个功能**共用**的东西：作用域清单、启用步骤、验证命令、
+  运维按钮（清图标缓存 / 重启进程）、检查更新与关于。
+
+作用域清单放在「模块」页而不是某个功能页，是因为它本来就有两半：
+launcher / settings / system_server 那几条是给裁圆用的，而 `com.android.systemui`
+同时服务两个功能（它既画通知，也画状态栏和最近任务的图标）。
 
 设置写进自己的 SharedPreferences，模块侧通过本应用暴露的**只读 ContentProvider**
 （`com.iamcanincan.opticon.config`，读取需要签名级权限 `android.permission.STATUS_BAR`）
@@ -308,9 +313,11 @@ com.iamcanincan.opticon
 │   └── OpticonLog             统一的日志 tag
 ├── ui/
 │   ├── MainActivity           入口 Activity（同时是桌面图标）
-│   ├── OpticonApp             外壳：顶栏 + 底部导航 + 两个页面
-│   ├── icon/IconScreen        「图标」页
-│   ├── notify/NotifyScreen    「通知」页
+│   ├── OpticonApp             外壳：顶栏 + 底部导航 + 三个页面
+│   ├── Common                 两个页面共用的小组件（Section / SectionLabel）
+│   ├── icon/IconScreen        「图标」页（裁圆）
+│   ├── notify/NotifyScreen    「通知」页（通知小图标）
+│   ├── module/ModuleScreen    「模块」页（作用域 / 步骤 / 验证 / 运维 / 更新 / 关于）
 │   └── theme/Theme            M3E 主题（动态取色）
 └── update/UpdateChecker       检查更新（唯一的联网点）
 ```
