@@ -2,9 +2,9 @@
 <!--
     图标底板：纯色铺满。
 
-    ⚠ 颜色**不写死**，取 `@color/opticon_icon_background` —— 它在 values-v31/ 里
-      指向系统的 Material You 主题色淡档（跟随壁纸取色），API 31 以下才用固定淡色。
-      所以这个文件本身不含颜色值，改配色去改 colors.xml。
+    ⚠ 颜色**不写死**，取 `@color/opticon_icon_background` = 品牌淡粉 `#FCE4EC`，
+      全 Android 版本一致、不跟随壁纸取色（早期曾在 API 31+ 改用 system_accent1_100
+      跟随壁纸，后按用户要求改回固定淡粉）。所以这个文件本身不含颜色值，改配色去改 colors.xml。
 
     形状层（圆 / 圆角方 / 水滴）由启动器按自己的 mask 裁，这里只管铺满。
 -->

@@ -5,11 +5,12 @@
     <!--
         桌面图标底板（被 ic_launcher_background.xml 引用）。
 
-        **默认就是品牌淡粉** `#FCE4EC`（Pink 50）—— 与 App 的品牌色一致，
-        黑字压上去对比度也够（1.20:1 的浅底 + 近黑字）。
+        **全 Android 版本固定品牌淡粉** `#FCE4EC`（Pink 50）—— 与 App 的品牌色一致，
+        黑字压上去对比度也够。
 
-        API 31+ 会在 values-v31/colors.xml 里覆盖成**系统主题色的淡档**（跟随壁纸取色），
-        所以这里只服务 Android 12 以下。
+        ⚠ 故意**不在 API 31+ 改走系统主题色**（`system_accent1_100` 跟随壁纸取色）：
+        用户要的是「所有版本都是这一个淡粉」，不跟随壁纸。原 values-v31/colors.xml 的
+        系统色覆盖已删除。不要为了「跟随壁纸」再把它加回来。
     -->
     <color name="opticon_icon_background">#FCE4EC</color>
 </resources>
