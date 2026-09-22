@@ -1,0 +1,29 @@
+<!--
+    「关于作用域」的图标：盾牌 + 对勾（表示作用域是模块自己固定好的）。
+
+    盾牌：顶部中心起笔 → 右上 → 垂直下行 → 两条三次贝塞尔收到下方尖点 →
+    左侧镜像上行 → 闭合。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- 盾牌轮廓 -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M12,2.6 L20,5.6 V12 c0,4.6 -3.4,7.8 -8,9.4 c-4.6,-1.6 -8,-4.8 -8,-9.4 V5.6 Z"
+        android:strokeColor="#FF000000"
+        android:strokeLineJoin="round"
+        android:strokeWidth="1.8" />
+
+    <!-- 对勾 -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M8.7,11.9 L11.1,14.3 L15.3,10.1"
+        android:strokeColor="#FF000000"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="1.8" />
+</vector>

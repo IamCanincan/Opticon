@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<lint>
+    <!--
+        Compose 编译器插件的版本必须与 Kotlin Gradle 插件版本严格一致（见 libs.versions.toml）。
+        lint 会建议把 compose 各库升到更新的版本，但那样会和 Kotlin 版本不匹配、
+        或者越过 material3 里 MD3E 公开 API 的那个窗口，所以这里显式忽略。
+    -->
+    <issue id="NewerVersionAvailable" severity="ignore" />
+
+    <!--
+        同一条理由的另一半：这条报的是 gradle/libs.versions.toml 里的依赖版本可以升。
+        依赖版本由 catalog 统一管，升级必须同时核对 Kotlin / Compose 编译器版本是否匹配
+        （见上面那条），不能跟着 lint 的即时建议走。
+    -->
+    <issue id="GradleDependency" severity="ignore" />
+
+    <!--
+        monochrome 是 API 33+ 的启动器才读的标签，**必须**放在 mipmap-anydpi-v33/ 里。
+        放在没有版本限定符的 mipmap-anydpi/ 下会被老版本忽略，主题图标反而不生效 ——
+        所以那里的 ic_launcher.xml 是**刻意**不写 <monochrome> 的，两处配合才正确。
+        lint 只看单个文件，看不出这个约定。
+    -->
+    <issue id="MonochromeLauncherIcon" severity="ignore" />
+
+    <!--
+        挂钩代码（CircleIconDrawable 等）刻意用原生 Drawable / Canvas API：
+        这些代码运行在被注入的进程里，少一个依赖就少一份风险；KTX 只是语法糖，
+        对这里的行为没有任何收益。
+    -->
+    <issue id="UseKtx" severity="ignore" />
+
+    <!--
+        模块没有别的途径反馈状态，logcat（adb logcat -s Opticon）是用户确认「模块到底
+        有没有注入到目标进程」的**唯一**手段，所以 release 构建也必须保留这些日志，
+        不能按 lint 的建议把它包进 BuildConfig.DEBUG。
+    -->
+    <issue id="LogConditional" severity="ignore" />
+
+    <!--
+        清缓存要访问的是**宿主应用**（launcher3）自己数据目录里的 `app_icons.db`，
+        不是本模块的目录 —— `Context.getFilesDir()` 返回的是模块自己的路径，对不上。
+        而且这段跑在 `onPackageReady`（宿主 `Application.attachBaseContext` 阶段），
+        那时还拿不到宿主的 Context，所以路径只能按 `/data/user/<userId>/<pkg>/...` 拼。
+        我们本来就以宿主的 UID 在跑，读写它自己的数据目录不需要任何额外权限。
+    -->
+    <issue id="SdCardPath" severity="ignore" />
+
+    <!--
+        Kotlin 访问同文件里的 private 顶层函数/属性时会生成合成访问器（synthetic accessor），
+        这是编译器行为。改成 internal 只是把可见性从「本文件」放大到「本模块」，
+        换来的只是少一条无害的字节码警告，不划算。
+    -->
+    <issue id="SyntheticAccessor" severity="ignore" />
+
+    <!--
+        模块拿宿主进程的 Context 只能反射 `ActivityThread.currentApplication()`：
+        libxposed 的 API（PackageReadyParam / PackageLoadedParam）只给了 packageName、
+        applicationInfo 和 classLoader，**没有任何 Context**，而注册广播接收器必须要它。
+        这是 Xposed 模块侧的通用做法，风险由「拿不到就只是少一个手动按钮」兜住
+        （见 IconHooks.registerProcessControlReceiver：拿不到只打一条日志，不影响裁圆）。
+    -->
+    <issue id="PrivateApi" severity="ignore" />
+    <issue id="DiscouragedPrivateApi" severity="ignore" />
+</lint>

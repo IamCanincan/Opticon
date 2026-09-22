@@ -1,0 +1,12 @@
+# 统一行尾：仓库内一律 LF，Windows 批处理脚本保留 CRLF
+* text=auto eol=lf
+*.bat text eol=crlf
+gradlew text eol=lf
+
+# 二进制文件不要做任何转换
+*.jar binary
+*.png binary
+*.jpg binary
+*.apk binary
+*.jks binary
+*.keystore binary

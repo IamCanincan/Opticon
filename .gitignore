@@ -1,0 +1,22 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+/.kotlin
+/.workbuddy-ai
+/screenshots
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+app/build
+app/release
+*.apk
+*.idsig
+# 本地临时件（下划线前缀）：图标轮廓抽取/渲染验证的脚本与预览图、
+# 写提交信息用的文本文件等，都不进仓库
+/_*.py
+/_*.png
+/_*.txt
+/_*.json

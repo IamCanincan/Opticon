@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Compose 界面用的壳主题：只要一个无 ActionBar 的窗口 + 透明系统栏。
+        真正的配色由 Compose 侧的 MaterialExpressiveTheme 决定（含动态取色），
+        这里不定义任何 Material 组件样式，避免和 Compose 的 M3 主题打架。
+    -->
+    <style name="Theme.Opticon" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowBackground">@color/opticon_window_background</item>
+    </style>
+</resources>

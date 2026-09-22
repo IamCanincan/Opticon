@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+        联网权限，只服务于界面里的「检查更新」按钮：用户点一下才去 GitHub 读一次
+        releases/latest，比对版本号。没有后台轮询、没有上报。
+        挂钩部分（跑在 SystemUI / launcher / system_server 里的代码）完全不联网。
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+        纯 LibXposed（现代 API 102）模块，不要放老式 xposed meta-data。
+
+        官方说明（LSPosed wiki · Develop Xposed Modules Using Modern Xposed API）：
+          "Modern API does not use metadata anymore as well. Module name uses
+           android:label; module description uses android:description; scope list
+           uses META-INF/xposed/scope.list; module configuration uses
+           META-INF/xposed/module.prop"
+
+        所以四个元数据分别落在：
+          - 模块名     -> android:label         （@string/app_name）
+          - 模块描述   -> android:description   （@string/xposed_description）
+          - 作用域     -> META-INF/xposed/scope.list
+          - 模块配置   -> META-INF/xposed/module.prop（含 staticScope=false）
+          - Java 入口  -> META-INF/xposed/java_init.list
+
+        老式写法（xposedmodule / xposeddescription / xposedminversion / xposedscope
+        等 meta-data，以及 module.prop 里的 description=）是给 API <= 93 的旧框架用的，
+        混着放会让管理器把模块当成「兼容模式」处理，作用域列表会退化成列出全部已装应用。
+    -->
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:description="@string/xposed_description"
+        android:theme="@style/Theme.Opticon"
+        android:supportsRtl="true"
+        tools:targetApi="34">
+
+        <!--
+            这个 Activity 让模块有 MAIN + LAUNCHER 入口 —— 没有它模块就是纯后台的，
+            桌面上不会出现图标（只能在系统设置的应用列表里看到）。
+
+            它不参与挂钩，只负责显示界面、把用户的选择写进 SharedPreferences。
+            加 Activity 不影响模块元数据。
+        -->
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Opticon">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+            配置通道：把界面里的开关与模式交给 SystemUI 进程里的通知模块。
+
+            为什么需要它：模块既读不到本应用的私有目录（系统隔离，表现为 ENOENT），
+            也用不了 LibXposed 的远程配置 —— 实测部分框架的 getRemotePreferences
+            返回空对象、openRemoteFile 找不到任何文件，配置根本传不过去。
+            ContentProvider 不依赖框架实现，各框架上都能用。
+
+            安全：只读，且用签名级权限 android.permission.STATUS_BAR 限流 ——
+            只有 SystemUI、system_server 这类系统组件持有该权限，普通应用查不进来；
+            provider 内部还会再按调用方包名校验一次。
+
+            它不影响模块元数据：作用域仍是 scope.list。
+        -->
+        <provider
+            android:name=".runtime.ConfigProvider"
+            android:authorities="com.iamcanincan.opticon.config"
+            android:exported="true"
+            android:readPermission="android.permission.STATUS_BAR" />
+    </application>
+</manifest>

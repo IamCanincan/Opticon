@@ -1,0 +1,19 @@
+<!--
+    「怎么确认生效」的图标：对勾。
+
+    一笔折线，圆头圆角，与 ic_power / ic_scope 同一套描边风格（1.9 描边、24 视口）。
+    与其它图标一样是纯黑，实际颜色由 Compose 侧的 tint 决定。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <path
+        android:pathData="M5,12.6 L10,17.6 L19,6.8"
+        android:strokeColor="#FF000000"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="1.9" />
+</vector>

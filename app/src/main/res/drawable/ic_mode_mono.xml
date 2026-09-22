@@ -1,0 +1,23 @@
+<!--
+    「系统黑白通知」模式的图标：对比度符号（圆环 + 右半边实心）。
+
+    右半圆的半径比外环略小，这样外环不会被填充盖住、轮廓仍然清晰。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- 外环 -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M12,3 A9,9 0 1,1 12,21 A9,9 0 1,1 12,3 Z"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.8" />
+
+    <!-- 右半边实心：从正上顺时针扫到正下 -->
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M12,3.9 A8.1,8.1 0 0,1 12,20.1 Z" />
+</vector>

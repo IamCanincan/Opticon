@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Opticon</string>
+
+    <!--
+        模块描述，被 AndroidManifest 的 android:description 引用。
+
+        这是 LibXposed（API 102）模块在管理器里显示描述的**唯一**字段：
+        管理器读的是 ApplicationInfo.descriptionRes。
+        老式写法（xposeddescription meta-data / module.prop 里的 description=）已经不用，
+        那是给 API <= 93 的旧框架用的，留着反而让模块变成「兼容模式」。
+
+        长度约定：中文 <= 26 字，太长在模块列表里会占好几行。当前 21 字，
+        两个功能都要提到 —— 用户只看得到这一行。
+    -->
+    <string name="xposed_description">把应用图标裁成圆形，修好未适配的通知小图标</string>
+
+    <!-- 底部导航 -->
+    <string name="tab_icon">图标</string>
+    <string name="tab_notify">通知</string>
+
+    <!-- ============ 「图标」页 ============ -->
+
+    <!-- Hero 顶栏 -->
+    <string name="hero_subtitle">把非圆形的应用图标强制裁成圆形</string>
+    <string name="hero_version_chip">v%1$s · MIT 许可</string>
+
+    <!-- 裁圆总开关 -->
+    <string name="circle_switch_title">强制圆形图标</string>
+    <string name="circle_switch_body">应用图标（含自适应图标）一律裁成正圆；关掉后保持系统原样</string>
+
+    <!-- 状态卡 -->
+    <string name="status_title">模块启用状态</string>
+    <string name="status_body">模块在框架中是否启用、作用域是否生效，请到框架管理器里确认。本界面只列出作用域清单和启用步骤。</string>
+
+    <!-- 作用域分组 -->
+    <string name="section_scope">作用域</string>
+    <string name="scope_hint">图标裁圆发生在这些进程里 —— 谁解析应用图标，谁就得认得模块打的标记。作用域不写死：任何会显示应用图标的应用都能在管理器里自行勾选；没勾上的进程会拿到无法解析的资源 id。</string>
+
+    <!-- 作用域标签（3 种，多个作用域共享同一档位）-->
+    <string name="scope_tag_required">必选</string>
+    <string name="scope_tag_recommended">推荐</string>
+    <string name="scope_tag_optional">可选</string>
+
+    <!-- 10 个推荐作用域（标题 + 描述 + 标签档位）-->
+    <string name="scope_system_title">android（system_server）</string>
+    <string name="scope_system_desc">系统服务，解析应用信息</string>
+
+    <string name="scope_systemprocess_title">system</string>
+    <string name="scope_systemprocess_desc">系统进程，部分 ROM 在这里解析图标</string>
+
+    <string name="scope_launcher_title">com.android.launcher3</string>
+    <string name="scope_launcher_desc">桌面与应用抽屉（类原生 ROM，效果最直观）；Android 16 强制动态取色下，未适配应用的单色图标也在这里修正</string>
+
+    <string name="scope_launcher_pixel_title">com.google.android.apps.nexuslauncher</string>
+    <string name="scope_launcher_pixel_desc">桌面与应用抽屉（Pixel / Nexus 专用）；Android 16 强制动态取色下，未适配应用的单色图标也在这里修正</string>
+
+    <string name="scope_systemui_title">com.android.systemui</string>
+    <string name="scope_systemui_desc">状态栏与最近任务；通知小图标的修复也在这里</string>
+
+    <string name="scope_settings_title">com.android.settings</string>
+    <string name="scope_settings_desc">设置里的应用列表</string>
+
+    <string name="scope_settings_intelligence_title">com.google.android.settings.intelligence</string>
+    <string name="scope_settings_intelligence_desc">设置搜索与建议里出现的应用图标</string>
+
+    <string name="scope_intentresolver_title">com.android.intentresolver</string>
+    <string name="scope_intentresolver_desc">分享与打开方式的选择列表</string>
+
+    <string name="scope_permissioncontroller_title">com.android.permissioncontroller</string>
+    <string name="scope_permissioncontroller_desc">权限弹窗里的应用图标</string>
+
+    <string name="scope_wellbeing_title">com.google.android.apps.wellbeing</string>
+    <string name="scope_wellbeing_desc">数字健康的应用使用列表</string>
+
+    <!-- 作用域列表的展开/收起（默认只显示必选 + 推荐，可选折叠）-->
+    <string name="scope_show_all">展开其余 %1$d 项可选作用域</string>
+    <string name="scope_show_less">收起可选作用域</string>
+
+    <!-- 启用步骤 -->
+    <string name="section_steps">启用步骤</string>
+    <string name="step_1">在框架中启用本模块</string>
+    <string name="step_1_hint">在管理器里把模块开关打开。</string>
+    <string name="step_2">按上方清单勾选要生效的进程</string>
+    <string name="step_2_hint">至少勾选 com.android.launcher3 才能在桌面看到裁圆效果；通知那一路还需要 com.android.systemui。</string>
+    <string name="step_3">重启设备</string>
+    <string name="step_3_hint">框架不会热加载模块，必须重启。</string>
+    <string name="step_4">桌面无变化时，强制停止桌面再打开</string>
+    <string name="step_4_hint">刚开机时 daemon 启动晚于 launcher3，进程可能未被注入。</string>
+
+    <!-- 验证 -->
+    <string name="section_verify">验证是否生效</string>
+    <string name="verify_body">执行下面的命令。看到 install in / Hooked 就说明模块已注入该进程；通知那一路看 patched。</string>
+    <string name="verify_logcat">adb logcat -s Opticon</string>
+    <string name="verify_copy">复制命令</string>
+    <string name="verify_copied">已复制到剪贴板</string>
+
+    <!-- 运维操作：清缓存 / 重启进程（全部由模块在目标进程内部执行，不需要 root） -->
+    <string name="section_tools">运维操作</string>
+    <string name="tools_body">下面这些操作全部由模块在目标进程内部完成（删自己的缓存、重启自己），不需要 root，也不会执行任何 shell 命令。</string>
+    <string name="cache_title">清除桌面图标缓存</string>
+    <string name="cache_body">桌面把图标位图缓存在自己的数据库里，而且只按“目标 App 的版本”更新 —— 所以开关改了、模块升级了之后，桌面可能仍旧显示上一次渲染出来的图。点下面的按钮删掉缓存并重启桌面，图标会按当前设置重新生成。</string>
+    <string name="action_clear_launcher">清除缓存并重启桌面</string>
+    <string name="action_restart_systemui">重启 SystemUI</string>
+    <string name="action_restart_others">重启其他进程</string>
+    <string name="cache_sent">已发送：桌面即将重启并重建图标</string>
+    <string name="restart_sent">已发送：目标进程即将重启</string>
+    <string name="tools_hint">模块不会自动清理：什么时候清由你决定，一般只在桌面图标没跟上变化时才需要点。
+        点了没反应 = 那个进程没有注入本模块（回上面确认框架里勾选过，并重启过设备）。</string>
+
+    <!-- 说明 -->
+    <string name="section_notes">说明</string>
+    <string name="note_adaptive">自适应图标也会被强制裁成圆形：系统给它的形状（圆角方、水滴等）不一定是圆。</string>
+    <string name="note_tiles">快捷设置磁贴画的是单色小图形，被排除在外。</string>
+    <string name="note_boot">框架守护进程启动晚于 system_server，刚开机时早期进程可能未注入。</string>
+    <string name="note_launcher3">Android 16 及以上会关掉桌面自带的背景板，图标按原样铺满圆形。</string>
+    <string name="note_themed_icon">本 App 图标已提供 monochrome 层，在 Android 13+ 启动器的“主题图标”开关下会染成壁纸取色。</string>
+
+    <!-- 更新卡片 -->
+    <string name="section_update">更新</string>
+    <!-- 卡片标题和按钮共用这一句 -->
+    <string name="update_title">检查更新</string>
+    <string name="action_open_repo">在 GitHub 上查看</string>
+    <string name="update_current">当前版本 %1$s</string>
+    <string name="update_checking">检查中…</string>
+    <string name="update_go_download">打开发布页</string>
+    <string name="update_disclaimer">只有点下面的按钮才会联网：先直连 GitHub，连不上时走公共加速镜像。
+        这是本应用唯一的联网行为，没有统计也没有上报。</string>
+
+    <!-- 更新结果（由 UpdateChecker.Result 翻译成 UpdateState.Done.message）-->
+    <string name="update_result_newer">发现新版本 %1$s（当前 %2$s）</string>
+    <string name="update_result_uptodate">已是最新版本（%1$s）</string>
+    <string name="update_result_uptodate_ahead">已是最新（本地 %1$s 比已发布的 %2$s 还新）</string>
+    <string name="update_result_no_release">仓库还没有发布过 Release</string>
+    <string name="update_result_failed">检查失败：%1$s</string>
+
+    <!-- 关于 -->
+    <string name="section_about">关于</string>
+    <string name="about_version">版本 %1$s · MIT 许可</string>
+    <string name="about_body">源码与说明在 GitHub。只做两件事：应用图标裁成圆形、修好未适配主题的通知小图标。</string>
+</resources>

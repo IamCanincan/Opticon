@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    API 26-32（Android 8-12）用的图标：没有 <monochrome> 元素，
+    老系统启动器读到这个标签会忽略它；放在 mipmap-anydpi-v33/ 才会生效。
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>

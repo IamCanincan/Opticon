@@ -1,0 +1,34 @@
+[versions]
+# Compose 编译器插件版本，必须与 Kotlin Gradle 插件版本严格一致。
+kotlin = "2.4.20"
+composeBom = "2026.09.00"
+# ⚠ 不能用 BOM 托管 material3：MD3E 的公开 API（MaterialExpressiveTheme /
+# MotionScheme.expressive）在稳定版里还是 internal，只有 1.5.0-alpha 起才对外公开。
+# 显式写版本即可覆盖 BOM（Gradle 里显式声明优先于 platform）。
+material3 = "1.5.0-alpha28"
+activityCompose = "1.13.0"
+coreKtx = "1.17.0"
+
+[libraries]
+libxposed-api = { module = "io.github.libxposed:api", version = "102.0.0" }
+
+# UI：Material 3 Expressive（Compose）。各库版本统一交给 BOM 托管，避免互相打架。
+compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
+compose-ui = { module = "androidx.compose.ui:ui" }
+compose-ui-graphics = { module = "androidx.compose.ui:ui-graphics" }
+compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
+compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
+compose-material3 = { module = "androidx.compose.material3:material3", version.ref = "material3" }
+# Material Icons Extended：作用域/状态/验证等卡片左侧的小图标（Power、Android、Layers 等）
+# 标准 material-icons 没有这些语义图标；extended 多 ~7k 个图标，仅 ~20KB gzip 增量。
+compose-material-icons-extended = { module = "androidx.compose.material:material-icons-extended" }
+activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+# 通知侧要在 SystemUI 进程里读 ContentProvider、跑 MatrixCursor，用 KTX 的便利方法更省事
+core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
+# MaterialShapes：Material 3 Expressive 的形状系统（连续圆角多边形，如花瓣/曲奇）
+graphics-shapes = { module = "androidx.graphics:graphics-shapes", version = "1.1.0" }
+
+[plugins]
+android-application = { id = "com.android.application", version = "9.4.1" }
+# Compose 编译器插件版本必须与 Kotlin Gradle 插件版本严格一致（都取上面的 kotlin）
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
