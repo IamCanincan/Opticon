@@ -133,7 +133,7 @@ fun OpticonApp() {
                     modifier = Modifier.fillMaxSize(),
                 ) { page ->
                     when (page) {
-                        TAB_ICON -> IconScreen()
+                        TAB_ICON -> IconScreen(snackbarHostState = snackbarHostState)
                         TAB_NOTIFY -> NotifyScreen()
                         TAB_MODULE -> ModuleScreen(snackbarHostState = snackbarHostState)
                         else -> AboutScreen()

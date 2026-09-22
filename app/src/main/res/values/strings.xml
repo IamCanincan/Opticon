@@ -141,6 +141,11 @@
     <string name="update_result_failed">检查失败：%1$s</string>
 
 
+    <!-- 隐私：这块信息之前只写在 README 里，界面上也该有一份 -->
+    <string name="section_privacy">隐私</string>
+    <string name="privacy_title">不联网、不上报</string>
+    <string name="privacy_body">只有点「检查更新」时才会联网 —— 没有后台轮询、没有统计上报、没有广告。跑在被注入进程里的挂钩代码完全不联网。</string>
+
     <!-- 关于（分区标题直接复用底栏的 tab_about，免得两处文案不一致被判重复）-->
     <string name="about_version">版本 %1$s · MIT 许可</string>
     <string name="about_body">源码与说明在 GitHub。只做两件事：应用图标裁成圆形、修好未适配主题的通知小图标。</string>

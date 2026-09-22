@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Update
@@ -37,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.BuildConfig
 import com.iamcanincan.opticon.R
@@ -92,11 +94,47 @@ fun AboutScreen() {
       )
     } }
 
+    item { Section(text = stringResource(R.string.section_privacy)) { PrivacyCard() } }
+
     item { Section(text = stringResource(R.string.tab_about)) { AboutCard() } }
   }
 }
 
 
+
+/**
+ * 隐私说明。
+ *
+ * 写进界面而不只写在 README 里：用户判断一个 Xposed 模块能不能装，
+ * 最关心的就是它联不联网、有没有上报。这句话放在「关于」页比藏在文档里有用。
+ */
+@Composable
+private fun PrivacyCard() {
+  val scheme = MaterialTheme.colorScheme
+  ElevatedCard(shape = MaterialTheme.shapes.large) {
+    Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.Top) {
+      IconTile(
+        icon = Icons.Default.Lock,
+        containerColor = scheme.tertiaryContainer,
+        contentColor = scheme.onTertiaryContainer,
+      )
+      Spacer(Modifier.width(14.dp))
+      Column {
+        Text(
+          text = stringResource(R.string.privacy_title),
+          style = MaterialTheme.typography.titleSmall,
+          fontWeight = FontWeight.SemiBold,
+        )
+        Spacer(Modifier.height(5.dp))
+        Text(
+          text = stringResource(R.string.privacy_body),
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+    }
+  }
+}
 
 /** 关于：版本/许可 + 跳转 GitHub 的按钮。 */
 @Composable

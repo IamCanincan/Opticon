@@ -227,11 +227,17 @@ intentresolver / permissioncontroller / wellbeing。
 
 ## 应用图标
 
-三层 adaptive icon（背景 / 前景 / 单色层），字符是 **Oi**：极淡粉背景 `#FCE4EC`
+三层 adaptive icon（背景 / 前景 / 单色层），字符是 **Oi**：默认极淡粉背景 `#FCE4EC`
+（API 31+ 换成系统的主题色淡档 `system_accent1_100`，见下）
 + 大号黑字，monochrome 只留白色剪影，对齐 Mihon 的主题图标结构。
 
 - 字形从 Google Sans Flex（可变字体）取轮廓算出的像素级 path（`wght=700 / opsz=18 / wdth=100`），
   **别手改坐标**，用 `<group android:pivotX/Y="54" android:scaleX/Y="k">` 缩放。
+- **底板颜色不写死**，取 `@color/opticon_icon_background`：
+  API 26-30 用品牌淡粉 `#FCE4EC`；**API 31+ 用 `@android:color/system_accent1_100`**
+  —— Material You tonal palette 的最淡档，跟着壁纸取色走。
+  adaptive icon 的背景是静态资源，这是它能做到的最接近「跟随系统取色」的形式；
+  真正会随主题染色的是下面那一层 monochrome。
 - Android 13+ 的启动器打开「主题图标」后，会拿 monochrome 层按壁纸取色染色。
 - **⚠ `<monochrome>` 元素必须放在 `mipmap-anydpi-v33/`**：它是 API 33+ 才有的元素，
   放在没有版本限定符的目录里会被启动器忽略，主题图标就不生效了。

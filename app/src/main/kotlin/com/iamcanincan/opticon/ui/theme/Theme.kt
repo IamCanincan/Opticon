@@ -1,38 +1,38 @@
 package com.iamcanincan.opticon.ui.theme
 
+import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 
 /**
  * 应用主题：Material 3 Expressive。
  *
- * ## 取色策略：**固定品牌配色，不跟随壁纸**
- * 刻意不用 `dynamicLightColorScheme` / `dynamicDarkColorScheme`（壁纸取色）：
+ * ## 取色策略：**跟随系统取色**
+ * Android 12（API 31）及以上走 `dynamicLightColorScheme` / `dynamicDarkColorScheme`，
+ * 也就是 Material You 的壁纸取色 —— 界面配色跟着系统/壁纸走。
+ * 12 以下没有这套机制，退回下面写死的品牌粉配色。
  *
- * - App 图标、每个页面顶部的 Hero 都是**固定的粉色系**。界面若跟着壁纸走，
- *   用户换成绿/蓝壁纸后，界面主色和图标就对不上了 —— 这是有自己品牌的应用，
- *   不是系统设置页，配色应该由我们定。
- * - 壁纸取色下「品牌色」对每个用户都不一样，等于没有品牌色。
- * - 固定配色才能把浅色 / 深色两套都逐项核对过（对比度、层级差），
- *   动态取色拿到的是一整套我们控制不了的值。
- *
- * ## 为什么每个角色都要写出来
- * `lightColorScheme()` 里没指定的角色会退回 **MD3 默认的紫色系**。
- * 之前就漏了 `surfaceContainerHighest`（界面里用了 5 处：图标方块底板、
- * 效果示意图的方块），于是那几块在粉色主题里泛紫灰。
+ * ## 为什么固定配色里每个角色都要写出来
+ * 那份配色只在 **Android 12 以下**生效，但同样要写全：`lightColorScheme()` 里
+ * 没指定的角色会退回 **MD3 默认的紫色系**。之前就漏了 `surfaceContainerHighest`
+ * （界面里用了 5 处：图标方块底板、效果示意图的方块），于是那几块在粉色主题里泛紫灰。
  * ⚠ 以后新增用到的角色，**先在这里补齐**，别依赖默认值。
  *
  * ## 圆角档位
  * `large = 20dp`，比 Material 3 标准的 12dp 软、比 Expressive 的 32dp 克制。
  * 界面里所有卡片都显式用 `MaterialTheme.shapes.large`，改这一个数就能整体调圆角。
+ * 形状**不跟随取色**，两套配色下都是同一套圆角。
  */
 
 /** 品牌樱粉（与桌面图标同一色系） */
@@ -123,9 +123,19 @@ fun OpticonTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit
 ) {
+    val context = LocalContext.current
+    val colorScheme = when {
+        // Android 12+：跟随系统取色（壁纸取色）
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
+            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+
+        darkTheme -> DarkColors
+        else -> LightColors
+    }
+
     // MaterialExpressiveTheme 默认带 Expressive 的弹簧动效（MotionScheme.expressive）
     MaterialExpressiveTheme(
-        colorScheme = if (darkTheme) DarkColors else LightColors,
+        colorScheme = colorScheme,
         shapes = OpticonShapes,
         content = content,
     )

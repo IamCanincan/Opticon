@@ -1,4 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="opticon_window_background">#FFF8F8</color>
+
+    <!--
+        桌面图标底板（被 ic_launcher_background.xml 引用）。
+
+        **默认就是品牌淡粉** `#FCE4EC`（Pink 50）—— 与 App 的品牌色一致，
+        黑字压上去对比度也够（1.20:1 的浅底 + 近黑字）。
+
+        API 31+ 会在 values-v31/colors.xml 里覆盖成**系统主题色的淡档**（跟随壁纸取色），
+        所以这里只服务 Android 12 以下。
+    -->
+    <color name="opticon_icon_background">#FCE4EC</color>
 </resources>
