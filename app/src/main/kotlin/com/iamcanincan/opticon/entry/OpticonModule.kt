@@ -89,6 +89,11 @@ class OpticonModule : XposedModule() {
      * 建好的那些缓存（Settings 应用列表就是从这里来的）永远是原图。
      */
     override fun onSystemServerStarting(param: XposedModuleInterface.SystemServerStartingParam) {
+        // system_server 也要读配置：它决定了「给不给图标 id 打标记」。
+        // 不读的话这里永远拿默认值（= 开），关掉裁圆开关时它照样打标记 ——
+        // 虽然客户端那侧 clipToCircle 会兜住（返回原图标），但那是多绕一步，
+        // 而且未注入的进程会白白经手一遍伪造 id。
+        ModuleRuntime.attach(this)
         hookSystemServer(this, param)
     }
 

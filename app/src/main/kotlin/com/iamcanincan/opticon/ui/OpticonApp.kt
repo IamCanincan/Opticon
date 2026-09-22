@@ -25,9 +25,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import com.iamcanincan.opticon.R
+import com.iamcanincan.opticon.runtime.ModulePrefs
 import com.iamcanincan.opticon.ui.icon.IconScreen
 import com.iamcanincan.opticon.ui.notify.NotifyScreen
 
@@ -53,6 +55,13 @@ fun OpticonApp() {
     val snackbarHostState = remember { SnackbarHostState() }
     val uriHandler = LocalUriHandler.current
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
+
+    // 首次打开就把默认配置落盘（含 mode 键）。放在外壳而不是各页面里：
+    // 默认打开的是「图标」页，而模块侧有几条回退通道是**以「配置里有 mode 键」
+    // 作为「这份文件是不是有效配置」的判据**的 —— 只打开过图标页就改开关的话，
+    // 文件里没有 mode，那几条通道会整份配置都不认，用户改的开关读不回来。
+    val context = LocalContext.current
+    remember { ModulePrefs.of(context).also { ModulePrefs.seedIfAbsent(it) } }
 
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),

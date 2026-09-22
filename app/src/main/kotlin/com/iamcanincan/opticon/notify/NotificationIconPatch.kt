@@ -3,7 +3,6 @@ package com.iamcanincan.opticon.notify
 import android.app.Notification
 import android.content.Context
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
 import android.graphics.drawable.Icon
 import android.os.Build
 import android.service.notification.StatusBarNotification

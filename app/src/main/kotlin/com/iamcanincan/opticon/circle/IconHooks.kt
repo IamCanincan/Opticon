@@ -746,6 +746,8 @@ private fun hookSplashScreenIcon(xposed: XposedInterface, classLoader: ClassLoad
     runCatching {
         xposed.hook(ctor).intercept { chain ->
           val result = chain.proceed(chain.args.toTypedArray())
+          // 这是为圆形图标（圆外透明）准备的判定：原样图标不该被它影响。
+          if (!ModuleRuntime.options().circleEnabled) return@intercept result
           runCatching {
             // 同 drawFullBleed：用 get()/set() 而不是 getBoolean()/setBoolean()，
             // 字段是基本类型还是装箱类型都能工作。
@@ -971,12 +973,17 @@ private fun markIcon(info: PackageItemInfo) {
 }
 
 private fun markIconResId(info: PackageItemInfo) {
+  // 总开关：关掉之后不再打标记，下游任何进程拿到的都是没被碰过的原始 id。
+  // 这是「关闭」最彻底的一层 —— system_server 里读到关闭，连标记都不会产生。
+  // 配置按 TTL 重读，所以界面里关掉后很快生效。
+  if (!ModuleRuntime.options().circleEnabled) return
   val icon = info.icon
   if (icon != 0 && icon.isAppResource()) info.icon = icon.marked()
 }
 
 private fun markResolveInfo(info: ResolveInfo?) {
   val resolveInfo = info ?: return
+  if (!ModuleRuntime.options().circleEnabled) return
   // 组件自己的 icon 在构造时已经打过标记，这里原样继承即可。
   val component =
     resolveInfo.activityInfo ?: resolveInfo.serviceInfo ?: resolveInfo.providerInfo ?: return

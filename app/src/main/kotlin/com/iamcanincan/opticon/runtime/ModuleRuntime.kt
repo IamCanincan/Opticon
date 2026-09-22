@@ -79,12 +79,17 @@ object ModuleRuntime {
      * 所以换开关既不用重新挂钩，也不用重启进程。
      */
     fun attach(module: XposedInterface) {
+        // 同一进程里 onSystemServerStarting 与 onPackageReady 都可能调到这里，
+        // 只让第一次打日志 —— 否则每次派发都刷一条一样的 "attach in ..."。
+        val first = this.module == null
         this.module = module
-        logI(
-            "attach in ${hostProcessName()}: framework=${runCatching { module.frameworkName }.getOrNull()}" +
-                " ${runCatching { module.frameworkVersion }.getOrNull()}" +
-                " api=${runCatching { module.apiVersion }.getOrNull()}"
-        )
+        if (first) {
+            logI(
+                "attach in ${hostProcessName()}: framework=${runCatching { module.frameworkName }.getOrNull()}" +
+                    " ${runCatching { module.frameworkVersion }.getOrNull()}" +
+                    " api=${runCatching { module.apiVersion }.getOrNull()}"
+            )
+        }
         refresh(force = true)
     }
 
