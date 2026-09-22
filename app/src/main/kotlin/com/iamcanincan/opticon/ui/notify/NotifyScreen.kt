@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.runtime.ModulePrefs
+import com.iamcanincan.opticon.ui.VersionChip
 
 /**
  * 设置界面。
@@ -161,11 +162,17 @@ private fun NotifyHero() {
                 }
             }
             Spacer(Modifier.width(14.dp))
-            Text(
-                text = stringResource(R.string.notify_hero_subtitle),
-                style = MaterialTheme.typography.bodyMedium,
-                color = scheme.onPrimaryContainer.copy(alpha = 0.85f)
-            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.notify_hero_subtitle),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = scheme.onPrimaryContainer.copy(alpha = 0.85f)
+                )
+                Spacer(Modifier.height(8.dp))
+                // 与「图标」页的 Hero 保持同一规格（标记方块 + 一行副标题 + 版本 chip），
+                // 否则切 Tab 时头部高度会跳。
+                VersionChip()
+            }
         }
     }
 }

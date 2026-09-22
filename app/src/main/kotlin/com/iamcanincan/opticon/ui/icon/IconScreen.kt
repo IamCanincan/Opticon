@@ -1,5 +1,6 @@
 package com.iamcanincan.opticon.ui.icon
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -7,11 +8,13 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Circle
@@ -30,15 +33,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import com.iamcanincan.opticon.BuildConfig
 import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.ui.Section
 import com.iamcanincan.opticon.ui.SectionLabel
+import com.iamcanincan.opticon.ui.VersionChip
 import com.iamcanincan.opticon.runtime.ModulePrefs
 
 /**
@@ -62,6 +65,7 @@ fun IconScreen() {
   ) {
     item { HeroHeader() }
     item { MasterSwitchCard() }
+    item { Section(text = stringResource(R.string.section_effect)) { EffectCard() } }
     item { Section(text = stringResource(R.string.section_notes)) { NotesCard() } }
   }
 }
@@ -108,23 +112,6 @@ private fun HeroHeader() {
   }
 }
 
-
-/** Hero 内部的版本 chip：在 primaryContainer 上用 onPrimaryContainer 的低 alpha。 */
-@Composable
-private fun VersionChip() {
-  Surface(
-    shape = RoundedCornerShape(50),
-    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.12f),
-    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-  ) {
-    Text(
-      text = stringResource(R.string.hero_version_chip, BuildConfig.VERSION_NAME),
-      style = MaterialTheme.typography.labelSmall,
-      fontFamily = FontFamily.Monospace,
-      modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-    )
-  }
-}
 
 
 /**
@@ -189,6 +176,63 @@ private fun MasterSwitchCard() {
   }
 }
 
+
+/**
+ * 「效果」卡：一张形状示意图 + 一句覆盖范围说明。
+ *
+ * 补这张卡是因为图标页原本只有「开关 + 说明」两块，首屏下半截全是空的；
+ * 而且「改完之后到底变成什么样」光靠文字不好讲 —— 画出来一目了然。
+ * 表达方式与「通知」页的模式预览一致（处理前 → 处理后）。
+ *
+ * ⚠ 两个色块只是**示意图**，不是真实图标渲染：左边用中性底表示「系统给的形状」
+ * （圆角方 / 水滴 / 方都可能是它），右边用主色圆表示裁完的结果。
+ */
+@Composable
+private fun EffectCard() {
+  val scheme = MaterialTheme.colorScheme
+  ElevatedCard(shape = MaterialTheme.shapes.large) {
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(16.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      // 处理前：圆角方 —— 代表「ROM 决定的那个形状」
+      Box(
+        modifier = Modifier
+          .size(44.dp)
+          .clip(RoundedCornerShape(13.dp))
+          .background(scheme.surfaceContainerHighest)
+      )
+      Spacer(modifier = Modifier.width(10.dp))
+      Text(
+        text = "→",
+        style = MaterialTheme.typography.titleMedium,
+        color = scheme.outline,
+      )
+      Spacer(modifier = Modifier.width(10.dp))
+      // 处理后：正圆，用主色把它和左边明显区分开
+      Box(
+        modifier = Modifier
+          .size(44.dp)
+          .clip(CircleShape)
+          .background(scheme.primary)
+      )
+      Spacer(modifier = Modifier.width(16.dp))
+      Column(modifier = Modifier.weight(1f)) {
+        Text(
+          text = stringResource(R.string.effect_title),
+          style = MaterialTheme.typography.titleSmall,
+          color = scheme.onSurface,
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+          text = stringResource(R.string.effect_body),
+          style = MaterialTheme.typography.bodySmall,
+          color = scheme.onSurfaceVariant,
+        )
+      }
+    }
+  }
+}
 
 /** 说明要点：带圆点的列表。 */
 @Composable

@@ -109,6 +109,11 @@
     <string name="tools_hint">模块不会自动清理：什么时候清由你决定，一般只在桌面图标没跟上变化时才需要点。
         点了没反应 = 那个进程没有注入本模块（回上面确认框架里勾选过，并重启过设备）。</string>
 
+    <!-- 效果示意（形状对比图）-->
+    <string name="section_effect">效果</string>
+    <string name="effect_title">一律裁成正圆</string>
+    <string name="effect_body">桌面、应用列表、最近任务里的图标都会变成圆形，圆外透明。</string>
+
     <!-- 说明 -->
     <string name="section_notes">说明</string>
     <string name="note_adaptive">自适应图标也会被强制裁成圆形：系统给它的形状（圆角方、水滴等）不一定是圆。</string>
@@ -141,7 +146,8 @@
 
     <!-- ============ 「通知」页 ============ -->
 
-    <string name="notify_hero_subtitle">把未适配主题的通知小图标换成能认出是谁的样子</string>
+    <!-- 一行以内：与「图标」页的 Hero 同高，切 Tab 时头部不跳 -->
+    <string name="notify_hero_subtitle">让通知里的小图标一眼认得出是谁</string>
 
     <string name="notify_section_mode">图标模式</string>
 
