@@ -103,8 +103,18 @@ object ModuleRuntime {
      * 之后不会重来。要它们变，得重建（桌面用「清除图标缓存」，通知等它重新发出）。
      */
     fun options(): ModuleOptions {
-        refresh(force = false)
-        return current
+        // ⚠ 读配置绝不能把调用方带崩。这个函数在**热路径**上被调：
+        // 每张图标（clipToCircle / 打标记）、每条通知都要过一次。
+        // 一旦这里抛出去，轻则那张图标没裁、重则 launcher 抛异常（保护模式虽然会吞，
+        // 但那条 hook 就被整体跳过了）。所以异常一律就地吃掉，退回上一次的值 ——
+        // 配置读不到时用旧值，比"整个功能失效"好得多。
+        return try {
+            refresh(force = false)
+            current
+        } catch (t: Throwable) {
+            logW("options() failed, keeping last: ${t::class.java.simpleName}: ${t.message}")
+            current
+        }
     }
 
     private fun refresh(force: Boolean) {
@@ -147,12 +157,19 @@ object ModuleRuntime {
         if (providerQueryInFlight || now - providerQueryAt < OPTIONS_TTL_MS) return
         providerQueryAt = now
         providerQueryInFlight = true
-        providerExecutor.execute {
-            try {
-                providerOptions = readFromProvider(m)
-            } finally {
-                providerQueryInFlight = false
+        // 线程池理论上可能拒绝（进程正在收尾），别让这一下把热路径打断；
+        // 拒绝了就把 inFlight 放回去，下个 TTL 再试。
+        runCatching {
+            providerExecutor.execute {
+                try {
+                    providerOptions = readFromProvider(m)
+                } finally {
+                    providerQueryInFlight = false
+                }
             }
+        }.onFailure {
+            providerQueryInFlight = false
+            logW("provider query rejected: ${it::class.java.simpleName}: ${it.message}")
         }
     }
 

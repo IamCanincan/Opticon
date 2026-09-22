@@ -37,7 +37,9 @@ object SystemUiHooks {
     private const val CONTRAST_UTIL = "com.android.internal.util.ContrastColorUtil"
 
     /** 已挂过的方法，防止框架重复回调时重复挂钩 */
-    private val hookedMethods = HashSet<java.lang.reflect.Method>()
+    // 线程安全集合：安装路径虽然目前只走主线程，但框架的回调时机不由我们决定，
+    // 用并发集合换掉 HashSet，避免万一并发时的静默数据损坏（零成本）。
+    private val hookedMethods = java.util.concurrent.ConcurrentHashMap.newKeySet<java.lang.reflect.Method>()
 
     /**
      * 已装过的挂钩 id。
@@ -48,7 +50,7 @@ object SystemUiHooks {
      * 只能按 id 判重 —— 否则同一条钩子会被装两遍，拦截逻辑跟着跑两遍。
      * （三处拦截都是幂等的，不会出错，但白白多跑一次，日志也会重复刷。）
      */
-    private val installedHookIds = HashSet<String>()
+    private val installedHookIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     /**
      * 主挂钩（inflateViews）是否已就位。

@@ -20,29 +20,35 @@ object ToneCheck {
     private const val CHANNEL_TOLERANCE = 20
     private const val MIN_OPAQUE_ALPHA = 50
 
-    // 取样用的复用对象：这段代码在通知刷新的热路径上，避免每次都新建
-    private var pixelBuffer: IntArray? = null
-    private var scratch: Bitmap? = null
-    private var scratchCanvas: Canvas? = null
-    private var scratchPaint: Paint? = null
+    // 取样用的复用对象：这段代码在通知刷新的热路径上，避免每次都新建。
+    //
+    // ⚠ 必须**线程安全**：SystemUI 的通知处理可能并发进来（不同通知各走一条线程），
+    // 而原来那种「先判空、再逐个赋值」的写法有两个真实的坏中间态：
+    //   1. 另一个线程看到 `scratch != null` 但 `scratchCanvas` 还是 null → NPE；
+    //   2. 像素缓冲被换成更小的数组后，本线程拿旧引用去 getPixels → 越界。
+    // 所以：一次性对象交给 `lazy`（默认就是 SYNCHRONIZED）建，
+    // 缓冲与取样的读写整体由 [isGrayscale] 上的 @Synchronized 串起来。
+    private val scratch: Bitmap by lazy {
+        Bitmap.createBitmap(SAMPLE_EDGE, SAMPLE_EDGE, Bitmap.Config.ARGB_8888)
+    }
+    private val scratchCanvas: Canvas by lazy { Canvas(scratch) }
+    private val scratchPaint: Paint by lazy { Paint(Paint.FILTER_BITMAP_FLAG) }
     private val scratchMatrix = Matrix()
 
+    private var pixelBuffer: IntArray? = null
+
+    @Synchronized
     fun isGrayscale(source: Bitmap): Boolean {
         var bmp = source
         var width = bmp.width
         var height = bmp.height
 
         if (height > SAMPLE_EDGE || width > SAMPLE_EDGE) {
-            if (scratch == null) {
-                scratch = Bitmap.createBitmap(SAMPLE_EDGE, SAMPLE_EDGE, Bitmap.Config.ARGB_8888)
-                scratchCanvas = Canvas(scratch!!)
-                scratchPaint = Paint(Paint.FILTER_BITMAP_FLAG)
-            }
             scratchMatrix.reset()
             scratchMatrix.setScale(SAMPLE_EDGE.toFloat() / width, SAMPLE_EDGE.toFloat() / height, 0f, 0f)
-            scratchCanvas!!.drawColor(0, PorterDuff.Mode.SRC)
-            scratchCanvas!!.drawBitmap(bmp, scratchMatrix, scratchPaint!!)
-            bmp = scratch!!
+            scratchCanvas.drawColor(0, PorterDuff.Mode.SRC)
+            scratchCanvas.drawBitmap(bmp, scratchMatrix, scratchPaint)
+            bmp = scratch
             width = SAMPLE_EDGE
             height = SAMPLE_EDGE
         }
