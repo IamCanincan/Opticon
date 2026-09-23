@@ -37,6 +37,21 @@ object UpdateChecker {
       "https://gh-proxy.com/https://api.github.com/repos/IamCanincan/Opticon/releases/latest",
     )
 
+  /** 拼回退链接用的仓库地址。响应里的 html_url 不可信时才用它（见 [isGithubUrl]）。 */
+  private const val GITHUB_REPO = "https://github.com/IamCanincan/Opticon"
+
+  /**
+   * 这个链接能不能直接交给用户的点击。
+   *
+   * 只认严格等于 github.com 这个 host：响应可能来自公共加速镜像（第三方），
+   * 而 url 最终是「打开发布页」按钮要跳去的地方。
+   */
+  private fun isGithubUrl(raw: String): Boolean =
+    runCatching {
+      val uri = java.net.URI(raw)
+      uri.scheme == "https" && uri.host == "github.com"
+    }.getOrDefault(false)
+
   /** GitHub API 不带 User-Agent 会直接回 403，所以必须带一个。 */
   private const val USER_AGENT = "Opticon"
 
@@ -119,8 +134,13 @@ object UpdateChecker {
     val body = connection.inputStream.bufferedReader().use { it.readText() }
     val json = JSONObject(body)
     val tag = json.optString("tag_name").trim()
-    // 发布页地址用响应里的，不自己拼 —— 免得仓库改名后链接失效。
-    val url = json.optString("html_url").trim()
+    // 发布页地址优先用响应里的 html_url（自己拼的话，仓库改名就失效）。
+    //
+    // ⚠ 但**只信 github.com**：直连失败时会退到公共加速镜像，那份响应整体是第三方给的，
+    // 而这个 url 最后会交给用户的一次点击（AboutScreen 的「打开发布页」）。
+    // 不设限的话，镜像返回什么链接我们就照跳什么 —— 等于把版本号和跳转目标一起
+    // 外包给了一个我们不控制的域名。host 不对就退回自己拼的那条。
+    val url = json.optString("html_url").trim().takeIf { isGithubUrl(it) } ?: "$GITHUB_REPO/releases"
     if (tag.isEmpty()) return Result.Failed("响应里没有版本号")
 
     val remote = parseVersion(tag) ?: return Result.Failed("看不懂远端版本号：$tag")
