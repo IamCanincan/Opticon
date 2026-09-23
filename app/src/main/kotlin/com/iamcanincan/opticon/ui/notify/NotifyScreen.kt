@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.CardColors
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.Surface
@@ -381,39 +382,54 @@ private fun SwitchRow(
     }
 }
 
+/**
+ * 本页的「说明卡」：图标底板 + 标题 + 一句说明，整张卡只是解释、不能点。
+ *
+ * 「作用域」和「验证」两张卡原来是一份东西抄了两遍，只差图标资源、两句文案
+ * 和卡片底色 —— 形状留这一份，两处差异用参数带出来。
+ *
+ * ⚠ 底板用的是**本页私有的** [IconBadge]（44dp 底板 + 23dp 图标），不是共享文件里
+ *   那个 `IconTile`（40dp + 22dp）。那两个是刻意不合并的（理由见 IconTile 上的说明），
+ *   所以这张卡也跟着留在本页 —— 别顺手搬去 Common.kt 给别的页复用，
+ *   一搬就等于替那两页把底板尺寸定了。
+ *
+ * @param cardColors 卡片配色，默认就是 `ElevatedCard` 本来的那套。
+ *   只有想额外压一层底色把它跟"可操作的那些"分开时才传（见 [ScopeCard]）。
+ * @param badgeContainerColor 底板底色覆盖，原样转给 [IconBadge]。卡片自己就是
+ *   surfaceVariant 时必须显式传一个跟卡片不同的颜色，否则底板等于不存在。
+ */
 @Composable
-private fun ScopeCard() {
-    val scheme = MaterialTheme.colorScheme
-    // 与「模块」页的说明卡同一种语言（ElevatedCard）；这里额外用 surfaceVariant 底，
-    // 是为了和上面的「设置项」区分开 —— 它是解释性的，不是可操作的。
+private fun InfoCard(
+    @DrawableRes icon: Int,
+    title: String,
+    description: String,
+    cardColors: CardColors = CardDefaults.elevatedCardColors(),
+    badgeContainerColor: Color = Color.Unspecified
+) {
     ElevatedCard(
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
-        colors = CardDefaults.elevatedCardColors(
-            containerColor = scheme.surfaceVariant,
-            contentColor = scheme.onSurfaceVariant
-        )
+        colors = cardColors
     ) {
         Row(
             modifier = Modifier.padding(16.dp),
             verticalAlignment = Alignment.Top
         ) {
-            // 卡片本身是 surfaceVariant，底板必须换个色，否则两者同色、底板等于不存在
             IconBadge(
-                icon = R.drawable.ic_scope,
+                icon = icon,
                 selected = false,
-                containerColor = scheme.surface
+                containerColor = badgeContainerColor
             )
             Spacer(Modifier.width(14.dp))
             Column {
                 Text(
-                    text = stringResource(R.string.notify_scope_title),
+                    text = title,
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold
                 )
                 Spacer(Modifier.height(5.dp))
                 Text(
-                    text = stringResource(R.string.notify_scope_body),
+                    text = description,
                     style = MaterialTheme.typography.bodySmall
                 )
             }
@@ -421,34 +437,32 @@ private fun ScopeCard() {
     }
 }
 
+@Composable
+private fun ScopeCard() {
+    val scheme = MaterialTheme.colorScheme
+    InfoCard(
+        icon = R.drawable.ic_scope,
+        title = stringResource(R.string.notify_scope_title),
+        description = stringResource(R.string.notify_scope_body),
+        // 与「模块」页的说明卡同一种语言（ElevatedCard）；这里额外用 surfaceVariant 底，
+        // 是为了和上面的「设置项」区分开 —— 它是解释性的，不是可操作的。
+        cardColors = CardDefaults.elevatedCardColors(
+            containerColor = scheme.surfaceVariant,
+            contentColor = scheme.onSurfaceVariant
+        ),
+        // 卡片本身是 surfaceVariant，底板必须换个色，否则两者同色、底板等于不存在
+        badgeContainerColor = scheme.surface
+    )
+}
+
 /** 怎么确认它真的生效了 —— 通知栏看不出差异时，日志是唯一可靠的判据。 */
 @Composable
 private fun VerifyCard() {
-    val scheme = MaterialTheme.colorScheme
-    ElevatedCard(
-        modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.large,
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.Top
-        ) {
-            IconBadge(icon = R.drawable.ic_verify, selected = false)
-            Spacer(Modifier.width(14.dp))
-            Column {
-                Text(
-                    text = stringResource(R.string.notify_verify_title),
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Spacer(Modifier.height(5.dp))
-                Text(
-                    text = stringResource(R.string.notify_verify_body),
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
-        }
-    }
+    InfoCard(
+        icon = R.drawable.ic_verify,
+        title = stringResource(R.string.notify_verify_title),
+        description = stringResource(R.string.notify_verify_body)
+    )
 }
 
 /**

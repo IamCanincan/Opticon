@@ -1,17 +1,13 @@
 package com.iamcanincan.opticon.ui.about
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
@@ -36,12 +32,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.BuildConfig
 import com.iamcanincan.opticon.R
-import com.iamcanincan.opticon.ui.FloatingNavSpace
 import com.iamcanincan.opticon.ui.IconTile
+import com.iamcanincan.opticon.ui.RepoUrl
+import com.iamcanincan.opticon.ui.ScreenList
 import com.iamcanincan.opticon.ui.Section
 import com.iamcanincan.opticon.update.UpdateChecker
-
-private const val REPO_URL = "https://github.com/IamCanincan/Opticon"
 
 /**
  * 「关于」页：检查更新与版本信息。
@@ -57,17 +52,7 @@ internal fun AboutScreen(state: UpdateState, onCheck: () -> Unit) {
   val uriHandler = LocalUriHandler.current
   val version = BuildConfig.VERSION_NAME
 
-  LazyColumn(
-    modifier = Modifier.fillMaxSize(),
-    contentPadding = PaddingValues(
-      start = 16.dp,
-      end = 16.dp,
-      top = 4.dp,
-      // 末尾让出悬浮药丸那一段，否则滚到底时最后一张卡会被它压住
-      bottom = 24.dp + FloatingNavSpace,
-    ),
-    verticalArrangement = Arrangement.spacedBy(20.dp),
-  ) {
+  ScreenList {
     item { Section(text = stringResource(R.string.section_update)) {
       UpdateCard(
         version = version,
@@ -149,7 +134,7 @@ private fun AboutCard() {
       }
       Spacer(modifier = Modifier.height(12.dp))
       Button(
-        onClick = { uriHandler.openUri(REPO_URL) },
+        onClick = { uriHandler.openUri(RepoUrl) },
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
         colors =

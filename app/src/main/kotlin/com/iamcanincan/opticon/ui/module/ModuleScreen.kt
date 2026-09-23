@@ -1,19 +1,15 @@
 package com.iamcanincan.opticon.ui.module
 
 import android.content.ClipData
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.Apps
@@ -27,8 +23,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -54,8 +48,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.R
-import com.iamcanincan.opticon.ui.FloatingNavSpace
+import com.iamcanincan.opticon.ui.HeroCard
 import com.iamcanincan.opticon.ui.IconTile
+import com.iamcanincan.opticon.ui.ScreenList
 import com.iamcanincan.opticon.ui.Section
 import com.iamcanincan.opticon.ui.SectionLabel
 import kotlinx.coroutines.launch
@@ -74,17 +69,7 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun ModuleScreen(onNotify: (String) -> Unit) {
-  LazyColumn(
-    modifier = Modifier.fillMaxSize(),
-    contentPadding = PaddingValues(
-      start = 16.dp,
-      end = 16.dp,
-      top = 4.dp,
-      // 末尾让出悬浮药丸那一段，否则滚到底时最后一张卡会被它压住
-      bottom = 24.dp + FloatingNavSpace,
-    ),
-    verticalArrangement = Arrangement.spacedBy(20.dp),
-  ) {
+  ScreenList {
     item { StatusCard() }
 
     item { Section(text = stringResource(R.string.section_scope)) { ScopeGroup() } }
@@ -102,42 +87,13 @@ fun ModuleScreen(onNotify: (String) -> Unit) {
  */
 @Composable
 private fun StatusCard() {
-  Card(
-    colors =
-      CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
-    shape = MaterialTheme.shapes.large,
-  ) {
-    Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-      Surface(
-        shape = MaterialTheme.shapes.small,
-        color = MaterialTheme.colorScheme.onSecondaryContainer,
-        modifier = Modifier.size(40.dp),
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(
-            imageVector = Icons.Default.Power,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.secondaryContainer,
-            modifier = Modifier.size(22.dp),
-          )
-        }
-      }
-      Spacer(modifier = Modifier.width(14.dp))
-      Column(modifier = Modifier.weight(1f)) {
-        Text(
-          text = stringResource(R.string.status_title),
-          style = MaterialTheme.typography.titleSmall,
-          color = MaterialTheme.colorScheme.onSecondaryContainer,
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-          text = stringResource(R.string.status_body),
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSecondaryContainer,
-        )
-      }
-    }
-  }
+  HeroCard(
+    icon = Icons.Default.Power,
+    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+    title = stringResource(R.string.status_title),
+    body = stringResource(R.string.status_body),
+  )
 }
 
 /** 作用域清单：一张卡片里 10 行，每行 = 图标方块 + 标题 + 描述 + 标签。 */

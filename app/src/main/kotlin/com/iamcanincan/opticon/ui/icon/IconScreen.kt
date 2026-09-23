@@ -1,26 +1,20 @@
 package com.iamcanincan.opticon.ui.icon
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.InvertColors
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -39,7 +33,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.R
-import com.iamcanincan.opticon.ui.FloatingNavSpace
+import com.iamcanincan.opticon.ui.HeroCard
+import com.iamcanincan.opticon.ui.IconTile
+import com.iamcanincan.opticon.ui.ScreenList
 import com.iamcanincan.opticon.ui.Section
 import com.iamcanincan.opticon.ui.SectionLabel
 import com.iamcanincan.opticon.runtime.ModulePrefs
@@ -71,26 +67,14 @@ private val OTHER_RESTARTABLE =
  * 已经移到「模块」页，见 [com.iamcanincan.opticon.ui.module.ModuleScreen]。
  *
  * 顶栏与底部导航让出的空间由外壳扣掉（`OpticonApp` 里的 `Modifier.padding(inner)`），
- * 这里只管列表自己的边距。
+ * 这里只管列表自己的边距 —— 三页共用同一份脚手架，见 [ScreenList]。
  *
  * ⚠ [onNotify] 由外壳提供、走外壳的协程作用域：这页是 Pager 的一页，切走就被销毁，
  * 用页面自己的 scope 发 Snackbar 会在切页那一刻被取消掉。
  */
 @Composable
 fun IconScreen(onNotify: (String) -> Unit) {
-  LazyColumn(
-    modifier = Modifier.fillMaxSize(),
-    contentPadding = PaddingValues(
-      start = 16.dp,
-      end = 16.dp,
-      top = 4.dp,
-      // 末尾让出悬浮药丸那一段，否则滚到底时最后一张卡会被它压住
-      bottom = 24.dp + FloatingNavSpace,
-    ),
-    // 组与组之间 20dp；小标题与它自己的卡片之间只有 10dp（见 [Section]），
-    // 这样「标题领着哪张卡」一眼能看出来。
-    verticalArrangement = Arrangement.spacedBy(20.dp),
-  ) {
+  ScreenList {
     item { MasterSwitchCard() }
     item { Section(text = stringResource(R.string.section_effect)) { EffectCard() } }
     item { Section(text = stringResource(R.string.section_mono)) { MonoInvertCard() } }
@@ -119,40 +103,13 @@ private fun MasterSwitchCard() {
     mutableStateOf(prefs.getBoolean(ModulePrefs.KEY_CIRCLE_ENABLED, ModulePrefs.DEFAULT_CIRCLE_ENABLED))
   }
 
-  Card(
-    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-    shape = MaterialTheme.shapes.large,
-  ) {
-    Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-      Surface(
-        shape = MaterialTheme.shapes.small,
-        color = MaterialTheme.colorScheme.onPrimaryContainer,
-        modifier = Modifier.size(40.dp),
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(
-            imageVector = Icons.Default.Circle,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primaryContainer,
-            modifier = Modifier.size(22.dp),
-          )
-        }
-      }
-      Spacer(modifier = Modifier.width(14.dp))
-      Column(modifier = Modifier.weight(1f)) {
-        Text(
-          text = stringResource(R.string.circle_switch_title),
-          style = MaterialTheme.typography.titleSmall,
-          color = MaterialTheme.colorScheme.onPrimaryContainer,
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-          text = stringResource(R.string.circle_switch_body),
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onPrimaryContainer,
-        )
-      }
-      Spacer(modifier = Modifier.width(8.dp))
+  HeroCard(
+    icon = Icons.Default.Circle,
+    containerColor = MaterialTheme.colorScheme.primaryContainer,
+    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+    title = stringResource(R.string.circle_switch_title),
+    body = stringResource(R.string.circle_switch_body),
+    trailing = {
       Switch(
         checked = enabled,
         onCheckedChange = { value ->
@@ -160,8 +117,8 @@ private fun MasterSwitchCard() {
           prefs.edit().putBoolean(ModulePrefs.KEY_CIRCLE_ENABLED, value).apply()
         },
       )
-    }
-  }
+    },
+  )
 }
 
 
@@ -190,20 +147,11 @@ private fun MonoInvertCard() {
 
   ElevatedCard(shape = MaterialTheme.shapes.large) {
     Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-      Surface(
-        shape = MaterialTheme.shapes.small,
-        color = MaterialTheme.colorScheme.surfaceContainerHighest,
-        modifier = Modifier.size(40.dp),
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(
-            imageVector = Icons.Default.InvertColors,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(22.dp),
-          )
-        }
-      }
+      IconTile(
+        icon = Icons.Default.InvertColors,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
       Spacer(modifier = Modifier.width(14.dp))
       Column(modifier = Modifier.weight(1f)) {
         Text(
@@ -342,20 +290,11 @@ private fun ToolsCard(onNotify: (String) -> Unit) {
   ElevatedCard(shape = MaterialTheme.shapes.large) {
     Column(modifier = Modifier.padding(16.dp)) {
       Row(verticalAlignment = Alignment.CenterVertically) {
-        Surface(
-          shape = MaterialTheme.shapes.small,
-          color = MaterialTheme.colorScheme.tertiaryContainer,
-          modifier = Modifier.size(40.dp),
-        ) {
-          Box(contentAlignment = Alignment.Center) {
-            Icon(
-              imageVector = Icons.Default.CleaningServices,
-              contentDescription = null,
-              tint = MaterialTheme.colorScheme.onTertiaryContainer,
-              modifier = Modifier.size(22.dp),
-            )
-          }
-        }
+        IconTile(
+          icon = Icons.Default.CleaningServices,
+          containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+          contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+        )
         Spacer(modifier = Modifier.width(14.dp))
         Text(
           text = stringResource(R.string.cache_title),
