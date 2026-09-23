@@ -159,18 +159,37 @@ private class MaskedDrawable(private val icon: Drawable) : Drawable() {
 
   private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
   private val maskMode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
+
+  /**
+   * 位图 / 画布 / 遮罩路径按尺寸缓存，三者一起换。
+   *
+   * 位图本来就缓存了，但 Canvas 和 Path 每次 draw 都新建 —— 而桌面滚动时每个图标
+   * 每帧都要画一次，尺寸根本不会变。省下来的是每帧每图标一次 Canvas + 一次 Path 分配。
+   */
   private var cache: Bitmap? = null
+  private var cacheCanvas: Canvas? = null
+  private var cacheMask: Path? = null
 
   override fun draw(canvas: Canvas) {
     val width = bounds.width()
     val height = bounds.height()
     if (width <= 0 || height <= 0) return
 
-    // 尺寸没变就复用位图；内容每次重画（图标可能是会动的，比如时钟）。
-    val bitmap =
-      cache?.takeIf { it.width == width && it.height == height }
-        ?: Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { cache = it }
-    val layer = Canvas(bitmap)
+    // 尺寸没变就复用这套缓存；内容每次重画（图标可能是会动的，比如时钟）。
+    var bitmap = cache
+    var layer = cacheCanvas
+    var mask = cacheMask
+    if (bitmap == null || layer == null || mask == null ||
+      bitmap.width != width || bitmap.height != height
+    ) {
+      bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+      layer = Canvas(bitmap)
+      mask = circleMaskPath(width, height)
+      cache = bitmap
+      cacheCanvas = layer
+      cacheMask = mask
+    }
+
     bitmap.eraseColor(Color.TRANSPARENT)
 
     val intrinsicWidth = icon.intrinsicWidth.takeIf { it > 0 } ?: width
@@ -190,7 +209,7 @@ private class MaskedDrawable(private val icon: Drawable) : Drawable() {
 
     // 遮罩：圆外不透明 → DST_OUT 擦掉圆外，只留圆内
     paint.xfermode = maskMode
-    layer.drawPath(circleMaskPath(width, height), paint)
+    layer.drawPath(mask, paint)
     paint.xfermode = null
 
     canvas.drawBitmap(bitmap, null, bounds, paint)
