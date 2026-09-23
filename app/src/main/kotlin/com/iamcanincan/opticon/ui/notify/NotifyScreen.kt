@@ -63,7 +63,9 @@ fun NotifyScreen() {
     // 默认配置由外壳（OpticonApp）在首次打开时落盘，这里只读。
     val prefs = remember { ModulePrefs.of(context) }
 
-    var enabled by remember { mutableStateOf(prefs.getBoolean(ModulePrefs.KEY_NOTIFY_ENABLED, true)) }
+    var enabled by remember {
+        mutableStateOf(prefs.getBoolean(ModulePrefs.KEY_NOTIFY_ENABLED, ModulePrefs.DEFAULT_NOTIFY_ENABLED))
+    }
     var mode by remember {
         mutableIntStateOf(prefs.getInt(ModulePrefs.KEY_MODE, ModulePrefs.DEFAULT_MODE))
     }

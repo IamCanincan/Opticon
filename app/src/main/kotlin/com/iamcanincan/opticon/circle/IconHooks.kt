@@ -1030,9 +1030,11 @@ private fun declaredConstructors(clazz: Class<*>): List<Constructor<*>> =
  * （`com.android.launcher3.icons.MonochromeIconFactory`），而这张遮罩的**极性是反的**：
  * 深色字形 + 浅色底的图标会变成"字形是洞、底色是形"，看着整个反掉。
  *
- * **为什么进来就翻、不用再判别的条件**：桌面只在 `AdaptiveIconDrawable.getMonochrome()`
+ * **为什么除了用户开关之外不再判别的条件**：桌面只在 `AdaptiveIconDrawable.getMonochrome()`
  * 为 null（= 应用没提供单色图标）时才 new 这个 Factory —— **已适配的应用根本不会走到这里**。
- * 所以"只翻未适配的"这件事由调用点天然保证，这里无脑翻一次即可，不需要再判断前景/背景亮度差。
+ * 所以"只翻未适配的"这件事由调用点天然保证，这里不需要再判断前景/背景亮度差。
+ * 唯一的开关是界面上的「修正单色图标的极性」（[ModuleRuntime.options] 的 `monoInvert`），
+ * 它是逃生口：个别 ROM / 图标包本身就该保持原样时用它关掉，不是在问用户口味。
  *
  * **链路（已逐条对过字节码）**：`generateMono()` 把结果写进 `mAlphaBitmap`，
  * `wrap()` 返回包住本对象的 `InsetDrawable`，`MonoIconThemeController.toAlphaBitmap()`
@@ -1064,6 +1066,10 @@ private fun hookForcedThemedMono(xposed: XposedInterface, classLoader: ClassLoad
             return@intercept result
           }
           runCatching {
+              // 反色开关（界面上「修正单色图标极性」）。关掉就是把桌面自己生成的那张
+              // 遮罩原样留着 —— 只在这个 ROM / 桌面版本实测不该翻的时候才需要关。
+              // 按调用时判断而不是装钩时判断，切开关才不需要重启桌面。
+              if (!ModuleRuntime.options().monoInvert) return@runCatching
               val bitmap = alphaField.get(self) as? Bitmap
               if (bitmap == null) Log.w(TAG, "Mono: mAlphaBitmap is null")
               else if (bitmap.config != Bitmap.Config.ALPHA_8)

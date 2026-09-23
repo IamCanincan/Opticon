@@ -20,6 +20,19 @@ data class ModuleOptions(
     /** 裁圆图标的总开关：关掉后所有进程都拿原图标，不再套圆形遮罩 */
     var circleEnabled: Boolean = true,
 
+    /**
+     * 修正 Android 16「强制取色」下桌面替**未适配**应用生成的单色遮罩极性。
+     *
+     * 那张遮罩的极性是反的：本该「字形实心、底透明」画成了「字形透明、底实心」，
+     * 深色字形 + 浅色底的图标看起来整个反掉。模块在 `MonochromeIconFactory.generateMono`
+     * 出图后把 ALPHA_8 掩码就地翻一次（`a → 255 - a`）。
+     *
+     * 关掉它就是把桌面自己那套原样留着 —— 只有在这个 ROM / 桌面版本上实测**不该翻**
+     * （例如厂商已经修过极性，或某个图标包本身就是反着出的）时才需要关。
+     * 它和 [circleEnabled] 是两个独立开关：裁圆和遮罩极性没有因果关系。
+     */
+    var monoInvert: Boolean = true,
+
     /** 通知图标的总开关：关掉后通知小图标保持系统原样 */
     var notifyEnabled: Boolean = true,
 
@@ -64,8 +77,8 @@ data class ModuleOptions(
      * 「读到了但值是默认的」和「根本没读到、退回默认了」。
      */
     fun describe(): String =
-        "circle=$circleEnabled notify=$notifyEnabled mode=$replacementName" +
-            " keepColor=$keepOriginalColor preserveTinted=$preserveTinted"
+        "circle=$circleEnabled monoInvert=$monoInvert notify=$notifyEnabled" +
+            " mode=$replacementName keepColor=$keepOriginalColor preserveTinted=$preserveTinted"
 
     companion object {
         /** 未适配 → 直接换成彩色的应用启动图标 */

@@ -21,7 +21,7 @@ import android.os.Process
  * - 清单里声明 `exported` 加 `readPermission="android.permission.STATUS_BAR"`，
  *   这是签名级权限，只有系统组件持有，普通应用查不进来；
  * - 代码里再按调用方包名校验一次作为第二道闸（见 [isTrustedCaller]）；
- * - 只读，暴露的内容仅是「两个功能开关 + 图标模式」这类非敏感开关。
+ * - 只读，暴露的内容仅是「三个开关 + 图标模式」这类非敏感配置。
  *
  * ⚠ **读不到配置的进程会用默认值（两个功能都开）**：作用域是可以由用户在管理器里
  * 额外勾选的（第三方桌面等），那些进程既不在下面的白名单里、也没有 STATUS_BAR 权限，
@@ -47,8 +47,9 @@ class ConfigProvider : ContentProvider() {
         // ⚠ 别用 addRow(arrayOf<Any>(...))：Int 与 Boolean 混在一起 Kotlin 推不出公共类型。
         // 用 newRow() 逐项 add。
         cursor.newRow().apply {
-            add(if (prefs.getBoolean(ModulePrefs.KEY_CIRCLE_ENABLED, true)) 1 else 0)
-            add(if (prefs.getBoolean(ModulePrefs.KEY_NOTIFY_ENABLED, true)) 1 else 0)
+            add(if (prefs.getBoolean(ModulePrefs.KEY_CIRCLE_ENABLED, ModulePrefs.DEFAULT_CIRCLE_ENABLED)) 1 else 0)
+            add(if (prefs.getBoolean(ModulePrefs.KEY_MONO_INVERT, ModulePrefs.DEFAULT_MONO_INVERT)) 1 else 0)
+            add(if (prefs.getBoolean(ModulePrefs.KEY_NOTIFY_ENABLED, ModulePrefs.DEFAULT_NOTIFY_ENABLED)) 1 else 0)
             add(prefs.getInt(ModulePrefs.KEY_MODE, ModulePrefs.DEFAULT_MODE))
         }
         return cursor
@@ -114,6 +115,7 @@ class ConfigProvider : ContentProvider() {
         /** 列名与 [ModulePrefs.COLUMN_*] 一一对应，顺序也要一致 */
         val COLUMNS = arrayOf(
             ModulePrefs.COLUMN_CIRCLE_ENABLED,
+            ModulePrefs.COLUMN_MONO_INVERT,
             ModulePrefs.COLUMN_NOTIFY_ENABLED,
             ModulePrefs.COLUMN_MODE
         )

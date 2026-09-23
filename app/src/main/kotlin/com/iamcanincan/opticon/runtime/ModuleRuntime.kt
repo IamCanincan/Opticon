@@ -205,6 +205,9 @@ object ModuleRuntime {
                     circleEnabled = cursor.getInt(
                         cursor.getColumnIndexOrThrow(ModulePrefs.COLUMN_CIRCLE_ENABLED)
                     ) != 0,
+                    monoInvert = cursor.getInt(
+                        cursor.getColumnIndexOrThrow(ModulePrefs.COLUMN_MONO_INVERT)
+                    ) != 0,
                     notifyEnabled = cursor.getInt(
                         cursor.getColumnIndexOrThrow(ModulePrefs.COLUMN_NOTIFY_ENABLED)
                     ) != 0,

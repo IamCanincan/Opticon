@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Circle
+import androidx.compose.material.icons.filled.InvertColors
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
@@ -93,6 +94,7 @@ fun IconScreen(snackbarHostState: SnackbarHostState) {
   ) {
     item { MasterSwitchCard() }
     item { Section(text = stringResource(R.string.section_effect)) { EffectCard() } }
+    item { Section(text = stringResource(R.string.section_mono)) { MonoInvertCard() } }
     item { Section(text = stringResource(R.string.section_tools)) { ToolsCard(snackbarHostState) } }
 
     item { Section(text = stringResource(R.string.section_notes)) { NotesCard() } }
@@ -115,7 +117,7 @@ private fun MasterSwitchCard() {
   val context = LocalContext.current
   val prefs = remember { ModulePrefs.of(context) }
   var enabled by remember {
-    mutableStateOf(prefs.getBoolean(ModulePrefs.KEY_CIRCLE_ENABLED, true))
+    mutableStateOf(prefs.getBoolean(ModulePrefs.KEY_CIRCLE_ENABLED, ModulePrefs.DEFAULT_CIRCLE_ENABLED))
   }
 
   Card(
@@ -163,6 +165,71 @@ private fun MasterSwitchCard() {
   }
 }
 
+
+/**
+ * 单色遮罩极性修正开关。
+ *
+ * Android 16「强制动态取色」下，桌面会给**没适配单色图标**的应用现场生成一张单色遮罩
+ * （`MonochromeIconFactory`），而这张遮罩的极性是反的 —— 深色字形 + 浅色底的图标会变成
+ * 「字形是洞、底色是形」，看着整个反掉。模块在桌面出图之后把那张 ALPHA_8 掩码翻回来。
+ *
+ * 已经自己提供了 monochrome 层的应用**根本不会走到这条路径**（桌面只在取不到单色层时
+ * 才 new 这个 Factory），所以这个开关只管得到未适配的那批图标。
+ *
+ * 关掉它是逃生口，不是「看个人口味」：只有在某个 ROM / 桌面版本上实测**不该翻**
+ * （厂商已经修过极性，或图标包本身就是反着出的）时才需要关。
+ * 两个功能的判定都在桌面进程里按 TTL 重读配置，切开关不用重启进程 ——
+ * 但已经缓存下来的图标要等重建，用下面「运维」里的清缓存按钮。
+ */
+@Composable
+private fun MonoInvertCard() {
+  val context = LocalContext.current
+  val prefs = remember { ModulePrefs.of(context) }
+  var enabled by remember {
+    mutableStateOf(prefs.getBoolean(ModulePrefs.KEY_MONO_INVERT, ModulePrefs.DEFAULT_MONO_INVERT))
+  }
+
+  ElevatedCard(shape = MaterialTheme.shapes.large) {
+    Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+      Surface(
+        shape = MaterialTheme.shapes.small,
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+        modifier = Modifier.size(40.dp),
+      ) {
+        Box(contentAlignment = Alignment.Center) {
+          Icon(
+            imageVector = Icons.Default.InvertColors,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(22.dp),
+          )
+        }
+      }
+      Spacer(modifier = Modifier.width(14.dp))
+      Column(modifier = Modifier.weight(1f)) {
+        Text(
+          text = stringResource(R.string.mono_switch_title),
+          style = MaterialTheme.typography.titleSmall,
+          color = MaterialTheme.colorScheme.onSurface,
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+          text = stringResource(R.string.mono_switch_body),
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+      Spacer(modifier = Modifier.width(8.dp))
+      Switch(
+        checked = enabled,
+        onCheckedChange = { value ->
+          enabled = value
+          prefs.edit().putBoolean(ModulePrefs.KEY_MONO_INVERT, value).apply()
+        },
+      )
+    }
+  }
+}
 
 /**
  * 「效果」卡：一张形状示意图 + 一句覆盖范围说明。

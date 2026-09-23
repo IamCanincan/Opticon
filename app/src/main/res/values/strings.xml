@@ -122,6 +122,14 @@
     <string name="effect_title">一律裁成正圆</string>
     <string name="effect_body">桌面、应用列表、最近任务里的图标都会变成圆形，圆外透明。</string>
 
+    <!--
+        单色遮罩极性修正。这条和裁圆是**两个独立开关**：它管的是 Android 16 强制取色下
+        桌面替「未适配」应用现场生成的那张单色遮罩，和形状无关。
+    -->
+    <string name="section_mono">单色图标</string>
+    <string name="mono_switch_title">修正单色图标的极性</string>
+    <string name="mono_switch_body">Android 16 强制取色时，桌面会给没做单色适配的应用现场生成一张遮罩，而它的极性是反的：字形变成洞、底色变成形，图标看着整个反掉。开着时在桌面出图后把它翻回来。已经自己提供了单色图层的应用不走这条路，不受这里影响。</string>
+
     <!-- 说明 -->
     <string name="section_notes">说明</string>
     <string name="note_adaptive">自适应图标也会被强制裁成圆形：系统给它的形状（圆角方、水滴等）不一定是圆。</string>
