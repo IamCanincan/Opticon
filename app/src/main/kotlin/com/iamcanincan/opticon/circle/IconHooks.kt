@@ -1091,16 +1091,33 @@ private fun hookForcedThemedMono(xposed: XposedInterface, classLoader: ClassLoad
   else Log.w(TAG, "Mono: generateMono NOT hooked")
 }
 
-/** 单色遮罩翻转：ALPHA_8，一个像素一字节，a → 255 - a。 */
+/** 单色遮罩翻转：ALPHA_8，一个像素一字节，a → 255 - a。
+ *
+ * 每张图标一次全像素往返本身无法避免（要进 JNI 再回来），
+ * 但用来传像素的那块 `byte[]` 不必每次新建 —— 热路径上每分钟数百张，
+ * `ByteArray` 是 Eden 区短命大对象，回收压力会显在 GC 抖动上。
+ * 用按大小**就地扩容**的缓存复用：旧数组装得下就接着用，装不下就换一块
+ * 稍大的（按 1.25 倍，避免下一张又恰好只大一个字节、再分配一次）。
+ *
+ * 多线程：每个 binder 线程各自一份，互不干扰、零锁。
+ */
+private val invertBuffer = ThreadLocal.withInitial { ByteArray(0) }
+
 private fun invertAlphaMask(bitmap: Bitmap) {
-  val bytes = ByteArray(bitmap.rowBytes * bitmap.height)
-  val buffer = ByteBuffer.wrap(bytes)
-  bitmap.copyPixelsToBuffer(buffer)
-  for (i in bytes.indices) {
-    bytes[i] = (255 - (bytes[i].toInt() and 0xff)).toByte()
+  val need = bitmap.rowBytes * bitmap.height
+  var arr = invertBuffer.get()
+  if (arr.size < need) {
+    // 1.25 倍上限，避免下一张恰好大一字节时又扩一次
+    arr = ByteArray(maxOf(need, arr.size + (arr.size shr 2)))
   }
-  buffer.rewind()
+  val buffer = ByteBuffer.wrap(arr, 0, need)
+  bitmap.copyPixelsToBuffer(buffer)
+  for (i in 0 until need) {
+    arr[i] = (255 - (arr[i].toInt() and 0xff)).toByte()
+  }
+  buffer.position(0)
   bitmap.copyPixelsFromBuffer(buffer)
+  invertBuffer.set(arr)
 }
 
 /** 累计翻了多少张遮罩。热路径，按 40 条汇总一次，不逐条打。 */

@@ -397,6 +397,7 @@ MIT —— 见 [LICENSE](LICENSE)。
 - 重构：四页重复的卡片与列表骨架收进 `Common.kt`（`ScreenList` 收成图标/模块/关于三页原本逐字节相同的骨架、`HeroCard` 收总开关卡与模块页状态卡、四处手写的 40dp 底板改用已有的 `IconTile`、`InfoCard` 合并通知页两张说明卡、`RepoUrl` 收成一份）。**纯结构，未改任何数值**。通知页那套 44dp 底板 / 私有小标题 / 14dp 间距是另一套视觉决定，刻意没有一起统一。
 - 性能：SystemUI 通知路径上的反射成员（`Field` / `Method`）与两个内部资源 id 从「每次访问现查」提到装钩时解析一次，句柄存进拦截闭包。原先 `MemberLookup` 每个成员访问都做一遍 `getDeclaredField`，`declaredMethod` 还靠逐级抛 `NoSuchMethodException` 走父类链，而这些都在每条通知、每次图标着色的路径上。
 - 清理：移除零引用的 `androidx.graphics:graphics-shapes` 依赖（Material Shapes 从来没被 import 过）；修正 `libs.versions.toml` 与 `lint.xml` 里那条「Compose 编译器版本必须与 Kotlin Gradle 插件严格一致」的说法 —— 仓库里没有 `kotlin.android` 插件，`kotlin = "…"` 只钉住 Compose 插件，KGP 由 AGP 带入，注释描述的约束实际不存在。
+- 性能：`invertAlphaMask` 用的那块 `byte[]` 改为按大小就地复用的 ThreadLocal 缓存，每张 mono 遮罩免去一次 Eden 区分配。Android 16「强制动态取色」下桌面会现场为每张没适配的应用生成 ALPHA_8 掩码，真机量过单次清缓存重启后 60 秒内能跑 360+ 张翻转 —— 短命大对象的 GC 压力是真能看到的，省下来比挂钩里 25 处 `toTypedArray()` 加起来还多。
 
 ### v1.0.3（2026-09-22）
 - 修复：点「清除缓存并重启桌面 / 重启 SystemUI / 重启其他进程」后弹出的提示（Snackbar）被底部悬浮导航栏挡住、截断的问题。提示现在显示在底栏上方，完整可见。
