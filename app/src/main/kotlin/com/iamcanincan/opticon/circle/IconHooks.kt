@@ -917,9 +917,11 @@ private fun hookShortcutIcons(xposed: XposedInterface) {
 
 private fun markAll(items: Iterable<*>?) {
   val list = items ?: return
-  runMarkingIcons {
-    for (item in list) markInfo(item)
-  }
+  // ⚠ 这一圈**不能**再套 runMarkingIcons：markInfo 的每个分支自己就带这道闸，
+  // 而它是 inline + 非局部返回 —— 外层先置位，里面每次调用都直接 return，
+  // 整条批量通道会一个 id 都不打地静默空转（就是之前的实锤 bug）。
+  // 逐条上锁才是想要的粒度：条目之间要互相放行，同一条内部的嵌套才要挡住。
+  for (item in list) markInfo(item)
 }
 
 private fun markInfo(info: Any?) {
