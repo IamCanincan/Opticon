@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <lint>
     <!--
-        Compose 编译器插件的版本必须与 Kotlin Gradle 插件版本严格一致（见 libs.versions.toml）。
-        lint 会建议把 compose 各库升到更新的版本，但那样会和 Kotlin 版本不匹配、
-        或者越过 material3 里 MD3E 公开 API 的那个窗口，所以这里显式忽略。
+        依赖版本一律由 catalog 管，不跟着 lint 的即时建议走：compose 各库由 BOM 钉着，
+        material3 必须停在 MD3E 公开 API 的那个 alpha 窗口，而 Compose 编译器插件版本
+        要和 kotlin 那个号对上（见 libs.versions.toml 顶部的说明）。
     -->
     <issue id="NewerVersionAvailable" severity="ignore" />
 

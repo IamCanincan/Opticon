@@ -1,5 +1,11 @@
 [versions]
-# Compose 编译器插件版本，必须与 Kotlin Gradle 插件版本严格一致。
+# ⚠ 这个 kotlin 版本号只管到 Compose 编译器插件（下面 kotlin-compose 引它）。
+# 仓库里没有 apply `org.jetbrains.kotlin.android` —— Kotlin Gradle 插件是 AGP 带进来的，
+# 所以「必须与 KGP 严格一致」这条约束在本项目里不是由这里保证的。
+# AGP 自己期望的是另一个版本（见 app/build.gradle.kts 里 compose-group-mapping 的 force），
+# 两边对不上时以能编译为准。
+# 所以这个版本号只钉住 Compose 编译器插件本身，并不约束 KGP —— 别把它当 Kotlin 版本看。改 AGP 时
+# 要另看这个插件版本还配不配（build.gradle.kts 里那段 force 就是为这个）。
 kotlin = "2.4.20"
 composeBom = "2026.09.00"
 # ⚠ 不能用 BOM 托管 material3：MD3E 的公开 API（MaterialExpressiveTheme /
@@ -26,7 +32,6 @@ activity-compose = { module = "androidx.activity:activity-compose", version.ref 
 # 通知侧要在 SystemUI 进程里读 ContentProvider、跑 MatrixCursor，用 KTX 的便利方法更省事
 core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
 # MaterialShapes：Material 3 Expressive 的形状系统（连续圆角多边形，如花瓣/曲奇）
-graphics-shapes = { module = "androidx.graphics:graphics-shapes", version = "1.1.0" }
 
 [plugins]
 android-application = { id = "com.android.application", version = "9.4.1" }

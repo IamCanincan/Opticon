@@ -393,6 +393,10 @@ MIT —— 见 [LICENSE](LICENSE)。
 - 性能：挂钩里 25 处 `chain.proceed(args.toTypedArray())` 改成零参 `proceed()`（`getArgs()` 返回 `List`，每次都要白拷一份数组，而那条钩挂在进程内**每一张** drawable 上）；圆形图标的离屏 `Canvas` 与遮罩 `Path` 改为按尺寸复用。
 - 健壮性：配置快照改为 volatile 发布 + 不可变对象，并给重读加互斥闸（system_server 里是多个 binder 线程同时进热路径）；provider 未就绪时的三条回退通道从「每秒在宿主主线程跑一遍」退避到 30 秒一次。
 - 整理：所有开关默认值收进 `ModulePrefs` 的 `DEFAULT_*` 常量（原先 circle/notify 的 `true` 散在界面、provider、prefs 四处）。
+- 修复：配置通道每次成功都打一行 `provider ok: …`，而它按 TTL 每秒一轮 —— 每个被注入的进程每秒一行、内容一模一样（撤 `STATUS_BAR` 之前还是每秒一行 `SecurityException`）。改成只在值变化时打。真机量过：同一进程 10 秒从约 10 行降到 1 行。
+- 重构：四页重复的卡片与列表骨架收进 `Common.kt`（`ScreenList` 收成图标/模块/关于三页原本逐字节相同的骨架、`HeroCard` 收总开关卡与模块页状态卡、四处手写的 40dp 底板改用已有的 `IconTile`、`InfoCard` 合并通知页两张说明卡、`RepoUrl` 收成一份）。**纯结构，未改任何数值**。通知页那套 44dp 底板 / 私有小标题 / 14dp 间距是另一套视觉决定，刻意没有一起统一。
+- 性能：SystemUI 通知路径上的反射成员（`Field` / `Method`）与两个内部资源 id 从「每次访问现查」提到装钩时解析一次，句柄存进拦截闭包。原先 `MemberLookup` 每个成员访问都做一遍 `getDeclaredField`，`declaredMethod` 还靠逐级抛 `NoSuchMethodException` 走父类链，而这些都在每条通知、每次图标着色的路径上。
+- 清理：移除零引用的 `androidx.graphics:graphics-shapes` 依赖（Material Shapes 从来没被 import 过）；修正 `libs.versions.toml` 与 `lint.xml` 里那条「Compose 编译器版本必须与 Kotlin Gradle 插件严格一致」的说法 —— 仓库里没有 `kotlin.android` 插件，`kotlin = "…"` 只钉住 Compose 插件，KGP 由 AGP 带入，注释描述的约束实际不存在。
 
 ### v1.0.3（2026-09-22）
 - 修复：点「清除缓存并重启桌面 / 重启 SystemUI / 重启其他进程」后弹出的提示（Snackbar）被底部悬浮导航栏挡住、截断的问题。提示现在显示在底栏上方，完整可见。

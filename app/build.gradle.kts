@@ -70,7 +70,6 @@ dependencies {
   implementation(libs.compose.material.icons.extended)
   implementation(libs.activity.compose)
   implementation(libs.core.ktx)
-  implementation(libs.graphics.shapes)
   debugImplementation(libs.compose.ui.tooling)
 }
 
