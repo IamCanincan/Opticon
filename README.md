@@ -60,9 +60,9 @@
 
 | 页面 | 内容 |
 |---|---|
-| **图标** | 裁圆总开关、效果示意、只跟裁圆有关的注意事项 |
+| **图标** | 裁圆总开关、单色遮罩极性开关、效果示意、只跟裁圆有关的注意事项、运维按钮（清图标缓存 / 重启进程） |
 | **通知** | 通知总开关、图标模式（系统黑白 / 彩色桌面图标）、怎么确认生效 |
-| **模块** | 两个功能**共用**的东西：作用域清单、启用步骤、验证命令、运维按钮（清图标缓存 / 重启进程） |
+| **模块** | 两个功能**共用**的东西：作用域清单、启用步骤、验证命令 |
 | **关于** | 检查更新与版本信息 |
 
 - **左右滑动也能切页**，和点底栏是双向联动的（当前页由 Pager 统一持有）。
@@ -181,6 +181,21 @@ Hooked com.android.settings
 对它们而言「关掉开关」不生效。真正决定全局的是 **system_server**：它在名单里，
 读到关闭就不给图标 id 打标记，下游任何进程拿到的都是未经处理的原图标。
 
+### 单色遮罩的极性（Android 16 强制取色）
+
+Android 16 的「强制动态取色」会给**没做单色适配**的应用现场生成一张单色遮罩
+（`com.android.launcher3.icons.MonochromeIconFactory`），而这张遮罩的**极性是反的**：
+深色字形 + 浅色底的图标会变成「字形是洞、底色是形」，看着整个反掉。
+模块在桌面出图之后把那张 ALPHA_8 掩码就地翻一次（`a → 255 - a`）。
+
+「已适配的不翻」这件事不用判条件 —— 桌面只在 `AdaptiveIconDrawable.getMonochrome()`
+为 null 时才 new 这个 Factory，自己带单色层的应用根本走不到这条路径。
+
+这个行为现在是**独立开关**（图标页 →「修正单色图标的极性」），和裁圆分开：
+极性跟形状没有因果关系。默认开着，与之前版本的行为一致；它是逃生口 ——
+只有在某个 ROM / 桌面版本上实测**不该翻**（厂商自己修过极性、或某个图标包本就反着出）
+时才需要关。判定按 TTL 在调用时读，切开关不用重启桌面（已缓存的图标仍要重建）。
+
 ### 运维按钮（纯 LSP，不 root 不 shell）
 
 界面里的三个按钮走的是「App 发广播点名 → **目标进程里的模块**自己执行」：
@@ -191,6 +206,14 @@ Hooked com.android.settings
 白名单 = launcher3 / nexuslauncher / systemui / settings / settings.intelligence /
 intentresolver / permissioncontroller / wellbeing。
 ⚠ **绝不能含 `system` / `system_server`** —— 杀它们等于软重启整机。
+
+接收器是**动态注册且必须导出**的（发送方是另一个 uid），所以入口由权限把闸：
+本 APK 自己声明一个 `signature` 级权限
+`com.iamcanincan.opticon.permission.PROCESS_CONTROL`，`registerReceiver` 一侧要求它。
+同签名才拿得到 —— 没有这一道的话，任何第三方应用发一条
+`com.iamcanincan.opticon.RESTART_SELF` 就能反复杀桌面和 SystemUI。
+注意权限只加在接收侧：`sendBroadcast` 再传一次会变成检查**接收方**是否持有，
+而宿主进程并不持有它。
 
 > 测之前**必须先把目标进程重启过**，否则它跑的是旧模块代码、接收器还没注册
 > （会误判成「按钮没生效」）。
@@ -246,10 +269,10 @@ intentresolver / permissioncontroller / wellbeing。
 - **⚠ `<monochrome>` 元素必须放在 `mipmap-anydpi-v33/`**：它是 API 33+ 才有的元素，
   放在没有版本限定符的目录里会被启动器忽略，主题图标就不生效了。
   所以 `mipmap-anydpi/` 和 `mipmap-anydpi-v33/` 两份必须同时存在、内容只差这一行。
-- **改几何必须三处同步**（`ic_launcher_foreground` / `ic_launcher_monochrome` /
-  `ic_brand_mark`），否则主题图标剪影会和桌面图标对不上。
-- 界面里一律用 `ic_brand_mark`（黑色 + Compose tint）：启动器那两份是硬编码深色、
-  且按图标比例算的缩放，直接贴到界面上会「深色模式下看不见 + 字号小得看不清」。
+- **改几何必须两处同步**（`ic_launcher_foreground` / `ic_launcher_monochrome`），
+  否则主题图标剪影会和桌面图标对不上。
+  （早先还有第三份 `ic_brand_mark` 专供界面使用，已在「界面大改」那次连同
+   `ScreenHero` / `VersionChip` 一起删掉 —— 界面现在用 `Icons.Default.*` 矢量图标。）
 
 ## 已知取舍
 
@@ -285,8 +308,10 @@ intentresolver / permissioncontroller / wellbeing。
   方便直接装；正式发布请换自己的 keystore。
 - release 开了 R8（`isMinifyEnabled` + `isShrinkResources`）。入口类
   `com.iamcanincan.opticon.entry.OpticonModule` 由 proguard `-keep` 保名 ——
-  它同时出现在 `META-INF/xposed/java_init.list` 里，改包名时**三处必须一起改**
-  （`namespace` / `applicationId`、proguard `-keep`、`java_init.list`）。
+  它同时出现在 `META-INF/xposed/java_init.list` 里，改包名时**四处必须一起改**
+  （`namespace` / `applicationId`、proguard `-keep`、`java_init.list`、
+   以及 `AndroidManifest` 里 provider 的 `android:authorities` —— 模块侧是按
+   「包名 + `.config`」拼 URI 的，漏掉它就是配置通道整条断掉、全线退回默认值）。
 - 依赖版本集中在 `gradle/libs.versions.toml`。⚠ `material3` 必须显式写版本，
   不能用 BOM 托管：MD3E 的公开 API（`MaterialExpressiveTheme`）在稳定版里还是 internal。
 
@@ -341,11 +366,10 @@ com.iamcanincan.opticon
 ├── ui/
 │   ├── MainActivity           入口 Activity（同时是桌面图标）
 │   ├── OpticonApp             外壳：顶栏 + 悬浮药丸导航 + Pager（左右滑动切页）
-│   ├── Common                 各页共用：ScreenHero / Section / SectionLabel /
-│   │                          VersionChip / IconTile / FloatingNavSpace
-│   ├── icon/IconScreen        「图标」页（裁圆）
+│   ├── Common                 各页共用：Section / SectionLabel / IconTile / FloatingNavSpace
+│   ├── icon/IconScreen        「图标」页（裁圆 + 单色极性 + 运维按钮）
 │   ├── notify/NotifyScreen    「通知」页（通知小图标）
-│   ├── module/ModuleScreen    「模块」页（作用域 / 步骤 / 验证 / 运维）
+│   ├── module/ModuleScreen    「模块」页（作用域 / 步骤 / 验证）
 │   ├── about/AboutScreen      「关于」页（检查更新 / 版本信息）
 │   └── theme/Theme            M3E 主题（动态取色）
 └── update/UpdateChecker       检查更新（唯一的联网点）
@@ -356,6 +380,18 @@ com.iamcanincan.opticon
 MIT —— 见 [LICENSE](LICENSE)。
 
 ## 更新日志
+
+### 未发布（v1.0.3 之后）
+- 新增：**单色遮罩极性**独立开关（图标页「修正单色图标的极性」）。之前这个反色行为是无条件的，只能改代码重刷；默认保持开着，行为不变。
+- 修复：批量打标记通道（`Parcel.readTypedList` / `createTypedArray` / `BaseParceledListSlice`）因为重入守卫套了两层而**完全空转**，一个图标 id 都没打上。受影响最实的是 `ResolveInfo` —— 它的 `activityInfo` / `icon` 要到 `readFromParcel` 才有值，构造时打标那条路对它走不通，批量这条正是唯一补救。表现为分享面板、默认应用选择页里的图标保持方角。
+- 修复：图标页三个运维按钮的广播接收器导出但**没有任何权限要求**，任何第三方应用都能反复杀桌面 / SystemUI、反复清桌面图标缓存。现在要求同签名才有的 `PROCESS_CONTROL` 权限。
+- 修复：`SystemUiHooks.isInstalled()` 恒为 false（那个标志位全仓没有一处赋值），装钩成功后的「别再接着试」闸门从不放行。
+- 修复：「检查更新」的结果和协程都活在 Pager 的那一页里，切一页结论就没了、后台那次 HTTP 请求也不会因取消而中断。现在由外壳持有；Snackbar 同理。
+- 修复：更新跳转链接原本直接采用响应里的 `html_url`，而直连失败时那份响应来自公共加速镜像（第三方）。现在 host 不是 `github.com` 就退回自己拼的地址。
+- 性能：SystemUI 每条通知都带 `CONTEXT_INCLUDE_CODE` 去 `createPackageContext`，那会建目标应用的类加载器、还会把 `packageReady` 重入进来；取图标只需要资源，去掉这个 flag。
+- 性能：挂钩里 25 处 `chain.proceed(args.toTypedArray())` 改成零参 `proceed()`（`getArgs()` 返回 `List`，每次都要白拷一份数组，而那条钩挂在进程内**每一张** drawable 上）；圆形图标的离屏 `Canvas` 与遮罩 `Path` 改为按尺寸复用。
+- 健壮性：配置快照改为 volatile 发布 + 不可变对象，并给重读加互斥闸（system_server 里是多个 binder 线程同时进热路径）；provider 未就绪时的三条回退通道从「每秒在宿主主线程跑一遍」退避到 30 秒一次。
+- 整理：所有开关默认值收进 `ModulePrefs` 的 `DEFAULT_*` 常量（原先 circle/notify 的 `true` 散在界面、provider、prefs 四处）。
 
 ### v1.0.3（2026-09-22）
 - 修复：点「清除缓存并重启桌面 / 重启 SystemUI / 重启其他进程」后弹出的提示（Snackbar）被底部悬浮导航栏挡住、截断的问题。提示现在显示在底栏上方，完整可见。

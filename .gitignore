@@ -12,6 +12,15 @@
 .cxx
 app/build
 app/release
+
+# 签名件绝不入库。.gitattributes 已经把 *.jks / *.keystore 标成 binary，
+# 说明这条线本来就在意；README 也让用户「正式发布请换自己的 keystore」，
+# 那就更要把凭据挡在仓库外。
+*.jks
+*.keystore
+*.p12
+keystore.properties
+signing.properties
 *.apk
 *.idsig
 # 本地临时件（下划线前缀）：图标轮廓抽取/渲染验证的脚本与预览图、
