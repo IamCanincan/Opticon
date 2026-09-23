@@ -350,6 +350,13 @@ private fun hookIconLoaders(xposed: XposedInterface, classLoader: ClassLoader): 
   return hooked
 }
 
+/**
+ * 约定：**没有改动过参数一律走零参 chain.proceed()**。
+ * Chain.getArgs() 返回的是 java.util.List，`proceed(args.toTypedArray())` 会先把整份
+ * 参数表拷成一个新数组 —— 而这条钩挂在 Resources.getDrawable* 上，进程里**每一张**
+ * drawable（不只是应用图标）都要过一遍，白拷一次就是每张图一次分配。
+ * 只有真的要换参数时才构造数组（下面的 restored、以及各 proceedWith 调用点）。
+ */
 private fun hookIconLoader(xposed: XposedInterface, method: Method): Boolean =
   runCatching {
       xposed.hook(method).intercept { chain ->
@@ -358,17 +365,17 @@ private fun hookIconLoader(xposed: XposedInterface, method: Method): Boolean =
         // 已经在生成图标了（同一条调用链的内层），交给最外层处理。
         // 参考项目把这道闸放在最前面 —— 默认图标那条分支同样要挡住，
         // 否则嵌套时同一个图标会被裁两次。
-        if (replacingIcon.get() == true) return@intercept chain.proceed(args.toTypedArray())
+        if (replacingIcon.get() == true) return@intercept chain.proceed()
 
         // 被标记的图标 id 是唯一认得出来的参数，找它比记住参数下标可靠。
         val index = args.indexOfFirst { (it as? Int)?.isMarkedIcon() == true }
         if (index < 0) {
           // 解析不出应用图标时系统会退回这个默认图标，它同样不是圆的。
           if (args.indexOfFirst { (it as? Int) == DEFAULT_APP_ICON } < 0) {
-            return@intercept chain.proceed(args.toTypedArray())
+            return@intercept chain.proceed()
           }
           val fallback =
-            chain.proceed(args.toTypedArray()) as? Drawable ?: return@intercept null
+            chain.proceed() as? Drawable ?: return@intercept null
           return@intercept clipToCircle(fallback)
         }
 
@@ -395,7 +402,7 @@ private fun hookArchivedAppIcon(xposed: XposedInterface, classLoader: ClassLoade
   for (method in declaredMethods(packageManager, "getArchivedAppIcon")) {
     runCatching {
       xposed.hook(method).intercept { chain ->
-        val icon = chain.proceed(chain.args.toTypedArray()) as? Drawable ?: return@intercept null
+        val icon = chain.proceed() as? Drawable ?: return@intercept null
         clipToCircle(icon)
       }
       hooked++
@@ -418,7 +425,7 @@ private fun hookPackageManagerIconGetters(xposed: XposedInterface, classLoader: 
     for (method in declaredMethods(packageManager, name)) {
       runCatching {
         xposed.hook(method).intercept { chain ->
-          val icon = chain.proceed(chain.args.toTypedArray()) as? Drawable ?: return@intercept null
+          val icon = chain.proceed() as? Drawable ?: return@intercept null
           clipToCircle(icon)
         }
         hooked++
@@ -454,11 +461,11 @@ private fun hookParcelWriteRestore(xposed: XposedInterface) {
       xposed.hook(method).intercept { chain ->
         val info =
           chain.thisObject as? PackageItemInfo
-            ?: return@intercept chain.proceed(chain.args.toTypedArray())
+            ?: return@intercept chain.proceed()
         val saved = info.icon
         if (saved.isMarkedIcon()) info.icon = saved.unmarked()
         try {
-          chain.proceed(chain.args.toTypedArray())
+          chain.proceed()
         } finally {
           info.icon = saved
         }
@@ -473,7 +480,7 @@ private fun hookParcelWriteRestore(xposed: XposedInterface) {
       xposed.hook(method).intercept { chain ->
         val info =
           chain.thisObject as? ResolveInfo
-            ?: return@intercept chain.proceed(chain.args.toTypedArray())
+            ?: return@intercept chain.proceed()
         val savedIcon = info.icon
         val savedResId = getIntField(info, "iconResourceId")
         if (savedIcon.isMarkedIcon()) {
@@ -481,7 +488,7 @@ private fun hookParcelWriteRestore(xposed: XposedInterface) {
           setIntField(info, "iconResourceId", savedIcon.unmarked())
         }
         try {
-          chain.proceed(chain.args.toTypedArray())
+          chain.proceed()
         } finally {
           info.icon = savedIcon
           if (savedResId != null) setIntField(info, "iconResourceId", savedResId)
@@ -510,7 +517,7 @@ private fun hookMarkedIconIds(xposed: XposedInterface) {
     for (ctor in declaredConstructors(clazz)) {
       runCatching {
         xposed.hook(ctor).intercept { chain ->
-          val result = chain.proceed(chain.args.toTypedArray())
+          val result = chain.proceed()
           val info = chain.thisObject as? PackageItemInfo ?: return@intercept result
           runMarkingIcons { markIcon(info) }
           result
@@ -522,7 +529,7 @@ private fun hookMarkedIconIds(xposed: XposedInterface) {
   for (ctor in declaredConstructors(ResolveInfo::class.java)) {
     runCatching {
       xposed.hook(ctor).intercept { chain ->
-        val result = chain.proceed(chain.args.toTypedArray())
+        val result = chain.proceed()
         runMarkingIcons { markResolveInfo(chain.thisObject as? ResolveInfo) }
         result
       }
@@ -534,7 +541,7 @@ private fun hookMarkedIconIds(xposed: XposedInterface) {
   for (ctor in declaredConstructors(PackageInfo::class.java)) {
     runCatching {
       xposed.hook(ctor).intercept { chain ->
-        val result = chain.proceed(chain.args.toTypedArray())
+        val result = chain.proceed()
         markInfo(chain.thisObject as? PackageInfo)
         result
       }
@@ -555,7 +562,7 @@ private fun hookBatchIconIds(xposed: XposedInterface, classLoader: ClassLoader) 
   for (method in declaredMethods(Parcel::class.java, "readTypedList")) {
     runCatching {
       xposed.hook(method).intercept { chain ->
-        val result = chain.proceed(chain.args.toTypedArray())
+        val result = chain.proceed()
         markAll(result as? List<*>)
         result
       }
@@ -566,7 +573,7 @@ private fun hookBatchIconIds(xposed: XposedInterface, classLoader: ClassLoader) 
   for (method in declaredMethods(Parcel::class.java, "createTypedArray")) {
     runCatching {
       xposed.hook(method).intercept { chain ->
-        val result = chain.proceed(chain.args.toTypedArray())
+        val result = chain.proceed()
         markAll((result as? Array<*>)?.asIterable())
         result
       }
@@ -590,7 +597,7 @@ private fun hookParceledListSlice(xposed: XposedInterface, classLoader: ClassLoa
   for (ctor in declaredConstructors(base)) {
     runCatching {
       xposed.hook(ctor).intercept { chain ->
-        val result = chain.proceed(chain.args.toTypedArray())
+        val result = chain.proceed()
         markAll(runCatching { mList.get(chain.thisObject) as? List<*> }.getOrNull())
         result
       }
@@ -620,7 +627,7 @@ private fun hookPackageInfoCommonUtils(xposed: XposedInterface, classLoader: Cla
     for (method in declaredMethods(utils, name)) {
       runCatching {
         xposed.hook(method).intercept { chain ->
-          val result = chain.proceed(chain.args.toTypedArray())
+          val result = chain.proceed()
           markInfo(result)
           result
         }
@@ -643,7 +650,7 @@ private fun hookTaskIcons(xposed: XposedInterface, classLoader: ClassLoader) {
       xposed.hook(method).intercept { chain ->
         val args = chain.args
         val index = args.indexOfFirst { it is Drawable }
-        if (index < 0) return@intercept chain.proceed(args.toTypedArray())
+        if (index < 0) return@intercept chain.proceed()
         val replaced = args.toMutableList()
         replaced[index] = clipToCircle(args[index] as Drawable)
         chain.proceedWith(chain.thisObject, replaced.toTypedArray())
@@ -719,7 +726,7 @@ private fun hookPixelLauncher(xposed: XposedInterface, classLoader: ClassLoader)
           // Field.set() 会自动拆箱，基本类型和装箱类型都成立。
           drawFullBleedField.set(iconOptions, false)
         }
-        chain.proceed(args.toTypedArray())
+        chain.proceed()
       }
       hooked++
     }
@@ -762,7 +769,7 @@ private fun hookSplashScreenIcon(xposed: XposedInterface, classLoader: ClassLoad
   for (ctor in ctors) {
     runCatching {
         xposed.hook(ctor).intercept { chain ->
-          val result = chain.proceed(chain.args.toTypedArray())
+          val result = chain.proceed()
           // 这是为圆形图标（圆外透明）准备的判定：原样图标不该被它影响。
           if (!ModuleRuntime.options().circleEnabled) return@intercept result
           runCatching {
@@ -807,7 +814,7 @@ private fun hookSettingsAdaptiveIcon(xposed: XposedInterface, classLoader: Class
         val index = args.indexOfFirst { it is Drawable }
         if (index < 0) {
           Log.d(TAG, "Settings.getAdaptiveIcon($sig) no-drawable")
-          return@intercept chain.proceed(args.toTypedArray())
+          return@intercept chain.proceed()
         }
         val inIcon = args[index] as Drawable
         Log.d(
@@ -846,7 +853,7 @@ private fun hookBatteryIcons(xposed: XposedInterface, classLoader: ClassLoader) 
         runCatching {
           runCatching { xposed.deoptimize(method) }
           xposed.hook(method).intercept { chain ->
-            val icon = chain.proceed(chain.args.toTypedArray()) as? Drawable
+            val icon = chain.proceed() as? Drawable
             if (icon == null) null else clipToCircle(icon)
           }
           hooked++
@@ -858,7 +865,7 @@ private fun hookBatteryIcons(xposed: XposedInterface, classLoader: ClassLoader) 
         runCatching {
           runCatching { xposed.deoptimize(method) }
           xposed.hook(method).intercept { chain ->
-            val result = chain.proceed(chain.args.toTypedArray())
+            val result = chain.proceed()
             wrapIconField(chain.thisObject, "mAppIcon")
             result
           }
@@ -874,7 +881,7 @@ private fun hookBatteryIcons(xposed: XposedInterface, classLoader: ClassLoader) 
       runCatching {
         runCatching { xposed.deoptimize(method) }
         xposed.hook(method).intercept { chain ->
-          val result = chain.proceed(chain.args.toTypedArray())
+          val result = chain.proceed()
           wrapIconField(chain.thisObject, "mIcon")
           result
         }
@@ -906,7 +913,7 @@ private fun hookShortcutIcons(xposed: XposedInterface) {
   for (method in declaredMethods(LauncherApps::class.java, "getShortcutIconDrawable")) {
     runCatching {
       xposed.hook(method).intercept { chain ->
-        val icon = chain.proceed(chain.args.toTypedArray()) as? Drawable ?: return@intercept null
+        val icon = chain.proceed() as? Drawable ?: return@intercept null
         clipToCircle(icon)
       }
       hooked++
@@ -1050,7 +1057,7 @@ private fun hookForcedThemedMono(xposed: XposedInterface, classLoader: ClassLoad
     runCatching {
         xposed.hook(method).intercept { chain ->
           // void 方法：intercept 期望返回 Any!，先存下来最后 return，别用 return@intercept。
-          val result = chain.proceed(chain.args.toTypedArray())
+          val result = chain.proceed()
           val self = chain.thisObject
           if (self == null) {
             Log.w(TAG, "Mono: thisObject is null")
