@@ -16,7 +16,14 @@
     <string name="xposed_description">把应用图标裁成圆形，修好未适配的通知小图标</string>
 
     <!--
-        底部导航：两个功能页 + 模块页（作用域 / 步骤 / 验证 / 运维）+ 关于页（更新 / 版本）。
+        自有权限 PROCESS_CONTROL 的名字与说明（出现在系统「设置 → 应用」里）。
+        用户不会主动去开它，但文案要能解释清它是干什么的、为什么存在。
+    -->
+    <string name="permission_process_control_label">Opticon 进程控制</string>
+    <string name="permission_process_control_description">只允许 Opticon 自己请求被注入的进程清图标缓存或重启自身</string>
+
+    <!--
+        底部导航：图标页（裁圆 + 运维按钮）、通知页、模块页（作用域 / 步骤 / 验证）、关于页（更新 / 版本）。
         四格 —— 三格时药丸太短，撑不起"悬浮药丸"的形态。
     -->
     <string name="tab_icon">图标</string>

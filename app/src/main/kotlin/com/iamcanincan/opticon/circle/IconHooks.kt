@@ -149,6 +149,19 @@ const val ACTION_CLEAR_ICON_CACHE = "com.iamcanincan.opticon.CLEAR_ICON_CACHE"
 const val ACTION_RESTART_SELF = "com.iamcanincan.opticon.RESTART_SELF"
 
 /**
+ * 上面两条 action 的**入口闸**：只有持有本权限的应用能让被注入的进程去清缓存 / 自杀重启。
+ *
+ * 接收器必须是导出的（发送方是另一个 uid —— 本模块 App），所以「谁能发」这件事只能由
+ * 权限来管。它是 `signature` 级、由本 APK 自己声明（见 AndroidManifest），
+ * 于是**只有与本包同签名的应用**能拿到 —— 少了这一道，任何第三方应用发一条
+ * `RESTART_SELF` 就能反复杀掉桌面和 SystemUI，`CLEAR_ICON_CACHE` 能反复删桌面图标缓存。
+ *
+ * ⚠ 只在 `registerReceiver` 一侧要求；`sendBroadcast` 不要再传这个权限名，
+ * 那是检查**接收方**是否持有 —— 宿主进程（SystemUI / launcher）并不持有它。
+ */
+const val PERMISSION_PROCESS_CONTROL = "com.iamcanincan.opticon.permission.PROCESS_CONTROL"
+
+/**
  * 允许响应"重启自己"的进程白名单。
  *
  * 这些都是普通 UI 进程：杀掉之后系统会立刻把它们拉起来，对用户没有副作用
@@ -208,6 +221,16 @@ private fun deleteIconCache(packageName: String): Boolean {
 // 清不清、什么时候清一律交给界面上的手动按钮，模块不再自作主张删桌面的数据库。
 // 手动清的实现见 [deleteIconCache] 与广播 [ACTION_CLEAR_ICON_CACHE]。
 
+/** 当前进程的 Application（模块侧拿 Context 的通用办法，反射 ActivityThread）。 */
+private fun currentApplication(): Application? =
+  runCatching {
+      val activityThread = Class.forName("android.app.ActivityThread")
+      val method = activityThread.getDeclaredMethod("currentApplication")
+      method.isAccessible = true
+      method.invoke(null) as? Application
+    }
+    .getOrNull()
+
 /**
  * 注册"进程控制"广播接收器：让 App 能请求**清缓存** / **重启本进程**。
  *
@@ -219,17 +242,9 @@ private fun deleteIconCache(packageName: String): Boolean {
  * **为什么清完缓存必须重启桌面**：桌面把图标位图缓存在**内存**里，只删 DB 它不会重新读盘，
  * 用户看到的还是旧图 —— 这正是"清了缓存却没变化"的根因。杀掉进程让系统把它拉起来，
  * 才会真正按当前逻辑重建图标。
+ *
+ * **发送方必须持有 [PERMISSION_PROCESS_CONTROL]**，见 [registerProcessControlReceiver]。
  */
-/** 当前进程的 Application（模块侧拿 Context 的通用办法，反射 ActivityThread）。 */
-private fun currentApplication(): Application? =
-  runCatching {
-      val activityThread = Class.forName("android.app.ActivityThread")
-      val method = activityThread.getDeclaredMethod("currentApplication")
-      method.isAccessible = true
-      method.invoke(null) as? Application
-    }
-    .getOrNull()
-
 private fun hookProcessControlReceiver(packageName: String) {
   if (packageName !in RESTARTABLE_PACKAGES) return
 
@@ -291,10 +306,12 @@ private fun registerProcessControlReceiver(context: Context, packageName: String
       addAction(ACTION_CLEAR_ICON_CACHE)
       addAction(ACTION_RESTART_SELF)
     }
+  // 权限加在**接收侧**：AMS 按发送方 uid 是否持有 PROCESS_CONTROL 决定这条广播送不送得到。
+  // 不写这个参数的话，任何应用都能让宿主进程自杀重启（见 [PERMISSION_PROCESS_CONTROL]）。
   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-    context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+    context.registerReceiver(receiver, filter, PERMISSION_PROCESS_CONTROL, null, Context.RECEIVER_EXPORTED)
   } else {
-    context.registerReceiver(receiver, filter)
+    context.registerReceiver(receiver, filter, PERMISSION_PROCESS_CONTROL, null)
   }
   Log.d(TAG, "ProcessControl: receiver registered in $packageName")
 }

@@ -10,6 +10,28 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!--
+        「运维按钮」用的自有权限。
+
+        图标页上的「清图标缓存 / 重启进程」不是本进程自己完成的：本应用既读不到桌面的
+        数据目录，也杀不掉别的进程。是**注入到目标进程里的模块代码**注册了一个动态广播
+        接收器，用宿主自己的 UID 去删自己的文件、去 kill 自己（见 IconHooks）。
+
+        动态接收器必须是导出的（发送方是另一个 uid），所以只能靠**权限**把住入口：
+        接收端要求调用方持有本权限，而这是 `signature` 级 —— 只有与本 APK 同签名的
+        应用能拿到。少了这一道，任何第三方应用发一条
+        `com.iamcanincan.opticon.RESTART_SELF` 就能反复杀掉桌面和 SystemUI。
+
+        这里 `<uses-permission>` 自己声明的自己用，安装时自动授予。
+    -->
+    <permission
+        android:name="com.iamcanincan.opticon.permission.PROCESS_CONTROL"
+        android:description="@string/permission_process_control_description"
+        android:label="@string/permission_process_control_label"
+        android:protectionLevel="signature" />
+
+    <uses-permission android:name="com.iamcanincan.opticon.permission.PROCESS_CONTROL" />
+
+    <!--
         纯 LibXposed（现代 API 102）模块，不要放老式 xposed meta-data。
 
         官方说明（LSPosed wiki · Develop Xposed Modules Using Modern Xposed API）：
