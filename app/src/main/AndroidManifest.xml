@@ -79,23 +79,28 @@
         </activity>
 
         <!--
-            配置通道：把界面里的开关与模式交给 SystemUI 进程里的通知模块。
+            配置通道：把界面里的开关与模式交给被注入到各进程里的模块代码。
 
             为什么需要它：模块既读不到本应用的私有目录（系统隔离，表现为 ENOENT），
             也用不了 LibXposed 的远程配置 —— 实测部分框架的 getRemotePreferences
             返回空对象、openRemoteFile 找不到任何文件，配置根本传不过去。
             ContentProvider 不依赖框架实现，各框架上都能用。
 
-            安全：只读，且用签名级权限 android.permission.STATUS_BAR 限流 ——
-            只有 SystemUI、system_server 这类系统组件持有该权限，普通应用查不进来；
-            provider 内部还会再按调用方包名校验一次。
+            安全：只读，且**按调用方包名认自家人**（见 ConfigProvider.isTrustedCaller，
+            名单与作用域清单逐条对齐）。不在名单里的应用查它，拿到的是一张开游标。
+
+            ⚠ 这里**刻意不写** android:readPermission。原先写的是
+            android.permission.STATUS_BAR（系统签名级），本意是防普通应用偷看，
+            实际效果是连自己人都防了：作用域清单里的 wellbeing 并不持有该权限，
+            于是它每秒查一次、每次被 SecurityException 挡掉，最后按默认值干活 ——
+            界面上把开关关掉对它不生效。真机才看得出来（见 ConfigProvider 的说明）。
+            包名白名单已经足够表达「谁能查」这件事，多那道锁只会漏人。
 
             它不影响模块元数据：作用域仍是 scope.list。
         -->
         <provider
             android:name=".runtime.ConfigProvider"
             android:authorities="com.iamcanincan.opticon.config"
-            android:exported="true"
-            android:readPermission="android.permission.STATUS_BAR" />
+            android:exported="true" />
     </application>
 </manifest>

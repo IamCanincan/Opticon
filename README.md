@@ -84,7 +84,7 @@ launcher / settings / system_server 那几条是给裁圆用的，而 `com.andro
 > 所以浅色 / 深色两套主题都成立。
 
 设置写进自己的 SharedPreferences，模块侧通过本应用暴露的**只读 ContentProvider**
-（`com.iamcanincan.opticon.config`，读取需要签名级权限 `android.permission.STATUS_BAR`）
+（`com.iamcanincan.opticon.config`，只读，按调用方包名认自家人）
 跨进程读取，按 1 秒 TTL 重读 —— 所以改完开关立刻生效，不用重启进程。
 
 ## 验证
@@ -177,7 +177,7 @@ Hooked com.android.settings
 拿到的就是应用原本的图标）。
 
 ⚠ **读不到配置的进程会用默认值（功能全开）**：作用域可以由用户在管理器里额外勾选，
-那些进程不在 provider 的可信名单里、也没有 `STATUS_BAR` 权限，拿不到配置。
+那些进程不在 provider 的包名白名单里，拿不到配置。
 对它们而言「关掉开关」不生效。真正决定全局的是 **system_server**：它在名单里，
 读到关闭就不给图标 id 打标记，下游任何进程拿到的都是未经处理的原图标。
 
@@ -382,6 +382,7 @@ MIT —— 见 [LICENSE](LICENSE)。
 ## 更新日志
 
 ### 未发布（v1.0.3 之后）
+- 修复：作用域里**不持有系统签名权限的应用根本读不到配置**。配置通道原本在包名白名单之外还加了一道 `readPermission="android.permission.STATUS_BAR"`，本意是防普通应用，实际把自家人也防了 —— 真机实测 `com.google.android.apps.wellbeing` 与 `com.android.permissioncontroller` 每个 TTL 查一次、每次被 `SecurityException` 挡掉，最后**只能按默认值干活**（界面上关掉开关对它们不生效），另外每秒往 logcat 刷一行失败日志。撤掉这道锁，只留 `isTrustedCaller()` 那道按包名的判断（名单仍与作用域逐条对齐）。撤锁后 permissioncontroller 立刻打出 `provider ok: …`，同一次查询用 shell 发则返回空游标而非权限拒绝 —— 陌生人依旧进不来。
 - 新增：**单色遮罩极性**独立开关（图标页「修正单色图标的极性」）。之前这个反色行为是无条件的，只能改代码重刷；默认保持开着，行为不变。
 - 修复：批量打标记通道（`Parcel.readTypedList` / `createTypedArray` / `BaseParceledListSlice`）因为重入守卫套了两层而**完全空转**，一个图标 id 都没打上。受影响最实的是 `ResolveInfo` —— 它的 `activityInfo` / `icon` 要到 `readFromParcel` 才有值，构造时打标那条路对它走不通，批量这条正是唯一补救。表现为分享面板、默认应用选择页里的图标保持方角。
 - 修复：图标页三个运维按钮的广播接收器导出但**没有任何权限要求**，任何第三方应用都能反复杀桌面 / SystemUI、反复清桌面图标缓存。现在要求同签名才有的 `PROCESS_CONTROL` 权限。
