@@ -302,6 +302,11 @@ intentresolver / permissioncontroller / wellbeing。
 - 界面里的「检查更新」是**本应用唯一的联网行为**，而且只在点了按钮之后才发起，
   没有后台轮询、没有统计上报；挂钩代码（跑在被注入进程里的部分）完全不联网。
   请求先直连 `api.github.com`，失败时回退到公共加速镜像 `gh-proxy.com`。
+- **`allowBackup="true"` 且没写备份规则** —— 这是**有意识的选择，不是疏漏**：
+  本应用的数据只有 `ModulePrefs` 的两个布尔 + 一个模式枚举，以及「检查更新」的缓存，
+  没有凭据、没有用户内容，被备份带上云不构成实际风险。而模块的**作用域**由框架自己的
+  管理器保存（不在本应用数据里），所以「跟着设备迁移」也不会带出一份错误的作用域。
+  真要收紧就把这一项改成 `false`，功能不受任何影响。
 - **强制取色：合成优先，翻转兜底**：Android 16 桌面在「强制动态取色」下会为没适配的
   应用现场生成掩码，而它的极性经常是反的。现在首选路径是**合成**（`MonochromeSynth`）：
   钩 `AdaptiveIconDrawable.getMonochrome()`，在它返回 null 时补一个极性正确的单色层，
@@ -358,8 +363,14 @@ intentresolver / permissioncontroller / wellbeing。
 
 需要 Android SDK 37（在 `local.properties` 里配好 `sdk.dir`）与 JDK 17+。
 
-- `assembleRelease` 产出的包用 debug 密钥签名（`signingConfigs.getByName("debug")`），
-  方便直接装；正式发布请换自己的 keystore。
+- `assembleRelease` 的签名取仓库根的 `keystore.properties`（`.gitignore` 已覆盖它和
+  `*.jks`；**keystore 本体刻意放在仓库外**，见 .gitignore 里那条注释的立场）。
+  文件不存在时**回退到 debug key** 并打一条构建警告 —— clone 下来照样能出一个能装的包，
+  但那个包**不能对外发布**：debug key 的指纹是公开的（`CN=Android Debug`），
+  任何人都能签出「同包名 + 同签名」的 APK，而本模块持有 `signature` 级的
+  `PROCESS_CONTROL` 权限（能反复杀桌面 / SystemUI）。
+  ⚠ 签名换掉之后**不能覆盖安装**：已装旧签名的设备必须先卸载（本应用自己的配置会丢，
+  框架侧的作用域选择不受影响）。
 - release 开了 R8（`isMinifyEnabled` + `isShrinkResources`）。入口类
   `com.iamcanincan.opticon.entry.OpticonModule` 由 proguard `-keep` 保名 ——
   它同时出现在 `META-INF/xposed/java_init.list` 里，改包名时**四处必须一起改**

@@ -1,11 +1,32 @@
 import com.android.build.api.dsl.ApplicationExtension
 import org.gradle.kotlin.dsl.configure
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.io.File
+import java.util.Properties
 
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.kotlin.compose)
 }
+
+/**
+ * 正式发布签名。
+ *
+ * 凭据放仓库根的 `keystore.properties`（`.gitignore` 已覆盖它和 `*.jks`），
+ * **keystore 本体刻意放在仓库外** —— 见 .gitignore 里「签名件绝不入库」那条注释的立场，
+ * 放进工作区就等于给 `git add -f` / 一次改错的 ignore 留了机会。
+ *
+ * ⚠ 文件不存在时**回退到 debug key**：让 clone 下来的人（以及没配密钥的 CI）照样能出
+ * 一个能装的包，而不是构建直接失败。代价是那个包**不能对外发布** —— debug key 的指纹
+ * 是公开的（`CN=Android Debug`），任何人都能签出「同包名 + 同签名」的 APK，
+ * 而本模块持有 `signature` 级的 `PROCESS_CONTROL` 权限。构建时会打一条警告。
+ */
+val keystoreProperties = Properties().apply {
+  val file = rootProject.file("keystore.properties")
+  if (file.exists()) file.inputStream().use { load(it) }
+}
+val releaseStoreFile: File? =
+  keystoreProperties.getProperty("storeFile")?.let { rootProject.file(it) }
 
 extensions.configure<ApplicationExtension> {
   namespace = "com.iamcanincan.opticon"
@@ -27,13 +48,31 @@ extensions.configure<ApplicationExtension> {
     versionName = "1.0.3"
   }
 
+  signingConfigs {
+    if (releaseStoreFile != null) {
+      create("release") {
+        storeFile = releaseStoreFile
+        storePassword = keystoreProperties.getProperty("storePassword")
+        keyAlias = keystoreProperties.getProperty("keyAlias")
+        keyPassword = keystoreProperties.getProperty("keyPassword")
+      }
+    }
+  }
+
   buildTypes {
     getByName("release") {
       isMinifyEnabled = true
       isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      // Ship a signed apk without maintaining a release keystore.
-      signingConfig = signingConfigs.getByName("debug")
+      signingConfig = if (releaseStoreFile != null) {
+        signingConfigs.getByName("release")
+      } else {
+        logger.warn(
+          "keystore.properties 缺失或没写 storeFile —— release 将用 debug key 签名，" +
+            "该 APK 不可对外发布（debug key 指纹公开，任何人都能签同签名包）。"
+        )
+        signingConfigs.getByName("debug")
+      }
     }
   }
 
