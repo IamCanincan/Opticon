@@ -152,11 +152,27 @@ object SystemUiHooks {
                         val sbn = (MemberLookup.readFieldByType(arg, StatusBarNotification::class.java)
                             ?: MemberLookup.readField(arg, "mSbn")) as? StatusBarNotification ?: return@runCatching
                         val context = ModuleRuntime.hostContext ?: return@runCatching
-                        // TYPE_RESOURCE 的图标必须用目标应用自己的 Resources 解码
+                        // TYPE_RESOURCE 的图标必须用目标应用自己的 Resources 解码。
+                        //
+                        // ⚠ 这里**不能**带 CONTEXT_INCLUDE_CODE：
+                        // ActivityThread.getPackageInfo 只在设了这个 flag 时才去
+                        // mPackages 里取/建 LoadedApk，并走 updateApplicationInfo →
+                        // createOrUpdateClassLoaderLocked（本仓 ModuleRuntime 的注释里
+                        // 记着这条路径会再派发一次 packageReady，把自己重入进来）。
+                        // 不带它则走 mResourcePackages 那份「只有资源、没有代码」的缓存，
+                        // 类加载器根本不建。对侧就是纯资源解码：IconBitmap.fromResources
+                        // 只用 context.resources，NotificationIconPatch 只用 packageManager，
+                        // 两者都不需要从目标 APK 里 loadClass。
+                        // 框架自己也这么判：Icon.java 里 CONTEXT_INCLUDE_CODE 只在
+                        // sameAppWithProcess 时才加，跨应用取图标一律不带。
+                        //
+                        // CONTEXT_IGNORE_SECURITY 留着不花成本：ActivityThread 是先算
+                        // includeCode 再算 securityViolation，标准实现里这里已经用不上它，
+                        // 但 ROM 侧的判断改没改我们说不好，留个保险丝。
                         val targetContext = runCatching {
                             context.createPackageContext(
                                 sbn.packageName,
-                                Context.CONTEXT_INCLUDE_CODE or Context.CONTEXT_IGNORE_SECURITY
+                                Context.CONTEXT_IGNORE_SECURITY
                             )
                         }.getOrDefault(context)
                         NotificationIconPatch.patch(sbn, targetContext)
@@ -166,6 +182,10 @@ object SystemUiHooks {
             }
         }
         ModuleRuntime.logI("inflateViews hooked (${overloads.size} overload(s))")
+        // 这一行是给 isInstalled() 用的收工信号：漏了它，OpticonModule 那道
+        // 「已经装上了就别再试」的闸门永远不放行，每次 packageReady 都会
+        // 重跑一遍 reportEnvironment（7 次 loadClass）和上面的重载扫描。
+        rowInflationInstalled = true
         return true
     }
 
