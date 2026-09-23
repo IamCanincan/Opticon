@@ -48,6 +48,23 @@ object IconBitmap {
     private const val MIN_SHAPE_RATIO = 0.02f
     private const val MAX_SHAPE_RATIO = 0.85f
 
+    /**
+     * 亮度掩码（[luminanceMask]）要求不透明像素的亮度至少铺开这么多档，否则「归一化」
+     * 只是把噪声放大：整块纯色（`max - min ≈ 0`）时没有任何可用的对比度，
+     * 与其交出去一片灰雾，不如返回 null 让调用方放弃。
+     */
+    private const val MIN_LUMINANCE_SPAN = 24
+
+    /**
+     * [alphaSilhouette] 的判据：**内容外接框**里不透明像素占比到这个程度，
+     * 就认定它是一整块底而不是「透明底 + 图形」。
+     *
+     * 0.92 这条线是「矩形 vs 形状」的分界 —— **实心圆只有 0.785**（π/4），
+     * 带圆角的形状更低，所以够得着 0.92 的只有真正铺满的方底（满幅位图 / 照片 /
+     * 纯色块）。取更松的值（比如 0.7）会把实心圆这类正常形状一起误伤。
+     */
+    private const val FULL_BOX_FILL = 0.92f
+
     /** 二值化时每个像素的归类，用于连通性判断 */
     private const val CLASS_TRANSPARENT = 0
     private const val CLASS_DARK = 1
@@ -126,33 +143,249 @@ object IconBitmap {
     }
 
     /**
-     * 这一层是不是「一整块不透明的底」—— alpha 只描述了它的外轮廓，不含图形信息。
+     * **通知方案的第一支**（`grayscale` 保留 alpha 那一步）—— 透明底 + 图形的轮廓。
      *
-     * 判据与 [monochrome] 里 `useAlpha` 用的那个实心判据同源（都是 [SOLID_SHAPE_LIMIT]），
-     * 只是去掉了「透明像素占比」那半个条件：这里要回答的是「不透明的部分是不是几乎铺满
-     * 整张」，而不是「该走哪条分支」。
+     * 与 [monochrome] 的 `useAlpha` 支走**同一份实现**（[alphaShape]），
+     * 唯一的差别是「透明像素占多少」在**哪张图上量**。返回 null 表示这张图的透明像素
+     * 不构成背景（整张是满幅的图形 / 照片 / 纯色块），调用方应当改用 [luminanceMask]。
      *
-     * 调用方是桌面主题图标那条路（`MonochromeSynth.wrapsSolidPlate`）：桌面会把老式
-     * （非自适应）图标缩到 70% 再塞进一个 `InsetDrawable`，于是「透明边 + 一整块不透明的
-     * 方图」会被 [monochrome] 误判成「透明底 + 图形」，压出一整块色块。
-     * 判断「这块底本身不透明」要在**剥掉那层 inset 之后**做 —— 带着透明边量，
-     * 满幅的方图也会被量成 49%，反而像「透明底的图形」。
+     * ## 判据，以及为什么必须**先裁到内容外接框再量**
+     * 判据只有一条：**内容外接框里有没有留下成片的透明**。
+     *
+     * ⚠ 关键在「**在哪张图上量**」。自适应图标的**前景层**四周自带安全区留白
+     * （约 53% 的面积是透明的），带着那圈留白去量，一张**满幅不透明的整块底**也会被量成
+     * 「透明 53% / 实心 47%」，正好落进「透明底 + 图形」的特征里 → 走 alpha →
+     * 压出那块底的外轮廓 = 一整块色。真机实例：淘宝（前景是一张满幅不透明的彩色图）
+     * 就是这么变成大色块的。
+     *
+     * 裁到内容外接框之后再量，同一张图是「框内填充 1.00」→ 判据正确地落到亮度那一支；
+     * 而真正的透明底图形（图形笔画之间、四周都有透明）照旧走 alpha。
+     * 于是「安全区留白」与「透明背景」这两件完全不同的事被分开 ——
+     * **不需要为某一类图标单独开一条分支**。
+     *
+     * 通知侧对同一件事的表述是「**先 fill 再 monochrome** —— fill 裁掉的透明边正好是
+     * 判断形状的凭据，反过来做会把整块图标压成一个实心圆」（见
+     * `NotificationIconPatch.launcherIconMonochrome`）。这里是同一个道理：
+     * 桌面不能像通知那样把内容放大填满（坐标系要对齐 108dp 画布），
+     * 但**「先裁框、再判形状」这一步必须一致**。
+     *
+     * 分界线取 [FULL_BOX_FILL]（0.92）而不是更松的值：**实心圆形的填充率只有 0.785**
+     * （π/4），带圆角的形状更低，只有「一整块矩形底」才够得着 0.92。
+     * 这条线不能跟 [monochrome] 里那个 `useAlpha` 的 0.7 混 ——
+     * 那个是**整张画布**口径下对覆盖率的兜底，量的是完全不同的东西。
+     *
+     * @param preserveAlpha 保留原始 alpha 的抗锯齿值（只把颜色换成白色），
+     *   与 [monochrome] 的同名参数含义一致。
      */
-    fun isSolidPlate(bitmap: Bitmap): Boolean {
-        val w = bitmap.width
-        val h = bitmap.height
-        if (w <= 0 || h <= 0) return false
+    @Synchronized
+    fun alphaSilhouette(input: Bitmap, preserveAlpha: Boolean = true): Bitmap? {
+        val w = input.width
+        val h = input.height
+        if (w <= 0 || h <= 0) return null
         val pixels = IntArray(w * h)
-        bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
-        var opaque = 0
-        for (pixel in pixels) {
-            if (Color.alpha(pixel) >= MIN_SHAPE_ALPHA) opaque++
+        input.getPixels(pixels, 0, w, 0, 0, w, h)
+        val bounds = contentBounds(input) ?: return null
+        var transparent = 0
+        for (y in bounds.top until bounds.bottom) {
+            val row = y * w
+            for (x in bounds.left until bounds.right) {
+                if (Color.alpha(pixels[row + x]) < MIN_SHAPE_ALPHA) transparent++
+            }
         }
-        return opaque.toFloat() / pixels.size >= SOLID_SHAPE_LIMIT
+        val boxTotal = bounds.width().toLong() * bounds.height()
+        if (boxTotal <= 0) return null
+        val solidRatio = (boxTotal - transparent).toFloat() / boxTotal
+        // 外接框内几乎被填满 → 这不是「透明底 + 图形」，是一整块底。
+        if (solidRatio >= FULL_BOX_FILL) return null
+
+        // 与通知方案同一个实现：见 [alphaShape]。
+        val output = IntArray(w * h)
+        val count = alphaShape(pixels, output, preserveAlpha)
+        val shapeRatio = count.toFloat() / (w * h)
+        if (shapeRatio < MIN_SHAPE_RATIO || shapeRatio > MAX_SHAPE_RATIO) return null
+        val result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        result.setPixels(output, 0, w, 0, 0, w, h)
+        return result
+    }
+
+    /**
+     * [analyzeSplit] 的结果 —— 「这个图标能不能二分成图形 / 背景」的全部依据。
+     *
+     * 永久用途是给亮度掩码（[luminanceMask]）定极性；诊断日志也用同一份数字，
+     * 免得两处各算一遍再分叉。
+     */
+    internal class Split(
+        /** Otsu 阈值（亮度 ≤ 它的算「暗部」） */
+        val threshold: Int,
+        /** 暗部 / 亮部各占**不透明**像素的比例（0..1） */
+        val darkRatio: Float,
+        val lightRatio: Float,
+        /** 暗部 / 亮部里「贴着图标外部」的比例（0..1）—— 判图形就是比这两个数 */
+        val darkBorder: Float,
+        val lightBorder: Float,
+        /** `true` = 图形偏暗。亮度掩码据此决定要不要取反。 */
+        val figureIsDark: Boolean,
+        /** 不透明像素的亮度直方图，8 桶（0-31 / 32-63 / … / 224-255）各占的比例（0..1） */
+        val lumaBuckets: FloatArray,
+        /** 内容外接框占整张画布的比例 */
+        val boxRatio: Float,
+        /** 内容外接框内被不透明像素填满的比例 —— 1.00 就是「一整块矩形底」 */
+        val boxFill: Float,
+    )
+
+    /**
+     * 把 [monochrome] 内部「二值化那条路」的决策过程**原样复算一遍**，交成结构化数据。
+     *
+     * ⚠ 复用的是真算法（[otsuThreshold] / [keepDarkSide] 那两个私有函数），所以数字和
+     * 真产出必然一致；另写一份副本一定会分叉，那就白算了。
+     *
+     * 两个用途：
+     * 1. **定极性**：[Split.figureIsDark] 是「图形偏暗还是偏亮」，判据与二值化选侧
+     *    完全同一个（连通性）。亮度掩码保留明暗层次，极性摆反了就是一张负片。
+     * 2. **诊断**：`MonochromeSynth` 把它格式化成一行日志 —— 含亮度直方图（那是判断
+     *    「该不该二值化」的关键：明显两个峰 = 双色图标，一路铺开 = 照片底），
+     *    以及外接框占比 / 框内填充率（[Split.boxRatio] / [Split.boxFill]）——
+     *    **后者就是 [alphaSilhouette] 判据的两个数**，出问题时一眼能看出它为什么走了那一支。
+     */
+    @Synchronized
+    internal fun analyzeSplit(input: Bitmap): Split {
+        val w = input.width
+        val h = input.height
+        val total = w * h
+        val pixels = IntArray(total)
+        input.getPixels(pixels, 0, w, 0, 0, w, h)
+        var transparent = 0
+        val buckets = IntArray(8)
+        var minX = w
+        var minY = h
+        var maxX = -1
+        var maxY = -1
+        for (y in 0 until h) {
+            val row = y * w
+            for (x in 0 until w) {
+                val p = pixels[row + x]
+                if (Color.alpha(p) < MIN_SHAPE_ALPHA) {
+                    transparent++
+                    continue
+                }
+                buckets[minOf(7, luma(p) / 32)]++
+                if (x < minX) minX = x
+                if (x > maxX) maxX = x
+                if (y < minY) minY = y
+                if (y > maxY) maxY = y
+            }
+        }
+        val solid = total - transparent
+        val boxArea = if (maxX < 0) 0 else (maxX - minX + 1) * (maxY - minY + 1)
+        val boxRatio = boxArea.toFloat() / total
+        val boxFill = if (boxArea > 0) solid.toFloat() / boxArea else 0f
+        if (solid == 0) {
+            return Split(128, 0f, 0f, 0f, 0f, false, FloatArray(8), boxRatio, boxFill)
+        }
+        val threshold = otsuThreshold(pixels)
+        val classes = classBuffer(total)
+        var dark = 0
+        var light = 0
+        for (i in 0 until total) {
+            val p = pixels[i]
+            classes[i] = when {
+                Color.alpha(p) < MIN_SHAPE_ALPHA -> CLASS_TRANSPARENT
+                luma(p) <= threshold -> {
+                    dark++
+                    CLASS_DARK
+                }
+                else -> {
+                    light++
+                    CLASS_LIGHT
+                }
+            }
+        }
+        val outside = outsideMask(classes, w, h)
+        val darkBorder = borderConnectedRatio(classes, outside, w, h, CLASS_DARK, dark)
+        val lightBorder = borderConnectedRatio(classes, outside, w, h, CLASS_LIGHT, light)
+        val figureIsDark = if (darkBorder == lightBorder) dark <= light else darkBorder < lightBorder
+        val ratios = FloatArray(8) { buckets[it].toFloat() / solid }
+        return Split(
+            threshold,
+            dark.toFloat() / solid,
+            light.toFloat() / solid,
+            darkBorder,
+            lightBorder,
+            figureIsDark,
+            ratios,
+            boxRatio,
+            boxFill,
+        )
+    }
+
+    /**
+     * **通知方案的第二支**（[grayscale] 那一步的移植）：把「不透明像素的亮度」当作 alpha
+     * 写出去，保留明暗层次。桌面只读 alpha，所以通知侧留下的**灰度**在这里必须写进 alpha。
+     *
+     * ## 什么时候用它（而不是 [alphaSilhouette]）
+     * 通知侧的原话已经把这个道理写清楚了（见 [grayscale] 的说明）：
+     * 「桌面图标是一整块不透明的彩色图形，二值化只会得到它的外轮廓（圆形图标就压成一个
+     * 白圆），细节全丢。灰度化保留了明暗层次」。真机上这一类是：
+     * 整块不透明的彩色图 / 照片底 / 渐变底 —— 走 alpha 只会得到那块底的外轮廓
+     * （真机实测 `out=0.47 cc=1 top=1.00`，一整片实心方块），二值化则把它切成一地碎块
+     * （真机实测 `cc=92`）。这两类输入的共同点是**没有可辨认的图形边界**，
+     * 而亮度掩码不依赖边界：它把明暗原样交出去，缩到小尺寸也仍然认得出是哪个应用。
+     *
+     * 这也正是桌面自己在 `MonochromeIconFactory.generateMono` 里干的事 —— 那条路
+     * 用户看下来是「黑白图标」，比色块 / 碎块好得多。
+     *
+     * ## 为什么要归一化
+     * 不归一化的话，低对比度的图标（整张落在 luma 100~160）交出去就是一片半透明灰雾，
+     * 上色之后几乎看不见。把 `[min, max]` 线性拉到 `[0, 255]` 之后，最暗处透明、
+     * 最亮处实心，图形才立得住 —— 与桌面那条路一致。
+     * `max - min` 太小（纯色块）时没有可用的对比度，返回 null 让调用方放弃。
+     *
+     * 原 alpha 会乘进去（`level × srcAlpha / 255`），否则图标的抗锯齿边缘会变成硬边。
+     *
+     * @param invert 图形偏暗时传 true —— 亮度掩码保留明暗层次，摆反了就是一张负片。
+     *   [grayscale] 本身不翻转，所以这一步是**必需的补充**：它用的判据与
+     *   [monochrome] 二值化选侧完全同一个（连通性），不另造一套。
+     */
+    @Synchronized
+    internal fun luminanceMask(input: Bitmap, invert: Boolean): Bitmap? {
+        val w = input.width
+        val h = input.height
+        val total = w * h
+        if (w <= 0 || h <= 0) return null
+        val pixels = IntArray(total)
+        input.getPixels(pixels, 0, w, 0, 0, w, h)
+        var min = 255
+        var max = 0
+        for (p in pixels) {
+            if (Color.alpha(p) < MIN_SHAPE_ALPHA) continue
+            val level = luma(p)
+            if (level < min) min = level
+            if (level > max) max = level
+        }
+        val span = max - min
+        if (span < MIN_LUMINANCE_SPAN) return null
+        val output = IntArray(total)
+        var weight = 0L
+        for (i in pixels.indices) {
+            val p = pixels[i]
+            val sourceAlpha = Color.alpha(p)
+            if (sourceAlpha < MIN_SHAPE_ALPHA) continue
+            var level = (luma(p) - min) * 255 / span
+            if (invert) level = 255 - level
+            level = level * sourceAlpha / 255
+            output[i] = Color.argb(level, 255, 255, 255)
+            weight += level
+        }
+        val coverage = weight.toFloat() / 255f / total
+        if (coverage < MIN_SHAPE_RATIO || coverage > MAX_SHAPE_RATIO) return null
+        val result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        result.setPixels(output, 0, w, 0, 0, w, h)
+        return result
     }
 
     /** 非透明像素的外接矩形；整张都透明时返回 null */
-    private fun contentBounds(source: Bitmap): Rect? {        val w = source.width
+    private fun contentBounds(source: Bitmap): Rect? {
+        val w = source.width
         val h = source.height
         val pixels = IntArray(w * h)
         source.getPixels(pixels, 0, w, 0, 0, w, h)
@@ -225,25 +458,7 @@ object IconBitmap {
         val useAlpha = transparentCount > total / 20 && solidRatio < SOLID_SHAPE_LIMIT
         val shapeCount = if (useAlpha) {
             // 透明底上的图形：alpha 本身就是最准的轮廓
-            var count = 0
-            for (i in pixels.indices) {
-                val alpha = Color.alpha(pixels[i])
-                // ⚠ 判据只能是「够不够实」，绝不能写成「有没有 alpha」。
-                //
-                // 桌面图标的前景层常常自带一层很淡的柔光 / 投影 / 半透明底板
-                // （alpha 1 ~ MIN_SHAPE_ALPHA-1，实测能占到画布的 60% 以上）。
-                // 把它们一并收进掩码，掩码的真实覆盖率会是这里 count 出来的十几倍 ——
-                // 上色之后整块图标被一层淡色铺满，看上去就是一个纯色块。
-                //
-                // 之前 preserveAlpha 分支写成 `alpha > 0 && (...)`,判据用的是 128、
-                // 写出去的却是 1 起步，两边口径不一致，就是这么踩进去的。
-                if (alpha < MIN_SHAPE_ALPHA) continue
-                count++
-                // preserveAlpha 时保留原 alpha 的抗锯齿值（只换颜色），不二值化成 0 / 255。
-                outputPixels[i] =
-                    if (preserveAlpha) Color.argb(alpha, 255, 255, 255) else Color.WHITE
-            }
-            count
+            alphaShape(pixels, outputPixels, preserveAlpha)
         } else {
             // 实心图标：alpha 只描述外轮廓，照搬就是一坨白块，改用二值化挖图形
             binarize(pixels, outputPixels, w, h, preserveAlpha)
@@ -258,6 +473,33 @@ object IconBitmap {
     }
 
     /**
+     * [monochrome] 的 **alpha 那一支**，单独抽出来是因为桌面侧也要走同一份。
+     *
+     * 判据只有一条：**够不够实**（`alpha >= MIN_SHAPE_ALPHA`）。绝不能写成「有没有 alpha」——
+     * 桌面图标的前景层常常自带一层很淡的柔光 / 投影 / 半透明底板
+     * （alpha 1 ~ MIN_SHAPE_ALPHA-1，实测能占到画布的 60% 以上）。把它们一并收进掩码，
+     * 掩码的真实覆盖率会是这里数出来的十几倍 —— 上色之后整块图标被一层淡色铺满，
+     * 看上去就是一个纯色块。
+     *
+     * 之前 preserveAlpha 分支写成 `alpha > 0 && (...)`，判据用的是 128、写出去的却是 1 起步，
+     * 两边口径不一致，就是这么踩进去的。
+     *
+     * @param preserveAlpha 保留原 alpha 的抗锯齿值（只换颜色），不二值化成 0 / 255。
+     *   状态栏图标（96px）不需要，桌面主题图标渲染尺寸大得多、硬边一放大就是锯齿，那边传 true。
+     * @return 涂了多少个像素（调用方拿它在判「压出来的形状合不合理」）
+     */
+    private fun alphaShape(pixels: IntArray, outputPixels: IntArray, preserveAlpha: Boolean): Int {
+        var count = 0
+        for (i in pixels.indices) {
+            val alpha = Color.alpha(pixels[i])
+            if (alpha < MIN_SHAPE_ALPHA) continue
+            count++
+            outputPixels[i] = if (preserveAlpha) Color.argb(alpha, 255, 255, 255) else Color.WHITE
+        }
+        return count
+    }
+
+    /**
      * 去掉颜色、只留明暗。
      *
      * 灰度图三通道相等，正好命中系统「这个图标做过主题适配」的判据
@@ -267,6 +509,10 @@ object IconBitmap {
      * 为什么不压成纯 alpha 剪影：桌面图标是一整块不透明的彩色图形，
      * 二值化只会得到它的外轮廓（圆形图标就压成一个白圆），细节全丢。
      * 灰度化保留了明暗层次，缩到状态栏那点尺寸也认得出是哪个应用。
+     *
+     * ⚠ 桌面侧那个 [luminanceMask] 就是这一支的移植：桌面只读 alpha，
+     * 所以把这里留下的**灰度**写进 alpha。**两支是同一条方案的两个分支**，
+     * 不是一个通知方案 + 一个桌面自造方案。
      */
     fun grayscale(input: Bitmap): Bitmap {
         val w = input.width

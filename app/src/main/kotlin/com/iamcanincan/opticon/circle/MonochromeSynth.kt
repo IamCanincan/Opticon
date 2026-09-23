@@ -12,7 +12,6 @@ import android.graphics.PorterDuffColorFilter
 import android.graphics.Rect
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.Drawable
-import android.graphics.drawable.DrawableWrapper
 import android.util.Log
 import com.iamcanincan.opticon.notify.IconBitmap
 import com.iamcanincan.opticon.runtime.TAG
@@ -34,25 +33,35 @@ import java.util.concurrent.atomic.AtomicInteger
  * 桌面只在这个 getter 返回 null 时才去 new 那个 Factory，所以我们一返回非 null，
  * 那条算错的路径根本不会进。
  *
- * ## 剪影算法与通知侧共用，不另写一套
- * 剪影那一步用的是 [IconBitmap.monochrome] —— 和通知小图标黑白模式
- * （`NotificationIconPatch.launcherIconMonochrome` / `forceMonochrome`）**同一个函数**：
- * 由它用 **Otsu 自动阈值**二值化，并用**连通性**判断哪一侧才是图形
- * （背景通常与图标外部相连、图形是被包住的内部块）—— 这比任何固定阈值都稳，
- * 也省得同一个问题在仓库里有两份实现、修一处漏一处。
+ * ## 方案：**通知小图标那套**，两支，不为任何一类图标单独开分支
+ * 通知侧（`NotificationIconPatch.launcherIconMonochrome`）做的是
+ * `fill(foregroundOf(图标))` → `grayscale(...)`。桌面只读 alpha，所以那一步的**两个成分
+ * 各自成了这里的一支**，实现都放在 [IconBitmap] 里、与通知**共用同一份代码**：
  *
- * 取前景层那一步（「透明底 + 图形」那一层，整张光栅化是不透明色块、压不出剪影）
- * 没有直接用 [IconBitmap.foregroundOf]，而是在这里自己写了 [rasterize]：
+ * 1. **透明像素真的构成背景** → [IconBitmap.alphaSilhouette]，即 `grayscale` 保留 alpha
+ *    那一步（与 [IconBitmap.monochrome] 的 `useAlpha` 支同一段实现）。
+ *    ⚠ 判据必须**先裁到内容外接框再量** —— 自适应前景层四周那 53% 的安全区留白不是背景，
+ *    带着它去量会把「满幅不透明的整块底」误判成「透明底 + 图形」，压出来就是一整块色
+ *    （淘宝就是这么变成大色块的）。通知侧那句「先 fill 再 monochrome，fill 裁掉的透明边
+ *    正好是判断形状的凭据」说的就是这一步。
+ * 2. **否则** → [IconBitmap.luminanceMask]，即 `grayscale` 把灰度留下的那一步
+ *    （桌面只读 alpha，所以灰度写进 alpha）。通知侧对它的说明是「桌面图标是一整块不透明的
+ *    彩色图形，二值化只会得到它的外轮廓（圆形图标就压成一个白圆），细节全丢；
+ *    灰度化保留了明暗层次」—— 所以这一类**就该走灰度**，不是特例。
+ *
+ * 两支都不成立（光栅化失败、或纯色块没有任何对比度）才返回 null，桌面照旧走自己的路。
+ *
+ * 取前景层那一步没有直接用 [IconBitmap.foregroundOf]，而是在这里自己写了 [rasterize]：
  * 它会**还原原 drawable 的 bounds**（理由写在那上面）。
  * 通知侧是「拿一个图标画一次就扔」、不需要还原，所以那边保持原样。
  *
  * ## 两套口径，别混：判定用「满幅」，位置用「可见区」
  * 这是本文件最容易写错的地方 —— 2026-09-24 真机「非自适应图标全部变成色块」的病根：
- * - **判定**：[IconBitmap.monochrome] 看「透明像素占多少」来决定走 alpha 分支还是
- *   二值化分支，所以喂给它的必须是**满幅光栅化**的结果。提前缩进可见区会凭空多出
- *   一圈透明边，把满幅不透明的老式图标误判成「透明底 + 图形」→ 压出一整块方色块。
+ * - **判定**：两支判据都要先看「透明像素占多少」或「亮度铺开多少」，所以喂给它们的
+ *   必须是**满幅光栅化**的结果。提前缩进可见区会凭空多出一圈透明边，
+ *   把满幅不透明的老式图标误判成「透明底 + 图形」→ 压出一整块方色块。
  * - **位置**：非自适应图标的内容铺满整个 bounds，而它在图层 bounds 里只该占中间 2/3，
- *   所以剪影算完**之后**才缩进可见区（[intoVisibleArea]）。自适应前景层本来就在
+ *   所以掩码算完**之后**才缩进可见区（[intoVisibleArea]）。自适应前景层本来就在
  *   108dp 画布上、天然落中间 61%，不用动。
  *
  * ## 坐标系：掩码必须是「整张 108dp 画布」，不是可见区
@@ -94,11 +103,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * 那时桌面照旧走 Factory，而那道翻转仍然挂着兜底。两条路是**互斥**的：
  * 合成生效 → 桌面不进 Factory → 翻转自然不会被触发。
  *
- * 有一条**故意**的放弃：前景层是「被包装过的一整块不透明底」时直接返回 null
- * （[wrapsSolidPlate]）—— 那是老式图标被桌面缩到 70% 再包进 `InsetDrawable` 的结果，
- * alpha 描述的是那块底的轮廓、不含图形信息，硬压只会得到一块色。那种输入桌面自己的
- * `MonochromeIconFactory`（亮度当 alpha）本来就处理得更好。放弃的每一次都会
- * 在日志里留痕（[noteGiveUp]），不会和「压根没进这条函数」混在一起。
+ * 两条出口都会在日志里留痕（[noteGiveUp] / [noteBranch]），不会和「压根没进这条函数」
+ * 混在一起。
  */
 internal object MonochromeSynth {
 
@@ -205,30 +211,49 @@ internal object MonochromeSynth {
         noteGiveUp(edge, label, "取不到前景层")
         return@runCatching null
       }
-      // ⚠ 前景层是「被包装过的一整块不透明底」时**必须放弃合成** —— 那是老式图标被桌面
-      // 缩到 70% 再包进 InsetDrawable 的结果，alpha 描述的是那块底的轮廓、不含图形信息，
-      // 硬压只会得到一整块色块。详见 [wrapsSolidPlate]。
-      if (wrapsSolidPlate(target, edge)) {
-        noteGiveUp(edge, label, "前景层是包装过的整块不透明底，alpha 不含图形信息")
-        return@runCatching null
-      }
-      // ⚠ 光栅化一律**满幅**（setBounds(0, 0, edge, edge)），不缩进可见区 ——
-      // 为什么非自适应图标也不能缩进，见 [rasterize] 上面那段（缩进会凭空多出一圈
-      // 透明边，把满幅不透明的老式图标误判成「透明底 + 图形」，压出一整块方色块）。
       val raster = rasterize(target, edge)
       if (raster == null) {
         noteGiveUp(edge, label, "光栅化失败")
         return@runCatching null
       }
-      val silhouette = IconBitmap.monochrome(raster, preserveAlpha = true)
+      // ── 走的**就是通知小图标那套方案的两支**，不为任何一类图标单独开分支 ──
+      //
+      // 通知侧（`NotificationIconPatch.launcherIconMonochrome`）是
+      // `fill(foregroundOf(图标))` → `grayscale(...)`。桌面只读 alpha，所以那一步的
+      // **两个成分各自成了这里的一支**，函数都在 [IconBitmap] 里、与通知共用同一份实现：
+      //
+      // 1. **透明像素真的构成背景** → 取 alpha（[IconBitmap.alphaSilhouette]）。
+      //    它就是 `grayscale` 保留 alpha 那一步，走的是 [IconBitmap.monochrome] 里
+      //    `useAlpha` 支的同一段代码。判据先裁到内容外接框再量 ——
+      //    通知侧那句「先 fill 再 monochrome，fill 裁掉的透明边正好是判断形状的凭据」
+      //    说的就是这一步；不裁框，自适应图标四周的安全区留白会把一张满幅不透明的底
+      //    误当成「透明底 + 图形」，压出那块底的轮廓 = 一整块色（淘宝就是这么坏的）。
+      // 2. **否则** → 把**灰度**写进 alpha（[IconBitmap.luminanceMask]），
+      //    也就是 `grayscale` 那一步的移植。通知侧对它的说明是「桌面图标是一整块
+      //    不透明的彩色图形，二值化只会得到它的外轮廓（圆形图标就压成一个白圆），
+      //    细节全丢；灰度化保留了明暗层次」—— 所以这一类**就该走灰度**，不是特例。
+      //
+      // 两条都不成立时返回 null，桌面照旧走它自己的路（[noteGiveUp] 会留痕）。
+      val silhouette = IconBitmap.alphaSilhouette(raster)
+      val branch: String
+      val base: Bitmap?
+      if (silhouette != null) {
+        branch = "alpha 轮廓"
+        base = silhouette
+      } else {
+        val split = IconBitmap.analyzeSplit(raster)
+        branch = "亮度掩码（图形偏${if (split.figureIsDark) "暗" else "亮"}）"
+        base = IconBitmap.luminanceMask(raster, invert = split.figureIsDark)
+      }
+      noteBranch(edge, label, branch, base != null)
       // 非自适应图标的内容是满幅的，而它在图层 bounds 里只该占中间那 2/3（可见区），
-      // 所以剪影算完**之后**才缩进 —— 顺序反了就会踩上面那个坑。
-      val placed = if (adaptive) silhouette else silhouette?.let { intoVisibleArea(it, edge) }
+      // 所以掩码算完**之后**才缩进 —— 顺序反了就会踩 [rasterize] 上面那个坑。
+      val placed = if (adaptive) base else base?.let { intoVisibleArea(it, edge) }
       val mask = placed?.let { toAlphaMask(it) }
-      noteDiagnosis(edge, label, raster, mask)
+      noteDiagnosis(edge, label, raster, mask, silhouette != null)
       raster.recycle()
-      if (placed !== silhouette) placed?.recycle()
-      silhouette?.recycle()
+      if (placed !== base) placed?.recycle()
+      base?.recycle()
       mask
     }.getOrNull()
   }
@@ -255,6 +280,10 @@ internal object MonochromeSynth {
         append("x")
         append(foreground.intrinsicHeight)
       }
+      append(" intrinsic=")
+      append(source.intrinsicWidth)
+      append("x")
+      append(source.intrinsicHeight)
       append(" bounds=")
       append(source.bounds.width())
       append("x")
@@ -270,29 +299,48 @@ internal object MonochromeSynth {
    * 存在的理由是本项目吃过的那条亏 —— **hook 的每条提前 return 都要留痕**。
    * 「返回 null」在功能上是正常降级（桌面会走自己的路），但和「压根没进这条函数」
    * 在日志里长得一模一样，排查时就分不清「合成失败」还是「合成没被调用」。
-   * 尤其是 [wrapsSolidPlate] 那条：它**故意**放弃，看起来像 bug，必须留下理由。
    */
   private fun noteGiveUp(edge: Int, label: String, reason: String) {
     val n = diagnosed.incrementAndGet()
-    if (n > SUMMARY_LIMIT) return
     Log.d(TAG, "Mono: diag#$n edge=$edge $label 放弃合成：$reason")
   }
 
   /**
-   * 诊断：把「这一张掩码怎么来的、长什么样」打进日志。只放行最前面几张（图标加载是热路径）。
+   * 诊断：这个图标走了哪条分支（alpha 轮廓 / 亮度掩码），以及有没有真的交出掩码。
+   *
+   * 和 [noteGiveUp] 同一个理由 —— 每一条出口都必须留痕，否则「走了哪条路」和
+   * 「压根没进这条函数」在日志里长得一模一样。
+   * 两条分支的**分布**也要能看出来：哪条路走得多、哪条路容易压不出东西，
+   * 是复核判据该定在哪的唯一依据。
+   */
+  private fun noteBranch(edge: Int, label: String, branch: String, produced: Boolean) {
+    val n = diagnosed.incrementAndGet()
+    Log.d(TAG, "Mono: diag#$n edge=$edge $label $branch → " +
+      if (produced) "已交出掩码" else "压不出掩码，放弃合成")
+  }
+
+  /**
+   * 诊断：把「这一张掩码怎么来的、长什么样」打进日志。
    *
    * ## 为什么要有它
    * 桌面主题图标这块**我看不见** —— 我的图像通道是 filtered 的，用户也明确不要我截图。
    * 而「形状不对」有好几种**成因完全不同**的可能（走了 alpha 分支但输入本身是糊的 /
-   * 走了 binarize 把彩色图形按亮度切碎 / 掩码没问题但下游画坏），靠推演猜已经错过一次，
-   * 所以这里把两样东西直接打出来：
-   * 1. **判定分支的数值**：`a0/a1/a2/a255` 是输入 alpha 的四段直方图，
-   *    `useAlpha` 是按 [IconBitmap.monochrome] 的判据（`透明 > 5% && 不透明 < 70%`）复算的 ——
-   *    一眼能看出它到底走了哪条分支。
-   * 2. **掩码本身的 ASCII 缩略图**：`#` 是不透明、`.` 是透明。把 384² 降采样成 40×40
+   * 亮度掩码把整块底当成了图形 / 掩码没问题但下游画坏），靠推演猜已经错过一次，
+   * 所以这里把三样东西直接打出来：
+   * 1. **输入 alpha 的四段直方图**（`a0/a1/a2/a255`）：一眼能看出这张图是
+   *    「透明底 + 图形」还是「整张不透明」。
+   * 2. **两支判据的决策过程**（`split …`，由 [IconBitmap.analyzeSplit] 复算真算法给出）：
+   *    `box` / `boxfill` 是 alpha 那一支的判据（`boxfill` 到 1.00 就是「一整块底」）；
+   *    Otsu 阈值、两侧占比、两侧的「贴外部」比例、图形偏哪一侧、亮度直方图是亮度那一支
+   *    的依据 —— 只有它能把「结果不对」定位到具体哪一步。
+   * 3. **掩码本身的 ASCII 缩略图**：`#` 是不透明、`.` 是透明。把 384² 降采样成 40×40
    *    打进日志，于是「是一个完整字形」还是「一堆碎片」在日志里就能直接看出来。
-   *    输入 alpha 还会在 [INPUT_DUMPS] 那几档阈值下各打一张 —— 用来回答
-   *    「图形到底落在哪一档 alpha 上」，也就是该不该把阈值定在 `MIN_SHAPE_ALPHA`。
+   *    ⚠ 缩略图**只给降级到亮度掩码的那些**（没走 alpha 轮廓这条主路），上限
+   *    [ASCII_DUMP_LIMIT] 张 —— alpha 轮廓已经验过，缩略图留给真正要看形状的样本。
+   *
+   * 汇总行**不打上限**（每个图标一行）：上一轮的教训正是采样太少 ——
+   * 只看得到前几个图标，而前几个往往同属一类，真正出问题的那一类一次都没出现。
+   * 图标数量本来就有界，一行一条的成本可以忽略。
    *
    * 形状统计：`out` 掩码里 ≥128 的像素占比；`fill` 是**按 alpha 加权的等效覆盖率**
    * （Σalpha / 255 / 总面积）—— 图标看起来「被填满多少」看的是这个，
@@ -302,17 +350,27 @@ internal object MonochromeSynth {
    *
    * ## 「一整块色」在数字上长什么样
    * 判据是 `out` ≈ `fill`（掩码本身就是那块色，没有更淡的东西）+ `cc=1` + `top=1.00`
-   * + `out` 落在 0.4~0.5 之间。这是**输入就已经是实心方块**的特征（非自适应图标
-   * 整张满幅画进可见区、alpha 直接就是那个方块的轮廓），不是掩码算法把图形切碎了
-   * ——切碎的特征是 `cc` 大、`top` 小，两者一眼能分开。
+   * + `out` 落在 0.4~0.5 之间。这是**输入就已经是实心方块**的特征（前景层是满幅不透明的
+   * 位图，alpha 直接就是那块底的轮廓），不是掩码算法把图形切碎了 ——
+   * 切碎的特征是 `cc` 大、`top` 小，两者一眼能分开。
+   * 真机实例：淘宝 `out=0.47 cc=1 top=1.00`、`box=0.47 boxfill=1.00`
+   * （外接框内被填满 = 一整块底）→ [IconBitmap.alphaSilhouette] 判「透明像素不构成背景」、
+   * 降级成亮度掩码之后是「淘」字本身。
    *
-   * ⚠ 只是诊断，不参与任何判断。发版前应当把它连同 [SUMMARY_LIMIT] / [ASCII_LIMIT] 一起降级/移除。
+   * ⚠ 只是诊断，不参与任何判断。发版前应当把它连同 [ASCII_DUMP_LIMIT] / [dumpAscii]
+   * 一起降级/移除。
    */
-  private fun noteDiagnosis(edge: Int, label: String, input: Bitmap, mask: Bitmap?) {
+  private fun noteDiagnosis(
+    edge: Int,
+    label: String,
+    input: Bitmap,
+    mask: Bitmap?,
+    alphaSilhouette: Boolean,
+  ) {
+    // ⚠ 汇总行**不打上限**：图标数量本来就有界（一屏一屏地加载），一行一条，
+    // 8 MiB 的 logcat 缓冲装得下。采样只覆盖前 12 条正是上一轮的教训 ——
+    // 前 12 条往往同属一类，真正出问题的那一类一次都没出现。
     val n = diagnosed.incrementAndGet()
-    if (n > SUMMARY_LIMIT) return
-    // ASCII 只给最前面几张：一张就是 4 份 40×40，8 张会把 logcat 环形缓冲（256 KiB）挤爆。
-    val ascii = n <= ASCII_LIMIT
     val w = input.width
     val h = input.height
     val total = w * h
@@ -331,14 +389,36 @@ internal object MonochromeSynth {
         else -> a255++
       }
     }
-    val transparent = a0 + a1
-    val useAlpha = transparent > total / 20 && (total - transparent).toFloat() / total < 0.7f
+    // 两支判据的决策过程（由 [IconBitmap.analyzeSplit] 复算真算法给出）：
+    // 外接框占比 / 框内填充率是 alpha 那一支的判据（`boxfill` 到 1.00 就是「一整块底」），
+    // 阈值 / 两侧占比 / 连通性 / 图形偏哪侧是亮度那一支的极性依据，
+    // 亮度直方图则说明输入到底有没有两色可分。
+    val split = IconBitmap.analyzeSplit(input)
+    val branch = buildString {
+      append("split t=")
+      append(split.threshold)
+      append(" dark=")
+      append(pct((split.darkRatio * 1000).toInt(), 1000))
+      append(" light=")
+      append(pct((split.lightRatio * 1000).toInt(), 1000))
+      append(" db=")
+      append(ratio(split.darkBorder))
+      append(" lb=")
+      append(ratio(split.lightBorder))
+      append(" figureDark=")
+      append(split.figureIsDark)
+      append(" box=")
+      append(ratio(split.boxRatio))
+      append(" boxfill=")
+      append(ratio(split.boxFill))
+      append(" luma=")
+      split.lumaBuckets.forEach { append(String.format(Locale.ROOT, "%02d", (it * 100).toInt())) }
+    }
 
     if (mask == null) {
       Log.d(TAG, "Mono: diag#$n edge=$edge $label in=${w}x$h " +
         "a0=${pct(a0, total)} a1=${pct(a1, total)} a2=${pct(a2, total)} a255=${pct(a255, total)} " +
-        "useAlpha=$useAlpha -> monochrome() 返回 null")
-      if (ascii) dumpInput(n, pixels, w, h)
+        "$branch -> 没交出掩码")
       return
     }
 
@@ -386,41 +466,30 @@ internal object MonochromeSynth {
 
     Log.d(TAG, "Mono: diag#$n edge=$edge $label in=${w}x$h " +
       "a0=${pct(a0, total)} a1=${pct(a1, total)} a2=${pct(a2, total)} a255=${pct(a255, total)} " +
-      "useAlpha=$useAlpha out=${pct(opaque, total)} fill=${pct((weight / 255).toInt(), total)} " +
-      "cc=$components top=${pct(largest, opaque)}")
+      "out=${pct(opaque, total)} fill=${pct((weight / 255).toInt(), total)} " +
+      "cc=$components top=${pct(largest, opaque)} $branch")
 
-    if (ascii) {
-      dumpInput(n, pixels, w, h)
-      dumpAscii(n, "mask", null, mw, mh, bytes, MASK_DUMP_THRESHOLD)
+    // 掩码缩略图**只给降级到亮度掩码的那些**（没走 alpha 轮廓这条主路）：
+    // alpha 轮廓已经验过，缩略图留给真正要看形状的样本，省 logcat 也省得淹掉。
+    // 上限只是防「一整屏全是坏图标」时把缓冲写爆，不是采样。
+    if (!alphaSilhouette) {
+      val dumped = asciiDumped.incrementAndGet()
+      if (dumped <= ASCII_DUMP_LIMIT) dumpAscii(n, "mask", mw, mh, bytes, MASK_DUMP_THRESHOLD)
     }
   }
 
   /**
-   * 输入 alpha 在 [INPUT_DUMPS] 那几档阈值下各打一张 ASCII。
+   * 把 ALPHA_8 掩码的原始字节（[maskBytes]）打成 40 列 ASCII：`#` = 不透明、`.` = 透明。
    *
-   * 存在的理由：`monochrome()` 把判据定在 `MIN_SHAPE_ALPHA`（128），而**这个值合不合适
-   * 只有看图才知道** —— 图形整体偏淡时 128 会把形状切掉一大半（甚至切空、退回 null），
-   * 整体偏浓时又会把柔光一起收进来。几张缩略图并排一看就知道该往哪边挪。
-   */
-  private fun dumpInput(n: Int, pixels: IntArray, w: Int, h: Int) {
-    for (threshold in INPUT_DUMPS) {
-      dumpAscii(n, "in>=$threshold", pixels, w, h, null, threshold)
-    }
-  }
-
-  /**
-   * 把 alpha（[pixels] 给 alpha 通道）或 ALPHA_8 掩码（[maskBytes] 给原始字节）打成 40 列的 ASCII。
-   *
-   * 每个格子取 [threshold] 当「算不算图形」的界，和 `monochrome()` 内部的判据同口径 ——
+   * 判据用 [threshold]，与 `IconBitmap` 里的 `MIN_SHAPE_ALPHA` 同口径 ——
    * 缩略图如果自己用一套阈值，就和真产出的掩码对不上了，那还不如不打。
    */
   private fun dumpAscii(
     n: Int,
     what: String,
-    pixels: IntArray?,
     w: Int,
     h: Int,
-    maskBytes: ByteArray?,
+    maskBytes: ByteArray,
     threshold: Int,
   ) {
     val cols = ASCII_COLS
@@ -438,9 +507,7 @@ internal object MonochromeSynth {
         for (y in y0 until y1) {
           for (x in x0 until x1) {
             cells++
-            val a = if (maskBytes != null) (maskBytes[y * w + x].toInt() and 0xff)
-            else Color.alpha(pixels!![y * w + x])
-            if (a >= threshold) hits++
+            if ((maskBytes[y * w + x].toInt() and 0xff) >= threshold) hits++
           }
         }
         line.append(if (cells > 0 && hits * 2 >= cells) '#' else '.')
@@ -454,25 +521,24 @@ internal object MonochromeSynth {
   /**
    * 放行几条**汇总行**。
    *
-   * 汇总行只有一行（`diag#N … useAlpha out fill cc top`），成本可以忽略，所以放得比缩略图宽 ——
-   * 采样太少正是上一轮的教训：只看得到前 2 个图标，而**前 2 个往往都是同一类**
-   * （启动后先加载的通常是自适应图标），于是「非自适应图标全是色块」这个现象
-   * 在日志里一次都没出现过。汇总行要多看几个，才覆盖得到两类图标。
+   * ⚠ 现在是**不打上限**（见 [noteDiagnosis]）—— 采样太少正是上一轮的教训：只看得到前 2 个
+   * 图标，而前几个往往同属一类，真正出问题的那一类在日志里一次都没出现过。
+   * 图标数量本来就有界，一行一条的成本可以忽略。
    */
-  private const val SUMMARY_LIMIT = 12
-
-  /**
-   * 其中前几条**额外**打 ASCII 缩略图。每张图标 4 份 40×40，别开大 ——
-   * logcat 环形缓冲只有 256 KiB，挤爆了会把真正想看的日志冲掉。
-   */
-  private const val ASCII_LIMIT = 2
-
   private const val ASCII_COLS = 40
 
-  /** 输入 alpha 各打一张缩略图的候选阈值，见 [dumpInput]。 */
-  private val INPUT_DUMPS = intArrayOf(64, 128, 192)
+  /**
+   * 「不走主路」的样本最多打几张缩略图。
+   *
+   * 40 行一张，一张图标一份 —— 这是防「一整屏全是坏图标」时把 logcat 缓冲写爆的护栏，
+   * **不是采样**：真出问题的那几类通常只占少数，8 张足够看清形状。
+   */
+  private const val ASCII_DUMP_LIMIT = 8
 
-  /** 掩码缩略图的阈值，与 `IconBitmap.monochrome` 里的判据同口径。 */
+  /** [dumpAscii] 的计数，见 [ASCII_DUMP_LIMIT]。 */
+  private val asciiDumped = AtomicInteger(0)
+
+  /** 掩码缩略图的阈值，与 `IconBitmap.alphaSilhouette` 里的判据同口径。 */
   private const val MASK_DUMP_THRESHOLD = 128
 
   /**
@@ -485,60 +551,8 @@ internal object MonochromeSynth {
   private fun pct(part: Int, whole: Int): String =
     if (whole <= 0) "0" else String.format(Locale.ROOT, "%.2f", part.toFloat() / whole)
 
-  /**
-   * 前景层是不是「被包装过的一整块不透明底」—— 是的话**不要合成**，返回 null 交回桌面。
-   *
-   * ## 为什么会有这种输入（真机证据，2026-09-24）
-   * 桌面为**老式（非自适应）图标**造主题图标时，会先把那张满幅位图**缩到 70%** 再包进
-   * 一个 `InsetDrawable`，然后才当成 `AdaptiveIconDrawable` 的前景层送进来。字节码
-   * （`Launcher3QuickStep.apk` 的 `BaseIconFactory`，对应 Kotlin 第 277–282 行）：
-   * ```
-   * wrapToAdaptiveIcon(drawable, options):
-   *   val bg = ColorDrawable(options.wrapperBackgroundColor)          // 默认白
-   *   val fg = wrapIntoSquareDrawable(drawable, LEGACY_ICON_SCALE)    // → InsetDrawable(..., (1-scale)/2)
-   *   return AdaptiveIconDrawable(bg, fg)
-   * ```
-   * 也就是说我们拿到的前景层是 `InsetDrawable(满幅位图, 0.15, 0.15, 0.15, 0.15)`。
-   *
-   * ## 为什么必须放弃，而不是「想办法压出图形」
-   * 那圈 15% 的透明边让一张**满幅不透明**的老式图标在光栅化后变成
-   * 「透明 51% / 实心 49%」—— 正好落进 [IconBitmap.monochrome] 里 `useAlpha` 的
-   * 判据（透明 > 5% 且实心 < 70%），于是走 alpha 分支。而那个 alpha 描述的是
-   * **那块底的外轮廓**，压出来就是一整块实心方块，上色之后就是一块色。
-   * 真机表现：**非自适应图标全部变成色块**。
-   *
-   * 放弃之后桌面会走它自己的 `MonochromeIconFactory`（`createThemedBitmap` 里
-   * `mono == null && shouldForceThemeIcon` 那条分支）。**那条才是老式图标的正解** ——
-   * 它把图标画进 ALPHA 位图、把**亮度**当 alpha，再归一化 + 做一条以 128 为中心的
-   * 对比度曲线（`generateMono`），保留明暗层次；对一整块不透明的彩色方图，
-   * 这比二值化剪影（只会得到外轮廓、细节全丢）好得多。本模块的翻转兜底
-   * （`IconHooks.hookForcedThemedMono`）仍然挂在那条路上，极性照样会修。
-   *
-   * ## 判据为什么要在「剥掉包装之后」量
-   * 带着那圈透明边去量「这块底是不是不透明的」，满幅的方图也只量出 49% ——
-   * 正好是「透明底的图形」的样子，等于没量。所以先 `getDrawable()` 取出被包的
-   * 那一层、**满幅光栅化**它，再问 [IconBitmap.isSolidPlate]。
-   * 判据本身复用 [IconBitmap.SOLID_SHAPE_LIMIT]（0.7），和 [IconBitmap.monochrome]
-   * 里那个实心判据同源，不新造一个阈值。
-   *
-   * 这样分得开两类输入（实测数量级差得很远，不是靠调阈值凑的）：
-   * - 被包的**满幅位图**（老式图标）→ 不透明占比 ≈ 1.0 → 判成整块底 → 放弃 ✓
-   * - 被包的**透明底图形**（矢量图形 / 透明底 PNG）→ 不透明占比 0.1 上下 → 照常合成 ✓
-   *
-   * ## 为什么用 [DrawableWrapper] 而不是只认 `InsetDrawable`
-   * 桌面两处包装都用 `InsetDrawable`，但别的地方可能是 `ScaleDrawable` / `ClipDrawable`。
-   * 这个判断只看「有没有被包」+「包着的是不是整块底」，对包装类型不敏感，
-   * 认宽一点更稳。`AdaptiveIconDrawable` / `BitmapDrawable` 都不是 wrapper，不受影响。
-   */
-  private fun wrapsSolidPlate(target: Drawable, edge: Int): Boolean {
-    val inner = (target as? DrawableWrapper)?.drawable ?: return false
-    val raster = rasterize(inner, edge) ?: return false
-    return try {
-      IconBitmap.isSolidPlate(raster)
-    } finally {
-      raster.recycle()
-    }
-  }
+  /** 诊断用的两位小数（比例本来就是 0..1，不用再除）。 */
+  private fun ratio(value: Float): String = String.format(Locale.ROOT, "%.2f", value)
 
   /**
    * 把 [target] 光栅化成 `edge × edge` 的位图，一律 `setBounds(0, 0, edge, edge)`。
@@ -546,21 +560,22 @@ internal object MonochromeSynth {
    * `edge` 的坐标系是**图层 bounds**（= 1.5 × 图标尺寸，也就是整张 108dp 画布）——
    * 为什么不是可见区，见类文档的坐标系那一节。
    *
-   * ## ⚠ 两种图标都不缩进 —— 缩进挪到剪影算完之后（[intoVisibleArea]）
+   * ## ⚠ 两种图标都不缩进 —— 缩进挪到掩码算完之后（[intoVisibleArea]）
    * 非自适应图标的内容是满幅的，看起来「应该先缩到可见区再光栅化」。**不行**，
    * 这是 2026-09-24 真机「非自适应图标全部变成色块」的病根：
    *
-   * 缩进会在四周留出一圈 `edge/6` 的透明边，而 [IconBitmap.monochrome] 的判据
-   * 第一眼就是「透明像素占多少」—— 一圈透明边让一张**满幅不透明**的老式图标变成
-   * 「透明 44% / 实心 56%」，正好落进「透明底 + 图形」的特征里（透明 > 5% 且实心 < 70%），
-   * 于是走了 alpha 分支。而那个 alpha 描述的是**整张方图的轮廓**，
-   * 压出来就是一整块实心方块 —— 上色之后就是一块色。
+   * 缩进会在四周留出一圈 `edge/6` 的透明边，而两支判据第一眼都是「透明像素占多少」
+   * （[IconBitmap.alphaSilhouette] 裁到内容外接框之后量，那圈边会让外接框缩到中间
+   * 2/3、把一张**满幅不透明**的老式图标量成「透明 44% / 实心 56%」）——
+   * 正好落进「透明底 + 图形」的特征里（透明 > 5% 且实心 < 70%），于是走了 alpha 分支。
+   * 而那个 alpha 描述的是**整张方图的轮廓**，压出来就是一整块实心方块 ——
+   * 上色之后就是一块色。
    *
    * 满幅光栅化（不缩进）之后，同一张图是「透明 0% / 实心 100%」→ 判据正确地落到
-   * **二值化**分支（Otsu + 连通性），与通知侧处理同类图标的口径完全一致 ——
-   * 这也正是「要通知那套算法」的本意。
+   * **亮度掩码**分支（[IconBitmap.luminanceMask]），与通知侧处理同类图标的口径完全一致
+   * —— 这也正是「要通知那套算法」的本意。
    *
-   * 于是分工是：**分支判定用满幅口径**（[IconBitmap.monochrome] 只看得到这一张），
+   * 于是分工是：**分支判定用满幅口径**（判据只看得到这一张），
    * **位置用可见区口径**（[intoVisibleArea]）。两者各自独立、互不干扰。
    *
    * ⚠ 为什么必须还原 bounds：自适应图标的前景层是**应用那份图标对象自己持有的**
@@ -605,13 +620,13 @@ internal object MonochromeSynth {
   }
 
   /**
-   * 把**满幅口径**算出来的剪影缩进**可见区**，四周留透明。
+   * 把**满幅口径**算出来的掩码缩进**可见区**，四周留透明。
    *
    * 非自适应图标（老式满幅 PNG、图标包给的整张图）的内容铺满整个 bounds，
    * 而它在图层 bounds 里只该占中间那 2/3 —— 与裁圆那边 `MaskedDrawable` 的填充同一口径。
    * 不缩进的话，可见区里只剩这张图的中间 2/3，看起来就是「放大一圈 + 四周被切」。
    *
-   * ⚠ 只能在 [IconBitmap.monochrome] **之后**调用，不能提前到光栅化那一步 ——
+   * ⚠ 只能在掩码**算完之后**调用，不能提前到光栅化那一步 ——
    * 为什么，见 [rasterize] 上面那段（这是「非自适应图标全是色块」的病根）。
    */
   private fun intoVisibleArea(source: Bitmap, edge: Int): Bitmap {
@@ -627,8 +642,8 @@ internal object MonochromeSynth {
   /**
    * ARGB_8888（白色 + alpha）→ ALPHA_8。
    *
-   * `monochrome()` 交出来的是 ARGB_8888，但桌面取色只读 alpha，
-   * 所以留着三个颜色通道是白占内存（每张 147 KB → 36 KB @192px）。
+   * [IconBitmap.alphaSilhouette] / [IconBitmap.luminanceMask] 交出来的都是 ARGB_8888，
+   * 但桌面取色只读 alpha，所以留着三个颜色通道是白占内存（每张 147 KB → 36 KB @192px）。
    */
   private fun toAlphaMask(source: Bitmap): Bitmap? {
     val w = source.width

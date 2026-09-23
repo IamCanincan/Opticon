@@ -294,34 +294,44 @@ intentresolver / permissioncontroller / wellbeing。
   钩 `AdaptiveIconDrawable.getMonochrome()`，在它返回 null 时补一个极性正确的单色层，
   桌面因此根本不进 `MonochromeIconFactory`；原先那道「把桌面算出来的掩码整张翻回来」
   保留为**兜底** —— 合成挂不上或抛异常时自动接管。两条路互斥，不需要开关。
-  剪影用的就是通知小图标黑白模式那套算法（`IconBitmap.monochrome`：透明底走 alpha 阈值、
-  实心底走 Otsu 自动阈值 + 连通性判据），两边共用一份实现。
-  **两类输入故意不合成、直接交回桌面**（都会在日志里留痕，见下）：
-  1. 压不出像样形状（几乎全空 / 全满）；
-  2. 前景层是**被包装过的一整块不透明底** —— 桌面会给老式（非自适应）图标先缩到 70%
-     再包进一个 `InsetDrawable`（`BaseIconFactory.wrapToAdaptiveIcon`），那圈透明边会让
-     「满幅不透明」被 `useAlpha` 误判成「透明底的图形」，硬压只会得到一整块色块。
-     这种输入桌面自己的 `MonochromeIconFactory` 本来就处理得更好：它把图标画进 ALPHA 位图、
-     把**亮度**当 alpha，再归一化 + 做一条以 128 为中心的对比度曲线（`generateMono`），
-     保留明暗层次 —— 对一整块不透明的彩色方图，这比二值化剪影好得多。
+
+  合成走的**就是通知小图标那套方案的两支**（通知侧是 `fill(前景层)` → `grayscale`）。
+  桌面只读 alpha，所以那一步的两个成分各自成了一支，实现都在 `IconBitmap` 里、
+  与通知**共用同一份代码**，不为任何一类图标单独开分支：
+  1. **透明像素真的构成背景** → 取 alpha（`alphaSilhouette`，与 `monochrome` 的
+     `useAlpha` 支同一段实现）。判据必须**先裁到内容外接框再量** —— 自适应前景层四周
+     约 53% 的安全区留白不是背景，带着它去量会把「满幅不透明的整块底」误判成
+     「透明底 + 图形」，压出来就是一整块色（真机实例：淘宝）。通知侧那句
+     「先 fill 再 monochrome，fill 裁掉的透明边正好是判断形状的凭据」说的就是这一步。
+  2. **否则** → 把**灰度**写进 alpha（`luminanceMask`，即 `grayscale` 那一步的移植）。
+     通知侧对它的说明是「桌面图标是一整块不透明的彩色图形，二值化只会得到它的外轮廓
+     （圆形图标就压成一个白圆），细节全丢；灰度化保留了明暗层次」—— 所以这一类
+     **就该走灰度**，不是特例。极性（图形偏暗还是偏亮）用的是 `monochrome` 二值化选侧
+     同一个连通性判据，不另造一套。
+  两支都不成立（光栅化失败 / 纯色块没有任何对比度）才返回 null，桌面照旧走自己的路。
   界面上的「修正单色图标的极性」开关是逃生口：关掉就什么都不补，桌面照它自己的方式处理。
 
 > 排查提示：如果 App 报「解析不了域名」，而 `adb shell` 里 `curl` 同一个地址是通的，
 > 那不是 DNS 问题 —— 是 `netpolicy` 里这个 uid 的陈旧记录把它设成了 `REJECT_ALL`
 >
 > 主题图标看着不对（一片色 / 缺边 / 形状反）时，日志里有 `Mono: diag#N` 一组行：
-> 汇总行给输入 alpha 的直方图（`a0/a1/a2/a255`）、走了哪条分支（`useAlpha`）、
-> 掩码的 `out`（≥128 占比）与 `fill`（按 alpha 加权的等效覆盖率）、连通块数 `cc`、
-> 最大一块占比 `top`；后面跟着输入 alpha 与掩码的 40×40 ASCII 缩略图（`#` 是图形）。
+> - **分支行**：走的是 `alpha 轮廓` 还是 `亮度掩码（图形偏暗/亮）`，以及有没有真的交出掩码；
+> - **汇总行**：输入 alpha 的直方图（`a0/a1/a2/a255`）、两支判据的决策过程
+>   （`box` / `boxfill` 是 alpha 支的判据；`t` / `dark` / `light` / `db` / `lb` /
+>   `figureDark` / `luma` 是亮度支的）、掩码的 `out`（≥128 占比）与 `fill`
+>   （按 alpha 加权的等效覆盖率）、连通块数 `cc`、最大一块占比 `top`；
+> - 降级到亮度掩码的样本还会跟一张 40×40 的 ASCII 缩略图（`#` 是不透明）。
 > 判读：`cc` 小、`top` 接近 1 说明形状是完整一块；`fill` 明显大于 `out` 说明掩码里
-> 塞了淡色；**`out ≈ fill`、`cc=1`、`top=1.00` 且 `out` 落在 0.4~0.5** 则是
-> 「一整块实心方块」的特征 —— 典型成因是输入本身是「透明边 + 一整块不透明的底」
-> （老式图标被桌面 `wrapToAdaptiveIcon` 包装过）。这种现在会**主动放弃合成**，
-> 日志里是 `放弃合成：前景层是包装过的整块不透明底，alpha 不含图形信息`。
+> 塞了淡色；**`out ≈ fill`、`cc=1`、`top=1.00`、`boxfill=1.00`** 是「一整块实心方块」
+> 的特征 —— 那说明**输入**本身就是满幅不透明的底（`alphaSilhouette` 会把它判给亮度支，
+> 真机实例淘宝：`box=0.47 boxfill=1.00` → 亮度掩码后是「淘」字本身，`cc=4`）。
+> ⚠ 亮度掩码的 `cc` / `top` 只是把连续灰阶按 128 二值化后的统计量，**不代表观感**
+> （噪点多的照片天然 `cc` 大），判它看 `fill` 更准。
 > `adaptive=` 是这批埋点里最关键的一位：`false` 表示这是非自适应图标，
-> 剪影走的是「满幅判定 → 缩进可见区」那条路（先缩进会让四周多出透明边、判错分支）。
-> 每进程打前 12 条汇总行、其中前 2 条额外带 ASCII 缩略图（图标加载是热路径，
-> 一张图标就是 4 份 40×40，打多了会把 logcat 环形缓冲挤爆），发版前可降级/移除。
+> 掩码走的是「满幅判定 → 缩进可见区」那条路（先缩进会让四周多出透明边、判错分支）。
+> 汇总行**逐条打**（不打上限 —— 采样太少会让真正出问题的那一类在日志里一次都不出现），
+> 只有降级样本的 ASCII 缩略图限 8 张（图标加载是热路径，打多了会把 logcat 环形缓冲挤爆），
+> 发版前可降级/移除。
 > （记录是在 App 还没有 `INTERNET` 权限时建立的，`adb install -r` 不会刷新它）。
 > **卸载后全新安装**即可重建，重启无效。
 
@@ -436,8 +446,11 @@ MIT —— 见 [LICENSE](LICENSE)。
 - 修复：合成的单色掩码**被一层淡色铺满**，桌面主题图标看起来是一整块色、字形几乎看不见。`IconBitmap.monochrome` 的 alpha 分支里，`preserveAlpha` 把「算不算图形」的判据从 `alpha >= 128` 松成了 `alpha > 0` —— 判据和真正写出去的像素两边口径不一致，而调用方正是拿这个判据数出来的 `shapeCount` 在判「形状合不合理」，等于没判。桌面图标的前景层常自带一整张极淡的满幅底：真机实测一张 192² 的输入里 26% 全透明、66% 落在 alpha 1~63、只有 8% 是实心字形，128~254 **一个像素都没有**（说明那层淡底是矢量自带的，不是抗锯齿）。松掉判据后掩码的等效覆盖率从 8% 涨到 34%，上色后整块图标被铺成一片色。现在判据一律是 `alpha >= 128`，`preserveAlpha` 只决定「写出去的 alpha 是多少」，不参与判定 —— `binarize` 那条路本来就是对的（判据是 `class != CLASS_TRANSPARENT`）。
 - 修复：主题图标**整块平色、看不见字形**（上面那条只修了掩码内容，不是病因）。桌面给这层上色用的是 `mono.setTint(colors[1])` —— `MonoIconThemeController.createThemedAdaptiveIcon` 的字节码是 `getMonochrome()` → `setTint(colors[1])` → `new AdaptiveIconDrawable(ColorDrawable(colors[0]), mono)`。而 `Drawable.setTint()` 的基类实现**只是把 tint 存进自己的私有字段、算出一个 `mTintFilter`，之后就没有然后了** —— 应用那个 filter 是子类自己的事。系统 drawable 都自己做了（`VectorDrawable` / `BitmapDrawable` 都实现了 `TintAwareDrawable`），自定义 Drawable 不重写就是**静默丢失**：掩码按 `Paint` 的默认色（黑）画出来，而深色主题下底色 `colors[0]` 本身就是深色 → 黑色字形糊在深色底上 = 一整块平色。对照桌面自己的兜底路径就很清楚：它拿不到应用的单色层时，会把 `MonochromeIconFactory` 的掩码包进 `new BitmapDrawable(mono)` 再 `setColorFilter(BlendModeColorFilter(colors[1], SRC_IN))` —— 换成 `BitmapDrawable` 就自动生效，所以那个版本反而看得见字形。现在 `MonochromeLayer` 把 `setColorFilter` / `setTintList` / `setTintMode` 三个入口都落到自己的 `Paint` 上（显式 color filter 优先于 tint，取舍与 `BitmapDrawable` 一致），`Paint` 的默认色设成白色兜底（掩码是 ALPHA_8、画出来的颜色由画笔决定 —— 这正是 `Bitmap.extractAlpha()` 那套「alpha 当遮罩」的用法）。另留两条埋点：`Mono: tint #N via …`（桌面走哪个入口、给了什么颜色）与 `Mono: layer … filter=…`（这一帧画的时候有没有 filter），用来在真机上核实，而不是只靠字节码推断。
 - 更正（**推翻上一条的判断**）：主题图标那条路径桌面**根本不 tint**。上一条从字节码里读到 `mono.setTint(colors[1])` 就认定「桌面用 `setTint` 上色」，但真机日志里**一条 tint 埋点都没有**、`filter=none`，而我们的层确实被画了（`Mono: layer bounds=384x384`）。补上「谁在问 / 谁在画」的堆栈埋点后看清了实际路径 —— `BaseIconFactory.createBadgedIconBitmap` → `MonoIconThemeController.createThemedBitmap`（Kotlin 第 76 行 `icon.getMonochrome()`）→ 第 78 行 `InsetDrawable(mono, -getExtraInsetFraction())` → 第 79 行 `toAlphaBitmap(inset, iconBitmapSize)`：**把这一层画进一张 ALPHA 位图**，再交给 `MonoThemedBitmap(alphaBitmap, colorProvider, …)` 由 `colorProvider` 上色。这条路上**只有 alpha 有意义，画出来是什么颜色完全无所谓**，所以之前那次「整块平色」的病因不在 tint，而在同一次提交里 `preserveAlpha` 判据那条（掩码被一层淡色铺满）。顺带用这段字节码解释了另外两个观察：负 inset 把我们的层撑到 1.5×（真机 `bounds=384` = 1.5 × 256）、掩码被画进 256 的位图所以只有中央 2/3 可见 —— 坐标系那一节的推导因此有了更直接的证据。tint 的实现**保留**（`Drawable` 的 tint 确实是「声明了但完全不管」，别的路径可能调它，补上契约是防御性的），但要指出上一条里的一处事实错误：基类 `setTintList` 是**空方法体**，它连「存进私有字段」都没做。
-- 修复：**非自适应（老式）图标全部变成色块**。桌面给老式图标造主题图标时，会先把那张满幅位图**缩到 70%** 再包进一个 `InsetDrawable`（`BaseIconFactory.wrapToAdaptiveIcon`：`AdaptiveIconDrawable(ColorDrawable(bg), wrapIntoSquareDrawable(icon, LEGACY_ICON_SCALE))`，而 `wrapIntoSquareDrawable` 就是 `InsetDrawable(d, (1-scale)/2, …)`），于是我们拿到的前景层四周有一圈 15% 的透明边。那张**满幅不透明**的老式图标因此被光栅化成「透明 51% / 实心 49%」，正好落进 `IconBitmap.monochrome` 里 `useAlpha` 的判据（透明 > 5% 且实心 < 70%）→ 走 alpha 分支 → 而那个 alpha 描述的是**那块底的外轮廓**，压出来就是一整块实心方块，上色后就是一块色。真机实测特征：`a0=0.88 a1=0.00 a2=0.00 a255=0.11`（硬边、零过渡、单连通块、`out ≈ fill`）。现在这类输入**主动放弃合成**（`MonochromeSynth.wrapsSolidPlate`：把 `DrawableWrapper` 剥一层、满幅光栅化被包的那层、用新增的 `IconBitmap.isSolidPlate` 判「不透明占比 ≥ `SOLID_SHAPE_LIMIT`」），交回桌面自己的 `MonochromeIconFactory` —— 它把图标画进 ALPHA 位图、把**亮度**当 alpha，再归一化 + 做一条以 128 为中心的对比度曲线（`generateMono`），对一整块不透明的彩色方图比二值化剪影（只留外轮廓、细节全丢）好得多，也正是用户说的「之前的黑白图标」。放弃的每一次都留日志（`Mono: diag#N … 放弃合成：…`），不会和「压根没进这条函数」混在一起。
-- 修复：非自适应图标在**裁圆那条路**上同样会压成方块，根因是同一个。这条路上图标是**没被包装**的裸 `BitmapDrawable`（真机 `adaptive=false`），而 `rasterizeForeground` 原先在**光栅化时**就把它缩进可见区（四周留 `edge/6` 透明边）—— 亲手制造出同一圈透明边、同一个误判。改成**满幅光栅化 → 让 `monochrome()` 判分支 → 剪影算完再缩进可见区**（新增 `intoVisibleArea`）。两处修改根因相同：**inset 的透明边会骗过 `useAlpha`**。真机实测改后 `a255=0.97 → useAlpha=false` → 走二值化 → `out=0.05`。
+- ⚠ **已被下面那条「合并上两条的做法」取代，保留过程记录**：修复：**非自适应（老式）图标全部变成色块**。桌面给老式图标造主题图标时，会先把那张满幅位图**缩到 70%** 再包进一个 `InsetDrawable`（`BaseIconFactory.wrapToAdaptiveIcon`：`AdaptiveIconDrawable(ColorDrawable(bg), wrapIntoSquareDrawable(icon, LEGACY_ICON_SCALE))`，而 `wrapIntoSquareDrawable` 就是 `InsetDrawable(d, (1-scale)/2, …)`），于是我们拿到的前景层四周有一圈 15% 的透明边。那张**满幅不透明**的老式图标因此被光栅化成「透明 51% / 实心 49%」，正好落进 `IconBitmap.monochrome` 里 `useAlpha` 的判据（透明 > 5% 且实心 < 70%）→ 走 alpha 分支 → 而那个 alpha 描述的是**那块底的外轮廓**，压出来就是一整块实心方块，上色后就是一块色。真机实测特征：`a0=0.88 a1=0.00 a2=0.00 a255=0.11`（硬边、零过渡、单连通块、`out ≈ fill`）。现在这类输入**主动放弃合成**（`MonochromeSynth.wrapsSolidPlate`：把 `DrawableWrapper` 剥一层、满幅光栅化被包的那层、用新增的 `IconBitmap.isSolidPlate` 判「不透明占比 ≥ `SOLID_SHAPE_LIMIT`」），交回桌面自己的 `MonochromeIconFactory` —— 它把图标画进 ALPHA 位图、把**亮度**当 alpha，再归一化 + 做一条以 128 为中心的对比度曲线（`generateMono`），对一整块不透明的彩色方图比二值化剪影（只留外轮廓、细节全丢）好得多，也正是用户说的「之前的黑白图标」。放弃的每一次都留日志（`Mono: diag#N … 放弃合成：…`），不会和「压根没进这条函数」混在一起。
+- ⚠ **已被下面那条「合并上两条的做法」取代，保留过程记录**：修复：非自适应图标在**裁圆那条路**上同样会压成方块，根因是同一个。这条路上图标是**没被包装**的裸 `BitmapDrawable`（真机 `adaptive=false`），而 `rasterizeForeground` 原先在**光栅化时**就把它缩进可见区（四周留 `edge/6` 透明边）—— 亲手制造出同一圈透明边、同一个误判。改成**满幅光栅化 → 让 `monochrome()` 判分支 → 剪影算完再缩进可见区**（新增 `intoVisibleArea`）。两处修改根因相同：**inset 的透明边会骗过 `useAlpha`**。真机实测改后 `a255=0.97 → useAlpha=false` → 走二值化 → `out=0.05`。
+- 重构（**合并上两条的做法**）：合成收敛成**一条通用规则的两支**，也就是**通知小图标那套方案本身**，不再为任何一类图标开特判。通知侧（`NotificationIconPatch.launcherIconMonochrome`）做的是 `fill(前景层)` → `grayscale`；桌面只读 alpha，所以那一步的**两个成分各自成了一支**，实现都放进 `IconBitmap` 与通知**共用同一份代码**：(1) 透明像素真的构成背景 → 取 alpha（新增 `alphaSilhouette`，与 `monochrome` 的 `useAlpha` 支走同一个 `alphaShape`）；(2) 否则 → 把灰度写进 alpha（新增 `luminanceMask`，即 `grayscale` 那一步的移植；通知侧对它的说明就是「二值化只会得到外轮廓（圆形图标就压成一个白圆）、细节全丢，灰度化保留了明暗层次」，所以这一类**就该走灰度**）。极性用 `monochrome` 二值化选侧同一个连通性判据（新增 `analyzeSplit` 复算真算法，不另造一套）。据此**删除**上一轮那套「按类型特判 + 剪影体检」：`wrapsSolidPlate` / `IconBitmap.isSolidPlate` / `silhouetteVerdict` / `Verdict` / `SOLID_BOX_AREA` / `SOLID_BOX_FILL` / `SHATTER_COMPONENTS` 全部移除 —— 那套每发现一个坏样本就要加一条规则，永远补不全。
+- 修复（**上一条的根因，也是「淘宝变成大色块」的病根**）：判据必须**先裁到内容外接框再量**。自适应前景层四周约 53% 的面积是安全区留白，带着它去量，一张**满幅不透明的整块底**也会被量成「透明 53% / 实心 47%」，正好落进「透明底 + 图形」的特征 → 走 alpha → 压出那块底的外轮廓 = 一整块色。真机实例淘宝：`fg=BitmapDrawable@648x648 intrinsic=432x432`，`box=0.47 boxfill=1.00` → 亮度支 → 掩码是「淘」字本身（`out=0.10 cc=4 top=0.42`，4 个连通块 = 汉字离散笔画），不再是实心方块（原先 `out=0.47 cc=1 top=1.00`）。通知侧对同一件事早有原话：**「注意顺序：先 fill 再 monochrome。fill 裁掉的透明边正好是 monochrome 判断形状的凭据，反过来做会把整块图标压成一个实心圆。」** 桌面不能像通知那样把内容放大填满（坐标系要对齐 108dp 画布），但「先裁框、再判形状」这一步现在是一致的。分界线取 `FULL_BOX_FILL = 0.92` 而不是更松的值：实心圆形的填充率只有 0.785（π/4），只有真正铺满的方底才够得着。
+- 验证：115 个第三方包逐个 `pm disable-user` + `pm enable` 强制重建图标（桌面图标缓存会缓存已渲染的图标，不逐个触发就只能看到首页那几个），全量普查 **707 次渲染 / 99 个唯一图标 / 0 次放弃**，分布 377 次 alpha 轮廓 + 330 次亮度掩码；逐条核对每个唯一图标的 `box` / `boxfill` / `out` / `cc` / 亮度直方图，结论是 opaque 满幅底全部落在亮度支、透明底图形全部落在 alpha 支，没有一类被误分。诊断埋点也一并调整：汇总行**逐条打**（不打上限 —— 采样太少正是上一轮的教训：只看得到前几个图标，而前几个往往同属一类，真正出问题的那一类在日志里一次都没出现），只有降级样本的 ASCII 缩略图限 8 张；新增 `box` / `boxfill` 两个字段（就是上面定位淘宝的那两个数）。
 - 诊断：`diag#N` 汇总行加上 `adaptive=`（走哪条口径），采样上限拆成「汇总行 12 条 / ASCII 缩略图 2 条」—— 原先每进程只放行 2 个图标，而**最先加载的往往是同一类**，于是「非自适应图标全是色块」这个现象在日志里一次都没出现过；采样太少是上一轮判断错方向的原因之一。另外加了「谁在问 / 谁在画」两条堆栈埋点 —— 上面那条 tint 矛盾就是靠它解开的。
 
 ### v1.0.3（2026-09-22）
