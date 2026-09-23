@@ -2,6 +2,7 @@ package com.iamcanincan.opticon.notify
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.res.Resources
 import android.graphics.drawable.Icon
 import android.os.Build
 import android.service.notification.StatusBarNotification
@@ -11,6 +12,7 @@ import com.iamcanincan.opticon.runtime.MemberLookup
 import com.iamcanincan.opticon.runtime.ModuleRuntime
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
+import java.lang.reflect.Field
 import java.lang.reflect.Method
 
 /**
@@ -19,6 +21,12 @@ import java.lang.reflect.Method
  * 这里挂的全是私有类/私有方法，任何一环在不同版本上都可能改名或改签名，
  * 所以每个挂钩都是「找不到就记日志跳过」，绝不让 SystemUI 因为装钩失败而崩。
  * 装上的钩子会以 <方法名> hooked 打进日志，真机排障时看这个就知道缺了哪一段。
+ *
+ * ## 钩子体是热路径，别在里面现找成员
+ * 下面几个拦截器每条通知、每次图标绘制都要跑一遍，所以 Field / Method / 资源 id
+ * 一律在**装钩那一刻**解析好、用闭包捕获（见 [installOnly] 与 [SysUiId]）：
+ * `getDeclaredField` 一次不算贵，乘上「通知数 × 重绘次数 × 4~6 处」就不是钱了。
+ * 每一项都保留了「解析不出来就运行时按名字现查」的退路，缓存只加速、不改变结果。
  */
 object SystemUiHooks {
 
@@ -35,6 +43,9 @@ object SystemUiHooks {
     private const val STATUS_BAR_ICON = "com.android.internal.statusbar.StatusBarIcon"
     private const val STATUS_BAR_ICON_VIEW = "com.android.systemui.statusbar.StatusBarIconView"
     private const val CONTRAST_UTIL = "com.android.internal.util.ContrastColorUtil"
+
+    /** 取 SystemUI 自己的内部资源 id 时要报的包名（见 [SysUiId]） */
+    private const val SYSTEM_UI_PACKAGE = "com.android.systemui"
 
     /** 已挂过的方法，防止框架重复回调时重复挂钩 */
     // 线程安全集合：安装路径虽然目前只走主线程，但框架的回调时机不由我们决定，
@@ -70,6 +81,64 @@ object SystemUiHooks {
         ROW_BINDER_MODERN, ROW_BINDER_LEGACY, NOTIFICATION_ENTRY,
         ICON_MANAGER, STATUS_BAR_ICON, STATUS_BAR_ICON_VIEW, CONTRAST_UTIL
     )
+
+    /**
+     * 装钩期的一次性解析。
+     *
+     * ⚠ 异常一律吞在这里：`install()` 这条链路外面没有第二层保护（框架的 protective
+     * 只兜钩子体，不兜装钩），一次解析失手抛出去 = 后面几条钩子一个都装不上，
+     * 通知全裸奔，比不缓存糟得多。
+     * 解析不出来就返回 null，闭包里的运行时代码自动退回「按名字现查」的老路子 ——
+     * 缓存只负责省掉重复查找，永远不负责让一条本来能用的钩子失效。
+     */
+    private fun <T : Any> installOnly(lookup: () -> T?): T? = runCatching(lookup).getOrNull()
+
+    /**
+     * 只解析一次的 SystemUI 内部资源 id。
+     *
+     * 原来这两处 `getIdentifier` 写在钩子体里，每次绘制 / 每次重建 RemoteViews 都要现查一遍，
+     * 而它要遍历宿主的 asset 包名表，不是廉价调用。id 在进程生命周期内是常量，查到一次就存着。
+     *
+     * ⚠ 为什么不在装钩那一刻查（明明别的东西都是装钩期定的）：装钩发生在 packageReady，
+     * 那时宿主还在 `attachBaseContext` 阶段，`ActivityThread.currentApplication()` 常常是 null
+     * （同一个坑见 IconHooks.hookProcessControlReceiver 的注释），而 `ModuleRuntime.hostContext`
+     * 要等 inflateViews 第一次被调用才会被填上 —— 也就是说装钩期根本拿不到 Resources。
+     * 硬在那时候查只会得到 0，而 0 会被当成「这台机器没这个 id」永久生效，
+     * 等于亲手把一条本来能用的保色钩子装死。所以退一步：第一次真拿到 Resources 时解析，
+     * 代价只落在第一条通知上。
+     *
+     * 解析成 0 也照样缓存：真没这个 id 时，每次现查同样得到 0、同样进不去保色分支，
+     * 结果与每次现查完全一致，只是少跑了后面那些次。
+     */
+    private class SysUiId(private val name: String) {
+
+        /** -1 = 还没解析过；>=0 一律视为终值（含 0） */
+        @Volatile
+        private var resolved = UNRESOLVED
+
+        /** DiscouragedApi 的抑制跟着 getIdentifier 一起挪进来了：这些 id 不在编译资源里，只能按名字反查 */
+        @SuppressLint("DiscouragedApi")
+        fun get(resources: Resources): Int {
+            val cached = resolved
+            if (cached != UNRESOLVED) return cached
+            // 异常照样就地吞：这一句跑在钩子体里，抛出去整条钩子都会被 protective 跳过，
+            // 白丢一次保色。查不到就按「这台机器没有这个 id」处理
+            val id = runCatching { resources.getIdentifier(name, "id", SYSTEM_UI_PACKAGE) }
+                .getOrDefault(0)
+            resolved = id
+            return id
+        }
+
+        private companion object {
+            const val UNRESOLVED = -1
+        }
+    }
+
+    /** setIcon 打的「这图标别给我统一着色」标记（见 [installColorRetention]） */
+    private val iconIsPreLId = SysUiId("icon_is_pre_L")
+
+    /** processSmallIconColor 要清留白的左侧图标位（见 [installSmallIconColor]） */
+    private val leftIconId = SysUiId("left_icon")
 
     /**
      * 装挂钩。返回「主挂钩是否已就位」。
@@ -133,6 +202,14 @@ object SystemUiHooks {
             return false
         }
 
+        // 钩子体每条通知都要跑，反射成员在这里一次定下来，闭包捕获。
+        // 解析不出来（entryClass 为 null 的兜底路径 / 类还没就绪 / 字段改名）就是 null，
+        // 运行时自动退回下面的按名现查 —— 缓存只加速，不会让本来能换图的钩子失效。
+        val sbnField = installOnly {
+            entryClass?.let { MemberLookup.findFieldByType(it, StatusBarNotification::class.java) }
+        }
+        val binderContextField = installOnly { MemberLookup.findField(binderClass, "mContext") }
+
         for (method in overloads) {
             method.isAccessible = true
             // 框架会对同一个进程多次回调 onPackageReady（实测 Vector 会调 2~3 次），
@@ -142,15 +219,14 @@ object SystemUiHooks {
             val hookId = "inflateViews[${method.parameterTypes.joinToString { it.simpleName }}]"
 
             module.hook(method).setId(hookId).setExceptionMode(EXCEPTION_MODE).intercept { chain ->
-                captureSystemContext(chain.thisObject)
+                captureSystemContext(chain.thisObject, binderContextField)
 
                 for (arg in chain.args) {
                     if (arg == null) continue
                     // entryClass 为 null 时放行所有参数，靠能否取出 sbn 来判断
                     if (entryClass != null && !entryClass.isInstance(arg)) continue
                     runCatching {
-                        val sbn = (MemberLookup.readFieldByType(arg, StatusBarNotification::class.java)
-                            ?: MemberLookup.readField(arg, "mSbn")) as? StatusBarNotification ?: return@runCatching
+                        val sbn = readEntryField(arg, sbnField) as? StatusBarNotification ?: return@runCatching
                         val context = ModuleRuntime.hostContext ?: return@runCatching
                         // TYPE_RESOURCE 的图标必须用目标应用自己的 Resources 解码。
                         //
@@ -189,10 +265,31 @@ object SystemUiHooks {
         return true
     }
 
-    /** 顺一个 SystemUI 的 Context 出来，后面取包名资源要用 */
-    private fun captureSystemContext(binder: Any?) {
-        val context = binder?.let { MemberLookup.readField(it, "mContext") as? Context }
-            ?: ModuleRuntime.hostContext
+    /**
+     * 从 inflateViews 的参数里把 sbn 抠出来。
+     *
+     * [sbnField] 是装钩期按类型解析好的字段，走它只需要一次 field.get；
+     * 它为 null（NotificationEntry 没解析出来）、或它取回 null 时，退回原来那两次现查
+     * （按类型扫字段表、再按名字试 `mSbn`），顺序和老代码一模一样。
+     * 留着兜底不是洁癖：运行时传进来的可能是 entry 的子类，字段要正好声明在子类上，
+     * 装钩期按父类找就是找不到 —— 那种情况下老代码能换图，新代码也必须能。
+     */
+    private fun readEntryField(arg: Any, sbnField: Field?): Any? =
+        (if (sbnField != null) MemberLookup.readField(arg, sbnField) else null)
+            ?: MemberLookup.readFieldByType(arg, StatusBarNotification::class.java)
+            ?: MemberLookup.readField(arg, "mSbn")
+
+    /**
+     * 顺一个 SystemUI 的 Context 出来，后面取包名资源要用。
+     *
+     * [contextField] 同 [readEntryField] 的字段：装钩期解析好了就只跑一次 field.get，
+     * 每条通知都 getDeclaredField 一次是纯浪费。取不到仍退回按名字现查。
+     */
+    private fun captureSystemContext(binder: Any?, contextField: Field?) {
+        val context = binder?.let {
+            ((if (contextField != null) MemberLookup.readField(it, contextField) else null)
+                ?: MemberLookup.readField(it, "mContext")) as? Context
+        } ?: ModuleRuntime.hostContext
         if (context != null) ModuleRuntime.hostContext = context
     }
 
@@ -202,10 +299,9 @@ object SystemUiHooks {
      * 2. StatusBarIconView#updateIconColor —— 非单色图标不强制设色；
      * 3. Notification.Builder#processSmallIconColor —— 去掉外圈圆底和留白。
      *
-     * 要用 getIdentifier 取 SystemUI 内部的资源 id（icon_is_pre_L、left_icon），
-     * 这些 id 不在本模块的编译资源里，只能按名字反查，故抑制 DiscouragedApi。
+     * 用到的两个 SystemUI 内部资源 id（icon_is_pre_L、left_icon）不在本模块的编译资源里，
+     * 只能按名字反查 —— 收在 [SysUiId] 里全进程各查一次，别在钩子体里每次现查。
      */
-    @SuppressLint("DiscouragedApi")
     private fun installColorRetention(module: XposedModule, classLoader: ClassLoader) {
         val iconManager = MemberLookup.findClass(ICON_MANAGER, classLoader)
         val entryClass = MemberLookup.findClass(NOTIFICATION_ENTRY, classLoader)
@@ -221,11 +317,13 @@ object SystemUiHooks {
         if (setIcon == null) {
             if (iconManager != null) logCandidates(iconManager, "setIcon")
         } else if (installedHookIds.add("setIcon")) {
+            // 这条钩子每次重绘图标都要跑，所以资源 id 走 [iconIsPreLId]（全进程只查一次），
+            // 不再在钩子体里现 getIdentifier
             module.hook(setIcon).setId("setIcon").setExceptionMode(EXCEPTION_MODE).intercept { chain ->
                 if (shouldKeepColor()) {
                     for (arg in chain.args) {
                         if (arg is View) {
-                            val tagId = arg.context.resources.getIdentifier("icon_is_pre_L", "id", "com.android.systemui")
+                            val tagId = iconIsPreLId.get(arg.context.resources)
                             if (tagId != 0) arg.setTag(tagId, true)
                         }
                     }
@@ -259,24 +357,45 @@ object SystemUiHooks {
             return
         }
         if (!installedHookIds.add("updateIconColor")) return
+
+        // 走到这里这条钩子确定要装了，把钩子体**每次重绘**都要用的四个成员一次解析好（见文件头）。
+        // ContrastColorUtil 是 framework 类，ClassLoader 按双亲委派只会给出同一个 Class，
+        // 所以装钩期在它上面解析出的 Method，与运行时在 getInstance 返回的实例上现找的是同一个；
+        // 反射 invoke 走虚分派，实例真是子类且有 override 也照样调到子类的实现。
+        // 任何一项解析不出来就是 null，闭包里退回按名字现查 —— 缓存不改变任何一条判据。
+        val notificationField = installOnly { MemberLookup.findField(iconView, "mNotification") }
+        val setColorField = installOnly { MemberLookup.findField(iconView, "mCurrentSetColor") }
+        val getInstanceMethod = installOnly {
+            MemberLookup.findMethod(contrastUtil, "getInstance", Context::class.java)
+        }
+        val isGrayscaleMethod = installOnly {
+            MemberLookup.findMethod(contrastUtil, "isGrayscaleIcon", Context::class.java, Icon::class.java)
+        }
+
         module.hook(method).setId("updateIconColor").setExceptionMode(EXCEPTION_MODE).intercept { chain ->
             if (shouldKeepColor()) {
                 runCatching {
                     val view = chain.thisObject as View
-                    val sbn = MemberLookup.readField(view, "mNotification") as? StatusBarNotification
+                    val sbn = (notificationField?.let { MemberLookup.readField(view, it) }
+                        ?: MemberLookup.readField(view, "mNotification")) as? StatusBarNotification
                     if (sbn != null && sbn.packageName != "android") {
                         val context = view.context
-                        val instance = MemberLookup.invokeStatic(
-                            contrastUtil, "getInstance", arrayOf(context), Context::class.java
-                        ) ?: return@runCatching
-                        val isGrayscale = MemberLookup.invoke(
-                            instance, "isGrayscaleIcon",
-                            arrayOf(context, sbn.notification.smallIcon),
-                            Context::class.java, Icon::class.java
-                        ) as? Boolean
+                        val instance = (getInstanceMethod?.let { MemberLookup.invokeStatic(it, arrayOf(context)) }
+                            ?: MemberLookup.invokeStatic(
+                                contrastUtil, "getInstance", arrayOf(context), Context::class.java
+                            )) ?: return@runCatching
+                        val grayArgs = arrayOf(context, sbn.notification.smallIcon)
+                        val isGrayscale = (isGrayscaleMethod?.let { MemberLookup.invoke(instance, it, grayArgs) }
+                            ?: MemberLookup.invoke(
+                                instance, "isGrayscaleIcon", grayArgs,
+                                Context::class.java, Icon::class.java
+                            )) as? Boolean
                         if (isGrayscale == false) {
-                            // 写失败 = 保色没生效（图标会被系统重新染色）。静默失败最难查，所以打出来
-                            val written = MemberLookup.writeField(view, "mCurrentSetColor", 0)
+                            // 写失败 = 保色没生效（图标会被系统重新染色）。静默失败最难查，所以打出来。
+                            // 兜底那步不会因为「快路径写了但返回 false」再写一遍：
+                            // writeField 失败给出的是 false，不是 null，掉不进 `?:` 右边
+                            val written = setColorField?.let { MemberLookup.writeField(view, it, 0) }
+                                ?: MemberLookup.writeField(view, "mCurrentSetColor", 0)
                             if (!written) {
                                 ModuleRuntime.logW(
                                     "mCurrentSetColor not writable on ${view.javaClass.simpleName}," +
@@ -292,7 +411,6 @@ object SystemUiHooks {
         ModuleRuntime.logI("updateIconColor hooked")
     }
 
-    @SuppressLint("DiscouragedApi")
     private fun installSmallIconColor(module: XposedModule, classLoader: ClassLoader) {
         val builderClass = MemberLookup.findClass("android.app.Notification\$Builder", classLoader)
             ?: return
@@ -316,23 +434,38 @@ object SystemUiHooks {
         }
         if (!installedHookIds.add("processSmallIconColor")) return
 
+        // 这条钩子每次重建通知 RemoteViews 都要跑，成员照旧在装钩期定下来（见文件头）。
+        // Builder 里那个 colorUtil 的类型就是框架的 ContrastColorUtil，所以 isGrayscaleIcon
+        // 在它上面解析；万一某个 ROM 换成了别的类，反射 invoke 会失败，
+        // 失败就落到下面按名现查那条兜底上 —— 结果与今天完全一致，只是那一次多跑一步。
+        val builderContextField = installOnly { MemberLookup.findField(builderClass, "mContext") }
+        val getColorUtilMethod = installOnly { MemberLookup.findMethod(builderClass, "getColorUtil") }
+        val isGrayscaleMethod = installOnly {
+            MemberLookup.findClass(CONTRAST_UTIL, classLoader)
+                ?.let { MemberLookup.findMethod(it, "isGrayscaleIcon", Context::class.java, Icon::class.java) }
+        }
+
         module.hook(method).setId("processSmallIconColor").setExceptionMode(EXCEPTION_MODE).intercept { chain ->
             if (shouldKeepColor()) {
                 runCatching {
-                    val context = (MemberLookup.readField(chain.thisObject, "mContext") as? Context)
+                    val context = ((builderContextField?.let { MemberLookup.readField(chain.thisObject, it) }
+                        ?: MemberLookup.readField(chain.thisObject, "mContext")) as? Context)
                         ?: ModuleRuntime.hostContext
                     val smallIcon = chain.getArg(0) as Icon
                     val contentView = chain.getArg(1) as RemoteViews
-                    val colorUtil = MemberLookup.invoke(chain.thisObject, "getColorUtil")
-                        ?: return@runCatching
-                    val isGrayscale = MemberLookup.invoke(
-                        colorUtil, "isGrayscaleIcon",
-                        arrayOf(context, smallIcon), Context::class.java, Icon::class.java
-                    ) as? Boolean
+                    val colorUtil = (getColorUtilMethod?.let { MemberLookup.invoke(chain.thisObject, it) }
+                        ?: MemberLookup.invoke(chain.thisObject, "getColorUtil")) ?: return@runCatching
+                    val grayArgs = arrayOf(context, smallIcon)
+                    val isGrayscale = (isGrayscaleMethod?.let { MemberLookup.invoke(colorUtil, it, grayArgs) }
+                        ?: MemberLookup.invoke(
+                            colorUtil, "isGrayscaleIcon", grayArgs,
+                            Context::class.java, Icon::class.java
+                        )) as? Boolean
                     if (isGrayscale == false && context != null) {
                         contentView.setInt(android.R.id.icon, "setBackgroundResource", android.R.color.transparent)
                         contentView.setViewPadding(android.R.id.icon, 0, 0, 0, 0)
-                        val leftIcon = context.resources.getIdentifier("left_icon", "id", "com.android.systemui")
+                        // left_icon 是 SystemUI 内部的资源 id，全进程只查一次（见 [leftIconId]）
+                        val leftIcon = leftIconId.get(context.resources)
                         if (leftIcon != 0) contentView.setViewPadding(leftIcon, 0, 0, 0, 0)
                     }
                 }.onFailure { ModuleRuntime.logE("processSmallIconColor failed", it) }

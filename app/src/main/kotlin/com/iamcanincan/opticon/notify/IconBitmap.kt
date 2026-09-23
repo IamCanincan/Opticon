@@ -162,7 +162,15 @@ object IconBitmap {
      * alpha 描述的是整块底板的轮廓，照搬会压出一个白方块。详见 [binarize]。
      *
      * 压不出像样的形状时返回 null，由上层保持原样 —— 详见 [MIN_SHAPE_RATIO]。
+     *
+     * ⚠ 带 @Synchronized：下面那四块复用缓冲区是进程级可变状态，而 SystemUI 的通知处理
+     * 会并发进来（binarize → keepDarkSide → outsideMask / borderConnectedRatio 一路都在用）。
+     * 本函数是它们唯一的入口，锁在这一层就锁住了全部四块缓冲，
+     * 与 [ToneCheck.isGrayscale] 用的是同一套做法（详见 [classBufferCache] 的说明）。
+     * 其余函数（[fill] / [grayscale] / [hasContent] / [rasterize]）各自 new 局部数组，
+     * 不共任何状态，不用跟着上锁。
      */
+    @Synchronized
     fun monochrome(input: Bitmap): Bitmap? {
         val w = input.width
         val h = input.height
@@ -348,7 +356,8 @@ object IconBitmap {
      * （图标自带透明边时可用）。两处一起当种子，两类都够不到任何一处才会打平。
      *
      * 用显式栈做四邻域洪泛，不递归 —— 整张图标可能连成一片，递归会爆栈。
-     * 缓冲区复用，这段代码在通知刷新的路径上。
+     * 缓冲区复用（这段代码在通知刷新的路径上），复用状态由 [monochrome] 上的锁串起来，
+     * 见 [classBufferCache]。
      */
     private fun borderConnectedRatio(
         classes: IntArray, outside: BooleanArray, w: Int, h: Int, kind: Int, kindTotal: Int
@@ -402,6 +411,11 @@ object IconBitmap {
         return connected.toFloat() / kindTotal
     }
 
+    /**
+     * 这四个取缓冲函数都不判锁 —— 唯一的调用链是 [monochrome] → [binarize] / [keepDarkSide]，
+     * 锁已经加在那条链的入口上了。绕过 [monochrome] 直接来用这些缓冲就是无保护地踩共享状态，
+     * 加新代码时要么走 monochrome，要么自己带锁。理由详见 [classBufferCache] 的说明。
+     */
     private fun classBuffer(size: Int): IntArray {
         var buf = classBufferCache
         if (buf == null || buf.size < size) {
@@ -439,6 +453,22 @@ object IconBitmap {
         return buf
     }
 
+    /**
+     * 通知刷新路径上复用的四块缓冲区，grow-only（只在需要时换成更大的数组，从不缩回去）。
+     *
+     * ⚠ **进程级可变状态，必须串行访问**：SystemUI 的通知处理会并发进来（不同通知各走一条线程），
+     * 而这里以前是四个裸 `private var`、[monochrome] 不带锁 —— 那和 ToneCheck 开头
+     * 「必须线程安全」的说法直接互相打脸。两边的说法只能留一个，这里保守地按有风险的那条来：
+     * 现在锁在 [monochrome] 上（唯一入口），classBuffer / visitedBuffer / stackBuffer /
+     * outsideBuffer 这四个取缓冲函数整体被串起来，做法与 [ToneCheck.isGrayscale] 完全一致。
+     * 不加锁能坏在哪，两条都是「日志干净、查不到」那一类：
+     *   1. 两条线程往同一块 visited/outside 里互相盖标记 → 连通性判据出错，
+     *      压出来的形状整个反掉（图形与背景互换），或者判成空图；
+     *   2. 共用的 stack 里混进另一条线程那张**更大**图的下标，本线程把它弹出来当索引
+     *      去访问自己手上那块较小的 outside/visited → ArrayIndexOutOfBoundsException。
+     *      （grow-only 自己换数组不会越界，越界是「下标来自别人的图」带来的。
+     *      异常从这里抛出去 = 整条 inflateViews 钩子被 protective 吞掉，那条通知不补丁。）
+     */
     private var classBufferCache: IntArray? = null
     private var visitedBufferCache: BooleanArray? = null
     private var stackBufferCache: IntArray? = null
