@@ -37,10 +37,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,13 +52,19 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.iamcanincan.opticon.BuildConfig
 import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.runtime.ModulePrefs
 import com.iamcanincan.opticon.ui.about.AboutScreen
+import com.iamcanincan.opticon.ui.about.UpdateState
+import com.iamcanincan.opticon.ui.about.toState
 import com.iamcanincan.opticon.ui.icon.IconScreen
 import com.iamcanincan.opticon.ui.module.ModuleScreen
 import com.iamcanincan.opticon.ui.notify.NotifyScreen
+import com.iamcanincan.opticon.update.UpdateChecker
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private const val REPO_URL = "https://github.com/IamCanincan/Opticon"
 
@@ -83,8 +90,10 @@ private const val PAGE_COUNT = 4
  *
  * ⚠ 底栏是**四格**：三格时药丸太短，撑不起"悬浮药丸"该有的形态（试过，明显偏窄）。
  *
- * ⚠ 切换页面时**不重建页面**：各页自己 `remember` 状态，切走再切回会重新读一遍
- * 配置 —— 那正是我们要的（用户可能刚在别处改过），代价只是重新读一次文件。
+ * ⚠ 切页**会**销毁离屏那页的组合：Pager 只保留视口内的页。所以「跨页还要留着的东西」
+ * 一律放在这里（外壳）而不是页面里 —— 目前有两个：检查更新的结果，和发 Snackbar 的作用域。
+ * 各页自己 `remember` 的**开关状态**被销毁反而正合适：切回来会重新读一遍配置，
+ * 用户可能刚在别处改过，代价只是重读一次文件。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -103,7 +112,33 @@ fun OpticonApp() {
     // 作为「这份文件是不是有效配置」的判据**的 —— 只打开过图标页就改开关的话，
     // 文件里没有 mode，那几条通道会整份配置都不认，用户改的开关读不回来。
     val context = LocalContext.current
-    remember { ModulePrefs.of(context).also { ModulePrefs.seedIfAbsent(it) } }
+
+    // 首次打开就把默认配置落盘（含 mode 键）。放在外壳而不是各页面里：
+    // 默认打开的是「图标」页，而模块侧有几条回退通道是**以「配置里有 mode 键」
+    // 作为「这份文件是不是有效配置」的判据**的 —— 只打开过图标页就改开关的话，
+    // 文件里没有 mode，那几条通道会整份配置都不认，用户改的开关读不回来。
+    //
+    // ⚠ 这是带磁盘读写的副作用，不能放在 remember {} 里：remember 的求值发生在**组合期**，
+    //    重组可能重跑它，而且 Compose 不保证它不在 UI 线程的关键路径上。
+    LaunchedEffect(Unit) { ModulePrefs.seedIfAbsent(ModulePrefs.of(context)) }
+
+    // 检查更新的**结果**和发起它的那次 launch 都在外壳持有。
+    // 「关于」页是 Pager 的一页，切走就离开组合 —— 放那边的话 job 被取消（结论再也写不回来，
+    // 而 IO 线程上那条 HttpURLConnection 并不因取消而中断，最长还白等约 40 秒），
+    // 那块承诺「常驻」的结果 chip 也会一片空白。
+    var updateState by remember { mutableStateOf<UpdateState>(UpdateState.Idle) }
+    val checkUpdate: () -> Unit = {
+        val version = BuildConfig.VERSION_NAME
+        updateState = UpdateState.Checking
+        scope.launch {
+            val result = withContext(Dispatchers.IO) { UpdateChecker.check(version) }
+            updateState = result.toState(context, version)
+        }
+    }
+
+    // Snackbar 也从外壳的作用域发：showSnackbar 会挂满整个展示时长，
+    // 用页面自己的 scope 一切页就被取消，提示当场消失（剪贴板那条同理）。
+    val notify: (String) -> Unit = { text -> scope.launch { snackbarHostState.showSnackbar(text) } }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
@@ -132,10 +167,10 @@ fun OpticonApp() {
                     modifier = Modifier.fillMaxSize(),
                 ) { page ->
                     when (page) {
-                        TAB_ICON -> IconScreen(snackbarHostState = snackbarHostState)
+                        TAB_ICON -> IconScreen(onNotify = notify)
                         TAB_NOTIFY -> NotifyScreen()
-                        TAB_MODULE -> ModuleScreen(snackbarHostState = snackbarHostState)
-                        else -> AboutScreen()
+                        TAB_MODULE -> ModuleScreen(onNotify = notify)
+                        else -> AboutScreen(state = updateState, onCheck = checkUpdate)
                     }
                 }
             }

@@ -28,14 +28,8 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -46,9 +40,6 @@ import com.iamcanincan.opticon.ui.FloatingNavSpace
 import com.iamcanincan.opticon.ui.IconTile
 import com.iamcanincan.opticon.ui.Section
 import com.iamcanincan.opticon.update.UpdateChecker
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 private const val REPO_URL = "https://github.com/IamCanincan/Opticon"
 
@@ -56,16 +47,15 @@ private const val REPO_URL = "https://github.com/IamCanincan/Opticon"
  * 「关于」页：检查更新与版本信息。
  *
  * 从「模块」页拆出来的 —— 底栏加到四格之后，「模块」页只留跟"怎么装、怎么验、
- * 怎么修"直接相关的内容（作用域 / 步骤 / 验证 / 运维），
+ * 怎么修"直接相关的内容（作用域 / 步骤 / 验证），
  * 更新与版本这类"看看就好"的信息独立成页。
+ *
+ * ⚠ 更新状态与检查动作都由外壳传进来（见 [UpdateState] 上的说明）—— 这页会被销毁。
  */
 @Composable
-fun AboutScreen() {
-  val scope = rememberCoroutineScope()
+internal fun AboutScreen(state: UpdateState, onCheck: () -> Unit) {
   val uriHandler = LocalUriHandler.current
   val version = BuildConfig.VERSION_NAME
-  val context = LocalContext.current
-  var update by remember { mutableStateOf<UpdateState>(UpdateState.Idle) }
 
   LazyColumn(
     modifier = Modifier.fillMaxSize(),
@@ -81,15 +71,8 @@ fun AboutScreen() {
     item { Section(text = stringResource(R.string.section_update)) {
       UpdateCard(
         version = version,
-        state = update,
-        onCheck = {
-          update = UpdateState.Checking
-          scope.launch {
-            // 联网不能跑在主线程，扔到 IO 再回来更新界面状态。
-            val result = withContext(Dispatchers.IO) { UpdateChecker.check(version) }
-            update = result.toState(context, version)
-          }
-        },
+        state = state,
+        onCheck = onCheck,
         onOpenPage = { url -> uriHandler.openUri(url) },
       )
     } }
@@ -187,7 +170,15 @@ private fun AboutCard() {
   }
 }
 
-private sealed interface UpdateState {
+/**
+ * 检查更新的状态机。
+ *
+ * ⚠ 状态和发起检查的那次 launch 都**归外壳（`OpticonApp`）持有**，不在这里 ——
+ * 这页是 `HorizontalPager` 的一页，切走就离开组合，`remember` 会被清掉、
+ * `rememberCoroutineScope` 会被取消。放在这里的后果是：切一下页结论就没了，
+ * 而且后台那条 HttpURLConnection 的协程被取消后并不会中断，IO 线程照旧白等最长约 40 秒。
+ */
+internal sealed interface UpdateState {
   data object Idle : UpdateState
 
   data object Checking : UpdateState
@@ -197,7 +188,7 @@ private sealed interface UpdateState {
 }
 
 
-private fun UpdateChecker.Result.toState(ctx: android.content.Context, current: String): UpdateState =
+internal fun UpdateChecker.Result.toState(ctx: android.content.Context, current: String): UpdateState =
   when (this) {
     is UpdateChecker.Result.Newer ->
       UpdateState.Done(ctx.getString(R.string.update_result_newer, version, current), url)

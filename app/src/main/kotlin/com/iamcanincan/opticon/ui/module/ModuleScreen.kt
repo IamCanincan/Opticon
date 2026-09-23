@@ -33,7 +33,6 @@ import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -74,7 +73,7 @@ import kotlinx.coroutines.launch
  * "怎么装、怎么验、怎么修"不是一回事。
  */
 @Composable
-fun ModuleScreen(snackbarHostState: SnackbarHostState) {
+fun ModuleScreen(onNotify: (String) -> Unit) {
   LazyColumn(
     modifier = Modifier.fillMaxSize(),
     contentPadding = PaddingValues(
@@ -92,7 +91,7 @@ fun ModuleScreen(snackbarHostState: SnackbarHostState) {
 
     item { Section(text = stringResource(R.string.section_steps)) { StepsCard() } }
 
-    item { Section(text = stringResource(R.string.section_verify)) { VerifyCard(snackbarHostState) } }
+    item { Section(text = stringResource(R.string.section_verify)) { VerifyCard(onNotify) } }
 
   }
 }
@@ -371,9 +370,14 @@ private fun StepsCard() {
   }
 }
 
-/** 验证卡：等宽字体的 logcat 命令 + 一键复制。 */
+/**
+ * 验证卡：等宽字体的 logcat 命令 + 一键复制。
+ *
+ * ⚠ [onNotify] 走外壳的作用域 —— Snackbar 要挂满整个展示时长，而页面切走就被销毁。
+ * 这里留下的 `scope` 只服务剪贴板那一次 suspend 写入。
+ */
 @Composable
-private fun VerifyCard(snackbarHostState: SnackbarHostState) {
+private fun VerifyCard(onNotify: (String) -> Unit) {
   val command = stringResource(R.string.verify_logcat)
   val copiedMessage = stringResource(R.string.verify_copied)
   // 用 LocalClipboard 而不是已废弃的 LocalClipboardManager：新 API 的写入是 suspend 的，
@@ -395,7 +399,7 @@ private fun VerifyCard(snackbarHostState: SnackbarHostState) {
         onClick = {
           scope.launch {
             clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(null, command)))
-            snackbarHostState.showSnackbar(copiedMessage)
+            onNotify(copiedMessage)
           }
         },
         shape = MaterialTheme.shapes.medium,

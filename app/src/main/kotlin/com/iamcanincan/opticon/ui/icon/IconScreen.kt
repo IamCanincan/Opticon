@@ -48,11 +48,8 @@ import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.runtime.rememberCoroutineScope
 import com.iamcanincan.opticon.circle.ACTION_CLEAR_ICON_CACHE
 import com.iamcanincan.opticon.circle.ACTION_RESTART_SELF
-import kotlinx.coroutines.launch
 
 private const val LAUNCHER_AOSP = "com.android.launcher3"
 private const val LAUNCHER_PIXEL = "com.google.android.apps.nexuslauncher"
@@ -70,15 +67,17 @@ private val OTHER_RESTARTABLE =
 /**
  * 「图标」页：只管裁圆这件事 —— 总开关，以及会影响它的那些系统行为说明。
  *
- * 作用域清单 / 启用步骤 / 验证 / 运维 / 检查更新 / 关于都是**模块级**内容
- * （跟「图标」无关，通知那一半也要用），已经移到「模块」页，见
- * [com.iamcanincan.opticon.ui.module.ModuleScreen]。
+ * 作用域清单 / 启用步骤 / 验证都是**模块级**内容（跟「图标」无关，通知那一半也要用），
+ * 已经移到「模块」页，见 [com.iamcanincan.opticon.ui.module.ModuleScreen]。
  *
  * 顶栏与底部导航让出的空间由外壳扣掉（`OpticonApp` 里的 `Modifier.padding(inner)`），
  * 这里只管列表自己的边距。
+ *
+ * ⚠ [onNotify] 由外壳提供、走外壳的协程作用域：这页是 Pager 的一页，切走就被销毁，
+ * 用页面自己的 scope 发 Snackbar 会在切页那一刻被取消掉。
  */
 @Composable
-fun IconScreen(snackbarHostState: SnackbarHostState) {
+fun IconScreen(onNotify: (String) -> Unit) {
   LazyColumn(
     modifier = Modifier.fillMaxSize(),
     contentPadding = PaddingValues(
@@ -95,7 +94,7 @@ fun IconScreen(snackbarHostState: SnackbarHostState) {
     item { MasterSwitchCard() }
     item { Section(text = stringResource(R.string.section_effect)) { EffectCard() } }
     item { Section(text = stringResource(R.string.section_mono)) { MonoInvertCard() } }
-    item { Section(text = stringResource(R.string.section_tools)) { ToolsCard(snackbarHostState) } }
+    item { Section(text = stringResource(R.string.section_tools)) { ToolsCard(onNotify) } }
 
     item { Section(text = stringResource(R.string.section_notes)) { NotesCard() } }
   }
@@ -335,11 +334,10 @@ private fun NotesCard() {
  * 所以不需要 root，也不会执行任何 shell 命令。
  */
 @Composable
-private fun ToolsCard(snackbarHostState: SnackbarHostState) {
+private fun ToolsCard(onNotify: (String) -> Unit) {
   val context = LocalContext.current
   val cacheSent = stringResource(R.string.cache_sent)
   val restartSent = stringResource(R.string.restart_sent)
-  val scope = rememberCoroutineScope()
 
   ElevatedCard(shape = MaterialTheme.shapes.large) {
     Column(modifier = Modifier.padding(16.dp)) {
@@ -383,7 +381,7 @@ private fun ToolsCard(snackbarHostState: SnackbarHostState) {
             context.sendBroadcast(Intent(ACTION_CLEAR_ICON_CACHE).setPackage(LAUNCHER_AOSP))
             context.sendBroadcast(Intent(ACTION_CLEAR_ICON_CACHE).setPackage(LAUNCHER_PIXEL))
           }
-          scope.launch { snackbarHostState.showSnackbar(cacheSent) }
+          onNotify(cacheSent)
         },
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
@@ -411,7 +409,7 @@ private fun ToolsCard(snackbarHostState: SnackbarHostState) {
             runCatching {
               context.sendBroadcast(Intent(ACTION_RESTART_SELF).setPackage(SYSTEMUI))
             }
-            scope.launch { snackbarHostState.showSnackbar(restartSent) }
+            onNotify(restartSent)
           },
           modifier = Modifier.weight(1f),
           shape = MaterialTheme.shapes.large,
@@ -427,7 +425,7 @@ private fun ToolsCard(snackbarHostState: SnackbarHostState) {
                 context.sendBroadcast(Intent(ACTION_RESTART_SELF).setPackage(pkg))
               }
             }
-            scope.launch { snackbarHostState.showSnackbar(restartSent) }
+            onNotify(restartSent)
           },
           modifier = Modifier.weight(1f),
           shape = MaterialTheme.shapes.large,
