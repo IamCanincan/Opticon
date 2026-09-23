@@ -125,6 +125,32 @@ object IconBitmap {
         return false
     }
 
+    /**
+     * 这一层是不是「一整块不透明的底」—— alpha 只描述了它的外轮廓，不含图形信息。
+     *
+     * 判据与 [monochrome] 里 `useAlpha` 用的那个实心判据同源（都是 [SOLID_SHAPE_LIMIT]），
+     * 只是去掉了「透明像素占比」那半个条件：这里要回答的是「不透明的部分是不是几乎铺满
+     * 整张」，而不是「该走哪条分支」。
+     *
+     * 调用方是桌面主题图标那条路（`MonochromeSynth.wrapsSolidPlate`）：桌面会把老式
+     * （非自适应）图标缩到 70% 再塞进一个 `InsetDrawable`，于是「透明边 + 一整块不透明的
+     * 方图」会被 [monochrome] 误判成「透明底 + 图形」，压出一整块色块。
+     * 判断「这块底本身不透明」要在**剥掉那层 inset 之后**做 —— 带着透明边量，
+     * 满幅的方图也会被量成 49%，反而像「透明底的图形」。
+     */
+    fun isSolidPlate(bitmap: Bitmap): Boolean {
+        val w = bitmap.width
+        val h = bitmap.height
+        if (w <= 0 || h <= 0) return false
+        val pixels = IntArray(w * h)
+        bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
+        var opaque = 0
+        for (pixel in pixels) {
+            if (Color.alpha(pixel) >= MIN_SHAPE_ALPHA) opaque++
+        }
+        return opaque.toFloat() / pixels.size >= SOLID_SHAPE_LIMIT
+    }
+
     /** 非透明像素的外接矩形；整张都透明时返回 null */
     private fun contentBounds(source: Bitmap): Rect? {        val w = source.width
         val h = source.height
