@@ -14,11 +14,17 @@ package com.iamcanincan.opticon.runtime
  *
  * 注意 [keepOriginalColor] 与 [replacement] 必须成对：彩色图标要保色，
  * 单色剪影要交给系统上色。界面只让用户选「模式」，这一对由模式推导。
+ *
+ * ⚠ 字段一律 `val`：这个实例会被 [ModuleRuntime] 存成「本进程当前生效的配置」，
+ * 而读配置的那条路在 system_server 里是**多个 binder 线程**同时进来的。
+ * 不可变对象 + volatile 引用就够保证大家看到同一份完整快照；
+ * 写成 var 的话既没有安全发布保证，也没人负责它改完后的可见性。
+ * （全仓确认过：没有任何地方赋值这些字段，改 val 不破坏任何调用点。）
  */
 data class ModuleOptions(
 
     /** 裁圆图标的总开关：关掉后所有进程都拿原图标，不再套圆形遮罩 */
-    var circleEnabled: Boolean = true,
+    val circleEnabled: Boolean = true,
 
     /**
      * 修正 Android 16「强制取色」下桌面替**未适配**应用生成的单色遮罩极性。
@@ -31,15 +37,15 @@ data class ModuleOptions(
      * （例如厂商已经修过极性，或某个图标包本身就是反着出的）时才需要关。
      * 它和 [circleEnabled] 是两个独立开关：裁圆和遮罩极性没有因果关系。
      */
-    var monoInvert: Boolean = true,
+    val monoInvert: Boolean = true,
 
     /** 通知图标的总开关：关掉后通知小图标保持系统原样 */
-    var notifyEnabled: Boolean = true,
+    val notifyEnabled: Boolean = true,
 
     /**
      * 已经做主题适配（单色）的图标原样放过 —— 这是「适配过的不要动」的核心。
      */
-    var preserveTinted: Boolean = true,
+    val preserveTinted: Boolean = true,
 
     /**
      * 跳过系统的统一着色、保住图标原色。
@@ -49,7 +55,7 @@ data class ModuleOptions(
      * 只有走 USE_LAUNCHER_ICON（塞彩色应用图标）时才需要打开。
      * ⚠ 必须与 [replacement] 成对改，见类注释。
      */
-    var keepOriginalColor: Boolean = false,
+    val keepOriginalColor: Boolean = false,
 
     /**
      * 替换策略，取值见下面的常量。
@@ -58,7 +64,7 @@ data class ModuleOptions(
      * 与 [ModulePrefs.DEFAULT_MODE] 一致。
      * ⚠ 改这里必须同时改 [keepOriginalColor]，见类注释。
      */
-    var replacement: Int = FORCE_MONOCHROME
+    val replacement: Int = FORCE_MONOCHROME
 ) {
 
     /** 替换策略的可读名字，只用于日志 */

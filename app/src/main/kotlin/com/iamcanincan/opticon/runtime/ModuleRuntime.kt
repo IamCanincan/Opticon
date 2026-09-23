@@ -25,15 +25,39 @@ import java.util.concurrent.Executors
 @SuppressLint("StaticFieldLeak")
 object ModuleRuntime {
 
-    /** 从挂钩点上顺出来的宿主上下文（SystemUI / launcher / …，看本进程是谁） */
+    /**
+     * 从挂钩点上顺出来的宿主上下文（SystemUI / launcher / …，看本进程是谁）。
+     *
+     * SystemUI 侧是在 inflateViews 钩子里写的，读的一方是 provider 那条查询的后台线程，
+     * 所以必须 volatile —— 否则后台线程可能永远看不到它被赋过值，provider 这一路白瞎。
+     */
+    @Volatile
     var hostContext: Context? = null
 
     /** 模块实例，用来读界面写下的配置 */
     private var module: XposedInterface? = null
 
+    /**
+     * 本进程当前生效的配置快照。
+     *
+     * [ModuleOptions] 是不可变的，所以 volatile 发布一份引用就够了：
+     * 拿到引用的线程看到的必然是完整一致的一份值，不会读到改一半的。
+     */
+    @Volatile
     private var current: ModuleOptions = ModuleOptions()
+
+    @Volatile
     private var lastReadAt = 0L
     private var lastSource: String? = null
+
+    /**
+     * 重读的互斥闸。
+     *
+     * options() 在热路径上被调，而 system_server 里 markIconResId 是**多个 binder 线程**
+     * 同时进来的。没有这道闸的话，TTL 一到这批线程会各自放行、各自去跑一遍回退探测，
+     * 一次图标潮就能重复读十几遍配置。抢不到闸的直接用旧快照返回，绝不等。
+     */
+    private val refreshing = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /**
      * 配置的重读间隔。
@@ -43,6 +67,22 @@ object ModuleRuntime {
      * 也不会让高频的图标加载反复读。
      */
     private const val OPTIONS_TTL_MS = 1_000L
+
+    /**
+     * 三条旧回退通道的重探间隔。
+     *
+     * ⚠ 这三条腿是**在调用线程上**跑的（provider 那条已经甩给后台线程了）。
+     * provider 还没答话的每一轮都会走到这里，里面最多四次文件 open 加一次远程配置查询 ——
+     * 而调用线程常常是宿主主线程。实测在 LSPosed 之外的框架上 provider 是唯一能通的，
+     * 也就是说这段会每秒在主线程上白跑一遍，永远跑不通。退避到这个间隔。
+     *
+     * provider 一通（正常情况）就完全走不到这段。
+     */
+    private const val FALLBACK_PROBE_MS = 30_000L
+
+    /** 上一次真去跑回退探测的时刻；0 = 还没跑过，第一次一定要跑（不能因为刚开机就跳过） */
+    @Volatile
+    private var lastFallbackProbeAt = 0L
 
     /** 候选文件名，按可能性排序。SharedPreferences 落盘时就是 `<名字>.xml` */
     private val REMOTE_FILE_CANDIDATES = listOf(
@@ -120,15 +160,26 @@ object ModuleRuntime {
     private fun refresh(force: Boolean) {
         val now = SystemClock.elapsedRealtime()
         if (!force && now - lastReadAt < OPTIONS_TTL_MS) return
-        lastReadAt = now
 
-        val m = module ?: return
-        val read = readOptions(m) ?: return
+        // 到点了也只让一个线程真去读；没抢到闸的立刻返回，调用方继续用上一份快照。
+        // 这里绝不能等：provider 那条腿是个 binder 调用，可能把模块进程拉起来（几百毫秒），
+        // 而调用方是宿主主线程上的图标加载 / 通知渲染。
+        if (!refreshing.compareAndSet(false, true)) return
+        try {
+            // 先记账再读：这一轮没读到新东西也算「读过了」，否则下一个热路径调用
+            // 又会立刻重试，等于没有 TTL。
+            lastReadAt = now
 
-        if (force || read.options != current || read.source != lastSource) {
-            current = read.options
-            lastSource = read.source
-            logI("options: ${read.options.describe()} (source=${read.source})")
+            val m = module ?: return
+            val read = readOptions(m) ?: return
+
+            if (force || read.options != current || read.source != lastSource) {
+                current = read.options
+                lastSource = read.source
+                logI("options: ${read.options.describe()} (source=${read.source})")
+            }
+        } finally {
+            refreshing.set(false)
         }
     }
 
@@ -145,6 +196,13 @@ object ModuleRuntime {
     private fun readOptions(m: XposedInterface): Read? {
         scheduleProviderQuery(m)
         providerOptions?.let { return Read(it, "provider") }
+
+        // provider 还没答话，才轮到这三条旧腿。它们会真的去开文件，所以不能每个 TTL 就跑一次
+        // （见 [FALLBACK_PROBE_MS]）。返回 null 不算失败：current 里的旧值继续用。
+        val now = SystemClock.elapsedRealtime()
+        if (lastFallbackProbeAt != 0L && now - lastFallbackProbeAt < FALLBACK_PROBE_MS) return null
+        lastFallbackProbeAt = now
+
         readPrefsFileDirectly(m)?.let { return Read(it, "direct-file") }
         readFromRemoteFile(m)?.let { return Read(it, "openRemoteFile") }
         readFromPreferences(m)?.let { return Read(it, "getRemotePreferences") }
