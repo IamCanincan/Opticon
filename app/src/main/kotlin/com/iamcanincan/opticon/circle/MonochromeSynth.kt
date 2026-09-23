@@ -9,9 +9,13 @@ import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.Drawable
+import android.util.Log
 import com.iamcanincan.opticon.notify.IconBitmap
+import com.iamcanincan.opticon.runtime.TAG
 import java.nio.ByteBuffer
 import java.util.IdentityHashMap
+import java.util.Locale
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * 给「没提供单色图标的应用」合成一个单色层 —— **用的是通知那半边同一套剪影算法**。
@@ -62,6 +66,9 @@ import java.util.IdentityHashMap
  *    桌面单色层必须与上面那个坐标系对齐，一 fill 图形就会撑出可见区。
  * 2. **`preserveAlpha = true`** —— 保留边缘的抗锯齿值，不做 0/255 二值化。
  *    96px 的状态栏图标看不出硬边，桌面图标大得多，硬边放大就是一圈锯齿。
+ *    ⚠ 它只影响**写出去的 alpha**，「哪些像素算图形」的判据仍然是
+ *    `IconBitmap` 里的 `MIN_SHAPE_ALPHA`（128）—— 两者不能混，混了掩码就会
+ *    被一整片淡色铺满（桌面图标的前景层常自带柔光/半透明底板）。
  * 3. **按桌面要的尺寸出图**（见 [MonochromeLayer]）—— 不固定一个尺寸再让桌面放大。
  *    桌面渲染多大就压多大，这是「糊」的根源。
  *
@@ -108,13 +115,13 @@ internal object MonochromeSynth {
   @Synchronized
   fun forIcon(source: Drawable): Drawable? {
     val hit = cache[source]
-    if (hit != null) return MonochromeLayer(source, hit)
+    if (hit != null) return MonochromeLayer(source, hit).also { noteSynthesized() }
     // 先按最小边压一次：既是「能不能压出形状」的探测（压不出来就别交个空壳出去，
     // 那会让桌面以为有单色图标、结果画出一片空白），也是尺寸未知时的默认输出。
     val mask = render(source, MIN_EDGE) ?: return null
     if (cache.size >= CACHE_LIMIT) cache.clear()
     cache[source] = mask
-    return MonochromeLayer(source, mask)
+    return MonochromeLayer(source, mask).also { noteSynthesized() }
   }
 
   /**
@@ -131,6 +138,32 @@ internal object MonochromeSynth {
   }
 
   /**
+   * 累计交出去多少张单色层。**两条入口都经过 [forIcon]，所以一个计数器就够**。
+   *
+   * 为什么非要有这个埋点：默认配置（裁圆开着）下桌面拿到的图标几乎都是
+   * [CircleIconDrawable]，那条路走的是它自己的 `getMonochrome()` override、
+   * **不经过** `IconHooks.hookSynthesizedMonochrome` 里那个计数器 —— 也就是说
+   * 主路径原先一条日志都没有。而这个项目已经吃过「hook 的提前 return 静默返回、
+   * 最难查」的亏，所以补上：看到 `Mono: N layers synthesized` 就说明合成真的在跑，
+   * 而不是悄悄返回 null 让桌面走了老路。
+   *
+   * 前 [LOG_FIRST] 条逐条打，之后每 [LOG_EVERY] 条汇总一次 —— 图标加载是热路径
+   * （刷一次应用列表上千次），全打会把 logcat 冲掉。
+   */
+  private fun noteSynthesized() {
+    val total = synthesized.incrementAndGet()
+    if (total <= LOG_FIRST || total % LOG_EVERY == 0) {
+      Log.d(TAG, "Mono: $total layers synthesized")
+    }
+  }
+
+  private val synthesized = AtomicInteger(0)
+
+  private const val LOG_FIRST = 3
+
+  private const val LOG_EVERY = 40
+
+  /**
    * 按 [edge] 边长压一张单色掩码（ALPHA_8）；压不出像样的形状时返回 null。
    *
    * [edge] 的语义是**图层 bounds**（= 1.5 × 图标尺寸），掩码按整张 108dp 画布出图 ——
@@ -143,17 +176,234 @@ internal object MonochromeSynth {
   fun render(source: Drawable, edge: Int): Bitmap? {
     if (edge <= 0) return null
     return runCatching {
+      val label = describe(source)
       val foreground = rasterizeForeground(source, edge)
       if (foreground == null) {
-        null
-      } else {
-        val silhouette = IconBitmap.monochrome(foreground, preserveAlpha = true)
-        foreground.recycle()
-        if (silhouette == null) null
-        else toAlphaMask(silhouette).also { silhouette.recycle() }
+        noteDiagnosis(edge, label, null, null)
+        return@runCatching null
       }
+      val silhouette = IconBitmap.monochrome(foreground, preserveAlpha = true)
+      val mask = silhouette?.let { toAlphaMask(it) }
+      noteDiagnosis(edge, label, foreground, mask)
+      foreground.recycle()
+      silhouette?.recycle()
+      mask
     }.getOrNull()
   }
+
+  /**
+   * 诊断用：这个图标到底是哪种 drawable、前景层多大。
+   *
+   * 光看 alpha 直方图认不出源 —— 「66% 落在 1~127」既可能是柔光、也可能是
+   * 半透明底板、还可能是低分辨率位图被放大。把类名和固有尺寸一起打出来，
+   * 才能把数字对上号（`BitmapDrawable@108x108` 和 `VectorDrawable@-1x-1` 是两回事）。
+   */
+  private fun describe(source: Drawable): String {
+    val foreground = (source as? AdaptiveIconDrawable)?.foreground
+    return buildString {
+      append(source.javaClass.simpleName)
+      if (foreground != null) {
+        append(" fg=")
+        append(foreground.javaClass.simpleName)
+        append("@")
+        append(foreground.intrinsicWidth)
+        append("x")
+        append(foreground.intrinsicHeight)
+      }
+      append(" bounds=")
+      append(source.bounds.width())
+      append("x")
+      append(source.bounds.height())
+    }
+  }
+
+  /**
+   * 诊断：把「这一张掩码怎么来的、长什么样」打进日志。只放行最前面几张（图标加载是热路径）。
+   *
+   * ## 为什么要有它
+   * 桌面主题图标这块**我看不见** —— 我的图像通道是 filtered 的，用户也明确不要我截图。
+   * 而「形状不对」有好几种**成因完全不同**的可能（走了 alpha 分支但输入本身是糊的 /
+   * 走了 binarize 把彩色图形按亮度切碎 / 掩码没问题但下游画坏），靠推演猜已经错过一次，
+   * 所以这里把两样东西直接打出来：
+   * 1. **判定分支的数值**：`a0/a1/a2/a255` 是输入 alpha 的四段直方图，
+   *    `useAlpha` 是按 [IconBitmap.monochrome] 的判据（`透明 > 5% && 不透明 < 70%`）复算的 ——
+   *    一眼能看出它到底走了哪条分支。
+   * 2. **掩码本身的 ASCII 缩略图**：`#` 是不透明、`.` 是透明。把 384² 降采样成 40×40
+   *    打进日志，于是「是一个完整字形」还是「一堆碎片」在日志里就能直接看出来。
+   *    输入 alpha 还会在 [INPUT_DUMPS] 那几档阈值下各打一张 —— 用来回答
+   *    「图形到底落在哪一档 alpha 上」，也就是该不该把阈值定在 `MIN_SHAPE_ALPHA`。
+   *
+   * 形状统计：`out` 掩码里 ≥128 的像素占比；`fill` 是**按 alpha 加权的等效覆盖率**
+   * （Σalpha / 255 / 总面积）—— 图标看起来「被填满多少」看的是这个，
+   * `out` 小但 `fill` 大就说明掩码里塞了一大片淡色（色块的典型特征）。
+   * `cc` 四邻域连通块数、`top` 最大一块占输出像素的比例 —— 完整字形 cc 很小、top 接近 1；
+   * 碎成一片时 cc 很大、top 很低。
+   *
+   * ⚠ 只是诊断，不参与任何判断。发版前应当把它连同 [DIAG_LIMIT] 一起降级/移除。
+   */
+  private fun noteDiagnosis(edge: Int, label: String, input: Bitmap?, mask: Bitmap?) {
+    val n = diagnosed.incrementAndGet()
+    if (n > DIAG_LIMIT) return
+    if (input == null) {
+      Log.d(TAG, "Mono: diag#$n edge=$edge $label 前景层取不到，直接放弃")
+      return
+    }
+    val w = input.width
+    val h = input.height
+    val total = w * h
+    val pixels = IntArray(total)
+    input.getPixels(pixels, 0, w, 0, 0, w, h)
+    var a0 = 0
+    var a1 = 0
+    var a2 = 0
+    var a255 = 0
+    for (p in pixels) {
+      val a = Color.alpha(p)
+      when {
+        a == 0 -> a0++
+        a < 128 -> a1++
+        a < 255 -> a2++
+        else -> a255++
+      }
+    }
+    val transparent = a0 + a1
+    val useAlpha = transparent > total / 20 && (total - transparent).toFloat() / total < 0.7f
+
+    if (mask == null) {
+      Log.d(TAG, "Mono: diag#$n edge=$edge $label in=${w}x$h " +
+        "a0=${pct(a0, total)} a1=${pct(a1, total)} a2=${pct(a2, total)} a255=${pct(a255, total)} " +
+        "useAlpha=$useAlpha -> monochrome() 返回 null")
+      dumpInput(n, pixels, w, h)
+      return
+    }
+
+    val mw = mask.width
+    val mh = mask.height
+    val bytes = ByteArray(mask.rowBytes * mh)
+    mask.copyPixelsToBuffer(ByteBuffer.wrap(bytes))
+    val on = BooleanArray(mw * mh)
+    var opaque = 0
+    var weight = 0L
+    for (y in 0 until mh) {
+      val row = y * mask.rowBytes
+      for (x in 0 until mw) {
+        val a = bytes[row + x].toInt() and 0xff
+        weight += a
+        if (a >= 128) {
+          on[y * mw + x] = true
+          opaque++
+        }
+      }
+    }
+    // 四邻域连通块：完整的字形是少数几块，碎掉的会是一大片小块
+    var components = 0
+    var largest = 0
+    val stack = IntArray(mw * mh)
+    for (start in on.indices) {
+      if (!on[start]) continue
+      components++
+      var top = 0
+      var size = 0
+      stack[top++] = start
+      on[start] = false
+      while (top > 0) {
+        val i = stack[--top]
+        size++
+        val x = i % mw
+        val y = i / mw
+        if (x > 0 && on[i - 1]) { on[i - 1] = false; stack[top++] = i - 1 }
+        if (x < mw - 1 && on[i + 1]) { on[i + 1] = false; stack[top++] = i + 1 }
+        if (y > 0 && on[i - mw]) { on[i - mw] = false; stack[top++] = i - mw }
+        if (y < mh - 1 && on[i + mw]) { on[i + mw] = false; stack[top++] = i + mw }
+      }
+      if (size > largest) largest = size
+    }
+
+    Log.d(TAG, "Mono: diag#$n edge=$edge $label in=${w}x$h " +
+      "a0=${pct(a0, total)} a1=${pct(a1, total)} a2=${pct(a2, total)} a255=${pct(a255, total)} " +
+      "useAlpha=$useAlpha out=${pct(opaque, total)} fill=${pct((weight / 255).toInt(), total)} " +
+      "cc=$components top=${pct(largest, opaque)}")
+
+    dumpInput(n, pixels, w, h)
+    dumpAscii(n, "mask", null, mw, mh, bytes, MASK_DUMP_THRESHOLD)
+  }
+
+  /**
+   * 输入 alpha 在 [INPUT_DUMPS] 那几档阈值下各打一张 ASCII。
+   *
+   * 存在的理由：`monochrome()` 把判据定在 `MIN_SHAPE_ALPHA`（128），而**这个值合不合适
+   * 只有看图才知道** —— 图形整体偏淡时 128 会把形状切掉一大半（甚至切空、退回 null），
+   * 整体偏浓时又会把柔光一起收进来。几张缩略图并排一看就知道该往哪边挪。
+   */
+  private fun dumpInput(n: Int, pixels: IntArray, w: Int, h: Int) {
+    for (threshold in INPUT_DUMPS) {
+      dumpAscii(n, "in>=$threshold", pixels, w, h, null, threshold)
+    }
+  }
+
+  /**
+   * 把 alpha（[pixels] 给 alpha 通道）或 ALPHA_8 掩码（[maskBytes] 给原始字节）打成 40 列的 ASCII。
+   *
+   * 每个格子取 [threshold] 当「算不算图形」的界，和 `monochrome()` 内部的判据同口径 ——
+   * 缩略图如果自己用一套阈值，就和真产出的掩码对不上了，那还不如不打。
+   */
+  private fun dumpAscii(
+    n: Int,
+    what: String,
+    pixels: IntArray?,
+    w: Int,
+    h: Int,
+    maskBytes: ByteArray?,
+    threshold: Int,
+  ) {
+    val cols = ASCII_COLS
+    val rows = cols
+    val line = StringBuilder(cols)
+    for (ry in 0 until rows) {
+      line.setLength(0)
+      val y0 = ry * h / rows
+      val y1 = maxOf(y0 + 1, (ry + 1) * h / rows)
+      for (rx in 0 until cols) {
+        val x0 = rx * w / cols
+        val x1 = maxOf(x0 + 1, (rx + 1) * w / cols)
+        var hits = 0
+        var cells = 0
+        for (y in y0 until y1) {
+          for (x in x0 until x1) {
+            cells++
+            val a = if (maskBytes != null) (maskBytes[y * w + x].toInt() and 0xff)
+            else Color.alpha(pixels!![y * w + x])
+            if (a >= threshold) hits++
+          }
+        }
+        line.append(if (cells > 0 && hits * 2 >= cells) '#' else '.')
+      }
+      Log.d(TAG, "Mono: diag#$n $what $ry|$line")
+    }
+  }
+
+  private val diagnosed = AtomicInteger(0)
+
+  /** 放行几张图标的诊断。每张要打 4 份 40×40 缩略图，别开大 —— logcat 环形缓冲只有 256 KiB。 */
+  private const val DIAG_LIMIT = 2
+
+  private const val ASCII_COLS = 40
+
+  /** 输入 alpha 各打一张缩略图的候选阈值，见 [dumpInput]。 */
+  private val INPUT_DUMPS = intArrayOf(64, 128, 192)
+
+  /** 掩码缩略图的阈值，与 `IconBitmap.monochrome` 里的判据同口径。 */
+  private const val MASK_DUMP_THRESHOLD = 128
+
+  /**
+   * 诊断用的占比格式化。
+   *
+   * ⚠ 必须显式给 [Locale.ROOT]：不指定时 `String.format` 用默认 locale，
+   * 在小数点用逗号的地区（de / fr 等）会打出 `0,08` —— 日志是给人对着源码读的，
+   * 换个系统语言就变形了。lint 的 `DefaultLocale` 也会拦这一条。
+   */
+  private fun pct(part: Int, whole: Int): String =
+    if (whole <= 0) "0" else String.format(Locale.ROOT, "%.2f", part.toFloat() / whole)
 
   /**
    * 把图标光栅化成 `edge × edge` 的位图。`edge` 的坐标系是**图层 bounds**
@@ -236,6 +486,15 @@ internal object MonochromeSynth {
 }
 
 /**
+ * [MonochromeLayer.draw] 打 bounds 日志用的全局计数 —— 按实例各打一次会把 logcat 冲掉，
+ * 所以只放行最前面几张。放在文件级是因为 [MonochromeLayer] 是文件内的另一个类，
+ * 拿不到 [MonochromeSynth] 的私有成员。
+ */
+private val boundsLogged = AtomicInteger(0)
+
+private const val BOUNDS_LOG_FIRST = 3
+
+/**
  * 单色层的载体：一张 ALPHA_8 掩码，画的时候由调用方（桌面的取色逻辑）上色。
  *
  * 不直接用 `BitmapDrawable` 是因为构造它要 `Resources`，而在被注入的进程里
@@ -260,6 +519,9 @@ private class MonochromeLayer(
   @Volatile
   private var mask: Bitmap = initial
 
+  /** 每个实例只打一次 bounds 日志，见 [draw]。 */
+  private var loggedBounds = false
+
   override fun draw(canvas: Canvas) {
     val edge = maxOf(bounds.width(), bounds.height())
     if (edge > mask.width) {
@@ -268,6 +530,20 @@ private class MonochromeLayer(
       MonochromeSynth.render(source, edge)?.let {
         mask = it
         MonochromeSynth.remember(source, it)
+      }
+    }
+    // 真机上把「桌面实际给了多大的 bounds」记下来 —— 类文档里那套「图层 bounds = 1.5 ×
+    // 图标尺寸」的推导是从字节码和源码推出来的，但推演在这块踩过坑（我判反过一次方向），
+    // 所以留一条**实测**出口：前 [BOUNDS_LOG_FIRST] 张打一次。
+    //
+    // ⚠ 必须在上面那段**之后**打：重压前 mask 还是 MIN_EDGE，打出来会变成
+    // 「bounds=384 mask=192」，读着像「384 的框里塞 192 的图 = 放大糊了」，正好相反。
+    // 放在这里，`bounds` 与 `mask` 相等就说明掩码是 1:1 铺满图层 bounds、没有被放大。
+    if (!loggedBounds) {
+      loggedBounds = true
+      val total = boundsLogged.incrementAndGet()
+      if (total <= BOUNDS_LOG_FIRST) {
+        Log.d(TAG, "Mono: layer bounds=${bounds.width()}x${bounds.height()} mask=${mask.width}")
       }
     }
     canvas.drawBitmap(mask, null, bounds, paint)

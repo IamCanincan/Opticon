@@ -156,6 +156,8 @@ object IconBitmap {
      * 不能是带颜色的位图，否则染出来就不对了。
      *
      * 形状优先取自 alpha 通道：绝大多数图标是透明底 + 图形，alpha 本身就是轮廓。
+     * 这一路的判据是 `alpha >= MIN_SHAPE_ALPHA` —— **低于它的淡色一律不算图形**，
+     * 因为前景层常自带柔光 / 投影 / 半透明底板，照收就会把整张画布铺满淡色。
      * 整张都不透明时（自适应图标光栅化后常见）退化成亮度二值化，
      * 再按连通性区分「连到图标外部的背景」与「被包在里面的图形」。
      * 只有透明像素占多数时才走 alpha —— 透明像素少而图形大时，
@@ -166,6 +168,11 @@ object IconBitmap {
      * @param preserveAlpha 保留原始 alpha 的抗锯齿值（只把颜色换成白色），
      *   而不是二值化成 0 / 255。状态栏图标不需要（96px 下硬边看不出来），
      *   但桌面主题图标的渲染尺寸大得多，硬边一放大就是一圈锯齿 —— 那边传 true。
+     *   ⚠ 它只决定「写出去的 alpha 是多少」，**不参与「哪些像素算图形」的判定** ——
+     *   判定一律是 `alpha >= MIN_SHAPE_ALPHA`（[binarize] 那边同理，判据是
+     *   `class != CLASS_TRANSPARENT`）。这两件事一旦混在一起，掩码的真实覆盖率
+     *   就会和返回的 `shapeCount` 差一个数量级，而调用方正是拿 `shapeCount`
+     *   在判「压出来的形状合不合理」—— 判据和产物对不上，等于没判。
      *
      * ⚠ 带 @Synchronized：下面那四块复用缓冲区是进程级可变状态，而 SystemUI 的通知处理
      * 会并发进来（binarize → keepDarkSide → outsideMask / borderConnectedRatio 一路都在用）。
@@ -195,14 +202,20 @@ object IconBitmap {
             var count = 0
             for (i in pixels.indices) {
                 val alpha = Color.alpha(pixels[i])
-                if (alpha >= MIN_SHAPE_ALPHA) count++
-                // preserveAlpha 时连边缘的抗锯齿值一起带上。二值化（只留 0/255）
-                // 在状态栏那种小尺寸下没问题，但桌面图标的渲染尺寸大得多，
-                // 硬边一放大就是一圈锯齿 —— 那是「糊」的主要来源。
-                if (alpha > 0 && (preserveAlpha || alpha >= MIN_SHAPE_ALPHA)) {
-                    outputPixels[i] =
-                        if (preserveAlpha) Color.argb(alpha, 255, 255, 255) else Color.WHITE
-                }
+                // ⚠ 判据只能是「够不够实」，绝不能写成「有没有 alpha」。
+                //
+                // 桌面图标的前景层常常自带一层很淡的柔光 / 投影 / 半透明底板
+                // （alpha 1 ~ MIN_SHAPE_ALPHA-1，实测能占到画布的 60% 以上）。
+                // 把它们一并收进掩码，掩码的真实覆盖率会是这里 count 出来的十几倍 ——
+                // 上色之后整块图标被一层淡色铺满，看上去就是一个纯色块。
+                //
+                // 之前 preserveAlpha 分支写成 `alpha > 0 && (...)`,判据用的是 128、
+                // 写出去的却是 1 起步，两边口径不一致，就是这么踩进去的。
+                if (alpha < MIN_SHAPE_ALPHA) continue
+                count++
+                // preserveAlpha 时保留原 alpha 的抗锯齿值（只换颜色），不二值化成 0 / 255。
+                outputPixels[i] =
+                    if (preserveAlpha) Color.argb(alpha, 255, 255, 255) else Color.WHITE
             }
             count
         } else {

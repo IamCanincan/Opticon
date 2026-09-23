@@ -31,3 +31,7 @@ signing.properties
 /_*.json
 /_*.kt
 /_*.xml
+# 目录同理：扒字节码解出来的 Launcher3 dex（_l3dex/）、release 包的 dex 校验副本
+# （_verify/）都是几百 MB 的中间产物。只写 /_*.txt 这类文件规则盖不住目录，
+# 而 git add -A 会把它们一起卷进来（2026-09-24 真被卷过一次）。
+/_*/
