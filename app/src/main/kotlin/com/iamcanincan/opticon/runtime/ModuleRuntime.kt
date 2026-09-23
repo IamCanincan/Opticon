@@ -232,23 +232,42 @@ object ModuleRuntime {
     }
 
     /**
+     * 内容没变就不再重复打的日志。
+     *
+     * provider 查询按 TTL 每秒一轮，成功路径原本每次都打一行 `provider ok: …` ——
+     * 于是每个被注入的进程每秒往 logcat 写一行、内容一模一样，真机实测 4 秒 4 行。
+     * 排查时真正要看的不是「它还在跑」，而是「它现在给的是什么值」，所以只在值
+     * **变了**的时候打（从成功切到失败、失败原因换一种，都算变了）。
+     *
+     * 只在 provider 那条单线程执行器上读写，不需要额外同步。
+     */
+    private var lastLoggedState: String? = null
+
+    private fun logStateChange(message: String, warn: Boolean = false) {
+        if (message == lastLoggedState) return
+        lastLoggedState = message
+        if (warn) logW(message) else logI(message)
+    }
+
+    /**
      * 查模块应用暴露的只读配置 provider。
      *
      * 这是跨进程拿配置的正路：provider 跑在模块应用进程里，读的是它自己的
      * SharedPreferences，所以既不受宿主进程的隔离限制，也不依赖框架实现。
      *
-     * 每一条提前返回都打日志 —— 这条通道曾经「静默地什么都不返回」，
+     * 每一条提前返回都要留痕 —— 这条通道曾经「静默地什么都不返回」，
      * 结果配置一直用默认值而没人发现，排查时必须有据可查。
+     * 留痕走 [logStateChange]：状态没变就不重复刷。
      */
     private fun readFromProvider(m: XposedInterface): ModuleOptions? {
         val context = hostContext()
         if (context == null) {
-            logW("provider skipped: no host context yet")
+            logStateChange("provider skipped: no host context yet", warn = true)
             return null
         }
         val pkg = runCatching { m.moduleApplicationInfo?.packageName }.getOrNull()
         if (pkg == null) {
-            logW("provider skipped: module package name unavailable")
+            logStateChange("provider skipped: module package name unavailable", warn = true)
             return null
         }
         val uri = Uri.parse("content://$pkg${ModulePrefs.AUTHORITY_SUFFIX}/config")
@@ -256,7 +275,7 @@ object ModuleRuntime {
             context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
                 if (!cursor.moveToFirst()) {
                     // provider 对非可信调用方返回空游标（包名校验没过）
-                    logW("provider returned no row (caller not trusted?)")
+                    logStateChange("provider returned no row (caller not trusted?)", warn = true)
                     return@use null
                 }
                 val options = ModulePrefs.fromRaw(
@@ -271,11 +290,14 @@ object ModuleRuntime {
                     ) != 0,
                     mode = cursor.getInt(cursor.getColumnIndexOrThrow(ModulePrefs.COLUMN_MODE))
                 )
-                logI("provider ok: ${options.describe()}")
+                logStateChange("provider ok: ${options.describe()}")
                 options
             }
         }.onFailure {
-            logW("provider query failed: ${it::class.java.simpleName}: ${it.message}")
+            logStateChange(
+                "provider query failed: ${it::class.java.simpleName}: ${it.message}",
+                warn = true
+            )
         }.getOrNull()
     }
 
