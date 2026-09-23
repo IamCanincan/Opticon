@@ -163,6 +163,10 @@ object IconBitmap {
      *
      * 压不出像样的形状时返回 null，由上层保持原样 —— 详见 [MIN_SHAPE_RATIO]。
      *
+     * @param preserveAlpha 保留原始 alpha 的抗锯齿值（只把颜色换成白色），
+     *   而不是二值化成 0 / 255。状态栏图标不需要（96px 下硬边看不出来），
+     *   但桌面主题图标的渲染尺寸大得多，硬边一放大就是一圈锯齿 —— 那边传 true。
+     *
      * ⚠ 带 @Synchronized：下面那四块复用缓冲区是进程级可变状态，而 SystemUI 的通知处理
      * 会并发进来（binarize → keepDarkSide → outsideMask / borderConnectedRatio 一路都在用）。
      * 本函数是它们唯一的入口，锁在这一层就锁住了全部四块缓冲，
@@ -171,7 +175,7 @@ object IconBitmap {
      * 不共任何状态，不用跟着上锁。
      */
     @Synchronized
-    fun monochrome(input: Bitmap): Bitmap? {
+    fun monochrome(input: Bitmap, preserveAlpha: Boolean = false): Bitmap? {
         val w = input.width
         val h = input.height
         val pixels = IntArray(w * h)
@@ -190,15 +194,20 @@ object IconBitmap {
             // 透明底上的图形：alpha 本身就是最准的轮廓
             var count = 0
             for (i in pixels.indices) {
-                if (Color.alpha(pixels[i]) >= MIN_SHAPE_ALPHA) {
-                    outputPixels[i] = Color.WHITE
-                    count++
+                val alpha = Color.alpha(pixels[i])
+                if (alpha >= MIN_SHAPE_ALPHA) count++
+                // preserveAlpha 时连边缘的抗锯齿值一起带上。二值化（只留 0/255）
+                // 在状态栏那种小尺寸下没问题，但桌面图标的渲染尺寸大得多，
+                // 硬边一放大就是一圈锯齿 —— 那是「糊」的主要来源。
+                if (alpha > 0 && (preserveAlpha || alpha >= MIN_SHAPE_ALPHA)) {
+                    outputPixels[i] =
+                        if (preserveAlpha) Color.argb(alpha, 255, 255, 255) else Color.WHITE
                 }
             }
             count
         } else {
             // 实心图标：alpha 只描述外轮廓，照搬就是一坨白块，改用二值化挖图形
-            binarize(pixels, outputPixels, w, h)
+            binarize(pixels, outputPixels, w, h, preserveAlpha)
         }
 
         val shapeRatio = shapeCount.toFloat() / total
@@ -248,7 +257,13 @@ object IconBitmap {
      * 两色图标（浅底 + 深图形）里就会出现「暗部 0 个像素」，进而判断成留亮部、
      * 结果一个像素都不画，交出去一张全空图。
      */
-    private fun binarize(pixels: IntArray, output: IntArray, w: Int, h: Int): Int {
+    private fun binarize(
+        pixels: IntArray,
+        output: IntArray,
+        w: Int,
+        h: Int,
+        preserveAlpha: Boolean,
+    ): Int {
         val threshold = otsuThreshold(pixels)
         val total = pixels.size
         val classes = classBuffer(total)
@@ -276,7 +291,12 @@ object IconBitmap {
             val cls = classes[i]
             if (cls == CLASS_TRANSPARENT) continue
             if ((cls == CLASS_DARK) == keepDark) {
-                output[i] = Color.WHITE
+                // 同 [monochrome]：preserveAlpha 时保留原 alpha 的抗锯齿边缘
+                output[i] = if (preserveAlpha) {
+                    Color.argb(Color.alpha(pixels[i]), 255, 255, 255)
+                } else {
+                    Color.WHITE
+                }
                 shapeCount++
             }
         }

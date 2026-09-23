@@ -81,7 +81,23 @@ class CircleIconDrawable(icon: Drawable) :
       null
     }
 
-  override fun getMonochrome(): Drawable? = sourceMonochrome
+  /**
+   * 原图标没提供单色层时**就地合成一个**（见 [MonochromeSynth]）。
+   *
+   * ⚠ 这里是 override，`AdaptiveIconDrawable.getMonochrome()` 上挂的那道合成钩
+   * **拦不到本类**（虚方法分派直接走这个实现）—— 而裁圆默认开着、桌面拿到的图标
+   * 几乎都是本类实例，所以合成必须在这里也接一次，否则整条「合成优先」在默认配置下
+   * 等于没上。
+   *
+   * ⚠ 合成用 **`sourceIcon`（原图标）而不是本对象**：本对象的可见外观是
+   * 「圆内裁好的内容」，拿它压剪影会得到一个**实心圆饼**；主题图标要的是
+   * 应用自己的字形剪影，所以得从原图标的前景层压。
+   */
+  override fun getMonochrome(): Drawable? {
+    sourceMonochrome?.let { return it }
+    if (!ModuleRuntime.options().monoInvert) return null
+    return MonochromeSynth.forIcon(sourceIcon)
+  }
 
   override fun draw(canvas: Canvas) {
     // 背景是透明的，画它等于什么都没画 —— 圆在前景层。

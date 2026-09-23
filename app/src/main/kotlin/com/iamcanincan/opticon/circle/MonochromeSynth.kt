@@ -32,9 +32,14 @@ import java.util.IdentityHashMap
  * （背景通常与图标外部相连、图形是被包住的内部块）—— 这比任何固定阈值都稳，
  * 也省得同一个问题在仓库里有两份实现、修一处漏一处。
  *
- * ⚠ **和通知侧唯一的差别：这里不做 `fill()`**。通知要的是填满状态栏那点小尺寸，
- * 所以裁掉四周空白再放大；而桌面单色层**必须与自适应图标的坐标系对齐**
- * （图形落在中间约 61% 的可见区，外面是 inset），一 fill 图形就会撑出可见区。
+ * ## 三个与通知侧不同的处理，都是为了桌面的大尺寸
+ * 1. **不做 `fill()`** —— 通知要填满状态栏那点小尺寸，所以裁掉四周空白再放大；
+ *    而桌面单色层必须与自适应图标的坐标系对齐（图形落在中间约 61% 的可见区，
+ *    外面是 inset），一 fill 图形就会撑出可见区。
+ * 2. **`preserveAlpha = true`** —— 保留边缘的抗锯齿值，不做 0/255 二值化。
+ *    96px 的状态栏图标看不出硬边，桌面图标大得多，硬边放大就是一圈锯齿。
+ * 3. **按桌面要的尺寸出图**（见 [MonochromeLayer]）—— 不固定一个尺寸再让桌面放大。
+ *    桌面渲染多大就压多大，这是「糊」的根源。
  *
  * ## 天然降级，不需要开关
  * 合成只在 `getMonochrome()` 原本返回 null 时才介入，且任何一步失败都返回 null ——
@@ -44,10 +49,10 @@ import java.util.IdentityHashMap
 internal object MonochromeSynth {
 
   /**
-   * 合成尺寸。桌面图标比状态栏图标大得多（96 那张是给通知用的），
-   * 这里取 192 免得放大后糊掉；最终存成 ALPHA_8，一张只占 36 KB。
+   * 首次合成的边长。桌面随后 `setBounds` 到它真正的 iconSize，
+   * 比这个大就按需重合成（见 [MonochromeLayer.draw]）—— 所以这里只是「够用」而非「精确」。
    */
-  private const val SIZE = 192
+  private const val MIN_EDGE = 192
 
   /** 缓存上限。图标数量本来就有界，超过就整体清掉重来，避免长歪。 */
   private const val CACHE_LIMIT = 256
@@ -56,8 +61,8 @@ internal object MonochromeSynth {
    * 按图标**实例**缓存（[IdentityHashMap] 语义：同一个对象才命中）。
    *
    * 用实例而不是内容做 key：桌面滚动时同一个图标对象会被反复取 monochrome，
-   * 每次都重压一遍 192×192 太贵。图标对象由桌面的 IconCache 长期持有、
-   * 数量有界，所以这里不会无限增长。
+   * 每次都重压一遍太贵。图标对象由桌面的 IconCache 长期持有、数量有界，
+   * 所以这里不会无限增长。
    */
   private val cache = IdentityHashMap<Drawable, Drawable>()
 
@@ -69,27 +74,34 @@ internal object MonochromeSynth {
   @Synchronized
   fun forIcon(source: Drawable): Drawable? {
     cache[source]?.let { return it }
-    val synth = runCatching { synthesize(source) }.getOrNull() ?: return null
+    // 先按最小边压一次：既是「能不能压出形状」的探测（压不出来就别交个空壳出去），
+    // 也是尺寸未知时的默认输出。桌面真正要多大，等它 setBounds 之后再说。
+    val initial = render(source, MIN_EDGE) ?: return null
+    val layer = MonochromeLayer(source, initial)
     if (cache.size >= CACHE_LIMIT) cache.clear()
-    cache[source] = synth
-    return synth
+    cache[source] = layer
+    return layer
   }
 
-  private fun synthesize(source: Drawable): Drawable? {
-    // 1) 取前景层（「透明底 + 图形」），交给通知侧那套压剪影的算法
-    val foreground = IconBitmap.foregroundOf(source, SIZE)
-    val silhouette = IconBitmap.monochrome(foreground) ?: return null
-    // 2) 转成 ALPHA_8：桌面只认 alpha 通道，转过去省 4 倍内存
-    val mask = toAlphaMask(silhouette) ?: return null
-    if (mask !== silhouette) silhouette.recycle()
-    return MonochromeLayer(mask)
-  }
+  /**
+   * 按 [edge] 边长压一张单色掩码（ALPHA_8）；压不出像样的形状时返回 null。
+   *
+   * 加锁的理由和 [IconBitmap.monochrome] 一样：那边用着进程级的复用缓冲。
+   * 这里再包一层是为了让 [MonochromeLayer.draw] 的按需重合成也走同一条路。
+   */
+  @Synchronized
+  fun render(source: Drawable, edge: Int): Bitmap? = runCatching {
+    if (edge <= 0) return null
+    val foreground = IconBitmap.foregroundOf(source, edge)
+    val silhouette = IconBitmap.monochrome(foreground, preserveAlpha = true) ?: return null
+    toAlphaMask(silhouette).also { silhouette.recycle() }
+  }.getOrNull()
 
   /**
    * ARGB_8888（白色 + alpha）→ ALPHA_8。
    *
    * `monochrome()` 交出来的是 ARGB_8888，但桌面取色只读 alpha，
-   * 所以留着三个颜色通道是白占内存（每张 147 KB → 36 KB）。
+   * 所以留着三个颜色通道是白占内存（每张 147 KB → 36 KB @192px）。
    */
   private fun toAlphaMask(source: Bitmap): Bitmap? {
     val w = source.width
@@ -114,12 +126,31 @@ internal object MonochromeSynth {
  *
  * 不直接用 `BitmapDrawable` 是因为构造它要 `Resources`，而在被注入的进程里
  * 拿 Resources 要么拿不到、要么拿到的是宿主的 —— 自己画一个更稳，也少一层依赖。
+ *
+ * ## 为什么掩码是「按需」的
+ * 桌面（Launcher3 的 `MonoIconThemeController`）是把这张 drawable `setBounds`
+ * 到它自己的 iconSize 之后再画的，而那个尺寸在取 `getMonochrome()` 的当下还不知道。
+ * 固定一个尺寸再让桌面放大就是「糊」的根源，所以这里在 [draw] 里看实际的 bounds：
+ * 比手上这张大就**按那个尺寸重压一次**，之后不再变。
  */
-private class MonochromeLayer(private val mask: Bitmap) : Drawable() {
+private class MonochromeLayer(
+  private val source: Drawable,
+  initial: Bitmap,
+) : Drawable() {
 
   private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
 
+  /** 当前掩码。只会在 [draw] 里因为尺寸不够而被换掉，换完就稳定。 */
+  @Volatile
+  private var mask: Bitmap = initial
+
   override fun draw(canvas: Canvas) {
+    val edge = maxOf(bounds.width(), bounds.height())
+    if (edge > mask.width) {
+      // 桌面要的比手上这张大 —— 按它重压，别把小的放大糊掉。
+      // 压不出来就继续用旧的（总比空着强）。
+      MonochromeSynth.render(source, edge)?.let { mask = it }
+    }
     canvas.drawBitmap(mask, null, bounds, paint)
   }
 

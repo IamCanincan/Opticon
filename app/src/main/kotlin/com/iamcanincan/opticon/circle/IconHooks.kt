@@ -1138,6 +1138,10 @@ private fun hookSynthesizedMonochrome(xposed: XposedInterface) {
           Log.w(TAG, "Mono: synth thisObject is null")
           return@intercept null
         }
+        // CircleIconDrawable **自己重写了 getMonochrome**（见那个类的说明），
+        // 本钩拦不到它；万一框架把 override 也一起拦了，这里也交给它自己的实现 ——
+        // 用本对象（裁圆之后的）压剪影只会得到一个实心圆饼，那是错的。
+        if (self is CircleIconDrawable) return@intercept null
         MonochromeSynth.forIcon(self)?.let { synth ->
           val total = monoSynthesized.incrementAndGet()
           if (total % 40 == 0) Log.d(TAG, "Mono: $total mono layers synthesized")
