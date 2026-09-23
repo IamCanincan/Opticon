@@ -289,6 +289,16 @@ intentresolver / permissioncontroller / wellbeing。
 - 界面里的「检查更新」是**本应用唯一的联网行为**，而且只在点了按钮之后才发起，
   没有后台轮询、没有统计上报；挂钩代码（跑在被注入进程里的部分）完全不联网。
   请求先直连 `api.github.com`，失败时回退到公共加速镜像 `gh-proxy.com`。
+- **强制取色遮罩一律翻转，不做合成替代方案**：Android 16 桌面在「强制动态取色」下会
+  现场为没适配的应用生成 ALPHA_8 单色掩码，本模块逐张翻转后通过真机验证（单次清缓存
+  后 60 秒内 480+ 张）。考虑过改 hook 点 —— 在 `AdaptiveIconDrawable.getMonochrome()`
+  上自己合成一个正确极性的单色层，让桌面那条算错的路径根本不进 —— 核对后判定不做：
+  (a) 合成算法仍是启发式（亮/暗判断），且已适配应用 `getMonochrome()` 非 null、不进
+  合成路径，"整体取反"对剩下那一类（深字形+不透明底）正好也对；(b) 改动 launcher
+  钩子行为，回滚要再装旧 APK + 重启 launcher；(c) 唯一实利是「不依赖
+  `MonochromeIconFactory.mAlphaBitmap` 这个私有字段名」，但字段找不到时模块其他功能
+  不受影响 —— 真出问题时再考虑这个改造。当前的字节缓存（commit 0d8df91，
+  ThreadLocal + 1.25 倍扩容）已经把每张图标省掉一次 Eden 区大对象分配。
 
 > 排查提示：如果 App 报「解析不了域名」，而 `adb shell` 里 `curl` 同一个地址是通的，
 > 那不是 DNS 问题 —— 是 `netpolicy` 里这个 uid 的陈旧记录把它设成了 `REJECT_ALL`
