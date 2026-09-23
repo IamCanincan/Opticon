@@ -309,14 +309,7 @@ private fun EffectPreview(colorful: Boolean, selected: Boolean) {
                 .size(15.dp)
                 .clip(CircleShape)
                 .let {
-                    if (colorful) it.background(
-                        Brush.sweepGradient(
-                            listOf(
-                                Color(0xFFE91E63), Color(0xFF9C27B0), Color(0xFF3F51B5),
-                                Color(0xFF03A9F4), Color(0xFF009688), Color(0xFFE91E63)
-                            )
-                        )
-                    )
+                    if (colorful) it.background(RainbowSweep)
                     else it.background(if (selected) scheme.primary else scheme.outline)
                 }
         )
@@ -457,3 +450,16 @@ private fun VerifyCard() {
         }
     }
 }
+
+/**
+ * 「彩色桌面图标」预览里那圈彩虹。
+ *
+ * 颜色是写死的示意值、与主题无关，所以做成文件级常量：放在 composable 里的话
+ * 每次重组都要重建一份 Color 列表再加一个 Brush，而这页两个开关一拨动整页都在重组。
+ */
+private val RainbowSweep = Brush.sweepGradient(
+    listOf(
+        Color(0xFFE91E63), Color(0xFF9C27B0), Color(0xFF3F51B5),
+        Color(0xFF03A9F4), Color(0xFF009688), Color(0xFFE91E63)
+    )
+)
