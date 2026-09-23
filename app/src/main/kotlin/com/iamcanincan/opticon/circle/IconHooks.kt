@@ -131,6 +131,9 @@ private fun install(xposed: XposedInterface, classLoader: ClassLoader, packageNa
   ) {
     hookPixelLauncher(xposed, classLoader)
     hookTaskIcons(xposed, classLoader)
+    // 合成优先：它一旦接上，桌面就不进 Factory，下面那条翻转不会被触发。
+    // 合成挂不上 / 抛异常时返回 null，桌面照旧走 Factory，翻转照常兜底。
+    hookSynthesizedMonochrome(xposed)
     hookForcedThemedMono(xposed, classLoader)
   }
   if (packageName == "com.android.systemui") hookSplashScreenIcon(xposed, classLoader)
@@ -1030,6 +1033,15 @@ private fun declaredConstructors(clazz: Class<*>): List<Constructor<*>> =
  * （`com.android.launcher3.icons.MonochromeIconFactory`），而这张遮罩的**极性是反的**：
  * 深色字形 + 浅色底的图标会变成"字形是洞、底色是形"，看着整个反掉。
  *
+ * ## 这是**兜底**，首选方案是 [hookSynthesizedMonochrome]
+ * 那一条钩在更上游：它让 `AdaptiveIconDrawable.getMonochrome()` 直接返回一个极性正确的
+ * 合成层，桌面因此根本不会 new 这个 Factory（桌面只在这个 getter 返回 null 时才生成）——
+ * 算错的那条路压根不进，比"让它算错再翻回来"干净。
+ *
+ * 本函数保留下来是为了**合成没接上时仍能工作**：合成钩挂不上（framework 类的钩在
+ * 部分框架上受限）、或者合成抛异常返回 null 时，桌面照旧走 Factory，
+ * 这里再翻一次。**两条路互斥，不需要开关去切** —— 合成一旦生效，这里就不会被触发。
+ *
  * **为什么除了用户开关之外不再判别的条件**：桌面只在 `AdaptiveIconDrawable.getMonochrome()`
  * 为 null（= 应用没提供单色图标）时才 new 这个 Factory —— **已适配的应用根本不会走到这里**。
  * 所以"只翻未适配的"这件事由调用点天然保证，这里不需要再判断前景/背景亮度差。
@@ -1090,6 +1102,56 @@ private fun hookForcedThemedMono(xposed: XposedInterface, classLoader: ClassLoad
   if (hooked > 0) Log.d(TAG, "Mono: $hooked generateMono hooked")
   else Log.w(TAG, "Mono: generateMono NOT hooked")
 }
+
+/**
+ * 首选方案：给没适配的应用**凭空合成一个单色层**，让桌面那条算错的路径根本不进。
+ *
+ * 桌面只在 `AdaptiveIconDrawable.getMonochrome()` 返回 null 时才去 new 那个 Factory
+ * 现场生成掩码（那条路算出来的极性经常是反的，见 [hookForcedThemedMono]）。
+ * 所以这里只要**补一个非 null**，桌面就走正常路径 —— 算错的机会根本不出现。
+ *
+ * 比"让它算错再翻回来"好在三处：不用等它先算一遍再翻（省一次全像素往返）、
+ * 不依赖 `mAlphaBitmap` 这个私有字段名、极性判据在我们手里（能正确处理
+ * 深色底+白色字形的图标，而桌面对那类图标正是会算反的）。
+ *
+ * ⚠ hook 的是 framework 的类，部分框架对 bootclasspath 上的类挂钩有限制；
+ * 挂不上就只打一条警告，[hookForcedThemedMono] 那道翻转会照常兜底。
+ * 合成器自己抛异常时也返回 null，同样落到兜底上 —— **不会让图标变得更糟**。
+ */
+private fun hookSynthesizedMonochrome(xposed: XposedInterface) {
+  val method = runCatching {
+    AdaptiveIconDrawable::class.java.getDeclaredMethod("getMonochrome")
+  }.getOrNull()
+  if (method == null) {
+    Log.w(TAG, "Mono: getMonochrome not found，走翻转兜底")
+    return
+  }
+  runCatching {
+      xposed.hook(method).intercept { chain ->
+        // 应用自己提供了单色图标：原样透传，一个像素都不碰。
+        val original = chain.proceed() as? Drawable
+        if (original != null) return@intercept original
+        // 开关关掉 = 什么都不补，桌面照它自己的方式处理（逃生口）
+        if (!ModuleRuntime.options().monoInvert) return@intercept null
+        val self = chain.thisObject as? AdaptiveIconDrawable
+        if (self == null) {
+          Log.w(TAG, "Mono: synth thisObject is null")
+          return@intercept null
+        }
+        MonochromeSynth.forIcon(self)?.let { synth ->
+          val total = monoSynthesized.incrementAndGet()
+          if (total % 40 == 0) Log.d(TAG, "Mono: $total mono layers synthesized")
+          return@intercept synth
+        }
+        null
+      }
+      Log.d(TAG, "Mono: getMonochrome hooked")
+    }
+    .onFailure { Log.w(TAG, "Mono: getMonochrome hook failed: ${it.message}") }
+}
+
+/** 累计合成了多少张单色层。热路径，按 40 条汇总一次，不逐条打。 */
+private val monoSynthesized = AtomicInteger(0)
 
 /** 单色遮罩翻转：ALPHA_8，一个像素一字节，a → 255 - a。
  *

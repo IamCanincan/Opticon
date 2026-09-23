@@ -289,16 +289,15 @@ intentresolver / permissioncontroller / wellbeing。
 - 界面里的「检查更新」是**本应用唯一的联网行为**，而且只在点了按钮之后才发起，
   没有后台轮询、没有统计上报；挂钩代码（跑在被注入进程里的部分）完全不联网。
   请求先直连 `api.github.com`，失败时回退到公共加速镜像 `gh-proxy.com`。
-- **强制取色遮罩一律翻转，不做合成替代方案**：Android 16 桌面在「强制动态取色」下会
-  现场为没适配的应用生成 ALPHA_8 单色掩码，本模块逐张翻转后通过真机验证（单次清缓存
-  后 60 秒内 480+ 张）。考虑过改 hook 点 —— 在 `AdaptiveIconDrawable.getMonochrome()`
-  上自己合成一个正确极性的单色层，让桌面那条算错的路径根本不进 —— 核对后判定不做：
-  (a) 合成算法仍是启发式（亮/暗判断），且已适配应用 `getMonochrome()` 非 null、不进
-  合成路径，"整体取反"对剩下那一类（深字形+不透明底）正好也对；(b) 改动 launcher
-  钩子行为，回滚要再装旧 APK + 重启 launcher；(c) 唯一实利是「不依赖
-  `MonochromeIconFactory.mAlphaBitmap` 这个私有字段名」，但字段找不到时模块其他功能
-  不受影响 —— 真出问题时再考虑这个改造。当前的字节缓存（commit 0d8df91，
-  ThreadLocal + 1.25 倍扩容）已经把每张图标省掉一次 Eden 区大对象分配。
+- **强制取色：合成优先，翻转兜底**：Android 16 桌面在「强制动态取色」下会为没适配的
+  应用现场生成 ALPHA_8 掩码，而它的极性经常是反的。现在首选路径是**合成**
+  （`MonochromeSynth`）：钩 `AdaptiveIconDrawable.getMonochrome()`，在它返回 null 时
+  补一个极性正确的单色层，桌面因此根本不进 `MonochromeIconFactory`；原先那道
+  「把桌面算出来的掩码整张翻回来」保留为**兜底** —— 合成挂不上或抛异常时自动接管。
+  两条路互斥，不需要开关。合成器按三种情形分别处理：透明底沿用原 alpha、浅色底按亮度
+  反转（暗处是字形）、**深色底按亮度直取**（亮处是字形，这一类正是「一律翻转」会弄错的）。
+  判据是启发式（不透明像素占比 + 底的平均亮度），个别图标仍可能判偏 ——
+  界面上的「修正单色图标的极性」开关是逃生口：关掉就什么都不补，桌面照它自己的方式处理。
 
 > 排查提示：如果 App 报「解析不了域名」，而 `adb shell` 里 `curl` 同一个地址是通的，
 > 那不是 DNS 问题 —— 是 `netpolicy` 里这个 uid 的陈旧记录把它设成了 `REJECT_ALL`
@@ -408,6 +407,7 @@ MIT —— 见 [LICENSE](LICENSE)。
 - 性能：SystemUI 通知路径上的反射成员（`Field` / `Method`）与两个内部资源 id 从「每次访问现查」提到装钩时解析一次，句柄存进拦截闭包。原先 `MemberLookup` 每个成员访问都做一遍 `getDeclaredField`，`declaredMethod` 还靠逐级抛 `NoSuchMethodException` 走父类链，而这些都在每条通知、每次图标着色的路径上。
 - 清理：移除零引用的 `androidx.graphics:graphics-shapes` 依赖（Material Shapes 从来没被 import 过）；修正 `libs.versions.toml` 与 `lint.xml` 里那条「Compose 编译器版本必须与 Kotlin Gradle 插件严格一致」的说法 —— 仓库里没有 `kotlin.android` 插件，`kotlin = "…"` 只钉住 Compose 插件，KGP 由 AGP 带入，注释描述的约束实际不存在。
 - 性能：`invertAlphaMask` 用的那块 `byte[]` 改为按大小就地复用的 ThreadLocal 缓存，每张 mono 遮罩免去一次 Eden 区分配。Android 16「强制动态取色」下桌面会现场为每张没适配的应用生成 ALPHA_8 掩码，真机量过单次清缓存重启后 60 秒内能跑 360+ 张翻转 —— 短命大对象的 GC 压力是真能看到的，省下来比挂钩里 25 处 `toTypedArray()` 加起来还多。
+- 重构：**单色遮罩改成「合成」而不是「翻转」**。原先是让桌面先算出一张极性错误的 ALPHA_8 掩码、模块再整张翻回来；现在改为钩 `AdaptiveIconDrawable.getMonochrome()`，在它返回 null（= 应用没提供单色图标）时**直接补一个极性正确的合成层** —— 桌面只在这个 getter 返回 null 时才 new `MonochromeIconFactory`，所以合成一接上，那条算错的路径根本不进。好处是不用等它算完再翻（省一次全像素往返）、不依赖 `mAlphaBitmap` 这个私有字段名、极性判据收在自己手里。合成器（`MonochromeSynth`）按三种情形分别处理：透明底的沿用原 alpha、浅色底的按亮度反转（暗处是字形）、**深色底的按亮度直取**（亮处是字形）——最后这种正是桌面会算反的典型，原先「一律翻转」的实现对它是错的。两条路**天然互斥、不需要开关**：合成一旦生效桌面就不进 Factory，翻转自然不触发；合成挂不上或抛异常时返回 null，翻转照常兜底。
 
 ### v1.0.3（2026-09-22）
 - 修复：点「清除缓存并重启桌面 / 重启 SystemUI / 重启其他进程」后弹出的提示（Snackbar）被底部悬浮导航栏挡住、截断的问题。提示现在显示在底栏上方，完整可见。
