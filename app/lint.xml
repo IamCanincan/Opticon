@@ -61,4 +61,20 @@
     -->
     <issue id="PrivateApi" severity="ignore" />
     <issue id="DiscouragedPrivateApi" severity="ignore" />
+
+    <!--
+        ConfigProvider 必须 exported —— 它本来就是给被注入进程读配置用的
+        （Hook 跑在 launcher / SystemUI / settings 等多个 uid 下，必须跨进程访问）。
+        包名白名单（ConfigProvider.isTrustedCaller）决定谁能读，不是 manifest export。
+        没有运行时 grantUriPermission 这种敞口。
+    -->
+    <issue id="ExportedContentProvider" severity="ignore" />
+
+    <!--
+        Common.kt 里 InfoCard 的 trailing slot 是可选的尾部内容位（图标卡右侧的
+        可选按钮、状态文字等），命名 `trailing` 已经把用途说清楚。lint 想要的是
+        显式的 lambda 参数名（如 `content`）以避免隐式 `it` 的歧义，但 trailing
+        这个位置语义很明确，没必要为了 lint 建议换个更没信息量的名字。
+    -->
+    <issue id="ComposableLambdaParameterNaming" severity="ignore" />
 </lint>
