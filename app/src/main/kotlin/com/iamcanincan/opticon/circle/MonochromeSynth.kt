@@ -132,8 +132,13 @@ internal object MonochromeSynth {
   fun polarityFor(source: Drawable): MonochromeMask.Polarity? {
     val adaptive = source is AdaptiveIconDrawable
     val label = describe(source, adaptive)
-    val target = (if (adaptive) source.foreground else source) ?: return null
-    val raster = rasterize(target, POLAR_EDGE) ?: return null
+    // ⚠ 量的是**整个图标**（背景层 + 前景层合成之后），不是前景层。桌面那张遮罩就是从合成后的图
+    //   上出的：自适应图标那块浅色圆盘在遮罩里是**实心墨**，而只看前景层时那块底压根不在画面里 ——
+    //   参照退成中灰，"图形比参照亮" → 判成不翻 → 屏幕上就是反的（真机点名的 7 张全栽在这条上，
+    //   它们的共同点正是"浅色底板 + 更深的字形"）。
+    //   同一个坑 `render()` 里已经记过一次（已适配判定只看前景层，24 小时错杀 295 次）——
+    //   判据换了路，就把那条教训原样重犯了一遍。
+    val raster = rasterize(source, POLAR_EDGE) ?: return null
     return runCatching {
       val total = POLAR_EDGE * POLAR_EDGE
       val pixels = IntArray(total)
@@ -146,26 +151,30 @@ internal object MonochromeSynth {
       // 判据一改，"翻对了还是翻错了"在桌面上看不见（图像通道是 filtered 的），所以把**判据
       // 动手的那几张**的原像素带回来重放 —— 与合成那条路同一个通道、同一个预算。
       // 判不了的那些也要带：它们说明判据在这类图上失效了，那是下一轮的靶子。
-      if (p.invert || !p.known) {
+      if (p.invert || !p.known || MonoDump.watched(label)) {
         MonoDump.maybe(id, label, raster, pixels, null, POLAR_EDGE, POLAR_EDGE,
           "${IconNames.of(source)} | ${p.report}")
       }
-      pending.set(p)
+      pending.set(Judgement(id, label, IconNames.of(source).substringBefore("/"), p))
       p
     }.onFailure {
       Log.w(TAG, "Mono: polarity threw: ${it.javaClass.simpleName}: ${it.message}")
     }.getOrNull().also { raster.recycle() }
   }
 
+  /** 一次判据：结论 + 它是**哪张图标**的结论（标签要一起传，`generateMono` 那边拿不到包名）。 */
+  /** label 的开头是 `包名/资源名`（见 IconNames），按应用的覆盖就按那一段查。 */
+  class Judgement(val id: Int, val label: String, val pkg: String, val polarity: MonochromeMask.Polarity)
+
   /** [getMonochrome] 与 `generateMono` 之间传话的那一个格子。
    *  ⚠ 为什么敢这么传：`MonoIconThemeController.createThemedBitmap` 第 76 行调
    *  `icon.getMonochrome()`，返回 null 才走到第 84 行 new `MonochromeIconFactory` ——
    *  **同一个方法、同一个线程、中间不切线程**，所以这一格子里只可能是刚才是那张图的判据。
    *  取一次就清空：留着会把上一张的结论用到下一张上，那比不翻更糟。 */
-  private val pending = ThreadLocal<MonochromeMask.Polarity?>()
+  private val pending = ThreadLocal<Judgement?>()
 
-  /** 本次调用链上刚判出来的那一个极性（取一次即清）。null = 没有判据 → 不动遮罩。 */
-  fun takePolarity(): MonochromeMask.Polarity? = pending.get().also { pending.set(null) }
+  /** 本次调用链上刚判出来的那一个（含标签，取一次即清）。null = 没有判据 → 不动遮罩。 */
+  fun takePolarity(): Judgement? = pending.get().also { pending.set(null) }
 
   /** 每次进入 `getMonochrome()` 先清一次：保证 `generateMono` 拿到的判据一定出自**同一张**图标。 */
   fun clearPolarity() {

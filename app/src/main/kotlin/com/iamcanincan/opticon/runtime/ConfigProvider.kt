@@ -58,6 +58,7 @@ class ConfigProvider : ContentProvider() {
         cursor.newRow().apply {
             add(if (prefs.getBoolean(ModulePrefs.KEY_CIRCLE_ENABLED, ModulePrefs.DEFAULT_CIRCLE_ENABLED)) 1 else 0)
             add(if (prefs.getBoolean(ModulePrefs.KEY_MONO_INVERT, ModulePrefs.DEFAULT_MONO_INVERT)) 1 else 0)
+            add(prefs.getString(ModulePrefs.KEY_MONO_OVERRIDES, ModulePrefs.DEFAULT_MONO_OVERRIDES))
             add(if (prefs.getBoolean(ModulePrefs.KEY_NOTIFY_ENABLED, ModulePrefs.DEFAULT_NOTIFY_ENABLED)) 1 else 0)
             add(prefs.getInt(ModulePrefs.KEY_MODE, ModulePrefs.DEFAULT_MODE))
         }
@@ -125,6 +126,7 @@ class ConfigProvider : ContentProvider() {
         val COLUMNS = arrayOf(
             ModulePrefs.COLUMN_CIRCLE_ENABLED,
             ModulePrefs.COLUMN_MONO_INVERT,
+            ModulePrefs.COLUMN_MONO_OVERRIDES,
             ModulePrefs.COLUMN_NOTIFY_ENABLED,
             ModulePrefs.COLUMN_MODE
         )

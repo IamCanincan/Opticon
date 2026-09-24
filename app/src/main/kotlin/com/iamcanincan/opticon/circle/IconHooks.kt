@@ -1051,11 +1051,14 @@ private fun declaredConstructors(clazz: Class<*>): List<Constructor<*>> =
  * 翻错。没有判据时（上游钩子没装上或抛了异常）**不动遮罩**，并且单独计数 —— 那是判据失效
  * 唯一看得见的信号。
  *
- * **为什么除了用户开关之外不再判别的条件**：桌面只在 `AdaptiveIconDrawable.getMonochrome()`
+ * **为什么不再判别的条件**：桌面只在 `AdaptiveIconDrawable.getMonochrome()`
  * 为 null（= 应用没提供单色图标）时才 new 这个 Factory —— **已适配的应用根本不会走到这里**。
  * 所以"只动未适配的"这件事由调用点天然保证，这里不需要再判断前景/背景亮度差。
- * 唯一的开关是界面上的「修正单色图标的极性」（[ModuleRuntime.options] 的 `monoInvert`），
- * 它是逃生口：个别 ROM / 图标包本身就该保持原样时用它关掉，不是在问用户口味。
+ * 界面上那条开关（`monoInvert`）是**一票否决**用的：关掉 = 完全交回桌面自己处理，
+ * 不是"换成另一种翻法"。逐张的例外走「按应用反色（调试）」那张表（[MonochromeSynth]
+ * 的覆盖表 → [ModuleOptions.flipFor]），它越过默认策略、但不越过总开关。
+ * 为什么留：判据的方向在真机上还没有可信依据（回传的两张遮罩互相打脸），这种时候
+ * "只有我能定"比"算法说了算"更有用，而那张表标出来的结果本身就是下一轮判据的样本。
  *
  * **链路（已逐条对过字节码）**：`generateMono()` 把结果写进 `mAlphaBitmap`，
  * `wrap()` 返回包住本对象的 `InsetDrawable`，`MonoIconThemeController.toAlphaBitmap()`
@@ -1089,27 +1092,36 @@ private fun hookMaskPolarity(xposed: XposedInterface, classLoader: ClassLoader) 
             return@intercept result
           }
           runCatching {
-              // 界面上的总开关（[ModuleRuntime.options] 的 `monoInvert`）。按调用时判断而不是
-              // 装钩时判断，切开关才不需要重启桌面。
+              // 界面上那个开关（[ModuleRuntime.options] 的 `monoInvert`）。关掉 = 遮罩原样不动 ——
+              // 这一轮他要拿"全反"和"按判据"在真机上对着看，所以这道闸是调试用的对照位。
               if (!ModuleRuntime.options().monoInvert) return@runCatching
-              // **翻不翻由判据决定，不再一律翻。**「桌面对每张图标都算反」这个前提真机上不成立
-              // （16 张回传里 12 张桌面的假定本来就是对的），一律翻等于把对的那批翻错。
-              val call = MonochromeSynth.takePolarity()
+              val hit = MonochromeSynth.takePolarity()
               val bitmap = alphaField.get(self) as? Bitmap
               when {
                 bitmap == null -> Log.w(TAG, "Mono: mAlphaBitmap is null")
                 bitmap.config != Bitmap.Config.ALPHA_8 ->
                   Log.w(TAG, "Mono: unexpected config ${bitmap.config}, skip")
-                call == null -> noJudge.incrementAndGet()
-                !call.invert -> kept.incrementAndGet()
                 else -> {
-                  invertAlphaMask(bitmap)
-                  monoInverted.incrementAndGet()
+                  // 点名的那几张：把**桌面自己出的**这张遮罩带回去（翻转之前）。判据数字全是我
+                  // 自己算的，看不出"我对桌面的理解错了"这种错 —— 只有它本来的样子能。
+                  if (hit != null && MonoDump.watched(hit.label)) {
+                    MonoDump.maskOf(hit.id, hit.label, bitmap, hit.polarity.report)
+                  }
+                  // **现在一律翻。**判据照旧每张都算、照旧进日志，只是不参与决定 ——
+                  // 他要先在真机上看到全反的样子，再逐张说哪几张不该反。
+                  // 两个数一起打，"一律翻"与"按判据翻"差在哪几张、差多少，一眼看得见。
+                  // 顺序：按应用的覆盖（调试表）> 默认策略（调试期 = 一律翻）。判据仍然只记录、不决定。
+                  val flip = ModuleRuntime.options().flipFor(hit?.pkg, default = true)
+                  if (hit == null) noJudge.incrementAndGet() else if (hit.polarity.invert != flip) against.incrementAndGet()
+                  if (flip) {
+                    invertAlphaMask(bitmap)
+                    monoInverted.incrementAndGet()
+                  }
                 }
               }
               val n = judgedTotal.incrementAndGet()
-              if (n % 40 == 0) Log.d(TAG, "Mono: $n 张遮罩 → 翻 ${monoInverted.get()} " +
-                "不翻 ${kept.get()} 无判据 ${noJudge.get()}")
+              if (n % 40 == 0) Log.d(TAG, "Mono: $n 张遮罩 → 一律翻 ${monoInverted.get()} " +
+                "判据反对 ${against.get()} 无判据 ${noJudge.get()}")
             }
             .onFailure { Log.w(TAG, "Mono: failed: ${it.message}") }
           result
@@ -1154,7 +1166,7 @@ private fun hookPolarityJudge(xposed: XposedInterface) {
         // 从这里往下都是"未适配"的图标。先清掉这一线程上一次的判据 —— 下面那道翻转钩
         // 只认"本次 getMonochrome 刚判出来的那一个"，留着上一张的结论会翻错图标。
         MonochromeSynth.clearPolarity()
-        // 开关关掉 = 什么都不做，桌面照它自己的方式处理（逃生口）
+        // 开关关掉 = 连判据都不算（省一次光栅化），遮罩也就没人决定翻不翻
         if (!ModuleRuntime.options().monoInvert) return@intercept null
         val self = chain.thisObject as? AdaptiveIconDrawable
         if (self == null) {
@@ -1206,8 +1218,10 @@ private fun invertAlphaMask(bitmap: Bitmap) {
 /** 累计翻了多少张遮罩。热路径，按 40 条汇总一次，不逐条打。 */
 private val monoInverted = AtomicInteger(0)
 
-/** 判据说"桌面是对的"、于是不动的张数。与上面那个一起看才知道判据有没有在两头乱翻。 */
-private val kept = AtomicInteger(0)
+
+/** 判据说"这张不该翻"、但当前一律翻了的张数。它就是"一律翻"与"按判据翻"
+ *  的差集大小 —— 判据哪天重新接管，要先看这个数。 */
+private val against = AtomicInteger(0)
 
 /** 走到翻转这一步却没有判据可用的张数（`getMonochrome` 那道钩子没装上、或判据抛了异常）。
  *  这一档**不动遮罩** = 用户看到的就是桌面本来的样子，但它是"判据失效"唯一的可见信号。 */

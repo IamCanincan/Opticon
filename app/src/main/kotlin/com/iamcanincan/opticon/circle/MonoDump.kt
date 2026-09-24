@@ -29,7 +29,7 @@ import java.util.Locale
 internal object MonoDump {
 
   /** 每进程最多带回来几张。PNG 压完一张十几 KB、六到十八行日志，所以这个数可以比想象中大。 */
-  private const val MAX_ICONS = 16
+  private const val MAX_ICONS = 34
 
   /** 一条日志的安全长度：logd 单条约 4000 字节，留足余量免得截断。 */
   private const val CHUNK = 3000
@@ -57,6 +57,50 @@ internal object MonoDump {
    */
   fun suspicious(o: MonochromeMask.Output): Boolean =
     o.mask == null || o.boxFill > 0.55f || o.components >= 10 || o.soft > 0.08f
+  /**
+   * 用户点名的包：**不看可不可疑，无条件带回来**。
+   *
+   * 这一批改出来的事实是「他说这 7 张反色，而判据对 7 张全说了不翻，且余量都不小」——
+   * 那只有一种可能：**我对桌面那张遮罩长什么样的模型是错的**。这种错从判据数字里看不出来
+   * （数字全是我自己算的），只能看桌面自己出的那张 `mAlphaBitmap`。所以这里要的不只是原图，
+   * 是**桌面的产物**。
+   */
+  private val WATCH = setOf(
+    // 2026-09-24 他点名的这一批：现在全部判成"不翻"，而屏幕上都是反的。
+    "com.azure.authenticator", "com.baidu.tieba", "com.neowizgames.game.browndust2",
+    "com.ss.android.ugc.aweme", "com.google.android.apps.translate",
+    "com.fdg.flashplay.farsee", "com.huawei.appmarket", "com.handsgo.jiakao.android",
+    "com.tmri.app.main", "com.moondroplab.moondrop.moondrop_app", "com.predidit.kazumi",
+    "com.sankuai.meituan", "com.openlist.mobile",
+  )
+
+  fun watched(label: String): Boolean = WATCH.any { label.contains(it) }
+
+  /** 点名的那些不走 [seen] 的形状去重（同一个图标被问很多次是常态），但每包只带一次。 */
+  private val watchSent = HashSet<String>()
+
+  /**
+   * 把桌面出的那张 ALPHA_8 遮罩带回来（**翻转之前**，那才是桌面的原样）。
+   *
+   * ALPHA_8 直接压 PNG 各版本行为不一，先 copy 成 ARGB_8（得到 (0,0,0,a)）——
+   * 重放那边读回 alpha 就是遮罩本身。
+   */
+  @Synchronized
+  fun maskOf(id: Int, label: String, alpha: Bitmap, why: String) {
+    if (budget <= 0 || sent >= MAX_ICONS) return
+    val key = label.substringBefore(' ')
+    if (!watchSent.add(key)) return
+    sent++
+    val n = sent
+    runCatching {
+      val argb = alpha.copy(Bitmap.Config.ARGB_8888, false) ?: return@runCatching
+      val png = pngOf(argb)
+      if (argb !== alpha) argb.recycle()
+      budget -= png.size / 1024
+      emit(n, id, "mask", "$key | $why", png)
+    }.onFailure { Log.w(TAG, "Mono: mask#$n failed: ${it.javaClass.simpleName}: ${it.message}") }
+  }
+
 
   /** 8×8 的 alpha 指纹：同一张形状不管被问多少次，只带一次。 */
   private fun signature(pixels: IntArray, w: Int, h: Int): Long {

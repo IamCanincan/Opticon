@@ -46,6 +46,16 @@ data class ModuleOptions(
      */
     val monoInvert: Boolean = true,
 
+    /**
+     * **按应用的反色覆盖**（调试用）：包名 → 这张要不要翻。表里没有的包走默认策略。
+     *
+     * 为什么要有这张表：判据的方向现在还没有可信依据（真机回传的两张遮罩，一张像"亮=墨"、
+     * 一张像"暗=墨"，互相打脸），而他需要在真机上一张一张看到结果。这张表就是"判据先交给人
+     * 定"的临时通道 —— 它必须跟着配置一起跨进程（被注入的桌面读不到本应用的 SharedPreferences
+     * 文件），所以序列化成一段文本走 provider 那一列，见 [ModulePrefs.KEY_MONO_OVERRIDES]。
+     */
+    val monoOverrides: Map<String, Boolean> = emptyMap(),
+
     /** 通知图标的总开关：关掉后通知小图标保持系统原样 */
     val notifyEnabled: Boolean = true,
 
@@ -74,6 +84,18 @@ data class ModuleOptions(
     val replacement: Int = FORCE_MONOCHROME
 ) {
 
+    /**
+     * 这一张遮罩到底翻不翻。
+     *
+     * 顺序是硬的：总开关关掉 = 一律不动（那是"完全交回桌面"的逃生口，按应用覆盖也不能越过它）；
+     * 然后按应用的覆盖；都没有才落到 [default]（调试期 = 一律翻）。
+     */
+    fun flipFor(pkg: String?, default: Boolean): Boolean {
+        if (!monoInvert) return false
+        if (pkg != null) monoOverrides[pkg]?.let { return it }
+        return default
+    }
+
     /** 替换策略的可读名字，只用于日志 */
     val replacementName: String
         get() = when (replacement) {
@@ -91,7 +113,10 @@ data class ModuleOptions(
      */
     fun describe(): String =
         "circle=$circleEnabled monoInvert=$monoInvert notify=$notifyEnabled" +
-            " mode=$replacementName keepColor=$keepOriginalColor preserveTinted=$preserveTinted"
+            " mode=$replacementName keepColor=$keepOriginalColor preserveTinted=$preserveTinted" +
+            // 按应用的反色表有没有跨进程传过来，全靠这一项：界面上标了、这里却是 0，
+            // 那就是 provider 那一列没读到（而不是"读到了但值为空"）。
+            " 反色表=${monoOverrides.size}"
 
     companion object {
         /** 未适配 → 直接换成彩色的应用启动图标 */

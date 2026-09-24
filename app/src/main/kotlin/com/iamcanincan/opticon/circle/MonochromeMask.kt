@@ -615,24 +615,12 @@ internal object MonochromeMask {
     return out
   }
 
-  /**
-   * **第一遍：参照 = 这一像素背后那块底。**
-   *
-   * 三步，全是原来「刻底」那一条，但**一条拒绝都没有了** —— 每一步量不出东西时它自己就退化：
-   *  · 四个角都不实心（透明底）→ 家族数 0 → 洪泛只穿得过透明像素 → 参照 = 四周那片"没有东西"，
-   *    色场由它定、β≈0 → 原语自动退成覆盖率；
-   *  · 底把整框吞了（整张一块平色）→ 工作集另一侧为空 → 实心点没得量 → 浓度全 0 = 一块平色；
-   *  · 底一格都没有（满幅、四角彼此不像）→ 色场全是补出来的空格、β=0 → 又是覆盖率。
-   *
-   * 洪泛**穿过所有底家族的并集**，不是冠军那一个：底不是一个颜色，是几块拼的（高德四块拼底、
-   * 饿了么上橙下蓝、云闪付上红下白）。只选一个家族，剩下那块底整块变成墨 = 「还剩一块大色块」。
-   */
-  private fun groundPass(
-    pixels: IntArray, w: Int, h: Int, box: Rect, band: Int, g: Int, s: Scratch,
+  private fun fitGround(
+    pixels: IntArray, w: Int, h: Int, box: Rect, g: Int, s: Scratch, fams: Int, seed: ByteArray,
   ): Pass {
     val total = w * h
     val boxArea = box.width().toLong() * box.height()
-    val fams = cornerFamilies(pixels, w, box, band, s)
+
 
     // 「拟合色场 → 重算距离 → 重新洪泛」跑 [FIELD_ITERS] 轮。第一轮只有一个全局候选色，容差
     // 必须给到能容下整道渐变（ΔE [TOL_COARSE]），代价是把与底相近的字形也圈进去；有色场之后
@@ -646,7 +634,7 @@ internal object MonochromeMask {
     var tol = DEP_COARSE
     passFromFamilies(pixels, w, box, s, TOL_COARSE shl 6)
     // 第一轮之前先洪泛一次：色场是从「与边界连通的底」上拟合的，没有这一步就没有种子像素。
-    flood(s, w, box, band)
+    flood(s, w, box, seed)
     var nGround = 0
     var nInk = 0
     var covSum = 0L
@@ -662,7 +650,7 @@ internal object MonochromeMask {
             ) 1 else 0
           }
         }
-        flood(s, w, box, band)
+        flood(s, w, box, seed)
       }
       fitField(pixels, w, box, g, s, s.plate, solidRef = false)
       propagateField(w, h, total, box, s, s.plate)
@@ -732,6 +720,99 @@ internal object MonochromeMask {
     p.meanCov = if (nInk > 0) (covSum / nInk).toInt() else 0
     return p
   }
+  /**
+   * **第一遍：参照 = 这一像素背后那块底。**
+   *
+   * 三个假设按顺序问，取**第一个留下真图形**的 —— figure/ground 本来就不是适定的，任何做法
+   * 都得验一次结论，区别只在于验的是数字还是手感：
+   *  · **H1 内容框四角上的颜色** —— 老式满幅图、以及底板画到边的自适应图标；
+   *  · **H2 内容自己轮廓上的颜色** —— 圆盘 / 圆角方**整块画在前景层里**的那种：空气在内容框
+   *    之外，角上必然量不到东西，于是 H1 直接判"没有这块底"、参照退成空气，而那块浅色圆盘
+   *    才是这张图真正的底。真机点名那一批（"浅盘 + 深字"的 azure / 翻译 / 驾考宝典 / 华为市场
+   *    …）全栽在这条上：判据比的是"图形 vs 空气"，底根本不在比较里，于是七张全判成不翻。
+   *  · **H3 参照 = 没有东西**（透明）—— 图形浮在空气上时的正确答案。H2 在这种图上会失败：
+   *    薄字形的轮廓就是字形自己，洪泛吃掉整框，验收（[PLATE_ALL_SHARE]）把它挡回这里。
+   *
+   * 洪泛**穿过所有底家族的并集**，不是冠军那一个：底常常是几块拼的（高德四块、云闪付红白两段、
+   * 饿了么橙蓝两段），只选一个家族，剩下那块底整块变成墨 = 「还剩一块大色块」。
+   */
+  private fun groundPass(
+    pixels: IntArray, w: Int, h: Int, box: Rect, band: Int, g: Int, s: Scratch,
+  ): Pass {
+    val seed = s.mark      // 洪泛的种子掩码（measure 之前没人用这块）
+    val fams = cornerFamilies(pixels, w, box, band, s)
+    if (fams > 0) {
+      bandSeed(s, w, box, band, seed)
+      return fitGround(pixels, w, h, box, g, s, fams, seed)
+    }
+    val ring = outlineFamilies(pixels, w, box, s, seed)
+    if (ring > 0) {
+      val alt = fitGround(pixels, w, h, box, g, s, ring, seed)
+      if (alt.share < PLATE_ALL_SHARE) return alt
+    }
+    bandSeed(s, w, box, band, seed)
+    return fitGround(pixels, w, h, box, g, s, 0, seed)
+  }
+
+  /** 参照吃掉整框到这个比例，就说明"这块底"其实是图形自己（薄字形的轮廓=字形）→ 假设不成立。 */
+  private const val PLATE_ALL_SHARE = 0.92f
+
+  /** 种子掩码 = 内容框的边界带（H1 / H3）。 */
+  private fun bandSeed(s: Scratch, w: Int, box: Rect, band: Int, seed: ByteArray) {
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      for (x in box.left until box.right) {
+        val i = row + x
+        seed[i] = if (inBand(x, y, box, band)) 1 else 0
+      }
+    }
+  }
+
+  /**
+   * H2 的家族色 = 内容**自己轮廓**上那一圈的颜色（不透明、且四邻里有不透明的对面），
+   * 种子掩码就写这些像素。
+   *
+   * 一块铺满画面的底板，必然在它自己的边界上露出来 —— 这与 H1「底按角取」是同一条道理，
+   * 只是量的是**形状的边**而不是**外接矩形的角**：圆盘在方框里，角上是空气，边上才是盘。
+   * 轮廓太少（<1/50 框）就不成立：那说明内容几乎填满整框、没有"外圈"可言。
+   */
+  private fun outlineFamilies(pixels: IntArray, w: Int, box: Rect, s: Scratch, seed: ByteArray): Int {
+    var n = 0
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      for (x in box.left until box.right) {
+        val i = row + x
+        val on = Color.alpha(pixels[i]) >= A_SOLID
+        val edge = on && (x == box.left || y == box.top || x == box.right - 1 ||
+          y == box.bottom - 1 || Color.alpha(pixels[i - 1]) < A_SOLID ||
+          Color.alpha(pixels[i + 1]) < A_SOLID || Color.alpha(pixels[i - w]) < A_SOLID ||
+          Color.alpha(pixels[i + w]) < A_SOLID)
+        seed[i] = if (edge) 1 else 0
+        if (edge) n++
+      }
+    }
+    val boxArea = box.width().toLong() * box.height()
+    if (n.toLong() * 50 < boxArea) return 0
+    var color = 0
+    for (c in 0 until 3) {
+      s.hist.fill(0)
+      for (y in box.top until box.bottom) {
+        val row = y * w
+        for (x in box.left until box.right) {
+          val i = row + x
+          if (seed[i] != 0.toByte()) s.hist[(pixels[i] shr (16 - 8 * c)) and 0xff]++
+        }
+      }
+      color = color or (median(s.hist, 0, n) shl (16 - 8 * c))
+    }
+    s.famL[0] = labChannel(color, 0)
+    s.famA[0] = labChannel(color, 1)
+    s.famB[0] = labChannel(color, 2)
+    s.famColor[0] = color
+    s.fams = 1
+    return 1
+  }
+
 
   /**
    * **第二遍：参照 = 这一像素近旁那块主体。** 结构与第一遍**一模一样**，只是把"底"换成
@@ -1110,7 +1191,7 @@ internal object MonochromeMask {
    * ⚠ 四邻域，不是八邻域 —— 八邻域会顺着对角线从笔画之间的缝里钻到图形内部，
    * 把本该留下的字腔一起当底擦掉。
    */
-  private fun flood(s: Scratch, w: Int, box: Rect, band: Int): Int {
+  private fun flood(s: Scratch, w: Int, box: Rect, seed: ByteArray): Int {
     val pass = s.pass
     val plate = s.plate
     val queue = s.queue
@@ -1123,7 +1204,7 @@ internal object MonochromeMask {
       val row = y * w
       for (x in box.left until box.right) {
         val i = row + x
-        if (pass[i] == 0.toByte() || !inBand(x, y, box, band)) continue
+        if (pass[i] == 0.toByte() || seed[i] == 0.toByte()) continue
         plate[i] = 1
         queue[tail++] = i
       }
