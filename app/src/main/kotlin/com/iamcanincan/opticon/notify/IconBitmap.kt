@@ -94,9 +94,23 @@ object IconBitmap {
      * ⚠ 两个数必须一起看，单看块数会误杀汉字 —— 「淘」这种四个字形的块天然 cc=4，
      * 而每一块都是实心笔画（top≈0.4）。真正的碎裂是渐变底被切出的一堆小渣。
      * 先闭运算再判，是因为闭运算本来就该把抗锯齿切断的笔画连回去；连不回去的才是真碎。
+     *
+     * ⚠ 光看块数会错杀：**块多 ≠ 碎**。皎月连（`com.example.appui`，发光月亮 + 散落星点）
+     *   真机量到 `cc=16 top=0.20` —— 每一块都是正经图形，却被这两条一起拦下，
+     *   于是两支双双放弃、桌面回去按亮度重画那半张白底 = 一整块白。所以第三条必须一起
+     *   成立：小片占的像素也得上 [SHATTER_SMALL_SHARE]（块大而多的图自动放过，噪点图拦下）。
      */
     private const val SHATTER_COMPONENTS = 8
     private const val SHATTER_TOP = 0.35f
+
+    /**
+     * 「碎成一片」的第三条：落在小块（不到 `碎渣线 × 8`，见 [polishBinarized]）里的像素
+     * 占掩码的比例。低于它说明这些块**各有分量**，那是设计者画的一堆分散图形，不是一片噪点。
+     *
+     * 0.5 = 一半以下：掩码过半数像素都是小渣才算真碎。这个数现在跟 `小片=` 一起打进日志，
+     * 判据台与真机的分布都还没有足够样本去收它 —— 先按"错杀一块白比漏拦一片渣更糟"定。
+     */
+    private const val SHATTER_SMALL_SHARE = 0.5f
 
     /**
      * 碎渣的最小尺寸：连通块小于 `总面积 / MIN_SPECK_DIVISOR`（且不少于 8 像素）就擦掉。
@@ -138,31 +152,21 @@ object IconBitmap {
     private const val CLASS_LIGHT = 2
 
     /**
-     * 三层输出里"点缀"那一档的 alpha：50% 的系统前景色压在系统底色上 = 两档的**中值**。
+     * 三层输出里"中间"那一档的分界 alpha：50% 的系统前景色压在系统底色上 = 两档的**中值**。
      *
-     * 主体是 255、底板是 0（让系统的底色透出来）。三档现在是插值的**控制点**、不是分箱：
-     * 见 [toneAlpha] —— 平色区域照旧平色，渐变区域恢复成过渡。
+     * 底板是 0（让系统的底色透出来）、远底那一档是 255（系统前景色本身）。它是**档间分界**
+     * 而不是分箱：每一档内部仍按该层自己的距离跨度线性铺开（[toneBand]）—— 平色区域照旧
+     * 平色，渐变区域仍是过渡。
      */
     internal const val TONE_MID = 128
 
     /**
-     * 三档插值之后，多淡的像素才算"图形的一部分"。
+     * 档内过渡的横轴 = 该层距离分布的这两个分位（理由见 [distanceSpan]）。
      *
-     * 有了分段插值，靠近底板色的像素会拿到一个很小的 alpha —— 那就又把柔光/渐变尾端
-     * 整片收进掩码了（本项目踩过的那类"淡色铺满"）。所以带档的掩码也要有条线，取中档的
-     * 一半：视觉上不到半成色的地方一律当透明。
+     * 真机日志每条三层判定都带着这两档的端点（`档近a-b/远c-d`），它们就是用来收这两条线的。
      */
-    internal const val TONE_FLOOR = 64
-
-    /**
-     * 形层距离下界的取数分位（%）—— 斜坡零点落在「形这两层里 5% 的像素散不到这么低」
-     * 的那个距离上。取数与理由见 [glyphFloor]。
-     *
-     * 用分位而不用最小值：抗锯齿与渐变最淡的那一头总会产出几个几乎等于底色的像素，
-     * 最小值会被它们拽回 0，零点等于没设。真机日志每条三层判定都带着这个数
-     * （`档距下/近/远`），它是用来收这条线的。
-     */
-    private const val GLYPH_FLOOR_PCT = 5
+    private const val SPAN_LOW_PCT = 5
+    private const val SPAN_HIGH_PCT = 95
 
     /**
      * 「独立第三种颜色」的最小离轴距离（RGB 欧氏空间，三通道求和口径，0..765）。
@@ -603,64 +607,104 @@ object IconBitmap {
         // ── 哪层算主体按**面积**定：大的是形，小的是点缀。 ──
         val mainLayer = if (l1 >= l2) 1 else 2
         val accentLayer = if (mainLayer == 1) 2 else 1
-        // ── 「是不是底」由**归层**说了算，"多浓"由**离底多远**说了算 ──
-        // 这两件事以前一直混在同一个量里量，结果两个方向都翻过车：
-        //   · 只看距离、零点摆在底板色散上 → 与底板颜色相近的那层形整片被当成底抹掉。
-        //     这就是用户报的「同一图标内颜色太相近会被画成同一个颜色，然后成了白块 / 黑块」
-        //     —— 细节不是糊掉，是**根本没涂进掩码**。
-        //   · 只看距离、零点摆在 0 → 底板自己那截渐变尾端越过形状线被涂成形。
-        //     判据台上 steamlink 那一版框内填满 **0.78**，就是一块色板。
-        // 分开之后各司其职：`assignLayers` 已经把「离中位色最近的那一群」判成底，
-        // 它内部有没有渐变与"是不是底"无关；剩下两层无论离底多近都是形，
-        // 浓度按**形自己那一段距离**撑开（下界见 [glyphFloor]），所以相近的两种颜色
-        // 照样分得开，而渐变段照旧是渐变。
+        // ── 层的**身份**决定它在哪一档，层内的**距离**决定这一档里的过渡 ──
+        // 三档还是那三档（底 0 / 中 TONE_MID / 实心 255），但"谁去哪档"与"档内怎么变"
+        // 分开了。以前两件事都用同一个「离底板距离」量，两个方向都翻过车：
+        //   · 零点摆在底板色散上 → 与底板相近的那层形整片被当底抹掉（用户报的
+        //     「同一图标内颜色太相近会被画成同一个颜色，然后成了白块 / 黑块」）；
+        //   · 零点摆在 0 + 一条淡色线 → 柔光型图标被那条线**切Skeleton**：皎月连
+        //     （`com.example.appui`）就是一张白底 + 蓝色柔光月亮，主色只有 FDFDFD 0.54
+        //     与 0092DB 0.20，剩下的全是过渡 —— 按绝对距离判淡，光晕一路淡到被切掉，
+        //     掩码碎成 16~18 块（top=0.10~0.26），两支双双放弃 → 桌面用自己的 Factory
+        //     按亮度重画 → 半张白底被画成实心 = 一整块白。同一个图标换个尺寸的素材
+        //     （320 那版）又不碎，观感就是"时对时错"。
+        // 现在：底那一层整层摘掉（归层判的，与它内部有没有渐变无关），两个形层各占一档
+        // 区间（近底档 1..TONE_MID、远底档 TONE_MID+1..255），**档内**按该层自己的距离
+        // 分布（5~95 分位）线性铺开 —— 所以同一层里的渐变仍是渐变，而不同层永远不同色。
+        // 至于「与底板连成一片的那部分淡档」，那已经不是颜色能回答的问题了，交给空间：
+        // 见下面那道从内容框边界出发的洪泛。
         //
-        // ⚠ 两个形档按**离底远近**排浓度（近 → [TONE_MID]、远 → 255），不按面积排。
-        //   alpha 本就是距离的单调函数，面积大的那层离底更近时两个控制点前后颠倒，
-        //   斜坡刚起步就饱和成 255。判据台的 `档距下/近/远` 抓到的就是这个：
-        //   12306 一度量出 55/129/**56**、steamlink 31/164/**24**。
-        //
-        // ⚠ 这条线在一天里被裁定过五次，记下来免得再翻：
-        //   ① 按层写死 0 / 128 / 255 → 渐变段被整片吸进某一层，"渐变被做成平色块"；
-        //   ② 改成插值 → "不纯色、发糊"（这个项目一开始就反对连续过渡的老理由）；
-        //   ③ 回到离散，并把共线的混合带并回相邻层（"纯色 = 跟旁边一个颜色"）；
-        //   ④ 渐变还是保留渐变的样子 —— 插值回来；
-        //   ⑤ **归层管底、距离管浓度** —— 就是现在这版，④ 那版把两件事混在距离里，
-        //     于是"相近颜色并成一个"和"底板渐变涂成块"同时存在。
+        // ⚠ 这条线在一天里被裁定过六次，记下来免得再翻：
+        //   ① 按层写死 0/128/255 → 渐变段被整片吸进某一层；② 改插值 → "不纯色、发糊"；
+        //   ③ 回离散 + 共线并层；④ 插值回来；⑤ 归层管底、距离管浓度（零点=形层距离下界）
+        //   —— ⑤ 解决了"相近颜色并成一个"，但**淡色仍是一条绝对线**，于是柔光型图标被切
+        //   成骨架；⑥ 就是现在这版：档由身份定、过渡在档内、淡不留不留由**连通性**定。
         val dMain = meanDistanceFromPlate(pixels, layer, mainLayer, plateR, plateG, plateB)
         val dAccent = if (l2 > 0) meanDistanceFromPlate(pixels, layer, accentLayer, plateR, plateG, plateB) else 0
-        val dFar = maxOf(dMain, dAccent)
-        val dNear = minOf(dMain, dAccent)   // 0 = 只有一层形，没有中间档
-        // 斜坡的零点 = 形那两层自己的距离下界。渐变尾端与抗锯齿边都在这之下，
-        // 而"与底板只差一点点"的那层形落在它上面 —— 这就是与 ④ 那版的分界线。
-        //
-        // ⚠ 但零点最远只能设在**字形跨度的一半**处。平色字形里「最淡的 5%」与均值
-        //   几乎是同一个数，照字面用分位数会把整层压成一步跳变，还会削掉细笔画的抗锯齿边
-        //   —— 判据台上元宝一度量出 `档距149/0/147`：零点(149)高过实心点(147)，
-        //   结果 `结构=0.00 top=1.00`，一块实心。钳在半跨上之后同一张回到有过渡、有结构。
-        val dFloor = minOf(glyphFloor(pixels, layer, plateR, plateG, plateB), dFar / 2)
-        // 离轴距离**只作为观测量打印**：上一轮用它做过"共线就把这层并回主体"，插值恢复之后
-        // 不需要并了 —— 混合带在斜坡上自然会穿过中点。留这个数是为了真机上看得懂分层结果。
+        val hasNear = l1 > 0 && l2 > 0
+        // 哪层在近底一侧按**距离**定，不按面积：alpha 本就是距离的单调函数，
+        // 面积大的那层离底更近时若按面积排，两档前后颠倒（判据台 12306 量出过 55/129/56）。
+        val nearLabel = if (!hasNear) -1 else if (dMain <= dAccent) mainLayer else accentLayer
+        val farLabel = if (!hasNear) mainLayer else if (nearLabel == mainLayer) accentLayer else mainLayer
+        // 每层自己的距离跨度 = 档内过渡的横轴。取 5~95 分位而不是最小/最大：
+        // 一端孤立的一两个像素（JPEG 噪点、一条高光）就能把整档的斜率压平。
+        val farSpan = distanceSpan(pixels, layer, farLabel, plateR, plateG, plateB)
+        val nearSpan = if (hasNear) distanceSpan(pixels, layer, nearLabel, plateR, plateG, plateB) else 0..0
         val offAxis = if (l1 > 0 && l2 > 0) accentOffAxis(pixels, layer, accentLayer, plateR, plateG, plateB) else -1.0
         val toneNote = if (offAxis >= 0) {
             "离轴${"%.0f".format(offAxis)}${if (offAxis < ACCENT_OFF_AXIS) "=混合带" else "=独立色"}"
         } else "单层"
-        var painted = 0
         for (i in 0 until total) {
             val p = pixels[i]
-            // ⚠ 只有「归没归到底层」这一刀是离散的，浓度全按距离连续算：
-            //   在底 / 形的分配边界上那圈抗锯齿像素会被判给底 → 透明，
-            //   量子上看不见（它们本就是几个百分点的过渡），换来的是渐变段完整保留。
-            val a = if (Color.alpha(p) < MIN_SHAPE_ALPHA || layer[i] < 1) 0
-            else toneAlpha(colorDistance(p, plateR, plateG, plateB) / 3, dFloor, dNear, dFar)
+            val l = layer[i]
+            val d = colorDistance(p, plateR, plateG, plateB) / 3
+            val a = when {
+                Color.alpha(p) < MIN_SHAPE_ALPHA || l < 1 -> 0
+                // 只有一层形时给它整条量程，柔光才铺得开
+                !hasNear -> toneBand(d, farSpan, 1, 255)
+                l == farLabel -> toneBand(d, farSpan, TONE_MID + 1, 255)
+                else -> toneBand(d, nearSpan, 1, TONE_MID)
+            }
             output[i] = if (a == 0) 0 else Color.argb(a, 255, 255, 255)
-            if (a >= TONE_FLOOR) painted++
         }
-        count = painted
+        // ── 与外面连成一片的淡档 = 背景；被图形围住的同样淡的像素 = 细节，留下 ──
+        // 这一步取代原来那条绝对淡色线（`TONE_FLOOR`）。差别正是用户要的那件事：
+        // **同一块颜色，处在什么位置**才算数 —— 光晕外圈连着画面边缘就是背景，
+        // 字形里那处同色的凹陷（比如白底白字里的那个洞）围在图形中间就是图形本身，
+        // 只按颜色判两者永远分不开，也只能永远"每处都画成一个颜色"。
+        val faint = outsideBuffer(total)   // 兼作「未访问」标记：进队即置回 false
+        for (i in 0 until total) faint[i] = Color.alpha(output[i]) in 1 until TONE_MID
+        val queue = stackBuffer(total)
+        var head = 0
+        var tail = 0
+        for (x in bounds.left until bounds.right) {
+            for (y in bounds.top..bounds.bottom - 1 step maxOf(1, bounds.height() - 1)) {
+                val i = y * w + x
+                if (faint[i]) { faint[i] = false; queue[tail++] = i }
+            }
+        }
+        for (y in bounds.top until bounds.bottom) {
+            for (x in bounds.left..bounds.right - 1 step maxOf(1, bounds.width() - 1)) {
+                val i = y * w + x
+                if (faint[i]) { faint[i] = false; queue[tail++] = i }
+            }
+        }
+        var faded = 0
+        while (head < tail) {
+            val i = queue[head++]
+            output[i] = 0
+            faded++
+            val y = i / w
+            val x = i - y * w
+            for (ny in maxOf(bounds.top, y - 1)..minOf(bounds.bottom - 1, y + 1)) {
+                val row = ny * w
+                for (nx in maxOf(bounds.left, x - 1)..minOf(bounds.right - 1, x + 1)) {
+                    val j = row + nx
+                    if (faint[j]) { faint[j] = false; queue[tail++] = j }
+                }
+            }
+        }
+        count = 0
+        for (i in 0 until total) if (Color.alpha(output[i]) > 0) count++
         val boxFill = count.toFloat() / boxTotal
         if (boxFill > MAX_SHAPE_RATIO) return Silhouette(null, boxFill, "刻出来的仍是整块底")
         if (boxFill < MIN_SHAPE_RATIO) return Silhouette(null, boxFill, "几乎刻不出东西")
-        return finish(output, w, h, bounds, "三层·档距$dFloor/$dNear/$dFar·$toneNote", tones = true)
+        return finish(
+            output, w, h, bounds,
+            "三层·档近${nearSpan.first}-${nearSpan.last}/远${farSpan.first}-${farSpan.last}" +
+                "·淡擦${"%.2f".format(faded.toFloat() / boxTotal)}·$toneNote",
+            tones = true,
+        )
     }
 
     /**
@@ -684,15 +728,21 @@ object IconBitmap {
         if (filled >= PLATE_FILL && shape.structureRatio <= PLATE_HOLE) {
             return Silhouette(null, filled, "$from：仍是一整块板（内部结构 ${"%.2f".format(shape.structureRatio)}）")
         }
-        if (shape.components >= SHATTER_COMPONENTS && shape.largestRatio <= SHATTER_TOP) {
-            return Silhouette(null, filled, "$from：桥接后仍碎成 ${shape.components} 块")
+        if (shape.components >= SHATTER_COMPONENTS && shape.largestRatio <= SHATTER_TOP &&
+            shape.smallShare >= SHATTER_SMALL_SHARE
+        ) {
+            return Silhouette(
+                null, filled,
+                "$from：桥接后仍碎成 ${shape.components} 块 top=${"%.2f".format(shape.largestRatio)} " +
+                    "小片=${"%.2f".format(shape.smallShare)} 结构=${"%.2f".format(shape.structureRatio)}",
+            )
         }
         val result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         result.setPixels(output, 0, w, 0, 0, w, h)
         return Silhouette(
             result, filled,
             "$from ${shape.kept} 像素 cc=${shape.components} top=${"%.2f".format(shape.largestRatio)} " +
-                "结构=${"%.2f".format(shape.structureRatio)}",
+                "小片=${"%.2f".format(shape.smallShare)} 结构=${"%.2f".format(shape.structureRatio)}",
             tones = tones,
             structure = shape.structureRatio,
             largest = shape.largestRatio,
@@ -711,6 +761,18 @@ object IconBitmap {
         val kept: Int,
         val components: Int,
         val largestRatio: Float,
+        /**
+         * **小片占的比例**：掩码里有多少像素落在"不到一块正经图形"的小块中
+         * （阈值见 [polishBinarized] 里的 `substantial`）。
+         *
+         * 这是判"碎成一片"该看的量。块数本身不行：皎月连（`com.example.appui`）是一张
+         * 发光月亮 + 散落的星点，星点天生就是十几个**各自成块**的正经图形
+         * （真机量过：16 块、最大块只占 20%）—— 按块数判，它被这道闸拦下、两支双双放弃，
+         * 桌面回去用自己的 Factory 按亮度重画，半张白底于是被画成实心 = **一整块白**。
+         * 按"小片占多少像素"判，同样的两块图就分开了：星点图的小片占比低（块碎但每块都大），
+         * 而噪点糊出来的掩码几乎全是小片。
+         */
+        val smallShare: Float,
         val structureRatio: Float,
     )
 
@@ -741,13 +803,15 @@ object IconBitmap {
         // ⚠ 「算不算图形」的线随掩码种类变：
         //   · 不带档的掩码里 alpha 是**源图的抗锯齿值**，必须按 [MIN_SHAPE_ALPHA] 把淡色滤掉
         //     —— 否则柔光/投影那一片淡底会整片进掩码（本项目踩过，出来就是一块色）；
-        //   · 带档的掩码里 alpha 是**我们按离底板色距离算出来的斜坡**（[toneAlpha]：底板 0 →
-        //     点缀档 [TONE_MID] → 主体档 255）。这时候还按 ≥128 判，等于把整条中色带都当成
-        //     背景擦掉，渐变部分会重新变成"刻没了"。所以带档时线放在 [TONE_FLOOR]。
+        //   · 带档的掩码里 alpha 是**我们写进去的档位**，凡是非 0 就是我们判定过的形，
+        //     这里再划一条绝对淡色线等于把判据台上皎月连那类柔光图切回骨架：光晕从 1 淡到
+        //     255 连续铺开，线画在哪都会留下一串断口（`碎成 16 块 top=0.25` 就是这么来的）。
+        //     "淡到该不算形"那一步已经在 plateSilhouette 里按**空间连通**做过了 ——
+        //     与画面边缘连成一片的淡档当场擦掉，留在这里的都是被图形围住的。
         var accentPixels = 0
         for (i in 0 until total) {
             val a = Color.alpha(output[i])
-            shape[i] = if (tones) a >= TONE_FLOOR else a >= MIN_SHAPE_ALPHA
+            shape[i] = if (tones) a > 0 else a >= MIN_SHAPE_ALPHA
             if (shape[i] && tones && a < 255) accentPixels++
             dilated[i] = false
         }
@@ -790,10 +854,14 @@ object IconBitmap {
         }
         // ── 连通块：顺带擦掉太小的碎渣 ──
         val minSpeck = maxOf(8, total / MIN_SPECK_DIVISOR)
+        // 「算一块正经图形」的下限：碎渣线的八倍。低于它的块只用来算 [Shape.smallShare]，
+        // 不再参与拒绝 —— 拒绝看的是**小片占了多少像素**，不是块数（见 [SHATTER_SMALL_SHARE]）。
+        val substantial = minSpeck * 8
         val visited = dilated   // 膨胀结果已经用完，这块直接当「已访问」复用
         visited.fill(false)
         var components = 0
         var largest = 0
+        var smallPixels = 0
         for (start in 0 until total) {
             if (!shape[start] || visited[start]) continue
             components++
@@ -817,6 +885,7 @@ object IconBitmap {
             }
             if (tail >= minSpeck) {
                 if (tail > largest) largest = tail
+                if (tail < substantial) smallPixels += tail
             } else {
                 // 整块擦掉：stack[0 until tail] 就是这一块的坐标（队列式 BFS，弹出不清记录）
                 for (k in 0 until tail) { output[stack[k]] = 0; shape[stack[k]] = false }
@@ -857,6 +926,7 @@ object IconBitmap {
             kept = kept,
             components = components,
             largestRatio = if (kept > 0) largest.toFloat() / kept else 0f,
+            smallShare = if (kept > 0) smallPixels.toFloat() / kept else 0f,
             structureRatio = if (boxArea > 0) (holePixels + accentPixels).toFloat() / boxArea else 0f,
         )
     }
@@ -1404,70 +1474,58 @@ object IconBitmap {
     }
 
     /**
-     * 斜坡的零点 = **形那两层自己**散到多低：非底板、且不透明的像素到底板中位色的距离
-     * 直方图取 [GLYPH_FLOOR_PCT] 分位（0..255 口径）。
+     * **一层自己**离底板色散到多远：该层不透明像素的距离直方图取
+     * [SPAN_LOW_PCT]~[SPAN_HIGH_PCT] 分位，当作档内过渡的横轴。
      *
-     * 为什么不用「底板层散到多高」当零点（前一版就是这么锚的）：那样一来「与底板只差一点点」
-     * 的那层形整片落在零点以内，被当底抹掉 —— 用户报的「同一图标内颜色太相近会被画成
-     * 同一个颜色」就是它。是不是底由 [assignLayers] 的归层说了算，这里只问「形有多淡」。
-     *
-     * 取低分位而不是最小值：抗锯齿边、渐变最淡的那一头总会产出几个几乎等于底色的像素，
-     * 最小值会被它们拽到 0，斜坡又变回"从零起坡"。
+     * 为什么不用最小~最大：一端孤立的一两个像素（JPEG 噪点、一条高光、抗锯齿最淡的那圈）
+     * 就能把整档的斜率压平 —— 于是"这一档里全是同一个 alpha"，渐变又被做成平色。
      */
-    private fun glyphFloor(
+    private fun distanceSpan(
         pixels: IntArray,
         layer: IntArray,
+        which: Int,
         plateR: Int,
         plateG: Int,
         plateB: Int,
-    ): Int {
+    ): IntRange {
         val hist = IntArray(257)
         var n = 0
         for (i in pixels.indices) {
-            if (layer[i] < 1) continue
+            if (layer[i] != which) continue
             val p = pixels[i]
             if (Color.alpha(p) < MIN_SHAPE_ALPHA) continue
-            val d = minOf(255, colorDistance(p, plateR, plateG, plateB) / 3)
-            hist[d]++
+            hist[minOf(255, colorDistance(p, plateR, plateG, plateB) / 3)]++
             n++
         }
-        if (n == 0) return 0
-        val want = maxOf(1, (n.toLong() * GLYPH_FLOOR_PCT / 100).toInt())
+        if (n == 0) return 0..0
+        val lo = percentile(hist, n, SPAN_LOW_PCT)
+        val hi = percentile(hist, n, SPAN_HIGH_PCT)
+        return lo..maxOf(lo, hi)
+    }
+
+    /** 256 桶直方图的分位数（0..255 口径）。热路径上排序十四万个数不值，走桶。 */
+    private fun percentile(hist: IntArray, n: Int, pct: Int): Int {
+        val want = maxOf(1, (n.toLong() * pct / 100).toInt())
         var acc = 0
         for (d in hist.indices) {
             acc += hist[d]
             if (acc >= want) return d
         }
-        return 255
+        return hist.lastIndex
     }
 
     /**
-     * 距离 → alpha 的分段线性映射。三个控制点：形层的距离下界 [glyphFloor] 处 0 →
-     * 近底那一层处 [TONE_MID] → 远底那一层处 255，再往外饱和。
+     * 档内过渡：把某层的距离跨度 [span] 线性铺到 alpha 区间 `from..to`。
      *
-     * ⚠ 零点**不是** 0：抗锯齿边与底板渐变最淡的那一头都贴着 0，从 0 起坡等于把
-     *   底板尾巴整片涂成中色 —— 判据台上 steamlink 那一版框内填满 78%，就是「大色块」。
-     *   但零点也**不能**摆在底板自己的色散上，那会把与底板相近的形整片抹掉
-     *   （「同一图标内颜色太相近被画成同一个颜色」就是它），所以零点取 [glyphFloor]：
-     *   形那两层的距离下界。是不是底不归它管，归 [assignLayers] 的归层管。
-     *   近底那一层若整层落在零点以下（几乎与底同色），中档就不出现，
-     *   退化成一条 0 → 255 的直线。
-     *
-     * 三档因此是**控制点**而不是分箱 —— 平色区域照旧平色（同色像素距离相同），
-     * 渐变恢复成过渡。
+     * 跨度为零（这一层本就是平色）时直接给到 `to` —— 平色区域照旧是实心，
+     * 不会因为"它也属于某一层"就凭空多出一档灰。
      */
-    private fun toneAlpha(distance: Int, dFloor: Int, dNear: Int, dFar: Int): Int {
-        if (dFar <= 0) return 255
-        val zero = minOf(dFloor, dFar - 1).coerceAtLeast(0)
-        if (distance <= zero) return 0
-        if (dNear <= zero || dNear >= dFar) {
-            return if (distance >= dFar) 255 else (distance - zero) * 255 / (dFar - zero)
-        }
-        return when {
-            distance < dNear -> (distance - zero) * TONE_MID / (dNear - zero)
-            distance < dFar -> TONE_MID + (distance - dNear) * (255 - TONE_MID) / (dFar - dNear)
-            else -> 255
-        }
+    private fun toneBand(distance: Int, span: IntRange, from: Int, to: Int): Int {
+        val lo = span.first
+        val hi = span.last
+        if (hi <= lo) return to
+        val t = (distance - lo).coerceIn(0, hi - lo)
+        return from + (to - from) * t / (hi - lo)
     }
 
     /**
