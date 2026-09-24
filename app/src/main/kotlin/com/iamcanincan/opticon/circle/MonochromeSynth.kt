@@ -166,12 +166,28 @@ internal object MonochromeSynth {
   fun forIcon(source: Drawable): Drawable? {
     val hit = cache[source]
     if (hit != null) return MonochromeLayer(source, hit).also { noteSynthesized() }
-    // 先按最小边压一次：既是「能不能压出形状」的探测（压不出来就别交个空壳出去，
-    // 那会让桌面以为有单色图标、结果画出一片空白），也是尺寸未知时的默认输出。
-    val mask = render(source, MIN_EDGE) ?: return null
+    // 尺寸已知就一次到位，不知道才按 MIN_EDGE 探一次（探的意义是「压不出形状就别交空壳出去」，
+    // 那会让桌面以为有单色图标、结果画出一片空白）。
+    // 没有这一行的话每个图标要把整条全像素管线跑两遍：先 192 探一次、`draw()` 里发现桌面
+    // 要 384 再重压一次 —— 真机日志里就是每个图标成对的 `edge=192` / `edge=384` 两行。
+    // 一次会话里桌面给的图层 bounds 是常量，所以只有第一个图标付两次。
+    val mask = render(source, if (knownEdge > 0) knownEdge else MIN_EDGE) ?: return null
     if (cache.size >= CACHE_LIMIT) cache.clear()
     cache[source] = mask
     return MonochromeLayer(source, mask).also { noteSynthesized() }
+  }
+
+  /**
+   * 桌面实际给的图层 bounds，由 [MonochromeLayer.draw] 回报。
+   *
+   * 只取见过的**最大值**：搜索框、通知里那种小尺寸场合不该把探测尺寸拉回 192，
+   * 宁可多压一次也不交出偏小的掩码。
+   */
+  @Volatile
+  private var knownEdge = 0
+
+  fun learnEdge(edge: Int) {
+    if (edge > knownEdge) knownEdge = edge
   }
 
   /**
@@ -927,6 +943,8 @@ private class MonochromeLayer(
 
   override fun draw(canvas: Canvas) {
     val edge = maxOf(bounds.width(), bounds.height())
+    // 把桌面实际给的尺寸回报上去：后面的图标就一次按它出图，不再先探 192 再重压。
+    MonochromeSynth.learnEdge(edge)
     if (edge > mask.width) {
       // 桌面要的比手上这张大 —— 按它重压，别把小的放大糊掉。
       // 压不出来就继续用旧的（总比空着强）。压出来的顺手回填缓存，见 remember。

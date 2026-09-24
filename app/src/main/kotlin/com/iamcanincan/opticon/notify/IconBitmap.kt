@@ -112,6 +112,9 @@ object IconBitmap {
      */
     private const val NOISE_LAYER_SHARE = 0.02f
 
+    /** 闭运算半径的基准边长：这个尺寸上半径为 1（详见 morphRadius）。 */
+    private const val MORPH_BASE_EDGE = 192
+
     /** 二值化时每个像素的归类，用于连通性判断 */
     private const val CLASS_TRANSPARENT = 0
     private const val CLASS_DARK = 1
@@ -587,17 +590,20 @@ object IconBitmap {
 
         val stack = stackBuffer(total)
         for (i in 0 until total) shape[i] = Color.alpha(output[i]) >= MIN_SHAPE_ALPHA
-        // ── 膨胀：形状周围的 8 邻域都算形状 ──
+        // ── 膨胀：形状周围半径 [radius] 的方框内都算形状 ──
+        // ⚠ 半径必须**跟着出图尺寸走**，不能写死 1 像素：同一条物理缝隙在 192 上是 1 像素
+        //   （闭得上），到 384 就变成 2 像素（闭不上）。真机日志抓到过现成的证据 ——
+        //   同一个图标 `edge=192 → cc=11`、`edge=384 → cc=17`，分辨率越高越"渣"，
+        //   连通块闸门跟着抖。半径按 MORPH_BASE_EDGE 线性放大，cc 才与尺寸无关。
+        val radius = morphRadius(w)
         dilated.fill(false)
         for (y in 0 until h) for (x in 0 until w) {
             if (!shape[y * w + x]) continue
-            for (dy in -1..1) {
-                val ny = y + dy
-                if (ny !in 0 until h) continue
-                for (dx in -1..1) {
-                    val nx = x + dx
-                    if (nx in 0 until w) dilated[ny * w + nx] = true
-                }
+            val y0 = maxOf(0, y - radius); val y1 = minOf(h - 1, y + radius)
+            val x0 = maxOf(0, x - radius); val x1 = minOf(w - 1, x + radius)
+            for (ny in y0..y1) {
+                val row = ny * w
+                for (nx in x0..x1) dilated[row + nx] = true
             }
         }
         // ⚠ 腐蚀必须**读到另一块缓冲**：膨胀的结果要一边读一边原样不动。曾经就地写回
@@ -609,13 +615,12 @@ object IconBitmap {
             val i = y * w + x
             if (!dilated[i]) continue
             var keep = true
-            outer@ for (dy in -1..1) {
-                val ny = y + dy
-                for (dx in -1..1) {
-                    val nx = x + dx
-                    if (ny !in 0 until h || nx !in 0 until w || !dilated[ny * w + nx]) {
-                        keep = false; break@outer
-                    }
+            val y0 = maxOf(0, y - radius); val y1 = minOf(h - 1, y + radius)
+            val x0 = maxOf(0, x - radius); val x1 = minOf(w - 1, x + radius)
+            outer@ for (ny in y0..y1) {
+                val row = ny * w
+                for (nx in x0..x1) {
+                    if (!dilated[row + nx]) { keep = false; break@outer }
                 }
             }
             eroded[i] = keep
@@ -1202,6 +1207,15 @@ object IconBitmap {
         }
         return 255
     }
+
+    /**
+     * 闭运算的半径：按 [MORPH_BASE_EDGE] 线性放大，最小 1。
+     *
+     * 要连的是**物理缝隙**，不是"1 像素"。抗锯齿那圈过渡带宽约等于图标的固定比例，
+     * 所以 192 上的 1 像素缝到 384 就是 2 像素。半径不跟着放大，高分辨率那张就会比
+     * 低分辨率那张碎得多（真机：同一图标 cc 11 → 17），连通块闸门也就跟着尺寸抖。
+     */
+    private fun morphRadius(edge: Int): Int = maxOf(1, ((edge + MORPH_BASE_EDGE / 2) / MORPH_BASE_EDGE))
 
 
     /** Otsu：遍历所有可能阈值，取类间方差最大的那个 */
