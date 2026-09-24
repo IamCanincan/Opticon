@@ -186,10 +186,6 @@ internal object MonochromeSynth {
     if (total <= LOG_FIRST || total % LOG_EVERY == 0) {
       Log.d(TAG, "Mono: $total layers synthesized")
     }
-    // 诊断：谁在问这一层。桌面有好几条拿 monochrome 的路（`createThemedAdaptiveIcon` /
-    // `createThemedBitmap` / Factory …），只有堆栈能一眼分辨实际走的是哪条 ——
-    // 光看「有没有 tint」推断不出来。
-    if (total <= STACK_LIMIT) Log.d(TAG, "Mono: who asks #$total\n" + stackTraceOf(STACK_FRAMES))
   }
 
   private val synthesized = AtomicInteger(0)
@@ -265,6 +261,13 @@ internal object MonochromeSynth {
       if (placed !== base) placed?.recycle()
       base?.recycle()
       mask
+    }.onFailure {
+      // ⚠ 这一条不能省：上面整个块包在 runCatching 里，任何异常都会被 `getOrNull()` 变成
+      // 一个正常的 null 出口 —— 而 null 在功能上就是「放弃合成、桌面照旧」，不崩、不报错。
+      // 上一轮那个「ALPHA_8 的 rowBytes 带 padding，掩码写歪 → copyPixelsFromBuffer 抛异常」
+      // 就是这么在真机上完全看不见的：日志里只有「压不出掩码」，看不出**为什么**压不出。
+      // 本项目已经吃过两次「提前 return 静默失效」的亏，异常这条同理。
+      Log.w(TAG, "Mono: render threw at edge=$edge: ${it.javaClass.simpleName}: ${it.message}")
     }.getOrNull()
   }
 
@@ -348,9 +351,13 @@ internal object MonochromeSynth {
    *    ⚠ 缩略图**只给走二值剪影的那些**（没走 alpha 轮廓这条主路），上限
    *    [ASCII_DUMP_LIMIT] 张 —— alpha 轮廓已经验过，缩略图留给真正要看形状的样本。
    *
-   * 汇总行**不打上限**（每个图标一行）：上一轮的教训正是采样太少 ——
-   * 只看得到前几个图标，而前几个往往同属一类，真正出问题的那一类一次都没出现。
-   * 图标数量本来就有界，一行一条的成本可以忽略。
+   * ## ⚠ 成本：一次全画布复算，所以限 [HEAVY_DIAG_LIMIT] 条
+   * 这一条汇总行**不便宜** —— `a0/a1/a2/a255`、`box/boxfill`、Otsu 与两侧连通性要在
+   * 384² 上各重跑一遍（`analyzeSplit` 是复算真算法，不是读现成结果），再加掩码连通块，
+   * 单次约 4 MB 短命数组。上一轮为普查短暂放宽过「逐条打、不打上限」（115 个包 ×
+   * 每图标两条，那一次确实需要），普查做完留着就是每图标白付的开销。
+   * 现在每进程只放行最前面 [HEAVY_DIAG_LIMIT] 条，够看清「判据落在哪、形状对不对」，
+   * 要看全量分布看的是 [noteBranch] 那条**逐条打**的廉价汇总。
    *
    * 形状统计：`out` 掩码里 ≥128 的像素占比；`fill` 是**按 alpha 加权的等效覆盖率**
    * （Σalpha / 255 / 总面积）—— 图标看起来「被填满多少」看的是这个。
@@ -370,8 +377,7 @@ internal object MonochromeSynth {
    * （外接框内被填满 = 一整块底）→ [IconBitmap.alphaSilhouette] 判「透明像素不构成背景」、
    * 降级成二值剪影之后是「淘」字本身。
    *
-   * ⚠ 只是诊断，不参与任何判断。发版前应当把它连同 [ASCII_DUMP_LIMIT] / [dumpAscii]
-   * 一起降级/移除。
+   * ⚠ 只是诊断，**不参与任何判断** —— 两支的选择与极性都由 `IconBitmap` 里的判据自己定。
    */
   private fun noteDiagnosis(
     edge: Int,
@@ -380,9 +386,9 @@ internal object MonochromeSynth {
     mask: Bitmap?,
     alphaSilhouette: Boolean,
   ) {
-    // ⚠ 汇总行**不打上限**：图标数量本来就有界（一屏一屏地加载），一行一条，
-    // 8 MiB 的 logcat 缓冲装得下。采样只覆盖前 12 条正是上一轮的教训 ——
-    // 前 12 条往往同属一类，真正出问题的那一类一次都没出现。
+    // 重活只干前 HEAVY_DIAG_LIMIT 次，理由见上面「成本」那一节。
+    // 单独一个计数器：`diagnosed` 是三条出口共用的 diag# 编号，不能拿来当闸门。
+    if (heavyDiag.incrementAndGet() > HEAVY_DIAG_LIMIT) return
     val n = diagnosed.incrementAndGet()
     val w = input.width
     val h = input.height
@@ -484,10 +490,11 @@ internal object MonochromeSynth {
 
     // 掩码缩略图**只给走二值剪影的那些**（没走 alpha 轮廓这条主路）：
     // alpha 轮廓已经验过，缩略图留给真正要看形状的样本，省 logcat 也省得淹掉。
-    // 上限只是防「一整屏全是坏图标」时把缓冲写爆，不是采样。
+    // 这里已经整体被 [HEAVY_DIAG_LIMIT] 兜住，[ASCII_DUMP_LIMIT] 只是再收一道：
+    // 一张 40 行，全放行会让「前 12 条恰好都是二值支」时刷出 480 行。
     if (!alphaSilhouette) {
       val dumped = asciiDumped.incrementAndGet()
-      if (dumped <= ASCII_DUMP_LIMIT) dumpAscii(n, "mask", mw, mh, bytes, MASK_DUMP_THRESHOLD)
+      if (dumped <= ASCII_DUMP_LIMIT) dumpAscii(n, "mask", mw, mh, mask.rowBytes, bytes, MASK_DUMP_THRESHOLD)
     }
   }
 
@@ -496,12 +503,17 @@ internal object MonochromeSynth {
    *
    * 判据用 [threshold]，与 `IconBitmap` 里的 `MIN_SHAPE_ALPHA` 同口径 ——
    * 缩略图如果自己用一套阈值，就和真产出的掩码对不上了，那还不如不打。
+   *
+   * ⚠ [stride] 必须传 `mask.rowBytes`：[maskBytes] 是按行步长填的（见 [toAlphaMask]），
+   * 用 `y * w + x` 去读会把每一行往左挪 `(stride - w)` 字节，宽度不是 4 的倍数时
+   * 整张缩略图**逐行错位** —— 看着像掩码碎了，其实是日志读错了。
    */
   private fun dumpAscii(
     n: Int,
     what: String,
     w: Int,
     h: Int,
+    stride: Int,
     maskBytes: ByteArray,
     threshold: Int,
   ) {
@@ -520,7 +532,7 @@ internal object MonochromeSynth {
         for (y in y0 until y1) {
           for (x in x0 until x1) {
             cells++
-            if ((maskBytes[y * w + x].toInt() and 0xff) >= threshold) hits++
+            if ((maskBytes[y * stride + x].toInt() and 0xff) >= threshold) hits++
           }
         }
         line.append(if (cells > 0 && hits * 2 >= cells) '#' else '.')
@@ -532,19 +544,24 @@ internal object MonochromeSynth {
   private val diagnosed = AtomicInteger(0)
 
   /**
-   * 放行几条**汇总行**。
+   * 重诊断（[noteDiagnosis]：全画布直方图 + 复算 `analyzeSplit` + 掩码连通块）每进程放行几条。
    *
-   * ⚠ 现在是**不打上限**（见 [noteDiagnosis]）—— 采样太少正是上一轮的教训：只看得到前 2 个
-   * 图标，而前几个往往同属一类，真正出问题的那一类在日志里一次都没出现过。
-   * 图标数量本来就有界，一行一条的成本可以忽略。
+   * 12 条够看清「判据落在哪、形状对不对」这两件事，又不是每个图标都付一次全画布复算。
+   * 逐条的分布仍然有 [noteBranch] 那行廉价汇总兜着 —— 降级掉的是**贵的那部分**，
+   * 不是「每条出口都留痕」这条规矩。
    */
+  private const val HEAVY_DIAG_LIMIT = 12
+
+  private val heavyDiag = AtomicInteger(0)
+
+  /** ASCII 缩略图的行列数（降采样后的画布大小）。 */
   private const val ASCII_COLS = 40
 
   /**
    * 「不走主路」的样本最多打几张缩略图。
    *
-   * 40 行一张，一张图标一份 —— 这是防「一整屏全是坏图标」时把 logcat 缓冲写爆的护栏，
-   * **不是采样**：真出问题的那几类通常只占少数，8 张足够看清形状。
+   * 40 行一张，一张图标一份 —— 在 [HEAVY_DIAG_LIMIT] 之上再收一道，
+   * 免得放行那 12 条恰好全是二值支时刷出 480 行。
    */
   private const val ASCII_DUMP_LIMIT = 8
 
@@ -656,6 +673,17 @@ internal object MonochromeSynth {
    *
    * [IconBitmap.alphaSilhouette] / [IconBitmap.binarizeSilhouette] 交出来的都是 ARGB_8888，
    * 但桌面取色只读 alpha，所以留着三个颜色通道是白占内存（每张 147 KB → 36 KB @192px）。
+   *
+   * ## ⚠ 必须按 [Bitmap.getRowBytes] 的下标写，不能按 packed 写
+   * ALPHA_8 每像素 1 字节，而 rowBytes 会**补到 4 的倍数**，于是 `w` 不是 4 的倍数时
+   * `rowBytes > w`。`copyPixelsFromBuffer` 要的是**带 padding 的整块**（`rowBytes × h` 字节），
+   * 按 `bytes[o++]` 那种逐像素连写只交得出 `w × h` 字节 → 缓冲区不够 → 抛异常。
+   * 而异常会被 [render] 的 `runCatching` 吞成 null：桌面回落到自己的 Factory，
+   * **合成整条静默失效**，日志里只剩一句「没交出掩码」。
+   * 本机 `edge = 384` 正好是 4 的倍数，所以这条永远踩不到 —— 但桌面实际给的尺寸是
+   * `1.5 × iconSize`，density 3.0 的机器给 378、3.375 给 423，全都会踩。
+   * 同一条口径在 `IconHooks.kt` 的 `invertAlphaMask` 那边本来就是按
+   * `rowBytes × height` 整块搬的，这里照同一个做法。
    */
   private fun toAlphaMask(source: Bitmap): Bitmap? {
     val w = source.width
@@ -664,13 +692,16 @@ internal object MonochromeSynth {
     val pixels = IntArray(w * h)
     source.getPixels(pixels, 0, w, 0, 0, w, h)
     val mask = Bitmap.createBitmap(w, h, Bitmap.Config.ALPHA_8)
-    val bytes = ByteArray(mask.rowBytes * h)
-    var o = 0
-    for (p in pixels) {
-      bytes[o++] = Color.alpha(p).toByte()
-      if (o >= bytes.size) break // rowBytes 可能带 padding，别越界
+    val stride = mask.rowBytes
+    val bytes = ByteArray(stride * h) // 末尾那 (stride-w)×h 个 padding 留 0 = 透明，无害
+    var read = 0
+    for (y in 0 until h) {
+      val row = y * stride
+      for (x in 0 until w) {
+        bytes[row + x] = Color.alpha(pixels[read++]).toByte()
+      }
     }
-    mask.copyPixelsFromBuffer(ByteBuffer.wrap(bytes, 0, o))
+    mask.copyPixelsFromBuffer(ByteBuffer.wrap(bytes))
     return mask
   }
 }
@@ -689,23 +720,6 @@ private val tintLogged = AtomicInteger(0)
 
 private const val TINT_LOG_FIRST = 3
 
-/** [MonochromeLayer.draw] 打「谁在画」的计数。 */
-private val drawLogged = AtomicInteger(0)
-
-/** 堆栈埋点放行次数与深度（诊断用，见 `MonochromeSynth.noteSynthesized`）。 */
-private const val STACK_LIMIT = 2
-
-private const val STACK_FRAMES = 14
-
-/**
- * 把当前调用栈前 [frames] 帧拼成多行文本。
- *
- * ⚠ 只用于诊断、且必须限次：`Throwable()` 要抓整条栈（含全部帧），在图标加载这种
- * 热路径上不加限制地调是会拖慢的。
- */
-private fun stackTraceOf(frames: Int): String =
-  Throwable().stackTrace.take(frames).joinToString("\n") { "    at $it" }
-
 /**
  * 单色层的载体：一张 ALPHA_8 掩码，画的时候由调用方（桌面的取色逻辑）上色。
  *
@@ -719,7 +733,7 @@ private fun stackTraceOf(frames: Int): String =
  * 之前从字节码里读到 `mono.setTint(colors[1])`，就认定「桌面用 `setTint` 给这层上色」。
  * **真机日志把这条推翻了**：`Mono: layer bounds=384x384 … filter=none`，而且
  * **一条 tint 日志都没有** —— 桌面压根没调过。加了「谁在问 / 谁在画」的堆栈埋点后看清了
- * 实际路径（`adb logcat` 原文）：
+ * 实际路径（那两条埋点是本轮排查用的，结论已经落在下面这段，代码已移除）。真机日志：
  * ```
  * at MonoIconThemeController.toAlphaBitmap(MonoIconThemeController.kt:100)
  * at MonoIconThemeController.createThemedBitmap(MonoIconThemeController.kt:79)
@@ -815,11 +829,6 @@ private class MonochromeLayer(
         Log.d(TAG, "Mono: layer bounds=${bounds.width()}x${bounds.height()} mask=${mask.width} " +
           "alpha=${paint.alpha} filter=${paint.colorFilter?.javaClass?.simpleName ?: "none"}")
       }
-    }
-    // 诊断：谁在画这一层（见 stackTraceOf）。桌面有「直接把我们当前景层画」和
-    // 「先把我们渲进位图再上色」两种可能，观感完全不同，堆栈能一眼分开。
-    if (drawLogged.incrementAndGet() <= STACK_LIMIT) {
-      Log.d(TAG, "Mono: who draws\n" + stackTraceOf(STACK_FRAMES))
     }
     canvas.drawBitmap(mask, null, bounds, paint)
   }
