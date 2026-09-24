@@ -638,8 +638,20 @@ internal object MonochromeSynth {
   /** [dumpAscii] 的计数，见 [ASCII_DUMP_LIMIT]。 */
   private val asciiDumped = AtomicInteger(0)
 
-  /** 掩码缩略图的阈值，与 `IconBitmap.alphaSilhouette` 里的判据同口径。 */
+  /**
+   * 剪影阈值：alpha 低于它就不算图形。与 `IconBitmap.MIN_SHAPE_ALPHA` 同一个口径 ——
+   * 掩码缩略图、实心钳位、判据台读图都得用同一个数，否则日志看着像另一回事。
+   */
   private const val MASK_DUMP_THRESHOLD = 128
+
+  /**
+   * 轮廓那一圈的 alpha 保底值：过渡值只允许在 [EDGE_ALPHA_FLOOR]..255 之间浮动。
+   *
+   * 不留保底的话，三四像素宽的描边整个都是"边界"，逐像素保留抗锯齿过渡值 =
+   * 整条笔画半透明，主题色看起来就发浅。留了保底，边缘仍然是渐变的（不硬），
+   * 但最淡也有八成不透明度。
+   */
+  private const val EDGE_ALPHA_FLOOR = 200
 
   /**
    * 诊断用的占比格式化。
@@ -780,15 +792,37 @@ internal object MonochromeSynth {
     val mask = Bitmap.createBitmap(w, h, Bitmap.Config.ALPHA_8)
     val stride = mask.rowBytes
     val bytes = ByteArray(stride * h) // 末尾那 (stride-w)×h 个 padding 留 0 = 透明，无害
+    // ⚠ 内部一律钳成实心，轮廓那一圈也托个底。
+    //   桌面把 alpha 当**不透明度**上色，而 `preserveAlpha` 保留的是整片原始 alpha，
+    //   不只是抗锯齿那圈边：源图标里 alpha 150~200 的区域会被画成六到八成浓度。
+    //   细笔画更糟 —— 三四像素宽的描边整个都是"边界"，逐像素保留过渡值等于整条笔画半透明，
+    //   观感就是「主题色怎么这么浅」。所以：内部一律 255，边界保底 [EDGE_ALPHA_FLOOR]。
     var read = 0
     for (y in 0 until h) {
       val row = y * stride
       for (x in 0 until w) {
-        bytes[row + x] = Color.alpha(pixels[read++]).toByte()
+        val a = Color.alpha(pixels[read++])
+        bytes[row + x] = when {
+          a < MASK_DUMP_THRESHOLD -> 0
+          a >= 255 -> 255
+          isSilhouetteEdge(pixels, w, h, x, y) -> maxOf(a, EDGE_ALPHA_FLOOR)
+          else -> 255
+        }.toByte()
       }
     }
     mask.copyPixelsFromBuffer(ByteBuffer.wrap(bytes))
     return mask
+  }
+
+  /** 该像素是不是剪影的外圈：8 邻域里有低于 [MASK_DUMP_THRESHOLD] 的（含画布外）。 */
+  private fun isSilhouetteEdge(pixels: IntArray, w: Int, h: Int, x: Int, y: Int): Boolean {
+    for (dy in -1..1) for (dx in -1..1) {
+      if (dx == 0 && dy == 0) continue
+      val nx = x + dx; val ny = y + dy
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+      if (Color.alpha(pixels[ny * w + nx]) < MASK_DUMP_THRESHOLD) return true
+    }
+    return false
   }
 }
 

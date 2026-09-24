@@ -105,27 +105,12 @@ object IconBitmap {
     private const val MIN_PLATE_SHARE = 0.30f
 
     /**
-     * 「离底板中位色够近」的距离上限（三通道曼哈顿距离）。
+     * 占比低于这个数的层当作噪声并回底板。
      *
-     * 渐变底没有"精确相等"的主导色，靠这一条才能算出它占多少：判据台上量过，12306 那张
-     * 按 ≤60 算占 0.44（越得过 [MIN_PLATE_SHARE]），而多色拼块 logo 远达不到。
+     * 渐变底最容易骗出这么一层：三阶采样总会在渐变最暗端挑中一个精确色，于是它独立成层、
+     * 只占几个百分点。让它参与字形就等于**把底板的碎片留在掩码里** —— 观感就是"色没去掉"。
      */
-    private const val PLATE_NEAR = 60
-
-    /**
-     * 「一层」的最小色距：两个层心相距不到这个数，就是同一次的抖动，不配单独占一层。
-     * 也是量残差时的标尺 —— 离所有层心都超过它，才算"三层装不下"。
-     */
-    private const val LAYER_TOLERANCE = 60
-
-    /**
-     * 三层装不下的容忍度：字形侧里有这么高比例的像素离三个层心都远，就说明这张图不是
-     * 「底 + 主体 + 点缀」的结构（照片底、复杂插画），**否决刻底板**、交回亮度 Otsu。
-     *
-     * 这条先验来自用户的领域判断：正常图标最多三层颜色。用它当否决比定阈值稳 ——
-     * 猜错阈值会刻坏一张好图，而否决只是退回另一条判据，不会更糟。
-     */
-    private const val MAX_OFFLAYER_SHARE = 0.30f
+    private const val NOISE_LAYER_SHARE = 0.02f
 
     /** 二值化时每个像素的归类，用于连通性判断 */
     private const val CLASS_TRANSPARENT = 0
@@ -490,51 +475,49 @@ object IconBitmap {
         val plateR = medianOf(histR, solid)
         val plateG = medianOf(histG, solid)
         val plateB = medianOf(histB, solid)
-        // 「主导」的判据：离中位色足够近的像素要占到多少。渐变底正是靠这一条而不是靠精确相等。
-        var near = 0
-        for (p in pixels) {
-            if (Color.alpha(p) < MIN_SHAPE_ALPHA) continue
-            if (colorDistance(p, plateR, plateG, plateB) <= PLATE_NEAR) near++
-        }
-        val plateShare = near.toFloat() / solid
-        if (plateShare < MIN_PLATE_SHARE) {
-            return Silhouette(null, 0f, "无主导底板色（离中位色够近 ${"%.2f".format(plateShare)}）")
-        }
 
-        // 2) 「一个图标最多三层颜色」这条先验，落地成两件事：
-        //    · **不猜阈值**：离底板 ≤ [PLATE_NEAR] 的算底，其余算形。原先这里对距离直方图
-        //      再跑一次 Otsu，而渐变底的距离分布根本没有两个峰，阈值切在哪全看运气。
-        //    · **三层装不下就否决**：把"形"那侧再贪心取两个层心（主体 + 点缀），离三个层心
-        //      都超过 [LAYER_TOLERANCE] 的像素占比，就是这张图装不进「底 + 主体 + 点缀」的
-        //      比例 —— 那是照片底 / 复杂插画，硬刻只会刻出一堆噪声，交回亮度 Otsu 那条兜底。
-        val distance = IntArray(total)
-        for (i in 0 until total) {
-            val p = pixels[i]
-            distance[i] = if (Color.alpha(p) < MIN_SHAPE_ALPHA)
-                -1 else colorDistance(p, plateR, plateG, plateB)
-        }
-        val layer = layerCenters(pixels, distance, plateR, plateG, plateB)
-        var offLayer = 0
+        // 2) 「一个图标最多三层颜色」是**预算**，不是否决条件。每个不透明像素都必须归到
+        //    三层之一：底板 / 主体 / 点缀，归类按「离哪个层心最近」，再跑一次均值修正
+        //    （Lloyd 一步）让层心落到该类的真实中心上。
+        //
+        //    ⚠ 上一版在这里留了个出口：「离三层心都超过阈值的像素占比 >0.30 就放弃刻底」。
+        //    那等于把「我算不出三层」当成「这张图不是三层」—— 渐变底整块被判成装不下、
+        //    直接不刻，彩色底板原样留在掩码里，就是你说的「去色没做好」。
+        //    不留出口之后：底那一层必然被摘掉，剩下的两层就是字形，没有"逃出去"的像素。
+        val layer = assignLayers(pixels, plateR, plateG, plateB)
+        var plateCount = 0
         var count = 0
+        var l1 = 0
+        var l2 = 0
+        var opaque = 0
         for (i in 0 until total) {
-            val d = distance[i]
-            if (d < 0) continue
-            if (d > PLATE_NEAR) {
-                output[i] = if (preserveAlpha) Color.argb(Color.alpha(pixels[i]), 255, 255, 255) else Color.WHITE
-                count++
+            when (layer[i]) {
+                0 -> plateCount++
+                1 -> l1++
+                2 -> l2++
+                else -> continue
             }
-            if (layer != null && d > PLATE_NEAR && minLayerDistance(pixels[i], layer) > LAYER_TOLERANCE) offLayer++
+            opaque++
         }
-        if (count == 0) return Silhouette(null, 0f, "整张同色，刻不出字形")
-        if (layer == null) return Silhouette(null, 0f, "字形侧不足两层，量不出残差")
-        val offLayerShare = offLayer.toFloat() / count
-        if (offLayerShare > MAX_OFFLAYER_SHARE) {
-            return Silhouette(null, 0f, "三层装不下（残差 ${"%.2f".format(offLayerShare)}）")
+        if (opaque == 0) return Silhouette(null, 0f, "整张透明")
+        // 占比不到 NOISE_LAYER 的那一层当作噪声，并回底板 —— 渐变底常会骗出一个只占几个
+        // 百分点的"第三层"，让它参与字形就等于把底板的碎片留在掩码里。
+        if (l1.toFloat() / opaque < NOISE_LAYER_SHARE) { plateCount += l1; l1 = 0 }
+        if (l2.toFloat() / opaque < NOISE_LAYER_SHARE) { plateCount += l2; l2 = 0 }
+        count = l1 + l2
+        if (plateCount.toFloat() / opaque < MIN_PLATE_SHARE) {
+            return Silhouette(null, 0f, "无主导底板（底占 ${"%.2f".format(plateCount.toFloat() / opaque)}）")
+        }
+        if (count == 0) return Silhouette(null, 0f, "除底板外没有别的层")
+        for (i in 0 until total) {
+            val l = layer[i]
+            if (l != 1 && l != 2) continue
+            output[i] = if (preserveAlpha) Color.argb(Color.alpha(pixels[i]), 255, 255, 255) else Color.WHITE
         }
         val boxFill = count.toFloat() / boxTotal
         if (boxFill > MAX_SHAPE_RATIO) return Silhouette(null, boxFill, "刻出来的仍是整块底")
         if (boxFill < MIN_SHAPE_RATIO) return Silhouette(null, boxFill, "几乎刻不出东西")
-        return finish(output, w, h, bounds, "三层刻底")
+        return finish(output, w, h, bounds, "三层")
     }
 
     /**
@@ -1148,51 +1131,65 @@ object IconBitmap {
         abs(Color.red(pixel) - r) + abs(Color.green(pixel) - g) + abs(Color.blue(pixel) - b)
 
     /**
-     * 在「离底板够远」那侧再取两个层心（主体 + 点缀），用来量化「三层装不下的残差」。
+     * 把每个不透明像素归到三层之一：`0` = 底板、`1`/`2` = 主体与点缀；透明像素 `-1`。
      *
-     * 按 4 bit 量化分桶、取最大的两个桶，并要求两个层心本身相距够远（否则第二个只是第一个
-     * 的抖动，白占一层）。返回 `[r,g,b, r,g,b]`（一到两个层心，各占三格）；字形侧一个桶都
-     * 没有时返回 null，调用方按「量不出残差」处理。
+     * 层心的取法是**最远点采样**而不是 k-means 迭代：c0 = 逐通道中位色（底板），
+     * c1 = 离 c0 最远的那个精确色（字形主体 —— 渐变底的最亮端也会落在这里，所以渐变不会
+     * 骗走它），c2 = 离 {c0,c1} 都最远的那个（点缀）。然后归类一次、按类均值修正层心一次
+     * （Lloyd 一步）就收 —— 图标本来就只有一层底加两笔，迭代到收敛是白烧 CPU。
+     *
+     * ⚠ **没有「装不进三层」这个出口**。留出口等于把「我算不出三层」当成「这张图不是三层」，
+     *   渐变底会整块被判成装不下、彩色底板原样留在掩码里（上一版就是这么把「去色」做没的）。
+     *   强制归类之后，底那一层必然被摘掉；真的多色照片底也不会崩，只是刻出来的东西会被
+     *   [finish] 那三道形状闸门拦下。
      */
-    private fun layerCenters(pixels: IntArray, distance: IntArray, plateR: Int, plateG: Int, plateB: Int): IntArray? {
-        class Agg { var r = 0; var g = 0; var b = 0; var n = 0 }
-        val buckets = HashMap<Int, Agg>()
-        for (i in pixels.indices) {
-            val d = distance[i]
-            if (d <= PLATE_NEAR) continue
-            val p = pixels[i]
-            val key = (Color.red(p) shr 4 shl 8) or (Color.green(p) shr 4 shl 4) or (Color.blue(p) shr 4)
-            val agg = buckets.getOrPut(key) { Agg() }
-            agg.r += Color.red(p); agg.g += Color.green(p); agg.b += Color.blue(p); agg.n++
-        }
-        if (buckets.isEmpty()) return null
-        val out = IntArray(6)
-        var taken = 0
-        for (agg in buckets.values.sortedByDescending { it.n }) {
-            val r = agg.r / agg.n; val g = agg.g / agg.n; val b = agg.b / agg.n
-            // 与底板同色的桶不算"形"的一层（量化到 4 bit 后仍可能落进 PLATE_NEAR 以内）
-            if (abs(r - plateR) + abs(g - plateG) + abs(b - plateB) <= PLATE_NEAR) continue
-            var tooClose = false
-            for (k in 0 until taken) {
-                if (abs(r - out[k * 3]) + abs(g - out[k * 3 + 1]) + abs(b - out[k * 3 + 2]) < LAYER_TOLERANCE) tooClose = true
+    private fun assignLayers(pixels: IntArray, plateR: Int, plateG: Int, plateB: Int): IntArray {
+        val layer = IntArray(pixels.size) { -1 }
+        var b1r = plateR; var b1g = plateG; var b1b = plateB
+        var d1 = -1
+        var b2r = plateR; var b2g = plateG; var b2b = plateB
+        var d2 = -1
+        for (p in pixels) {
+            if (Color.alpha(p) < MIN_SHAPE_ALPHA) continue
+            val toPlate = colorDistance(p, plateR, plateG, plateB)
+            if (toPlate > d1) {
+                d1 = toPlate; b1r = Color.red(p); b1g = Color.green(p); b1b = Color.blue(p)
             }
-            if (tooClose) continue
-            out[taken * 3] = r; out[taken * 3 + 1] = g; out[taken * 3 + 2] = b
-            taken++
-            if (taken == 2) break
+            val nearest = minOf(toPlate, colorDistance(p, b1r, b1g, b1b))
+            if (nearest > d2) {
+                d2 = nearest; b2r = Color.red(p); b2g = Color.green(p); b2b = Color.blue(p)
+            }
         }
-        if (taken == 0) return null
-        return if (taken == 1) out.copyOfRange(0, 3) else out
-    }
-
-    /** 像素到各层心的最近距离；[centers] 是 [layerCenters] 那种三格一组的摊平数组（长度 3 或 6）。 */
-    private fun minLayerDistance(pixel: Int, centers: IntArray): Int {
-        var best = Int.MAX_VALUE
-        for (k in centers.indices step 3) {
-            val d = colorDistance(pixel, centers[k], centers[k + 1], centers[k + 2])
-            if (d < best) best = d
+        if (d1 <= 0) return layer  // 整张就一个颜色，没有可分的层
+        val centers = intArrayOf(plateR, plateG, plateB, b1r, b1g, b1b, b2r, b2g, b2b)
+        for (pass in 0 until 2) {
+            for (i in pixels.indices) {
+                val p = pixels[i]
+                if (Color.alpha(p) < MIN_SHAPE_ALPHA) continue
+                var best = 0
+                var bestD = Int.MAX_VALUE
+                for (k in 0..2) {
+                    val d = colorDistance(p, centers[k * 3], centers[k * 3 + 1], centers[k * 3 + 2])
+                    if (d < bestD) { bestD = d; best = k }
+                }
+                layer[i] = best
+            }
+            if (pass == 1) break
+            // 均值修正：层心回到该类的真实中心（第一遍的层心是"某个精确色"，偏单点）
+            val sumR = LongArray(3); val sumG = LongArray(3); val sumB = LongArray(3); val n = IntArray(3)
+            for (i in pixels.indices) {
+                val k = layer[i]
+                if (k < 0) continue
+                val p = pixels[i]
+                sumR[k] += Color.red(p); sumG[k] += Color.green(p); sumB[k] += Color.blue(p); n[k]++
+            }
+            for (k in 0..2) if (n[k] > 0) {
+                centers[k * 3] = (sumR[k] / n[k]).toInt()
+                centers[k * 3 + 1] = (sumG[k] / n[k]).toInt()
+                centers[k * 3 + 2] = (sumB[k] / n[k]).toInt()
+            }
         }
-        return best
+        return layer
     }
 
     /** 从 256 桶直方图里取中位数对应的档（0..255）。[total] 是不透明像素总数，>0。 */
