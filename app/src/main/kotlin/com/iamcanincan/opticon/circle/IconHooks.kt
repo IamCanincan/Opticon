@@ -411,6 +411,9 @@ private fun hookArchivedAppIcon(xposed: XposedInterface, classLoader: ClassLoade
     runCatching {
       xposed.hook(method).intercept { chain ->
         val icon = chain.proceed() as? Drawable ?: return@intercept null
+        // 日志用的名字（见 packageFromArgs）：这条路上桌面根本不经过 Resources.getDrawable*，
+        // 不在这里登记，`Mono: diag` 行就永远是 `?`。
+        IconNames.remember(icon, packageFromArgs(chain.args))
         clipToCircle(icon)
       }
       hooked++
@@ -922,6 +925,9 @@ private fun hookShortcutIcons(xposed: XposedInterface) {
     runCatching {
       xposed.hook(method).intercept { chain ->
         val icon = chain.proceed() as? Drawable ?: return@intercept null
+        // 日志用的名字（见 packageFromArgs）：这条路上桌面根本不经过 Resources.getDrawable*，
+        // 不在这里登记，`Mono: diag` 行就永远是 `?`。
+        IconNames.remember(icon, packageFromArgs(chain.args))
         clipToCircle(icon)
       }
       hooked++
@@ -1257,8 +1263,31 @@ internal object IconNames {
   fun remember(icon: Drawable, name: String) {
     if (name.isEmpty()) return
     if (byDrawable.size >= LIMIT) { byDrawable.clear(); byState.clear() }
-    byDrawable[icon] = name
-    icon.constantState?.let { byState[it] = name }
+    put(icon, name)
+    // ⚠ 必须连**子层**一起记。桌面后来交给我们的那个 AdaptiveIconDrawable 往往不是这里
+    //   返回的同一个实例（每次 getDrawable 都从 ConstantState 新建一个），而
+    //   `AdaptiveIconDrawable.getConstantState()` 又常在子层缺状态时整个返回 null ——
+    //   只记顶层的结果就是真机上 100% 查不到、日志里全是 `?`。
+    //   跨副本真正稳定的是**前景/背景层自己的 ConstantState**：`newDrawable()` 复制时
+    //   子层用的是同一份 state，所以记它才认得出来。
+    if (icon is AdaptiveIconDrawable) {
+      icon.foreground?.let { put(it, name) }
+      icon.background?.let { put(it, name) }
+    }
+    // 一次性探针：写入侧到底有没有跑。真机日志里名字全是 `?`，只读侧看查不出是"没写"
+    // 还是"写的和读的不是同一个对象"，这两件事的修法完全不同。
+    if (++written <= PROBE_LIMIT) {
+      Log.d(TAG, "IconNames: 登记#$written $name ← ${icon.javaClass.simpleName}+${icon.foregroundOf()?.javaClass?.simpleName}")
+    }
+  }
+
+  /** AdaptiveIconDrawable 的前景层，其它 drawable 返回 null。 */
+  private fun Drawable.foregroundOf(): Drawable? = (this as? AdaptiveIconDrawable)?.foreground
+
+  @Synchronized
+  private fun put(drawable: Drawable, name: String) {
+    byDrawable[drawable] = name
+    drawable.constantState?.let { byState[it] = name }
   }
 
   /** 命中就返回 `包名/类型/入口名`，认不出返回 `?`。 */
@@ -1273,13 +1302,46 @@ internal object IconNames {
         fg.constantState?.let { byState[it] }?.let { return it }
       }
     }
+    // 同一条探针：查不到时把"是谁在查"打出来，对着上面那几条登记就知道是实例对不上还是压根没登记
+    if (++missed <= PROBE_LIMIT) {
+      Log.d(TAG, "IconNames: 查不到#$missed ${icon.javaClass.simpleName} " +
+        "state=${icon.constantState?.javaClass?.simpleName ?: "null"} " +
+        "表里 ${byDrawable.size}/${byState.size} 条")
+    }
     return "?"
   }
 
   private const val LIMIT = 4096
+
+  /** 探针放行条数：各三行就够分清"没写"还是"写的不是同一个对象"，不在热路径上刷日志。 */
+  private const val PROBE_LIMIT = 3
+
+  private var written = 0
+  private var missed = 0
 }
 
 /** 资源 id → 可读名字。取不到（跨包资源、被回收的 id）就交空串，让调用方跳过登记。 */
 private fun resourceName(res: Resources?, id: Int): String = runCatching {
   if (res == null) "" else "${res.getResourcePackageName(id)}/${res.getResourceTypeName(id)}/${res.getResourceEntryName(id)}"
 }.getOrDefault("")
+
+/**
+ * PackageManager 那条路的参数里认出「是哪个应用」，`pm:包名` 形式交给 [IconNames]。
+ *
+ * 为什么非要有这一条：真机探针显示桌面**根本不经过** `Resources.getDrawable*` 拿图标
+ * —— 三次 `getMonochrome()` 查询发生在第一次登记之前 8 秒，表里 0 条。它走的是
+ * `PackageManager.getApplicationIcon` / `loadItemIcon` 这类**没有 resId** 的入口，
+ * 能用的标识就只有包名本身。够用了：报一个应用名就能捞到它那一行。
+ *
+ * 注意别走极端：这里只读**公开字段**（`packageName`），不为凑名字去反射猜别人的字段布局。
+ */
+private fun packageFromArgs(args: List<Any?>): String {
+  for (a in args) {
+    when (a) {
+      is PackageItemInfo -> return "pm:${a.packageName}"      // ApplicationInfo / ComponentInfo…
+      is ResolveInfo -> if (a.activityInfo?.packageName != null) return "pm:${a.activityInfo.packageName}"
+      is String -> if (a.contains('.')) return "pm:$a"        // getApplicationIcon(String pkg)
+    }
+  }
+  return ""
+}

@@ -502,7 +502,10 @@ object IconBitmap {
             }
             opaque++
         }
-        if (opaque == 0) return Silhouette(null, 0f, "整张透明")
+        // 走到这里说明上面已经量到不透明像素了，所以"一层都没有"只可能是**整张同色**
+        // （assignLayers 在 d1<=0 时不给任何层）—— 别报成「整张透明」，那会把排查引到
+        // 「alpha 判据坏了」上去，而真实情况是这张图根本没有第二种颜色可刻。
+        if (opaque == 0) return Silhouette(null, 0f, "整张同色，无层可刻")
         // 占比不到 NOISE_LAYER 的那一层当作噪声，并回底板 —— 渐变底常会骗出一个只占几个
         // 百分点的"第三层"，让它参与字形就等于把底板的碎片留在掩码里。
         if (l1.toFloat() / opaque < NOISE_LAYER_SHARE) { plateCount += l1; l1 = 0 }
