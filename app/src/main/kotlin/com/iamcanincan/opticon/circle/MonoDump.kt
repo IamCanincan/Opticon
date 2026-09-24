@@ -76,32 +76,6 @@ internal object MonoDump {
 
   fun watched(label: String): Boolean = WATCH.any { label.contains(it) }
 
-  /** 点名的那些不走 [seen] 的形状去重（同一个图标被问很多次是常态），但每包只带一次。 */
-  private val watchSent = HashSet<String>()
-
-  /**
-   * 把桌面出的那张 ALPHA_8 遮罩带回来（**翻转之前**，那才是桌面的原样）。
-   *
-   * ALPHA_8 直接压 PNG 各版本行为不一，先 copy 成 ARGB_8（得到 (0,0,0,a)）——
-   * 重放那边读回 alpha 就是遮罩本身。
-   */
-  @Synchronized
-  fun maskOf(id: Int, label: String, alpha: Bitmap, why: String) {
-    if (budget <= 0 || sent >= MAX_ICONS) return
-    val key = label.substringBefore(' ')
-    if (!watchSent.add(key)) return
-    sent++
-    val n = sent
-    runCatching {
-      val argb = alpha.copy(Bitmap.Config.ARGB_8888, false) ?: return@runCatching
-      val png = pngOf(argb)
-      if (argb !== alpha) argb.recycle()
-      budget -= png.size / 1024
-      emit(n, id, "mask", "$key | $why", png)
-    }.onFailure { Log.w(TAG, "Mono: mask#$n failed: ${it.javaClass.simpleName}: ${it.message}") }
-  }
-
-
   /** 8×8 的 alpha 指纹：同一张形状不管被问多少次，只带一次。 */
   private fun signature(pixels: IntArray, w: Int, h: Int): Long {
     var hash = 1469598103934665603L

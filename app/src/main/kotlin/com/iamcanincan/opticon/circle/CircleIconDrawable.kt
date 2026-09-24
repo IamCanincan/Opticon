@@ -82,23 +82,26 @@ class CircleIconDrawable(icon: Drawable) :
     }
 
   /**
-   * 原图标没提供单色层时，**在这里也接一次极性判据**（[MonochromeSynth.polarityFor]）。
+   * 原图标没提供单色层时，**在这里把合成出来的那张交出去**（[MonochromeSynth.forIcon]）。
    *
-   * ⚠ 这里是 override，`AdaptiveIconDrawable.getMonochrome()` 上挂的那道判据钩
+   * ⚠ 这里是 override，`AdaptiveIconDrawable.getMonochrome()` 上挂的那道合成钩
    * **拦不到本类**（虚方法分派直接走这个实现）—— 而裁圆默认开着、桌面拿到的图标几乎都是
-   * 本类实例，所以判据必须在这里也接一次，否则默认配置下整条「按判据翻遮罩」等于没上。
+   * 本类实例，所以合成必须在这里也接一次，否则默认配置下主路径等于没上。
    *
-   * ⚠ 判据用 **`sourceIcon`（原图标）而不是本对象**：本对象的可见外观是「圆内裁好的内容」，
-   *   拿它去量"哪边是图形"只会得到一个实心圆饼。
+   * ⚠ 合成用 **`sourceIcon`（原图标）而不是本对象**：本对象的可见外观是「圆内裁好的内容」，
+   *   拿它去压剪影只会得到一个实心圆饼。
    *
-   * 一律返回 null：遮罩照旧由桌面生成，我们只在它生成之后决定翻不翻（`IconHooks.hookMaskPolarity`）。
+   * 返回 null 只发生在两种情况下：总开关关掉（逃生口），或这张图合成不出来 / 被按应用旁路。
+   * 那时桌面会去 new 它自己的 `MonochromeIconFactory`，而那条路在 [IconHooks] 里是**漏接计数**
+   * —— 屏幕上这批就是反的，所以它绝不静默。
    */
   override fun getMonochrome(): Drawable? {
     sourceMonochrome?.let { return it }
-    MonochromeSynth.clearPolarity()
     if (!ModuleRuntime.options().monoInvert) return null
-    MonochromeSynth.polarityFor(sourceIcon)
-    return null
+    // 按应用旁路：表里标着「交回」的应用不合成。认不出包名（`?`）的应用旁不了。
+    val pkg = IconNames.of(sourceIcon).substringBefore("/")
+    if (!ModuleRuntime.options().synthesizeFor(pkg)) return null
+    return MonochromeSynth.forIcon(sourceIcon)
   }
 
   override fun draw(canvas: Canvas) {

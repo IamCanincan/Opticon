@@ -35,7 +35,7 @@ import com.iamcanincan.opticon.circle.ACTION_CLEAR_ICON_CACHE
 import com.iamcanincan.opticon.runtime.ModulePrefs
 
 /**
- * **按应用反色**的调试面板：一张 `包名 → 翻 / 不翻 / 跟随默认` 的表。
+ * **按应用合成**的调试面板：一张 `包名 → 合成 / 交回桌面 / 跟随默认` 的表。
  *
  * ## 为什么要有它，而不是我把判据调对
  * 判据的方向现在没有可信依据：真机带回的两张桌面遮罩，一张像「亮=墨」、另一张像「暗=墨」，
@@ -77,7 +77,7 @@ internal fun MonoOverrideDialog(onDismiss: () -> Unit) {
   }
   AlertDialog(
     onDismissRequest = onDismiss,
-    title = { Text("按应用反色（调试）") },
+    title = { Text("按应用合成（调试）") },
     confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
     text = {
       Column {
@@ -95,11 +95,11 @@ internal fun MonoOverrideDialog(onDismiss: () -> Unit) {
           OutlinedButton(onClick = { store(emptyMap()) }) { Text("清空") }
           OutlinedButton(onClick = { bounceLaunchers(context) }) { Text("清缓存重启") }
         }
-        // 「改了没反应」的头一种原因不是 bug：现在没标的走的是**默认翻**，于是「反」和「随」
-        // 是同一件事，只有「正」会真的不一样。这句话必须写在面板上，不该靠人自己推。
+        // 「改了没反应」的头一种原因不是 bug：默认就是全部合成，于是「合」和「随」是同一件事，
+        // 只有「交回」会真的不一样。这句话必须写在面板上，不该靠人自己推。
         Text(
-          "默认=一律翻 → 标「反」与「随」结果相同，只有「正」会变；改完要按「清缓存重启」" +
-            "（桌面把遮罩预渲染好了，光重启只重建极少数几张）",
+          "默认=全部由我们合成 → 标「合」与「随」结果相同，只有「交回」会变（交回后那张会是" +
+            "桌面自己的反色）；改完要按「清缓存重启」，光重启只重建极少数几张",
           style = MaterialTheme.typography.labelSmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -115,7 +115,7 @@ internal fun MonoOverrideDialog(onDismiss: () -> Unit) {
                 Text(app.name, style = MaterialTheme.typography.bodyMedium)
                 val marked = overrides[app.pkg]
                 Text(
-                  // 每一行直接写出**这一张最后翻不翻**，比"标了什么"有用：标了「反」而默认也是翻，
+                  // 每一行直接写出**这一张最后归谁画**，比"标了什么"有用：标了「合」而默认也是合，
                   // 就该看得见"同默认"三个字，而不是去猜为什么没变化。
                   // 前面那一截是它自己给不给单色层：已适配的应用我们一个像素都不碰，
                   // 那一行会一直显示"不生效" —— 这是"标了却没反应"的头一种解释。
@@ -123,14 +123,14 @@ internal fun MonoOverrideDialog(onDismiss: () -> Unit) {
                     true -> "自带单色层→不生效"
                     false -> "未适配"
                     null -> "非自适应图标"
-                  } + "　生效=" + if (marked == null) "翻(随默认)"
-                  else if (marked) "翻(同默认)" else "不翻",
+                  } + "　生效=" + if (marked == null) "合成(随默认)"
+                  else if (marked) "合成(同默认)" else "交回桌面",
                   style = MaterialTheme.typography.labelSmall,
                   color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
               }
-              TinyChoice("反", overrides[app.pkg] == true) { set(app.pkg, true) }
-              TinyChoice("正", overrides[app.pkg] == false) { set(app.pkg, false) }
+              TinyChoice("合", overrides[app.pkg] == true) { set(app.pkg, true) }
+              TinyChoice("回", overrides[app.pkg] == false) { set(app.pkg, false) }
               TinyChoice("随", overrides[app.pkg] == null) { set(app.pkg, null) }
             }
           }

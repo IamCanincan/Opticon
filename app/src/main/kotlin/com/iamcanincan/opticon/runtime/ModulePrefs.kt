@@ -49,9 +49,10 @@ object ModulePrefs {
     const val KEY_MONO_INVERT = "mono_invert"
 
     /**
-     * 按应用的反色覆盖（调试用）。存成一段文本 `pkg=1;pkg=0;…`，
-     * 因为配置通道的每一列都要能被 provider 一次查出来 —— 为一张表再开一个 provider
-     * 不划算，而这段文本的长度天然有限（一个人手工标几十上百个包就到头了）。
+     * 按应用的**合成旁路**（调试用）。存成一段文本 `pkg=true;pkg=false;…`
+     * （`false` = 这张交回桌面自己压遮罩），因为配置通道的每一列都要能被 provider 一次查出来
+     * —— 为一张表再开一个 provider 不划算，而这段文本的长度天然有限
+     * （一个人手工标几十上百个包就到头了）。
      */
     const val KEY_MONO_OVERRIDES = "mono_overrides"
     const val DEFAULT_MONO_OVERRIDES = ""

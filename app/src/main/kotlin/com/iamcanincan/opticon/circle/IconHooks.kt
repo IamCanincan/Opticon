@@ -18,7 +18,6 @@ import android.content.pm.ProviderInfo
 import android.content.pm.ResolveInfo
 import android.content.pm.ServiceInfo
 import android.content.res.Resources
-import android.graphics.Bitmap
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.Drawable
 import android.os.Build
@@ -35,7 +34,6 @@ import java.io.File
 import java.lang.reflect.Constructor
 import java.lang.reflect.Field
 import java.lang.reflect.Method
-import java.nio.ByteBuffer
 import java.util.WeakHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.Volatile
@@ -132,10 +130,10 @@ private fun install(xposed: XposedInterface, classLoader: ClassLoader, packageNa
   ) {
     hookPixelLauncher(xposed, classLoader)
     hookTaskIcons(xposed, classLoader)
-    // 合成优先：它一旦接上，桌面就不进 Factory，下面那条翻转不会被触发。
-    // 合成挂不上 / 抛异常时返回 null，桌面照旧走 Factory，翻转照常兜底。
-    hookPolarityJudge(xposed)
-    hookMaskPolarity(xposed, classLoader)
+    // 纯合成：未适配图标的单色层由我们出，桌面因此不会进它自己的 Factory。
+    // 下面那条不是兜底、是**漏接计数** —— 它非零就说明上面那条没接住，屏幕上会是反的。
+    hookSynthesizedMonochrome(xposed)
+    hookMaskFallThrough(xposed, classLoader)
   }
   if (packageName == "com.android.systemui") hookSplashScreenIcon(xposed, classLoader)
   if (packageName == "com.android.settings") {
@@ -384,7 +382,7 @@ private fun hookIconLoader(xposed: XposedInterface, method: Method): Boolean =
           // 解析不出应用图标时系统会退回这个默认图标，它同样不是圆的。
           if (args.indexOfFirst { (it as? Int) == DEFAULT_APP_ICON } < 0) {
             // 没打标记的加载（抽屉里那一批、嵌套在内层的）以前直接放行，名字表里就查不到它。
-            // 日志打成 `?` 还只是难看 —— **「按应用反色」用的键就是这个名字**，于是那几张
+            // 日志打成 `?` 还只是难看 —— **「按应用合成」用的键就是这个名字**，于是那几张
             // 表现为"总开关会变、单独那个开关怎么标都不变"（真机 800 张里 73 张是 `?`）。
             // 只对结果确实是自适应图标的补登记：那是本功能关心的全集，也免得给每个
             // drawable 都问一次资源名。
@@ -1066,33 +1064,21 @@ private fun declaredConstructors(clazz: Class<*>): List<Constructor<*>> =
   clazz.declaredConstructors.toList().onEach { it.isAccessible = true }
 
 /**
- * 遮罩模式的主路：桌面替**未适配**的应用现场生成一张单色遮罩
- * （`com.android.launcher3.icons.MonochromeIconFactory`），它的算法是**亮度当 alpha** ——
- * 等于假定「亮的就是墨」。深色字形 + 浅色底的图标因此被画成"字形是洞、底色是形"。
+ * 桌面自己出遮罩的那条路（`MonochromeIconFactory.generateMono`）—— 纯合成模式下它**一张都
+ * 不该被走到**，所以这里只数不修。
  *
- * ## 翻不翻由 [hookPolarityJudge] 判，不在这里猜
- * 那道钩子在同一次调用里先把"哪边是图形"量出来存好（`createThemedBitmap` 第 76 行取
- * monochrome、第 84 行才 new Factory —— 同一个方法、同一个线程），这里只消费那一个结论。
- * **不再一律翻转**：真机回传的 16 张里有 12 张桌面的假定本来就是对的，一律翻等于把那 12 张
- * 翻错。没有判据时（上游钩子没装上或抛了异常）**不动遮罩**，并且单独计数 —— 那是判据失效
- * 唯一看得见的信号。
+ * 主路是 [hookSynthesizedMonochrome]：`getMonochrome()` 直接交出一张极性正确的剪影，桌面
+ * 就根本不会 new 这个 Factory（它只在 getter 返回 null 时才自己生成）。于是这里的计数
+ * = **上游漏接了多少张**，漏接的那些会以「亮=墨」出现在屏幕上（2026-09-24 真机量定的桌面
+ * 算法，与 themed 图标的约定正好相反）。这个项目吃过「hook 静默不生效最难查」的亏，
+ * 所以它前三张必报、之后每 40 张报一次，绝不静默。
  *
- * **为什么不再判别的条件**：桌面只在 `AdaptiveIconDrawable.getMonochrome()`
- * 为 null（= 应用没提供单色图标）时才 new 这个 Factory —— **已适配的应用根本不会走到这里**。
- * 所以"只动未适配的"这件事由调用点天然保证，这里不需要再判断前景/背景亮度差。
- * 界面上那条开关（`monoInvert`）是**一票否决**用的：关掉 = 完全交回桌面自己处理，
- * 不是"换成另一种翻法"。逐张的例外走「按应用反色（调试）」那张表（[MonochromeSynth]
- * 的覆盖表 → [ModuleOptions.flipFor]），它越过默认策略、但不越过总开关。
- * 为什么留：判据的方向在真机上还没有可信依据（回传的两张遮罩互相打脸），这种时候
- * "只有我能定"比"算法说了算"更有用，而那张表标出来的结果本身就是下一轮判据的样本。
- *
- * **链路（已逐条对过字节码）**：`generateMono()` 把结果写进 `mAlphaBitmap`，
- * `wrap()` 返回包住本对象的 `InsetDrawable`，`MonoIconThemeController.toAlphaBitmap()`
- * 把它画进一张 ALPHA_8 位图 —— 所以改 `mAlphaBitmap` 一定传到屏幕上，中间没有二次翻转。
- * ⚠ 这条路依赖桌面的**私有字段名** `mAlphaBitmap`：字段找不到的 ROM 上整条失效（只打一条警告，
- *   不崩）。换 ROM 第一件事就是看这条日志在不在。
+ * 为什么不干脆删掉这个钩：它同时是**换 ROM 时的诊断**。合成钩挂在 framework 的
+ * `AdaptiveIconDrawable.getMonochrome` 上，而部分框架对 bootclasspath 上的类挂钩有限制；
+ * 那种 ROM 上漏接数会暴涨，这一行日志是唯一看得见的证据。（过去那条翻转路读的
+ * 是桌面私有字段 `mAlphaBitmap`，字段名一变整条静默失效 —— 现在不再依赖它。）
  */
-private fun hookMaskPolarity(xposed: XposedInterface, classLoader: ClassLoader) {
+private fun hookMaskFallThrough(xposed: XposedInterface, classLoader: ClassLoader) {
   val factory =
     classOf("com.android.launcher3.icons.MonochromeIconFactory", classLoader)
       ?: run {
@@ -1100,200 +1086,99 @@ private fun hookMaskPolarity(xposed: XposedInterface, classLoader: ClassLoader) 
         Log.w(TAG, "Mono: MonochromeIconFactory not found")
         return
       }
-  val alphaField = fieldOf(factory, "mAlphaBitmap")
-  if (alphaField == null) {
-    Log.w(TAG, "Mono: mAlphaBitmap not found, skip")
-    return
-  }
 
   var hooked = 0
   for (method in declaredMethods(factory, "generateMono")) {
     runCatching {
         xposed.hook(method).intercept { chain ->
-          // void 方法：intercept 期望返回 Any!，先存下来最后 return，别用 return@intercept。
+          // void 方法：intercept 期望返回 Any!，先把结果存下来最后 return。
           val result = chain.proceed()
-          val self = chain.thisObject
-          if (self == null) {
-            Log.w(TAG, "Mono: thisObject is null")
-            return@intercept result
-          }
-          runCatching {
-              // 界面上那个开关（[ModuleRuntime.options] 的 `monoInvert`）。关掉 = 遮罩原样不动 ——
-              // 这一轮他要拿"全反"和"按判据"在真机上对着看，所以这道闸是调试用的对照位。
-              if (!ModuleRuntime.options().monoInvert) return@runCatching
-              val hit = MonochromeSynth.takePolarity()
-              val bitmap = alphaField.get(self) as? Bitmap
-              when {
-                bitmap == null -> Log.w(TAG, "Mono: mAlphaBitmap is null")
-                bitmap.config != Bitmap.Config.ALPHA_8 ->
-                  Log.w(TAG, "Mono: unexpected config ${bitmap.config}, skip")
-                else -> {
-                  // 点名的那几张：把**桌面自己出的**这张遮罩带回去（翻转之前）。判据数字全是我
-                  // 自己算的，看不出"我对桌面的理解错了"这种错 —— 只有它本来的样子能。
-                  if (hit != null && MonoDump.watched(hit.label)) {
-                    MonoDump.maskOf(hit.id, hit.label, bitmap, hit.polarity.report)
-                  }
-                  // **现在一律翻。**判据照旧每张都算、照旧进日志，只是不参与决定 ——
-                  // 他要先在真机上看到全反的样子，再逐张说哪几张不该反。
-                  // 两个数一起打，"一律翻"与"按判据翻"差在哪几张、差多少，一眼看得见。
-                  // 顺序：按应用的覆盖（调试表）> 默认策略（调试期 = 一律翻）。判据仍然只记录、不决定。
-                  val opts = ModuleRuntime.options()
-                  val pkg = hit?.pkg
-                  val flip = opts.flipFor(pkg, default = true)
-                  if (hit == null) noJudge.incrementAndGet() else if (hit.polarity.invert != flip) against.incrementAndGet()
-                  // 覆盖有没有落到这一张上，只有这里看得见。表非空却一次没命中，就是
-                  // `pkg` 与界面里那个包名对不上 —— 不是缓存的锅。未命中也打前几张的包名：
-                  // 与 `provider ok: … 反色表=…` 那行的键同屏一比，差在哪一眼就出来。
-                  if (pkg != null && opts.monoOverrides.isNotEmpty())
-                    if (opts.monoOverrides.containsKey(pkg)) {
-                      if (overrideHits.getAndIncrement() < 8)
-                        Log.d(TAG, "Mono: 覆盖命中 $pkg → ${if (flip) "翻" else "不翻"} (${hit.label})")
-                    } else if (overrideMiss.getAndIncrement() < 8)
-                      Log.d(TAG, "Mono: 覆盖未命中 遮罩认出的包名=$pkg 表里的键=${opts.monoOverrides.keys}")
-                  if (flip) {
-                    invertAlphaMask(bitmap)
-                    monoInverted.incrementAndGet()
-                  }
-                }
-              }
-              val n = judgedTotal.incrementAndGet()
-              if (n % 40 == 0) Log.d(TAG, "Mono: $n 张遮罩 → 一律翻 ${monoInverted.get()} " +
-                "判据反对 ${against.get()} 无判据 ${noJudge.get()} " +
-                "覆盖命中 ${overrideHits.get()} 未命中 ${overrideMiss.get()}")
-            }
-            .onFailure { Log.w(TAG, "Mono: failed: ${it.message}") }
+          // **只数，不修。**走到这里就说明上游那张合成层没交出去，屏幕上会是桌面自己的
+          // 「亮=墨」—— 与 themed 约定正好相反，所以前三张必报、之后每 40 张报一次。
+          val n = fellThrough.incrementAndGet()
+          if (n <= 3 || n % 40 == 0)
+            Log.w(TAG, "Mono: $n 张走了桌面自己的遮罩（合成没接住，这些在屏幕上是反的）")
           result
         }
         hooked++
       }
       .onFailure { Log.w(TAG, "Mono: hook failed: ${it.message}") }
   }
-  if (hooked > 0) Log.d(TAG, "Mono: $hooked generateMono hooked")
+  if (hooked > 0) Log.d(TAG, "Mono: $hooked generateMono hooked (漏接计数)")
   else Log.w(TAG, "Mono: generateMono NOT hooked")
 }
 
 /**
- * 极性判据的入口：在桌面问"这图标有自带的单色层吗"的那一刻，把**哪边是图形**量出来。
+ * 未适配图标的单色层**由我们生成**：在桌面问"这图标有自带的单色层吗"的那一刻，把一张
+ * 极性正确的剪影交出去（[MonochromeSynth.forIcon]）。
  *
- * 这里**不出图** —— 一律交回 null，让桌面照它自己的路子生成遮罩；量到的那一个结论存进
- * [MonochromeSynth] 的线程内格子，由 [hookMaskPolarity] 在同一次调用里消费。
- * 之所以能这么传：`MonoIconThemeController.createThemedBitmap` 第 76 行调这个 getter、
- * 返回 null 才走到第 84 行 new `MonochromeIconFactory`，同一个方法同一个线程。
+ * 这是主路径，也是唯一路径：桌面只在 `getMonochrome()` 返回 null 时才去 new 它自己的
+ * `MonochromeIconFactory`，而那个算法是「亮度当 alpha」（2026-09-24 在真机上量定，见
+ * [MonochromeMask] 的极性一节）—— 与 themed 图标的约定正好相反。上游直接交图，比"让它
+ * 算错再翻回来"干净：翻转要事后猜极性，而猜就需要认得这张图是谁（下面那个按应用旁路
+ * 就是这条链上唯一不可靠的一环）。
  *
- * 判据与过去那条合成路**共用同一份** [MonochromeMask]（同一个 `groundPass`）——
- * 全仓只允许有一份"哪边是图形"的实现，出现第二份就会各自漂移，而这个功能的全部难点
- * 就在这一个判断上。
- *
- * ⚠ hook 的是 framework 的类，部分框架对 bootclasspath 上的类挂钩有限制；挂不上就只打
- * 一条警告，[hookMaskPolarity] 那边取不到判据 → **一律不动遮罩**（桌面本来的样子），
- * 并把这类张数单独计数，不让它静默发生。
+ * ⚠ hook 的是 framework 的类，部分框架对 bootclasspath 上的类挂钩有限制；挂不上 = 桌面
+ * 照它自己的路子出遮罩，屏幕上就是反的。所以 [hookMaskPolarity] 保留成**漏接计数器**：
+ * 那条汇总行非零就是在告诉我们上游没接住。
  */
-private fun hookPolarityJudge(xposed: XposedInterface) {
+private fun hookSynthesizedMonochrome(xposed: XposedInterface) {
   val method = runCatching {
     AdaptiveIconDrawable::class.java.getDeclaredMethod("getMonochrome")
   }.getOrNull()
   if (method == null) {
-    Log.w(TAG, "Mono: getMonochrome not found，极性判据不可用")
+    Log.w(TAG, "Mono: getMonochrome not found，合成接不上，只能交回桌面")
     return
   }
   runCatching {
       xposed.hook(method).intercept { chain ->
-        // 应用自己提供了单色图标：原样透传，一个像素都不碰，也不去判它的极性。
+        // 应用自己提供了单色图标：原样透传，一个像素都不碰（他的硬规则）。
         val original = chain.proceed() as? Drawable
         if (original != null) {
-          // 这一路原本**完全静默**：既没有判据行也没有遮罩行，于是"我标了它却没反应"分不清
-          // 是「它本来就适配」（正/反本来就不该有效，硬规则要的就是这个）还是「这一轮桌面
-          // 根本没重画那一张」。⚠ 这是热路径：探测次数硬上限 400（不是"打满 8 条就停"，
-          // 那样在没人命中的设备上会把包名解析挂在每一次 getMonochrome 上），命中最多 8 条。
+          // 这一路原本完全静默，于是"它怎么没被合成"分不清是「本来就适配」还是「没重画」。
+          // ⚠ 热路径：探测次数硬上限 400（不是"打满 8 条就停" —— 那样在没人命中的设备上
+          // 会把包名解析挂在每一次 getMonochrome 上），命中最多 8 条。
           if (!ModuleRuntime.options().monoOverrides.isEmpty() &&
             adaptProbed.getAndIncrement() < 400
           ) {
             val lbl = IconNames.of(chain.thisObject as? Drawable ?: original)
             if (lbl.substringBefore("/") in ModuleRuntime.options().monoOverrides &&
               adaptSpoken.getAndIncrement() < 8
-            ) Log.d(TAG, "Mono: $lbl 自带单色层 → 一个像素不碰，正/反对它本来就不生效")
+            ) Log.d(TAG, "Mono: $lbl 自带单色层 → 一个像素不碰，旁路对它本来就不生效")
           }
           return@intercept original
         }
-        // 从这里往下都是"未适配"的图标。先清掉这一线程上一次的判据 —— 下面那道翻转钩
-        // 只认"本次 getMonochrome 刚判出来的那一个"，留着上一张的结论会翻错图标。
-        MonochromeSynth.clearPolarity()
-        // 开关关掉 = 连判据都不算（省一次光栅化），遮罩也就没人决定翻不翻
-        if (!ModuleRuntime.options().monoInvert) return@intercept null
         val self = chain.thisObject as? AdaptiveIconDrawable
         if (self == null) {
-          Log.w(TAG, "Mono: judge thisObject is null")
+          Log.w(TAG, "Mono: synth thisObject is null")
           return@intercept null
         }
-        // CircleIconDrawable **自己重写了 getMonochrome**（见那个类的说明），本钩拦不到它；
-        // 万一框架把 override 也一起拦了，这里也交给它自己的实现 —— 用本对象（裁圆之后的）
-        // 去判"哪边是图形"只会得到一个实心圆饼，那是错的。
+        // 界面上那条总开关（`monoInvert`）：关掉 = 一张都不合成，完全交回桌面。逃生口。
+        if (!ModuleRuntime.options().monoInvert) return@intercept null
+        // CircleIconDrawable **自己重写了这个 getter**，本钩拦不到它；就算框架把 override
+        // 一起拦了也不能用本对象压剪影 —— 那只会得到一个实心圆饼。它自己会去合成 sourceIcon。
         if (self is CircleIconDrawable) return@intercept null
-        // **交回 null**：遮罩仍由桌面生成，我们只在它生成之后决定翻不翻（[hookMaskPolarity]）。
-        MonochromeSynth.polarityFor(self)
-        null
+        // 按应用旁路：表里标着「交回」的应用不合成，交回桌面自己出遮罩。合成在某张上错了
+        // 又不记得它本来长什么样时，这是唯一不改代码的退路。认不出包名（`?`）的应用旁不了。
+        if (!ModuleRuntime.options().synthesizeFor(IconNames.of(self).substringBefore("/")))
+          return@intercept null
+        MonochromeSynth.forIcon(self)
       }
-      Log.d(TAG, "Mono: getMonochrome hooked (极性判据)")
+      Log.d(TAG, "Mono: getMonochrome hooked (合成单色层)")
     }
     .onFailure { Log.w(TAG, "Mono: getMonochrome hook failed: ${it.message}") }
 }
 
-/** 单色遮罩翻转：ALPHA_8，一个像素一字节，a → 255 - a。
- *
- * 每张图标一次全像素往返本身无法避免（要进 JNI 再回来），
- * 但用来传像素的那块 `byte[]` 不必每次新建 —— 热路径上每分钟数百张，
- * `ByteArray` 是 Eden 区短命大对象，回收压力会显在 GC 抖动上。
- * 用按大小**就地扩容**的缓存复用：旧数组装得下就接着用，装不下就换一块
- * 稍大的（按 1.25 倍，避免下一张又恰好只大一个字节、再分配一次）。
- *
- * 多线程：每个 binder 线程各自一份，互不干扰、零锁。
+/**
+ * 桌面自己出了多少张遮罩 = 上游合成漏接了多少张（见 [hookMaskFallThrough]）。
+ * 纯合成模式下这个数应该是 0；它非零就是"屏幕上有一批图标是反的"唯一的可见信号。
  */
-private val invertBuffer = ThreadLocal.withInitial { ByteArray(0) }
+private val fellThrough = AtomicInteger(0)
 
-private fun invertAlphaMask(bitmap: Bitmap) {
-  val need = bitmap.rowBytes * bitmap.height
-  var arr = invertBuffer.get()
-  if (arr.size < need) {
-    // 1.25 倍上限，避免下一张恰好大一字节时又扩一次
-    arr = ByteArray(maxOf(need, arr.size + (arr.size shr 2)))
-  }
-  val buffer = ByteBuffer.wrap(arr, 0, need)
-  bitmap.copyPixelsToBuffer(buffer)
-  for (i in 0 until need) {
-    arr[i] = (255 - (arr[i].toInt() and 0xff)).toByte()
-  }
-  buffer.position(0)
-  bitmap.copyPixelsFromBuffer(buffer)
-  invertBuffer.set(arr)
-}
-
-/** 累计翻了多少张遮罩。热路径，按 40 条汇总一次，不逐条打。 */
-private val monoInverted = AtomicInteger(0)
-
-
-/** 判据说"这张不该翻"、但当前一律翻了的张数。它就是"一律翻"与"按判据翻"
- *  的差集大小 —— 判据哪天重新接管，要先看这个数。 */
-private val against = AtomicInteger(0)
-
-/** 走到翻转这一步却没有判据可用的张数（`getMonochrome` 那道钩子没装上、或判据抛了异常）。
- *  这一档**不动遮罩** = 用户看到的就是桌面本来的样子，但它是"判据失效"唯一的可见信号。 */
-private val noJudge = AtomicInteger(0)
-
-/** 三个数一起汇总用的总数。 */
-private val judgedTotal = AtomicInteger(0)
-
-/** 按应用的反色覆盖**真的落到某一张上**的张数。它存在的理由：界面上标了、`反色表=N` 也
- *  证明这张表跨进程到了，屏幕上却没变化 —— 那时只有两种可能（键没对上 / 这张根本没重新
- *  合成），修法完全不同，不能靠猜。命中数为 0 而表非空 = 键没对上；命中了却没变化 = 缓存。 */
-private val overrideHits = AtomicInteger(0)
-
-/** 表非空、但这张遮罩认出的包名不在里面的张数（只打前 8 条，见 [overrideHits] 那条注释）。 */
-private val overrideMiss = AtomicInteger(0)
-
-/** 「已适配 → 原样透传」这一路探测过多少个图标（上限 400，见 [hookPolarityJudge]）。 */
+/** 「已适配 → 原样透传」这一路探测过多少个图标（上限 400，见 [hookSynthesizedMonochrome]）。 */
 private val adaptProbed = AtomicInteger(0)
 
-/** 上面那批探测里，包名正好在反色表里的条数（最多打 8 条）。 */
+/** 上面那批探测里，包名正好在旁路表里的条数（最多打 8 条）。 */
 private val adaptSpoken = AtomicInteger(0)
 
 private fun classOf(name: String, classLoader: ClassLoader): Class<*>? =
@@ -1337,7 +1222,7 @@ private fun getIntField(obj: Any, name: String): Int? = runCatching {
 /**
  * 「这个 Drawable 是哪个应用的图标」对照表。
  *
- * ⚠ **它现在参与一件判断**：「按应用反色」那张表的键就是这里的包名（`IconHooks.hookMaskPolarity`
+ * ⚠ **它现在参与一件判断**：「按应用合成」那张表的键就是这里的包名（`IconHooks.hookSynthesizedMonochrome`
  * 取 `IconNames.of(...).substringBefore("/")`）。认不出 = `?` = 那张遮罩**不可能被按应用覆盖**，
  * 只能走默认。所以名字表漏一条不只是日志难看，它会让某个应用的单独开关静默失效 ——
  * 覆盖未命中那行日志就是为了把这个失效摆出来，别把它删掉。

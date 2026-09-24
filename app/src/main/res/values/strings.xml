@@ -127,8 +127,8 @@
         桌面替「未适配」应用现场生成的那张单色遮罩，和形状无关。
     -->
     <string name="section_mono">单色图标</string>
-    <string name="mono_switch_title">修正单色图标的极性</string>
-    <string name="mono_switch_body">调试用。Android 16 强制取色时，桌面会给没做单色适配的应用现场生成一张遮罩（算法是把亮度当不透明度）。开着时这张遮罩**一律反一次色**；关掉就是桌面本来的样子。逐张判据（"这张图的墨比底暗吗"）现在照旧在算、照旧进日志，但还不参与决定，所以关掉它不影响图标显示，只是省一次分析。</string>
+    <string name="mono_switch_title">未适配的图标由本模块生成单色层</string>
+    <string name="mono_switch_body">Android 16 强制取色时，没做单色适配的应用由本模块现场压一张剪影交给桌面。关掉 = 完全不介入，桌面会照它自己的算法压（把亮度当不透明度，等于假定「亮的就是墨」），那与主题图标的约定正好相反，屏幕上这批图标就是反的 —— 所以这一条是整体逃生口，不是口味开关。逐张的例外在下面的「按应用合成（调试）」里。</string>
 
     <!-- 说明 -->
     <string name="section_notes">说明</string>

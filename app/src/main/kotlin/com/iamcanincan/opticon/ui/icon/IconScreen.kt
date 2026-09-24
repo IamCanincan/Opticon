@@ -192,7 +192,7 @@ private fun MonoInvertCard() {
     // 原因对上号的办法；而且标出来的那张表本身就是下一轮判据的考卷（见 MonoOverrideDialog）。
     Row(modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp)) {
       OutlinedButton(onClick = { showOverrides = true }) {
-        Text(if (overrideCount == 0) "按应用反色（调试）" else "按应用反色：已标 $overrideCount 个")
+        Text(if (overrideCount == 0) "按应用合成（调试）" else "按应用合成：已标 $overrideCount 个")
       }
     }
   }
