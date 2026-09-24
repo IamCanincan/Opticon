@@ -2,6 +2,8 @@ package com.iamcanincan.opticon.ui.icon
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.drawable.AdaptiveIconDrawable
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -93,6 +95,14 @@ internal fun MonoOverrideDialog(onDismiss: () -> Unit) {
           OutlinedButton(onClick = { store(emptyMap()) }) { Text("清空") }
           OutlinedButton(onClick = { bounceLaunchers(context) }) { Text("清缓存重启") }
         }
+        // 「改了没反应」的头一种原因不是 bug：现在没标的走的是**默认翻**，于是「反」和「随」
+        // 是同一件事，只有「正」会真的不一样。这句话必须写在面板上，不该靠人自己推。
+        Text(
+          "默认=一律翻 → 标「反」与「随」结果相同，只有「正」会变；改完要按「清缓存重启」" +
+            "（桌面把遮罩预渲染好了，光重启只重建极少数几张）",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         // 固定高度：AlertDialog 的内容槽没有给定的高度上限，用 weight 会直接塌成 0。
         LazyColumn(modifier = Modifier.fillMaxWidth().height(360.dp)) {
           items(shown, key = { it.pkg }) { app ->
@@ -103,8 +113,18 @@ internal fun MonoOverrideDialog(onDismiss: () -> Unit) {
             ) {
               Column(modifier = Modifier.weight(1f)) {
                 Text(app.name, style = MaterialTheme.typography.bodyMedium)
+                val marked = overrides[app.pkg]
                 Text(
-                  app.pkg,
+                  // 每一行直接写出**这一张最后翻不翻**，比"标了什么"有用：标了「反」而默认也是翻，
+                  // 就该看得见"同默认"三个字，而不是去猜为什么没变化。
+                  // 前面那一截是它自己给不给单色层：已适配的应用我们一个像素都不碰，
+                  // 那一行会一直显示"不生效" —— 这是"标了却没反应"的头一种解释。
+                  app.pkg + "　" + when (app.mono) {
+                    true -> "自带单色层→不生效"
+                    false -> "未适配"
+                    null -> "非自适应图标"
+                  } + "　生效=" + if (marked == null) "翻(随默认)"
+                  else if (marked) "翻(同默认)" else "不翻",
                   style = MaterialTheme.typography.labelSmall,
                   color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -139,7 +159,18 @@ private fun TinyChoice(text: String, selected: Boolean, onClick: () -> Unit) {
   ) { Text(text, style = MaterialTheme.typography.labelMedium) }
 }
 
-private class AppEntry(val pkg: String, val name: String)
+private class AppEntry(val pkg: String, val name: String, val mono: Boolean?)
+
+/**
+ * 这个应用**自己**给不给单色层。给 = 我们的功能对它本来就没有作用对象（硬规则：已适配的一个
+ * 像素都不碰），此时「正/反/随」怎么标都不会有变化 —— 这句话以前只能靠日志推，现在写在行上。
+ *
+ * 用反射：`getMonochrome()` 是 API 33 才有的，而本包 minSdk 26；拿不到方法就当"不知道"。
+ */
+private fun shipsMonochrome(pm: PackageManager, pkg: String): Boolean? = runCatching {
+  val d = pm.getApplicationIcon(pkg) as? AdaptiveIconDrawable ?: return@runCatching null
+  AdaptiveIconDrawable::class.java.getMethod("getMonochrome").invoke(d) != null
+}.getOrNull()
 
 /** 只列桌面上能看见的应用 —— 只有它们会被问单色层，列别的东西没有意义。 */
 private fun launchablePackages(context: Context): List<AppEntry> {
@@ -148,8 +179,9 @@ private fun launchablePackages(context: Context): List<AppEntry> {
   return pm.queryIntentActivities(intent, 0).map { it.activityInfo.packageName }
     .distinct().sorted()
     .map { pkg ->
+      // 一次开面板要为每个应用解一次图标 —— 百来个应用、只在调试面板里，值得换那一列的可信度。
       AppEntry(pkg, runCatching {
         pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
-      }.getOrDefault(pkg))
+      }.getOrDefault(pkg), shipsMonochrome(pm, pkg))
     }
 }

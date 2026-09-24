@@ -116,7 +116,11 @@ data class ModuleOptions(
             " mode=$replacementName keepColor=$keepOriginalColor preserveTinted=$preserveTinted" +
             // 按应用的反色表有没有跨进程传过来，全靠这一项：界面上标了、这里却是 0，
             // 那就是 provider 那一列没读到（而不是"读到了但值为空"）。
-            " 反色表=${monoOverrides.size}"
+            // 表小（手工标的量级）时把键一起打出来 —— 遮罩那边打的是它自己认出的包名，
+            // 两个数同屏才能一眼看出"没生效"是**键对不上**还是**那张根本没重新合成**。
+            " 反色表=${monoOverrides.size}" +
+            (if (monoOverrides.isEmpty() || monoOverrides.size > 6) "" else
+                " ${monoOverrides.entries.joinToString(",") { "${it.key}=${it.value}" }}")
 
     companion object {
         /** 未适配 → 直接换成彩色的应用启动图标 */

@@ -209,8 +209,15 @@ private fun launcherDataDir(packageName: String): String =
  * @return 真删掉了返回 true；DB 本来就不存在返回 false（这不算失败）。
  */
 private fun deleteIconCache(packageName: String): Boolean {
-  val db = File("${launcherDataDir(packageName)}/databases/app_icons.db")
-  if (!db.exists()) return false
+  val dir = File("${launcherDataDir(packageName)}/databases")
+  val db = File(dir, "app_icons.db")
+  if (!db.exists()) {
+    // "删了但什么都没变"最常见的一种：这个桌面的图标缓存根本不叫这个名字，于是我们
+    // 一个字节都没删，而界面上按下去是静默的。把目录里真有什么打出来，一眼定案。
+    val there = dir.list()?.sorted()?.joinToString(" ") { "$it(${File(dir, it).length()})" } ?: "读不到目录"
+    Log.w(TAG, "IconCache: $db 不存在，没删任何东西；$dir 里有 $there")
+    return false
+  }
   if (!runCatching { db.delete() }.getOrDefault(false)) {
     Log.w(TAG, "IconCache: cannot delete ${db.path}")
     return false
@@ -376,7 +383,26 @@ private fun hookIconLoader(xposed: XposedInterface, method: Method): Boolean =
         if (index < 0) {
           // 解析不出应用图标时系统会退回这个默认图标，它同样不是圆的。
           if (args.indexOfFirst { (it as? Int) == DEFAULT_APP_ICON } < 0) {
-            return@intercept chain.proceed()
+            // 没打标记的加载（抽屉里那一批、嵌套在内层的）以前直接放行，名字表里就查不到它。
+            // 日志打成 `?` 还只是难看 —— **「按应用反色」用的键就是这个名字**，于是那几张
+            // 表现为"总开关会变、单独那个开关怎么标都不变"（真机 800 张里 73 张是 `?`）。
+            // 只对结果确实是自适应图标的补登记：那是本功能关心的全集，也免得给每个
+            // drawable 都问一次资源名。
+            val passed = chain.proceed()
+            if (passed is AdaptiveIconDrawable) {
+              val res = chain.thisObject as? Resources
+              val rid = args.firstOrNull { (it as? Int)?.let { v -> v > 0x1000000 } == true } as? Int
+              if (res != null && rid != null) {
+                val nm = resourceName(res, rid)
+                // 资源 id 是从参数里挑的，不保证就是这张图的 id；解到桌面自己包上的名字
+                // 就把别的图标登记成别的应用，比 `?` 更糟。
+                if (nm.isNotEmpty() && !nm.startsWith("com.android.launcher3") &&
+                  !nm.startsWith("com.google.android.apps.nexuslauncher") &&
+                  !nm.startsWith("android")
+                ) IconNames.remember(passed, nm)
+              }
+            }
+            return@intercept passed
           }
           val fallback =
             chain.proceed() as? Drawable ?: return@intercept null
@@ -1111,8 +1137,19 @@ private fun hookMaskPolarity(xposed: XposedInterface, classLoader: ClassLoader) 
                   // 他要先在真机上看到全反的样子，再逐张说哪几张不该反。
                   // 两个数一起打，"一律翻"与"按判据翻"差在哪几张、差多少，一眼看得见。
                   // 顺序：按应用的覆盖（调试表）> 默认策略（调试期 = 一律翻）。判据仍然只记录、不决定。
-                  val flip = ModuleRuntime.options().flipFor(hit?.pkg, default = true)
+                  val opts = ModuleRuntime.options()
+                  val pkg = hit?.pkg
+                  val flip = opts.flipFor(pkg, default = true)
                   if (hit == null) noJudge.incrementAndGet() else if (hit.polarity.invert != flip) against.incrementAndGet()
+                  // 覆盖有没有落到这一张上，只有这里看得见。表非空却一次没命中，就是
+                  // `pkg` 与界面里那个包名对不上 —— 不是缓存的锅。未命中也打前几张的包名：
+                  // 与 `provider ok: … 反色表=…` 那行的键同屏一比，差在哪一眼就出来。
+                  if (pkg != null && opts.monoOverrides.isNotEmpty())
+                    if (opts.monoOverrides.containsKey(pkg)) {
+                      if (overrideHits.getAndIncrement() < 8)
+                        Log.d(TAG, "Mono: 覆盖命中 $pkg → ${if (flip) "翻" else "不翻"} (${hit.label})")
+                    } else if (overrideMiss.getAndIncrement() < 8)
+                      Log.d(TAG, "Mono: 覆盖未命中 遮罩认出的包名=$pkg 表里的键=${opts.monoOverrides.keys}")
                   if (flip) {
                     invertAlphaMask(bitmap)
                     monoInverted.incrementAndGet()
@@ -1121,7 +1158,8 @@ private fun hookMaskPolarity(xposed: XposedInterface, classLoader: ClassLoader) 
               }
               val n = judgedTotal.incrementAndGet()
               if (n % 40 == 0) Log.d(TAG, "Mono: $n 张遮罩 → 一律翻 ${monoInverted.get()} " +
-                "判据反对 ${against.get()} 无判据 ${noJudge.get()}")
+                "判据反对 ${against.get()} 无判据 ${noJudge.get()} " +
+                "覆盖命中 ${overrideHits.get()} 未命中 ${overrideMiss.get()}")
             }
             .onFailure { Log.w(TAG, "Mono: failed: ${it.message}") }
           result
@@ -1162,7 +1200,21 @@ private fun hookPolarityJudge(xposed: XposedInterface) {
       xposed.hook(method).intercept { chain ->
         // 应用自己提供了单色图标：原样透传，一个像素都不碰，也不去判它的极性。
         val original = chain.proceed() as? Drawable
-        if (original != null) return@intercept original
+        if (original != null) {
+          // 这一路原本**完全静默**：既没有判据行也没有遮罩行，于是"我标了它却没反应"分不清
+          // 是「它本来就适配」（正/反本来就不该有效，硬规则要的就是这个）还是「这一轮桌面
+          // 根本没重画那一张」。⚠ 这是热路径：探测次数硬上限 400（不是"打满 8 条就停"，
+          // 那样在没人命中的设备上会把包名解析挂在每一次 getMonochrome 上），命中最多 8 条。
+          if (!ModuleRuntime.options().monoOverrides.isEmpty() &&
+            adaptProbed.getAndIncrement() < 400
+          ) {
+            val lbl = IconNames.of(chain.thisObject as? Drawable ?: original)
+            if (lbl.substringBefore("/") in ModuleRuntime.options().monoOverrides &&
+              adaptSpoken.getAndIncrement() < 8
+            ) Log.d(TAG, "Mono: $lbl 自带单色层 → 一个像素不碰，正/反对它本来就不生效")
+          }
+          return@intercept original
+        }
         // 从这里往下都是"未适配"的图标。先清掉这一线程上一次的判据 —— 下面那道翻转钩
         // 只认"本次 getMonochrome 刚判出来的那一个"，留着上一张的结论会翻错图标。
         MonochromeSynth.clearPolarity()
@@ -1230,6 +1282,20 @@ private val noJudge = AtomicInteger(0)
 /** 三个数一起汇总用的总数。 */
 private val judgedTotal = AtomicInteger(0)
 
+/** 按应用的反色覆盖**真的落到某一张上**的张数。它存在的理由：界面上标了、`反色表=N` 也
+ *  证明这张表跨进程到了，屏幕上却没变化 —— 那时只有两种可能（键没对上 / 这张根本没重新
+ *  合成），修法完全不同，不能靠猜。命中数为 0 而表非空 = 键没对上；命中了却没变化 = 缓存。 */
+private val overrideHits = AtomicInteger(0)
+
+/** 表非空、但这张遮罩认出的包名不在里面的张数（只打前 8 条，见 [overrideHits] 那条注释）。 */
+private val overrideMiss = AtomicInteger(0)
+
+/** 「已适配 → 原样透传」这一路探测过多少个图标（上限 400，见 [hookPolarityJudge]）。 */
+private val adaptProbed = AtomicInteger(0)
+
+/** 上面那批探测里，包名正好在反色表里的条数（最多打 8 条）。 */
+private val adaptSpoken = AtomicInteger(0)
+
 private fun classOf(name: String, classLoader: ClassLoader): Class<*>? =
   runCatching { Class.forName(name, true, classLoader) }.getOrNull()
 
@@ -1269,7 +1335,12 @@ private fun getIntField(obj: Any, name: String): Int? = runCatching {
   .getOrNull()
 
 /**
- * 「这个 Drawable 是哪个应用的图标」对照表 —— **只给日志用**，不参与任何判断。
+ * 「这个 Drawable 是哪个应用的图标」对照表。
+ *
+ * ⚠ **它现在参与一件判断**：「按应用反色」那张表的键就是这里的包名（`IconHooks.hookMaskPolarity`
+ * 取 `IconNames.of(...).substringBefore("/")`）。认不出 = `?` = 那张遮罩**不可能被按应用覆盖**，
+ * 只能走默认。所以名字表漏一条不只是日志难看，它会让某个应用的单独开关静默失效 ——
+ * 覆盖未命中那行日志就是为了把这个失效摆出来，别把它删掉。
  *
  * 为什么非要它：这一路的反馈全都长这样——「12123 / termux / 闲鱼 不对」。而 `Mono: diag`
  * 行里只有 `AdaptiveIconDrawable fg=VectorDrawable@425x425` 这种 drawable 签名，两边对不上
