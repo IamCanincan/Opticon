@@ -15,6 +15,7 @@ import android.net.Uri
 import android.os.Build
 import androidx.core.content.res.ResourcesCompat
 import com.iamcanincan.opticon.runtime.MemberLookup
+import kotlin.math.abs
 
 /**
  * 图标位图的取与造。
@@ -92,6 +93,39 @@ object IconBitmap {
      * （本机 192 / 384 两档）—— 定死 36 像素的话，192 那一档上就等于抹掉一整笔。
      */
     private const val MIN_SPECK_DIVISOR = 4096
+
+    /**
+     * 「有一块主导底板」的最低占比：最大色桶要占到不透明像素的这个比例，才认为这张图是
+     * 「底板 + 字形」结构、值得按色距去刻。低于它说明这张图本来就多色（几个色块拼出来的
+     * logo），那时亮度 Otsu 比色距更接近正解，交回 [binarizeSilhouette]。
+     *
+     * 0.30 偏保守：刻错的代价是把好形状刻没（还有别的支兜底），漏刻的代价是大色块照旧。
+     * 真机要看的是这个占比的实际分布，不是这一个数对不对 —— 它现在跟着日志一起打出来。
+     */
+    private const val MIN_PLATE_SHARE = 0.30f
+
+    /**
+     * 「离底板中位色够近」的距离上限（三通道曼哈顿距离）。
+     *
+     * 渐变底没有"精确相等"的主导色，靠这一条才能算出它占多少：判据台上量过，12306 那张
+     * 按 ≤60 算占 0.44（越得过 [MIN_PLATE_SHARE]），而多色拼块 logo 远达不到。
+     */
+    private const val PLATE_NEAR = 60
+
+    /**
+     * 「一层」的最小色距：两个层心相距不到这个数，就是同一次的抖动，不配单独占一层。
+     * 也是量残差时的标尺 —— 离所有层心都超过它，才算"三层装不下"。
+     */
+    private const val LAYER_TOLERANCE = 60
+
+    /**
+     * 三层装不下的容忍度：字形侧里有这么高比例的像素离三个层心都远，就说明这张图不是
+     * 「底 + 主体 + 点缀」的结构（照片底、复杂插画），**否决刻底板**、交回亮度 Otsu。
+     *
+     * 这条先验来自用户的领域判断：正常图标最多三层颜色。用它当否决比定阈值稳 ——
+     * 猜错阈值会刻坏一张好图，而否决只是退回另一条判据，不会更糟。
+     */
+    private const val MAX_OFFLAYER_SHARE = 0.30f
 
     /** 二值化时每个像素的归类，用于连通性判断 */
     private const val CLASS_TRANSPARENT = 0
@@ -404,24 +438,133 @@ object IconBitmap {
         if (boxFill > MAX_SHAPE_RATIO) return Silhouette(null, boxFill, "保住的那侧=整块底")
         if (boxFill < MIN_SHAPE_RATIO) return Silhouette(null, boxFill, "几乎没保住东西")
 
-        // 形状体检（就地修整 + 打分），只有这一支需要 —— 理由见 [polishBinarized] 上面那段。
+        return finish(output, w, h, bounds, "亮度 Otsu")
+    }
+
+    /**
+     * **按「与底板主色的距离」把字形从底板里刻出来** —— 大色块的正解。
+     *
+     * ## 为什么亮度 Otsu 不够
+     * 中国 App 的图标绝大多数是「一层彩色底板 + 与之不同的字形」：红底白字、蓝底白 logo、
+     * 白底彩字。这类图**每一像素都不透明**，alpha 描述的是那块底的轮廓（整块收下就是大色块），
+     * 而亮度 Otsu 只在「底与字形恰好一明一暗」时切得开 —— 底板自带渐变时，直方图根本没有
+     * 两个峰，切在哪一档全看运气。
+     * 「离底板主色有多远」这条线就不挑明暗：白字在红底上、红底在白字上，距离都是大。
+     * 判据仍是**一条通用的**（有主导色才切、没有就交回别的支），不为任何具体图标开特判。
+     *
+     * ## 什么时候返回 null（= 这条路不适用）
+     * 1. 不透明像素里**没有主导色**（最大色桶占比 < [MIN_PLATE_SHARE]）—— 多色 logo，
+     *    根本没有"一块底"可谈；
+     * 2. 距离直方图切不出分层（阈值落在 0 档）—— 整张就是单一颜色，没有可刻的字形；
+     * 3. 刻出来的东西过满 / 过空，或体检不过关（见 [finish]）。
+     *
+     * ⚠ 透明底上的彩色字形**不会被误刻**：那种图的最大色桶就是字形自己，
+     * 全图距离≈0 → 走到第 2 条返回 null → 仍然由 alpha 支交出原形状。
+     */
+    @Synchronized
+    internal fun plateSilhouette(input: Bitmap, preserveAlpha: Boolean = true): Silhouette {
+        val w = input.width
+        val h = input.height
+        if (w <= 0 || h <= 0) return Silhouette(null, 0f, "尺寸非法")
+        val total = w * h
+        val pixels = IntArray(total)
+        val output = IntArray(total)
+        input.getPixels(pixels, 0, w, 0, 0, w, h)
+        val bounds = contentBoundsOf(pixels, w, h) ?: return Silhouette(null, 0f, "整张透明")
+        val boxTotal = bounds.width().toLong() * bounds.height()
+        if (boxTotal <= 0) return Silhouette(null, 0f, "外接框为空")
+
+        // 1) 底板颜色 = **逐通道中位色**，不是众数色。
+        //    先试过按 4 bit 量化分桶取众数：渐变底会散成几千种颜色，真机实测 12306 那张
+        //    最大色桶只占 0.11 —— 「有没有一块主导底」当场判否，整块底照旧交出去，
+        //    大色块根本没治到。换成中位色后同一张图「离底够近」占 0.44，越得过线。
+        //    取中位数走 256 桶直方图而不是排序：这是在桌面加载图标的路上，排 14 万个数不值。
+        val histR = IntArray(256); val histG = IntArray(256); val histB = IntArray(256)
+        var solid = 0
+        for (p in pixels) {
+            if (Color.alpha(p) < MIN_SHAPE_ALPHA) continue
+            solid++
+            histR[Color.red(p)]++; histG[Color.green(p)]++; histB[Color.blue(p)]++
+        }
+        if (solid == 0) return Silhouette(null, 0f, "整张透明")
+        val plateR = medianOf(histR, solid)
+        val plateG = medianOf(histG, solid)
+        val plateB = medianOf(histB, solid)
+        // 「主导」的判据：离中位色足够近的像素要占到多少。渐变底正是靠这一条而不是靠精确相等。
+        var near = 0
+        for (p in pixels) {
+            if (Color.alpha(p) < MIN_SHAPE_ALPHA) continue
+            if (colorDistance(p, plateR, plateG, plateB) <= PLATE_NEAR) near++
+        }
+        val plateShare = near.toFloat() / solid
+        if (plateShare < MIN_PLATE_SHARE) {
+            return Silhouette(null, 0f, "无主导底板色（离中位色够近 ${"%.2f".format(plateShare)}）")
+        }
+
+        // 2) 「一个图标最多三层颜色」这条先验，落地成两件事：
+        //    · **不猜阈值**：离底板 ≤ [PLATE_NEAR] 的算底，其余算形。原先这里对距离直方图
+        //      再跑一次 Otsu，而渐变底的距离分布根本没有两个峰，阈值切在哪全看运气。
+        //    · **三层装不下就否决**：把"形"那侧再贪心取两个层心（主体 + 点缀），离三个层心
+        //      都超过 [LAYER_TOLERANCE] 的像素占比，就是这张图装不进「底 + 主体 + 点缀」的
+        //      比例 —— 那是照片底 / 复杂插画，硬刻只会刻出一堆噪声，交回亮度 Otsu 那条兜底。
+        val distance = IntArray(total)
+        for (i in 0 until total) {
+            val p = pixels[i]
+            distance[i] = if (Color.alpha(p) < MIN_SHAPE_ALPHA)
+                -1 else colorDistance(p, plateR, plateG, plateB)
+        }
+        val layer = layerCenters(pixels, distance, plateR, plateG, plateB)
+        var offLayer = 0
+        var count = 0
+        for (i in 0 until total) {
+            val d = distance[i]
+            if (d < 0) continue
+            if (d > PLATE_NEAR) {
+                output[i] = if (preserveAlpha) Color.argb(Color.alpha(pixels[i]), 255, 255, 255) else Color.WHITE
+                count++
+            }
+            if (layer != null && d > PLATE_NEAR && minLayerDistance(pixels[i], layer) > LAYER_TOLERANCE) offLayer++
+        }
+        if (count == 0) return Silhouette(null, 0f, "整张同色，刻不出字形")
+        if (layer == null) return Silhouette(null, 0f, "字形侧不足两层，量不出残差")
+        val offLayerShare = offLayer.toFloat() / count
+        if (offLayerShare > MAX_OFFLAYER_SHARE) {
+            return Silhouette(null, 0f, "三层装不下（残差 ${"%.2f".format(offLayerShare)}）")
+        }
+        val boxFill = count.toFloat() / boxTotal
+        if (boxFill > MAX_SHAPE_RATIO) return Silhouette(null, boxFill, "刻出来的仍是整块底")
+        if (boxFill < MIN_SHAPE_RATIO) return Silhouette(null, boxFill, "几乎刻不出东西")
+        return finish(output, w, h, bounds, "三层刻底")
+    }
+
+    /**
+     * 两支共用的收尾：形状体检（闭运算 + 去碎渣 + 三道闸）→ 成图。
+     * 就地改 [output]，[pixels] 只用于日志里的口径说明。
+     */
+    private fun finish(
+        output: IntArray,
+        w: Int,
+        h: Int,
+        bounds: Rect,
+        from: String,
+    ): Silhouette {
+        val boxTotal = bounds.width().toLong() * bounds.height()
         val shape = polishBinarized(output, w, h, bounds)
         val filled = shape.kept.toFloat() / boxTotal
         // 闭运算 + 去碎渣之后可能把仅剩的一点杂色全擦光 —— 空掩码交出去就是一个看不见的洞，
-        // 比不合成糟得多。这道守卫必须在体检之后、而不是之前：上面两条量的是闭运算**之前**
-        // 的原始计数，擦完渣之后真实比例只会更小，用旧数判会放行一张空图。
-        if (filled < MIN_SHAPE_RATIO) return Silhouette(null, filled, "修整后几乎全空")
+        // 比不合成糟得多。这道守卫必须在体检之后：之前那几条量的是体检**之前**的原始计数。
+        if (filled < MIN_SHAPE_RATIO) return Silhouette(null, filled, "$from：修整后几乎全空")
         if (filled >= PLATE_FILL && shape.holeRatio <= PLATE_HOLE) {
-            return Silhouette(null, filled, "闭运算后仍是一整块板（空洞 ${"%.2f".format(shape.holeRatio)}）")
+            return Silhouette(null, filled, "$from：闭运算后仍是一整块板（空洞 ${"%.2f".format(shape.holeRatio)}）")
         }
         if (shape.components >= SHATTER_COMPONENTS && shape.largestRatio <= SHATTER_TOP) {
-            return Silhouette(null, filled, "闭运算后仍碎成 ${shape.components} 块")
+            return Silhouette(null, filled, "$from：闭运算后仍碎成 ${shape.components} 块")
         }
         val result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         result.setPixels(output, 0, w, 0, 0, w, h)
         return Silhouette(
             result, filled,
-            "${shape.kept} 像素 cc=${shape.components} top=${"%.2f".format(shape.largestRatio)} " +
+            "$from ${shape.kept} 像素 cc=${shape.components} top=${"%.2f".format(shape.largestRatio)} " +
                 "hole=${"%.2f".format(shape.holeRatio)}"
         )
     }
@@ -999,6 +1142,70 @@ object IconBitmap {
     private fun luma(pixel: Int): Int {
         return (Color.red(pixel) * 299 + Color.green(pixel) * 587 + Color.blue(pixel) * 114) / 1000
     }
+
+    /** 像素到某个参考色的曼哈顿距离（0..765）。三通道等权，不套感知权重 —— 这里要的是"像不像"。 */
+    private fun colorDistance(pixel: Int, r: Int, g: Int, b: Int): Int =
+        abs(Color.red(pixel) - r) + abs(Color.green(pixel) - g) + abs(Color.blue(pixel) - b)
+
+    /**
+     * 在「离底板够远」那侧再取两个层心（主体 + 点缀），用来量化「三层装不下的残差」。
+     *
+     * 按 4 bit 量化分桶、取最大的两个桶，并要求两个层心本身相距够远（否则第二个只是第一个
+     * 的抖动，白占一层）。返回 `[r,g,b, r,g,b]`（一到两个层心，各占三格）；字形侧一个桶都
+     * 没有时返回 null，调用方按「量不出残差」处理。
+     */
+    private fun layerCenters(pixels: IntArray, distance: IntArray, plateR: Int, plateG: Int, plateB: Int): IntArray? {
+        class Agg { var r = 0; var g = 0; var b = 0; var n = 0 }
+        val buckets = HashMap<Int, Agg>()
+        for (i in pixels.indices) {
+            val d = distance[i]
+            if (d <= PLATE_NEAR) continue
+            val p = pixels[i]
+            val key = (Color.red(p) shr 4 shl 8) or (Color.green(p) shr 4 shl 4) or (Color.blue(p) shr 4)
+            val agg = buckets.getOrPut(key) { Agg() }
+            agg.r += Color.red(p); agg.g += Color.green(p); agg.b += Color.blue(p); agg.n++
+        }
+        if (buckets.isEmpty()) return null
+        val out = IntArray(6)
+        var taken = 0
+        for (agg in buckets.values.sortedByDescending { it.n }) {
+            val r = agg.r / agg.n; val g = agg.g / agg.n; val b = agg.b / agg.n
+            // 与底板同色的桶不算"形"的一层（量化到 4 bit 后仍可能落进 PLATE_NEAR 以内）
+            if (abs(r - plateR) + abs(g - plateG) + abs(b - plateB) <= PLATE_NEAR) continue
+            var tooClose = false
+            for (k in 0 until taken) {
+                if (abs(r - out[k * 3]) + abs(g - out[k * 3 + 1]) + abs(b - out[k * 3 + 2]) < LAYER_TOLERANCE) tooClose = true
+            }
+            if (tooClose) continue
+            out[taken * 3] = r; out[taken * 3 + 1] = g; out[taken * 3 + 2] = b
+            taken++
+            if (taken == 2) break
+        }
+        if (taken == 0) return null
+        return if (taken == 1) out.copyOfRange(0, 3) else out
+    }
+
+    /** 像素到各层心的最近距离；[centers] 是 [layerCenters] 那种三格一组的摊平数组（长度 3 或 6）。 */
+    private fun minLayerDistance(pixel: Int, centers: IntArray): Int {
+        var best = Int.MAX_VALUE
+        for (k in centers.indices step 3) {
+            val d = colorDistance(pixel, centers[k], centers[k + 1], centers[k + 2])
+            if (d < best) best = d
+        }
+        return best
+    }
+
+    /** 从 256 桶直方图里取中位数对应的档（0..255）。[total] 是不透明像素总数，>0。 */
+    private fun medianOf(histogram: IntArray, total: Int): Int {
+        val half = (total + 1) / 2
+        var run = 0
+        for (i in histogram.indices) {
+            run += histogram[i]
+            if (run >= half) return i
+        }
+        return 255
+    }
+
 
     /** Otsu：遍历所有可能阈值，取类间方差最大的那个 */
     private fun otsuThreshold(pixels: IntArray): Int {

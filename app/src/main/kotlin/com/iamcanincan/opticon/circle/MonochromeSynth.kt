@@ -124,6 +124,15 @@ internal object MonochromeSynth {
   private const val MIN_EDGE = 192
 
   /**
+   * alpha 支的「这大概是一块底」提示线：框内填充率到这一步以上，就先试一次
+   * [IconBitmap.plateSilhouette] 把字形从底板里刻出来，别把整块底当图形交出去。
+   *
+   * ⚠ 这是**要不要再试一次**的门槛，不是拒绝线 —— 刻不出来时 alpha 的结果照旧生效，
+   * 所以试错的方向是安全的。定在 0.55 的理由见 `IconBitmap.PLATE_FILL` 那一段。
+   */
+  private const val PLATE_HINT = 0.55f
+
+  /**
    * 「整张图标是不是灰度」那道判据的出图尺寸。
    *
    * `ToneCheck` 自己就会把输入缩到 64 再逐像素看三通道，画得更大只是白付一次光栅化 ——
@@ -276,10 +285,23 @@ internal object MonochromeSynth {
       //    两支各自把量出来的 `boxFill` 与结论带出来，交给下面那行逐条日志。
       //
       // 两条都不成立时返回 null，桌面照旧走它自己的路（[noteGiveUp] 会留痕）。
+      // 三条判据、按「最忠实的先试」排：alpha → 从底板刻字形 → 亮度 Otsu。
+      //
+      // 1. **alpha**（[IconBitmap.alphaSilhouette]）：交出去的就是图标自带的 alpha，不猜。
+      // 2. **刻底板**（[IconBitmap.plateSilhouette]）：只要 alpha 说「框内已经是成片的底」
+      //    （≥ [PLATE_HINT]，含它直接判成底板那种），就先试着按**离底板主色的距离**把字形
+      //    刻出来。这一步专治大色块 —— 0.55~0.85 那一段以前被 alpha 整块收下，屏幕上就是
+      //    一块带几条镂空洞的色板，字形根本没露出来。刻不出来（多色 logo / 整张同色）就照旧
+      //    用 alpha 的结果，不会因为试了而变差。
+      // 3. **亮度 Otsu**（[IconBitmap.binarizeSilhouette]）：前两条都不成立时的兜底。
       val alpha = IconBitmap.alphaSilhouette(raster)
-      val bin = if (alpha.mask == null) IconBitmap.binarizeSilhouette(raster) else null
-      val chosen = if (alpha.mask != null) alpha else bin?.takeIf { it.mask != null }
-      noteBranch(edge, label, alpha, bin, chosen)
+      val carved = if (alpha.boxFill >= PLATE_HINT) IconBitmap.plateSilhouette(raster) else null
+      val bin = if (alpha.mask == null && carved?.mask == null)
+        IconBitmap.binarizeSilhouette(raster) else null
+      val chosen = carved?.mask?.let { carved }
+        ?: alpha.mask?.let { alpha }
+        ?: bin?.takeIf { it.mask != null }
+      noteBranch(edge, label, alpha, carved, bin, chosen)
       val base = chosen?.mask
       // 非自适应图标的内容是满幅的，而它在图层 bounds 里只该占中间那 2/3（可见区），
       // 所以掩码算完**之后**才缩进 —— 顺序反了就会踩 [rasterize] 上面那个坑。
@@ -362,18 +384,22 @@ internal object MonochromeSynth {
     edge: Int,
     label: String,
     alpha: IconBitmap.Silhouette,
+    carved: IconBitmap.Silhouette?,
     bin: IconBitmap.Silhouette?,
     chosen: IconBitmap.Silhouette?,
   ) {
     val n = diagnosed.incrementAndGet()
     val trail = buildString {
       append("alpha[").append(ratio(alpha.boxFill)).append(' ').append(alpha.verdict).append(']')
+      if (carved != null) {
+        append(" → 刻底[").append(ratio(carved.boxFill)).append(' ').append(carved.verdict).append(']')
+      }
       if (bin != null) {
         append(" → 二值[").append(ratio(bin.boxFill)).append(' ').append(bin.verdict).append(']')
       }
     }
     Log.d(TAG, "Mono: diag#$n edge=$edge $label $trail → " +
-      if (chosen != null) "已交出掩码" else "两支都不成立，放弃合成")
+      if (chosen != null) "已交出掩码" else "三条判据都不成立，放弃合成")
   }
 
   /**
