@@ -665,12 +665,28 @@ internal object MonochromeSynth {
    */
   private fun rasterize(target: Drawable, edge: Int): Bitmap? {
     val saved = Rect(target.bounds)
+    // ⚠ target 自己就是 AdaptiveIconDrawable 时，光栅化它等于**顺带改了它两个子层的 bounds**：
+    //   `AdaptiveIconDrawable.draw()` → `updateLayerBoundsInternal()` 会按这次的 bounds 重算
+    //   背景层与前景层，而它之后重画图层用的是子层**当前** bounds、不再 setBounds。
+    //   只还原父层的话，那份「按 64px 算出来的子层 bounds」就留在应用自己的图标对象上，
+    //   桌面下次画原图标时按 1/6 尺寸铺进 384 的画布 —— 观感就是「图标突然变糊」。
+    //   这是本文件早就写过的那条坑（前景层要还原 bounds）在上一层的翻版。
+    val background = (target as? AdaptiveIconDrawable)?.background
+    val foreground = (target as? AdaptiveIconDrawable)?.foreground
+    val savedBackground = background?.let { Rect(it.bounds) }
+    val savedForeground = foreground?.let { Rect(it.bounds) }
     return try {
       val bmp = Bitmap.createBitmap(edge, edge, Bitmap.Config.ARGB_8888)
       target.setBounds(0, 0, edge, edge)
       target.draw(Canvas(bmp))
       bmp
     } finally {
+      // 子层**必须自己还原**，不能指望上面那次 setBounds 把它们带回去：取 monochrome 的时机
+      // 常常在桌面给这个 drawable 设 bounds 之前（真机日志里就是 `bounds=0x0`），还原成空矩形
+      // 时 `Drawable.setBounds` 根本不会触发 onBoundsChange → 图层不重算 → 64px 的子层 bounds
+      // 就留在那份图标对象上了。
+      if (background != null && savedBackground != null) background.bounds = savedBackground
+      if (foreground != null && savedForeground != null) foreground.bounds = savedForeground
       target.bounds = saved
     }
   }
