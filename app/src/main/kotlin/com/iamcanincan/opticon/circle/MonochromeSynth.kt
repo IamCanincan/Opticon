@@ -14,6 +14,8 @@ import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.Drawable
 import android.util.Log
 import com.iamcanincan.opticon.notify.IconBitmap
+import com.iamcanincan.opticon.notify.ToneCheck
+import com.iamcanincan.opticon.runtime.ModuleRuntime
 import com.iamcanincan.opticon.runtime.TAG
 import java.nio.ByteBuffer
 import java.util.IdentityHashMap
@@ -217,6 +219,20 @@ internal object MonochromeSynth {
       val raster = rasterize(target, edge)
       if (raster == null) {
         noteGiveUp(edge, label, "光栅化失败")
+        return@runCatching null
+      }
+      // ── 「原本就适配取色的图标，一个像素都不要碰」 ──
+      // 应用自己提供单色层的那种「已适配」，`getMonochrome()` 非 null，钩子在最外层就透传了
+      // （见 `IconHooks.hookSynthesizedMonochrome`）。但还有第二种已适配：**图标本身就是灰度
+      // 剪影**、等着系统按主题上色 —— 那种根本没有单色层，会一路走进这里被我们重压一遍，
+      // 白丢它自己画好的层次。通知侧对这一种早有判据（`ToneCheck.isGrayscale` +
+      // `preserveTinted`，「单色说明人家已经适配好了，不动」），桌面这边一直没接 ——
+      // 两边说的是同一件事，所以复用同一个函数，不另写一套标准。
+      // ⚠ 量的是**我们要动的那一层**（自适应=前景层、非自适应=整张），不是合成后的图：
+      //   拿合成结果去判等于用「我压出来的形状」去决定「要不要压」，自己证自己。
+      if (ModuleRuntime.options().preserveTinted && ToneCheck.isGrayscale(raster)) {
+        noteGiveUp(edge, label, "已是灰度（应用自己适配过取色）→ 不动")
+        raster.recycle()
         return@runCatching null
       }
       // ── 走的**就是通知小图标那套方案的两支**，不为任何一类图标单独开分支 ──
