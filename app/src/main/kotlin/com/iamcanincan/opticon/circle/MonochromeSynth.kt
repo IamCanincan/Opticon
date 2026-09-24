@@ -351,6 +351,8 @@ internal object MonochromeSynth {
   private fun describe(source: Drawable, adaptive: Boolean): String {
     val foreground = (source as? AdaptiveIconDrawable)?.foreground
     return buildString {
+      // 包名/资源名放最前面：报一个应用名就能直接 grep 到它那一行（认不出打 `?`）。
+      append(IconNames.of(source)).append(' ')
       append(source.javaClass.simpleName)
       if (foreground != null) {
         append(" fg=")

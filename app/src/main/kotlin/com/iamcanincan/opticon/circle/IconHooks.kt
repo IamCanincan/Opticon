@@ -36,6 +36,7 @@ import java.lang.reflect.Constructor
 import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.nio.ByteBuffer
+import java.util.WeakHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.Volatile
 
@@ -389,6 +390,10 @@ private fun hookIconLoader(xposed: XposedInterface, method: Method): Boolean =
           val icon =
             chain.proceedWith(chain.thisObject, restored.toTypedArray()) as? Drawable
               ?: return@intercept null
+          // 只给日志用的名字。取的是**还原后的真实 id** —— args 里那份是打过标记的假 id，
+          // 拿它问资源名只会得到异常或错名字。只在「这确实是个被标记的应用图标 id」这条
+          // 分支上做，热路径的其余 drawable 一次都不问。
+          IconNames.remember(icon, resourceName(chain.thisObject as? Resources, restored[index] as Int))
           clipToCircle(icon)
         } finally {
           replacingIcon.set(false)
@@ -1226,3 +1231,55 @@ private fun getIntField(obj: Any, name: String): Int? = runCatching {
   obj.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(obj) as Int
 }
   .getOrNull()
+
+/**
+ * 「这个 Drawable 是哪个应用的图标」对照表 —— **只给日志用**，不参与任何判断。
+ *
+ * 为什么非要它：这一路的反馈全都长这样——「12123 / termux / 闲鱼 不对」。而 `Mono: diag`
+ * 行里只有 `AdaptiveIconDrawable fg=VectorDrawable@425x425` 这种 drawable 签名，两边对不上
+ * 号，每一轮排查都只能靠猜（上一轮能定位到淘宝，纯属它的特征恰好独占一类）。名字进日志之后，
+ * 报一个应用名就能直接捞到它那一行，判据定得对不对当场可见。
+ *
+ * ⚠ 认不出是常态，不是错误：launcher 复制图标（`newDrawable` / `mutate`）之后实例会变，
+ *   所以除了实例还记一份 `ConstantState`；两条都不命中就打 `?`。**绝不为了记名字去改
+ *   应用那份图标对象** —— 那正是本模块吃过亏的地方（bounds 被动过 = 图标画歪 / 画糊）。
+ *
+ * 内存：WeakHashMap。图标对象由 launcher 的 IconCache 长期持有，但换主题、卸载应用之后
+ * 会被丢掉，用强引用等于把整批 drawable 钉在桌面进程里。
+ */
+internal object IconNames {
+
+  private val byDrawable = WeakHashMap<Drawable, String>()
+
+  private val byState = WeakHashMap<Drawable.ConstantState, String>()
+
+  @Synchronized
+  fun remember(icon: Drawable, name: String) {
+    if (name.isEmpty()) return
+    if (byDrawable.size >= LIMIT) { byDrawable.clear(); byState.clear() }
+    byDrawable[icon] = name
+    icon.constantState?.let { byState[it] = name }
+  }
+
+  /** 命中就返回 `包名/类型/入口名`，认不出返回 `?`。 */
+  @Synchronized
+  fun of(icon: Drawable): String {
+    byDrawable[icon]?.let { return it }
+    icon.constantState?.let { byState[it] }?.let { return it }
+    if (icon is AdaptiveIconDrawable) {
+      val fg = icon.foreground
+      if (fg != null) {
+        byDrawable[fg]?.let { return it }
+        fg.constantState?.let { byState[it] }?.let { return it }
+      }
+    }
+    return "?"
+  }
+
+  private const val LIMIT = 4096
+}
+
+/** 资源 id → 可读名字。取不到（跨包资源、被回收的 id）就交空串，让调用方跳过登记。 */
+private fun resourceName(res: Resources?, id: Int): String = runCatching {
+  if (res == null) "" else "${res.getResourcePackageName(id)}/${res.getResourceTypeName(id)}/${res.getResourceEntryName(id)}"
+}.getOrDefault("")
