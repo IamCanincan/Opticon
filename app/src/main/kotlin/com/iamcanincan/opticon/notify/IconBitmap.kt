@@ -40,23 +40,36 @@ object IconBitmap {
     private const val SOLID_SHAPE_LIMIT = 0.7f
 
     /**
-     * 压出来的形状占整张图的比例，低于下限（几乎全空）或高于上限（几乎全满）都算失败。
+     * 压出来的形状占**它自己那块内容外接框**的比例，低于下限（几乎全空）或高于上限
+     * （几乎全满）都算失败。
      *
      * 状态栏只认 alpha，交出去一张空图就是一个看不见的洞，交出去一张满图就是一个纯色块，
      * 两者都比原图标更糟。这种情况宁可放弃替换、保持原样。
+     *
+     * ## ⚠ 桌面那两支必须按**外接框**口径量，不能按整张画布
+     * 这是 2026-09-24「白块 / 块不干净」那条反馈的病根。自适应前景层的内容只落在 108dp
+     * 画布中央约 61% 一线，**外接框本身就只有画布的约 47%** —— 于是「整个外接框被填满」
+     * 这种最坏的掩码（一整块底板，字形根本不在里面）按画布量出来是 0.47，
+     * 离 0.85 的上限远得很，**永远拦不住**。真机日志早就把这个数打出来了：
+     * 淘宝那一版 `out=0.47 cc=1 top=1.00`（`out` 就是画布口径）——
+     * `cc=1 top=1.00` 说的是「一整块」，`out=0.47` 却一路放行。
+     *
+     * 通知侧不受这个影响：那条链在 [monochrome] 之前先 [fill] 过，内容已经放大填满整张画布，
+     * 外接框 ≈ 画布，两种口径是同一个数。所以这里**只有桌面的两个入口**换成框口径，
+     * [monochrome] 保持画布口径不动（改它等于改已验过的通知那条链）。
      */
     private const val MIN_SHAPE_RATIO = 0.02f
     private const val MAX_SHAPE_RATIO = 0.85f
 
     /**
-     * [alphaSilhouette] 的判据：**内容外接框**里不透明像素占比到这个程度，
-     * 就认定它是一整块底而不是「透明底 + 图形」。
+     * 外接框口径下「一整块底板」的分界线就是 [MAX_SHAPE_RATIO]，**不再另设一条**。
      *
-     * 0.92 这条线是「矩形 vs 形状」的分界 —— **实心圆只有 0.785**（π/4），
-     * 带圆角的形状更低，所以够得着 0.92 的只有真正铺满的方底（满幅位图 / 照片 /
-     * 纯色块）。取更松的值（比如 0.7）会把实心圆这类正常形状一起误伤。
+     * 之前这里有一条 [FULL_BOX_FILL]（0.92）专管「这是不是底」，而产出守卫用 0.85 管画布，
+     * 两条线量的是不同的东西，中间那段（框内 0.85~0.92）既没人拦也没人看。
+     * 现在统一成一条：框内 ≥0.85 就当底板、降级到二值支。
+     * 0.85 仍然不会误伤**实心圆**：圆的框内填充率是 π/4 ≈ 0.785，
+     * 而圆形底板本来就该压成一个圆 —— 那是它的形状，不是脏块。
      */
-    private const val FULL_BOX_FILL = 0.92f
 
     /** 二值化时每个像素的归类，用于连通性判断 */
     private const val CLASS_TRANSPARENT = 0
@@ -136,11 +149,27 @@ object IconBitmap {
     }
 
     /**
+     * [alphaSilhouette] / [binarizeSilhouette] 的产出：掩码，加上**这一张的判据数字**。
+     *
+     * 为什么要把数字带出去而不是只回一个 `Bitmap?`：桌面主题图标这块看不见（图像通道是
+     * filtered 的，用户也明确不要我截图），而「白块 / 块不干净」这类观感问题只有一句
+     * 「压不出掩码」是查不了的 —— 上一轮的 `out=0.47` 就是活例子：数打了，但打在**画布**
+     * 口径上，一整块底板量出 0.47，看着完全正常。现在每个图标那行日志都带着它被收 / 被拒
+     * 的那个**框内**比例，判据定得对不对一眼能核。
+     *
+     * @param mask 白色 + alpha 的掩码；null = 这一支不成立，调用方该换支或放弃合成。
+     * @param boxFill 内容外接框内的等效覆盖率（0..1）。被拒时它就是**致拒的那个数**。
+     * @param verdict 一句话结论，直接拼进日志。
+     */
+    internal class Silhouette(val mask: Bitmap?, val boxFill: Float, val verdict: String)
+
+    /**
      * **通知方案的第一支**（`grayscale` 保留 alpha 那一步）—— 透明底 + 图形的轮廓。
      *
      * 与 [monochrome] 的 `useAlpha` 支走**同一份实现**（[alphaShape]），
-     * 唯一的差别是「透明像素占多少」在**哪张图上量**。返回 null 表示这张图的透明像素
-     * 不构成背景（整张是满幅的图形 / 照片 / 纯色块），调用方应当改用 [binarizeSilhouette]。
+     * 唯一的差别是「透明像素占多少」在**哪张图、哪个口径**上量：这里是**内容外接框**口径，
+     * 理由见 [MAX_SHAPE_RATIO] 上那一段（画布口径会让一整块底板量出 0.47 而一路放行）。
+     * 不成立时 `mask` 为 null，调用方应当改用 [binarizeSilhouette]。
      *
      * ## 判据，以及为什么必须**先裁到内容外接框再量**
      * 判据只有一条：**内容外接框里有没有留下成片的透明**。
@@ -162,22 +191,22 @@ object IconBitmap {
      * 桌面不能像通知那样把内容放大填满（坐标系要对齐 108dp 画布），
      * 但**「先裁框、再判形状」这一步必须一致**。
      *
-     * 分界线取 [FULL_BOX_FILL]（0.92）而不是更松的值：**实心圆形的填充率只有 0.785**
-     * （π/4），带圆角的形状更低，只有「一整块矩形底」才够得着 0.92。
-     * 这条线不能跟 [monochrome] 里那个 `useAlpha` 的 0.7 混 ——
-     * 那个是**整张画布**口径下对覆盖率的兜底，量的是完全不同的东西。
+     * 分界线就是 [MAX_SHAPE_RATIO]（0.85），不再另设一条：实心圆的框内填充率只有
+     * 0.785（π/4），够不着这条线，所以「圆形底板压成一个圆」这种**正确**的行为不会被误伤。
+     * 也不要跟 [monochrome] 里那个 `useAlpha` 的 0.7 混 —— 那是**画布**口径下对覆盖率的
+     * 兜底（通知侧 fill 过，框≈画布），量的不是同一个东西。
      *
      * @param preserveAlpha 保留原始 alpha 的抗锯齿值（只把颜色换成白色），
      *   与 [monochrome] 的同名参数含义一致。
      */
     @Synchronized
-    fun alphaSilhouette(input: Bitmap, preserveAlpha: Boolean = true): Bitmap? {
+    internal fun alphaSilhouette(input: Bitmap, preserveAlpha: Boolean = true): Silhouette {
         val w = input.width
         val h = input.height
-        if (w <= 0 || h <= 0) return null
+        if (w <= 0 || h <= 0) return Silhouette(null, 0f, "尺寸非法")
         val pixels = IntArray(w * h)
         input.getPixels(pixels, 0, w, 0, 0, w, h)
-        val bounds = contentBounds(input) ?: return null
+        val bounds = contentBoundsOf(pixels, w, h) ?: return Silhouette(null, 0f, "整张透明")
         var transparent = 0
         for (y in bounds.top until bounds.bottom) {
             val row = y * w
@@ -186,19 +215,21 @@ object IconBitmap {
             }
         }
         val boxTotal = bounds.width().toLong() * bounds.height()
-        if (boxTotal <= 0) return null
-        val solidRatio = (boxTotal - transparent).toFloat() / boxTotal
+        if (boxTotal <= 0) return Silhouette(null, 0f, "外接框为空")
+        val boxFill = (boxTotal - transparent).toFloat() / boxTotal
         // 外接框内几乎被填满 → 这不是「透明底 + 图形」，是一整块底。
-        if (solidRatio >= FULL_BOX_FILL) return null
+        if (boxFill >= MAX_SHAPE_RATIO) return Silhouette(null, boxFill, "框内已填满=底板")
+        if (boxFill <= MIN_SHAPE_RATIO) return Silhouette(null, boxFill, "框内几乎全空")
 
         // 与通知方案同一个实现：见 [alphaShape]。
+        // ⚠ 这里**不再**重复一遍覆盖率守卫：alphaShape 收的正是「框内 alpha ≥ 128」那一批
+        // 像素，它的计数除框面积就是上面那个 boxFill（按构造必然相等）。再量一遍只会
+        // 多一次全画布遍历，还会留下两条可能对不上的数。
         val output = IntArray(w * h)
         val count = alphaShape(pixels, output, preserveAlpha)
-        val shapeRatio = count.toFloat() / (w * h)
-        if (shapeRatio < MIN_SHAPE_RATIO || shapeRatio > MAX_SHAPE_RATIO) return null
         val result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         result.setPixels(output, 0, w, 0, 0, w, h)
-        return result
+        return Silhouette(result, boxFill, "$count 像素")
     }
 
     /**
@@ -328,31 +359,50 @@ object IconBitmap {
      * 选哪一侧（暗部还是亮部）由 [keepDarkSide] 的**连通性**判据定：背景通常与图标
      * 外部相连、图形是被包住的内部块 —— 比任何固定阈值都稳，也和通知侧同一套。
      *
-     * 压不出像样的形状（几乎全空 / 全满）时返回 null，由上层保持原样。
+     * 压不出像样的形状时返回 `mask = null`，由上层保持原样。⚠ 这里的「像样」按
+     * **内容外接框**口径量（与 [alphaSilhouette] 同一个理由）：这一支最常踩的坑正是
+     * 「连通性打平 → 退回取较少一侧 → 结果保住的还是那块底」，按画布量它永远只有
+     * 约 0.47，拦不住；按框量就是 1.00，当场拒掉、让桌面走自己的路。
      */
     @Synchronized
-    internal fun binarizeSilhouette(input: Bitmap, preserveAlpha: Boolean = true): Bitmap? {
+    internal fun binarizeSilhouette(input: Bitmap, preserveAlpha: Boolean = true): Silhouette {
         val w = input.width
         val h = input.height
-        if (w <= 0 || h <= 0) return null
+        if (w <= 0 || h <= 0) return Silhouette(null, 0f, "尺寸非法")
         val total = w * h
         val pixels = IntArray(total)
         val output = IntArray(total)
         input.getPixels(pixels, 0, w, 0, 0, w, h)
         val count = binarize(pixels, output, w, h, preserveAlpha)
-        val shapeRatio = count.toFloat() / total
-        if (shapeRatio < MIN_SHAPE_RATIO || shapeRatio > MAX_SHAPE_RATIO) return null
+        val bounds = contentBoundsOf(pixels, w, h)
+            ?: return Silhouette(null, 0f, "整张透明")
+        val boxTotal = bounds.width().toLong() * bounds.height()
+        if (boxTotal <= 0) return Silhouette(null, 0f, "外接框为空")
+        // 分子是「保住了的那一侧」，分母是**内容外接框** —— 两侧都不是整张画布。
+        val boxFill = count.toFloat() / boxTotal
+        if (boxFill > MAX_SHAPE_RATIO) return Silhouette(null, boxFill, "保住的那侧=整块底")
+        if (boxFill < MIN_SHAPE_RATIO) return Silhouette(null, boxFill, "几乎没保住东西")
         val result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         result.setPixels(output, 0, w, 0, 0, w, h)
-        return result
+        return Silhouette(result, boxFill, "$count 像素")
     }
 
-    /** 非透明像素的外接矩形；整张都透明时返回 null */
+    /** 非透明像素的外接矩形；整张都透明时返回 null。位图版只是 [contentBoundsOf] 的薄壳。 */
     private fun contentBounds(source: Bitmap): Rect? {
         val w = source.width
         val h = source.height
         val pixels = IntArray(w * h)
         source.getPixels(pixels, 0, w, 0, 0, w, h)
+        return contentBoundsOf(pixels, w, h)
+    }
+
+    /**
+     * 同上，但直接吃已经取好的像素数组。
+     *
+     * 桌面那两支手上本来就有整张 `pixels`，走位图版会白白再来一次 `getPixels`
+     * —— 384² 就是 590 KB 一次的全画布拷贝，而这两支每个图标各跑一遍。
+     */
+    private fun contentBoundsOf(pixels: IntArray, w: Int, h: Int): Rect? {
         var minX = w
         var minY = h
         var maxX = -1

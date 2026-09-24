@@ -238,25 +238,23 @@ internal object MonochromeSynth {
       //    通知侧的 `grayscale` 之所以能用灰度，是因为它交出去的是**完整位图**
       //    （RGB 与 alpha 各司其职），桌面这条路上 RGB 根本没人看。
       //
+      // ⚠ 两支用**同一条**覆盖率线（`IconBitmap.MAX_SHAPE_RATIO`，0.85），而且必须按
+      //    **内容外接框**量、不能按整张画布量：自适应前景的框只占画布约 47%，
+      //    「整个框被填满」这种最坏的掩码按画布量永远只有 0.47，看着完全健康 ——
+      //    真机那个 `out=0.47 cc=1 top=1.00` 的白块就是这么一路放行的。
+      //    两支各自把量出来的 `boxFill` 与结论带出来，交给下面那行逐条日志。
+      //
       // 两条都不成立时返回 null，桌面照旧走它自己的路（[noteGiveUp] 会留痕）。
-      val silhouette = IconBitmap.alphaSilhouette(raster)
-      val branch: String
-      val base: Bitmap?
-      if (silhouette != null) {
-        branch = "alpha 轮廓"
-        base = silhouette
-      } else {
-        // 保留暗部还是亮部由 [IconBitmap.binarizeSilhouette] 内部的连通性判据自己定，
-        // 这里不先算一遍 —— 那只是诊断信息，[noteDiagnosis] 会把它打进日志。
-        branch = "二值剪影"
-        base = IconBitmap.binarizeSilhouette(raster)
-      }
-      noteBranch(edge, label, branch, base != null)
+      val alpha = IconBitmap.alphaSilhouette(raster)
+      val bin = if (alpha.mask == null) IconBitmap.binarizeSilhouette(raster) else null
+      val chosen = if (alpha.mask != null) alpha else bin?.takeIf { it.mask != null }
+      noteBranch(edge, label, alpha, bin, chosen)
+      val base = chosen?.mask
       // 非自适应图标的内容是满幅的，而它在图层 bounds 里只该占中间那 2/3（可见区），
       // 所以掩码算完**之后**才缩进 —— 顺序反了就会踩 [rasterize] 上面那个坑。
       val placed = if (adaptive) base else base?.let { intoVisibleArea(it, edge) }
       val mask = placed?.let { toAlphaMask(it) }
-      noteDiagnosis(edge, label, raster, mask, silhouette != null)
+      noteDiagnosis(edge, label, raster, mask, chosen === alpha)
       raster.recycle()
       if (placed !== base) placed?.recycle()
       base?.recycle()
@@ -319,17 +317,32 @@ internal object MonochromeSynth {
   }
 
   /**
-   * 诊断：这个图标走了哪条分支（alpha 轮廓 / 二值剪影），以及有没有真的交出掩码。
+   * 诊断：这个图标走了哪条分支、两支各自量出多少、最后有没有交出掩码。
    *
-   * 和 [noteGiveUp] 同一个理由 —— 每一条出口都必须留痕，否则「走了哪条路」和
-   * 「压根没进这条函数」在日志里长得一模一样。
-   * 两条分支的**分布**也要能看出来：哪条路走得多、哪条路容易压不出东西，
-   * 是复核判据该定在哪的唯一依据。
+   * ⚠ 这是**每个图标一行**的廉价留痕 —— 不复算任何东西，数字是两支自己带出来的
+   * （见 [IconBitmap.Silhouette]），所以这一条不打上限。贵的那条全画布复算汇总在
+   * [noteDiagnosis]，那条才有限额。
+   *
+   * 为什么非要把 `框内=` 这个数打在逐条行上：上一轮「白块」的教训是**数打了、口径错了** ——
+   * `out=0.47` 是画布口径，一整块底板也只量到 0.47，看上去完全健康，于是一路放行。
+   * 这一行给的是**内容外接框**口径的那一个数，它才是真正决定走哪支、拦不拦得住的数。
    */
-  private fun noteBranch(edge: Int, label: String, branch: String, produced: Boolean) {
+  private fun noteBranch(
+    edge: Int,
+    label: String,
+    alpha: IconBitmap.Silhouette,
+    bin: IconBitmap.Silhouette?,
+    chosen: IconBitmap.Silhouette?,
+  ) {
     val n = diagnosed.incrementAndGet()
-    Log.d(TAG, "Mono: diag#$n edge=$edge $label $branch → " +
-      if (produced) "已交出掩码" else "压不出掩码，放弃合成")
+    val trail = buildString {
+      append("alpha[").append(ratio(alpha.boxFill)).append(' ').append(alpha.verdict).append(']')
+      if (bin != null) {
+        append(" → 二值[").append(ratio(bin.boxFill)).append(' ').append(bin.verdict).append(']')
+      }
+    }
+    Log.d(TAG, "Mono: diag#$n edge=$edge $label $trail → " +
+      if (chosen != null) "已交出掩码" else "两支都不成立，放弃合成")
   }
 
   /**
