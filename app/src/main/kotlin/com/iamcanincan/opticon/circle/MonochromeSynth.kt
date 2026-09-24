@@ -119,11 +119,69 @@ internal object MonochromeSynth {
   private val cache = IdentityHashMap<Drawable, Bitmap>()
 
   /**
+   * 遮罩模式下的**极性判据**入口：把桌面要用的那一层光栅化，交给 [MonochromeMask.polarity]，
+   * 只换一个 bit 回来 —— **不再出图**，`getMonochrome()` 仍然交回 null，遮罩照旧由桌面生成，
+   * 我们在它生成之后按这个 bit 决定翻不翻。
+   *
+   * ⚠ 判据与合成必须同源：走的是 [rasterize] 那条同一路（图层 bounds 尺寸、108dp 坐标系、
+   *   剥 `DrawableWrapper` 的那些坑都在那边），降采样在 `polarity()` 里面做，所以这里 192 就够。
+   *   判"哪边是图形"这件事全仓只有 [MonochromeMask.groundPass] 一份实现 —— 出现第二份，
+   *   两处就会各自漂移，而这个功能的全部难点就是这一个判断。
+   */
+  @Synchronized
+  fun polarityFor(source: Drawable): MonochromeMask.Polarity? {
+    val adaptive = source is AdaptiveIconDrawable
+    val label = describe(source, adaptive)
+    val target = (if (adaptive) source.foreground else source) ?: return null
+    val raster = rasterize(target, POLAR_EDGE) ?: return null
+    return runCatching {
+      val total = POLAR_EDGE * POLAR_EDGE
+      val pixels = IntArray(total)
+      raster.getPixels(pixels, 0, POLAR_EDGE, 0, 0, POLAR_EDGE, POLAR_EDGE)
+      val t0 = System.nanoTime()
+      val p = MonochromeMask.polarity(pixels, POLAR_EDGE, POLAR_EDGE)
+      val ms = (System.nanoTime() - t0) / 1_000_000
+      val id = judged.incrementAndGet()
+      Log.d(TAG, "Mono: $label 极性 ${ms}ms ${p.report}")
+      // 判据一改，"翻对了还是翻错了"在桌面上看不见（图像通道是 filtered 的），所以把**判据
+      // 动手的那几张**的原像素带回来重放 —— 与合成那条路同一个通道、同一个预算。
+      // 判不了的那些也要带：它们说明判据在这类图上失效了，那是下一轮的靶子。
+      if (p.invert || !p.known) {
+        MonoDump.maybe(id, label, raster, pixels, null, POLAR_EDGE, POLAR_EDGE,
+          "${IconNames.of(source)} | ${p.report}")
+      }
+      pending.set(p)
+      p
+    }.onFailure {
+      Log.w(TAG, "Mono: polarity threw: ${it.javaClass.simpleName}: ${it.message}")
+    }.getOrNull().also { raster.recycle() }
+  }
+
+  /** [getMonochrome] 与 `generateMono` 之间传话的那一个格子。
+   *  ⚠ 为什么敢这么传：`MonoIconThemeController.createThemedBitmap` 第 76 行调
+   *  `icon.getMonochrome()`，返回 null 才走到第 84 行 new `MonochromeIconFactory` ——
+   *  **同一个方法、同一个线程、中间不切线程**，所以这一格子里只可能是刚才是那张图的判据。
+   *  取一次就清空：留着会把上一张的结论用到下一张上，那比不翻更糟。 */
+  private val pending = ThreadLocal<MonochromeMask.Polarity?>()
+
+  /** 本次调用链上刚判出来的那一个极性（取一次即清）。null = 没有判据 → 不动遮罩。 */
+  fun takePolarity(): MonochromeMask.Polarity? = pending.get().also { pending.set(null) }
+
+  /** 每次进入 `getMonochrome()` 先清一次：保证 `generateMono` 拿到的判据一定出自**同一张**图标。 */
+  fun clearPolarity() {
+    pending.set(null)
+  }
+
+  private val judged = AtomicInteger(0)
+
+  /** 判据用的光栅化边长。polarity() 内部还会降到 ~96 再跑模型，这里只是别让它读到太大的图。 */
+  private const val POLAR_EDGE = 192
+
+  /**
    * 给 [source] 合成一个单色层；合成不出来就返回 null，让调用方照原样走下去。
    *
    * 尺寸已知就一次到位，不知道才按 MIN_EDGE 探一次（探的意义是「压不出形状就别交空壳出去」，
-   * 那会让桌面以为有单色图标、结果画出一片空白）。没有这一行的话每个图标要把整条全像素管线
-   * 跑两遍：先 192 探一次、`draw()` 里发现桌面要 384 再重压一次。一次会话里桌面给的图层 bounds
+   * 那会让桌面以为有单色图标、结果画出一片空白）。一次会话里桌面给的图层 bounds
    * 是常量，所以只有第一个图标付两次。
    */
   @Synchronized

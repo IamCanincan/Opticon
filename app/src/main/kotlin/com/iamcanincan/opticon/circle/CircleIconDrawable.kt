@@ -82,21 +82,23 @@ class CircleIconDrawable(icon: Drawable) :
     }
 
   /**
-   * 原图标没提供单色层时**就地合成一个**（见 [MonochromeSynth]）。
+   * 原图标没提供单色层时，**在这里也接一次极性判据**（[MonochromeSynth.polarityFor]）。
    *
-   * ⚠ 这里是 override，`AdaptiveIconDrawable.getMonochrome()` 上挂的那道合成钩
-   * **拦不到本类**（虚方法分派直接走这个实现）—— 而裁圆默认开着、桌面拿到的图标
-   * 几乎都是本类实例，所以合成必须在这里也接一次，否则整条「合成优先」在默认配置下
-   * 等于没上。
+   * ⚠ 这里是 override，`AdaptiveIconDrawable.getMonochrome()` 上挂的那道判据钩
+   * **拦不到本类**（虚方法分派直接走这个实现）—— 而裁圆默认开着、桌面拿到的图标几乎都是
+   * 本类实例，所以判据必须在这里也接一次，否则默认配置下整条「按判据翻遮罩」等于没上。
    *
-   * ⚠ 合成用 **`sourceIcon`（原图标）而不是本对象**：本对象的可见外观是
-   * 「圆内裁好的内容」，拿它压剪影会得到一个**实心圆饼**；主题图标要的是
-   * 应用自己的字形剪影，所以得从原图标的前景层压。
+   * ⚠ 判据用 **`sourceIcon`（原图标）而不是本对象**：本对象的可见外观是「圆内裁好的内容」，
+   *   拿它去量"哪边是图形"只会得到一个实心圆饼。
+   *
+   * 一律返回 null：遮罩照旧由桌面生成，我们只在它生成之后决定翻不翻（`IconHooks.hookMaskPolarity`）。
    */
   override fun getMonochrome(): Drawable? {
     sourceMonochrome?.let { return it }
+    MonochromeSynth.clearPolarity()
     if (!ModuleRuntime.options().monoInvert) return null
-    return MonochromeSynth.forIcon(sourceIcon)
+    MonochromeSynth.polarityFor(sourceIcon)
+    return null
   }
 
   override fun draw(canvas: Canvas) {

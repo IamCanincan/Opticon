@@ -6,41 +6,38 @@ import java.util.Locale
 import kotlin.math.sqrt
 
 /**
- * 强制取色的掩码模型：一张图标 → 一条 alpha 斜坡。
+ * 强制取色的合成模型：一张图标 → 一条 alpha 斜坡。
  *
  * 纯数组进、纯数组出 —— 不碰 Drawable、不碰 Bitmap，所以判据台（`_harness/`）跑的是**这一份**
  * 代码而不是它的副本；位图与 drawable 的事全在 [MonochromeSynth]。
  *
- * ## 为什么整条链只剩两支
- * 上一版这里四支在竞价（alpha 轮廓 / 细节 / 三层刻底 / 亮度 Otsu），每支一套阈值，谁赢由一串
- * `beatsAlpha` / `plateLike` / `boxFill` 比较决定。病根不是阈值没调好，是**四支量的本来就不是
- * 同一件事**：alpha 支照抄轮廓（底板原样留下）、刻底支按颜色删像素（删到哪一刀是一条全局线，
- * 柔光字形与渐变底两头都栽过）、Otsu 支只看亮度（底与字形一明一暗才切得开）。README 记的那
- * 七次裁定，六次是在决定这条全局线画在哪。
+ * ## 为什么只剩一个量
+ * 这里先后有过四支竞价（alpha 轮廓 / 细节 / 三层刻底 / 亮度 Otsu），后来收成两支（刻底 /
+ * 透明底）再加一级明度兜底。病根不是阈值没调好，是**每一支量的本来就不是同一件事**，
+ * 于是要靠一串比较来决定谁赢：`beatsAlpha` / `plateLike` / `boxFill` / `alphaIsPlate`……
+ * README 记的那七次裁定，六次是在决定这条全局线画在哪、哪一支先发言。
  *
- * 这一版只问一个问题：**这个像素，与它*周围*那块底，看起来差多少？**
+ * 现在整条链只有**一个浓度量** [departure]、**一个原语应用两遍**（[groundPass] / [bodyPass]），
+ * 两支与那一级兜底都不是被"删掉"的，是**同一个式子在三个 β 上的样子**：
  *
- * 1. **底 = 局部底色场**（[FIELD_GRID] 的格子，每格取该格底板像素的中位色，空格由邻格松弛补齐，
- *    取值时双线性插值）。不是全图一个中位色 —— 一道渐变底在每个格子里都有自己那一份，于是
- *   「渐变」不需要并层、不需要档内插值补偿，**它自己就是平的**。
- * 2. **差 = CIELAB 距离**，整数查表实现（见「感知色度学」）。不用 RGB 曼哈顿距离（同距离不同
- *    色相看起来差很远），也不只用亮度（同亮度的红与青量不出来）。
- * 3. **alpha = 差按这张图自己的范围标定**（底散度 → 0、形层 p66 → 255）过一条单调曲线
- *    [CURVE]，再按「比底暗还是亮」把同一距离的两块**分侧**（暗侧最多 +16%、亮侧最多 −8%）。
- *    ⚠ 试过把实心点从 p66 抬到 p90、中段拉成三点拉伸 —— 图标的主体往往就是那个中位色，
- *    把它钉在 200 上白块就从 255 掉到 184，正是「主题色怎么这么浅」。**层次不能靠把实心段
- *    降下来换**；能换的是同一距离上的明度分侧，那是不花实心度的层次。
- * 4. **没有底可摘的图也不许退回桌面**：整张插画 / 照片底这类"四族底也只摘得掉 0.14"的，
- *    走 [luminanceRamp] —— 把这张图自己的明暗层次搬到 alpha 上（越暗越实，端点按 p5/p95 量）。
- *    返回 null 在功能上不是"什么都不做"，是把这张图交给桌面那条算错极性的工厂。
+ *     dep = a × [ (1−β) + β × min(ΔE, EMAX) / EMAX ]        0..255
+ *
+ *  a = 这一像素自己的覆盖率，β = **参照自己的**覆盖率，ΔE = 与参照色的 CIELAB 距离。
+ *  · β=1 参照是一整块实心底 → dep 就是「离底多远」—— 原来的「刻底」；
+ *  · β=0 参照是「没有东西」→ dep 退成覆盖率 —— 原来的「透明底」，但**是被算出来的**，
+ *    不是照抄图标自带的 alpha（所以柔光底板那类不再需要一条绝对 alpha 线去拦）；
+ *  · 0<β<1 → 连续过渡，一张带半透明底板的前景层两头都不误判；
+ *  · 一整块底把全框都吞了（整张插画，根本没有"底"这个区域）→ 参照仍然是**局部的** 8×8 色场，
+ *    量出来就是「离自己周围多远」= 局部对比 = 它自己的明暗层次 —— 原来的第三支。
+ *
+ * 两遍之外的三件事也都只有一份：**底色场**（[FIELD_GRID] 的格子，每格取该格参照像素的中位色，
+ * 空格由邻格松弛补齐，取值按「离它最近的那块参照」传播而不是按格子 —— 见 [propagateField]）、
+ * **两点标定**（每一遍各自的零点与实心点，全从这张图自己的分布量）、**明度序**（同一距离上
+ * 一暗一亮两块被 |ΔE| 撞成一个值，按「比参照暗还是亮」排开，参照色按 β 在两遍之间加权）。
  *
  * 于是「一整块色板」在这条路上**不是被闸门拦掉的，是产生不出来**：底板与自己比必然差 0，归一
  * 之后必然透明。要涂满整张，得先让整张都不是它自己的底 —— 定义上的矛盾。
  *
- * ## 唯一保留的另一支：透明底
- * 图标的底是「没有东西」时，色场没有可比的对象，差就退成覆盖率本身 = 图标自带的 alpha。走不走
- * 这一支只看两个事实：**内容外接框里有多少是不透明的**（[PLATE_MIN_BOX]），以及 alpha 轮廓自己
- * 有没有内部结构（[ALPHA_SOLID_TOP] + [PLATE_HOLE]）。
  * ⚠ 判据一律**先裁到内容外接框再量**：自适应前景层四周那圈安全区留白不是背景，带着它量会把满幅
  * 不透明的一块底误判成「透明底 + 图形」，压出来就是那块底的轮廓 = 一整块色。这是真机「淘宝变成
  * 大色块」的病根，口径不能动。
@@ -48,7 +45,8 @@ import kotlin.math.sqrt
  * ## 交出去的就是最终答案
  * 模型之外不再做任何浓度决定 —— 旧版 `MonochromeSynth.toAlphaMask` 里那套「内部一律钳实心 +
  * 边缘保底」一并删掉。判据算出来的斜坡就是要上屏的东西；两头各调一次必然对不上，上一版「日志
- * 说的和屏幕上不是一张图」就是这么来的。
+ * 说的和屏幕上不是一张图」就是这么来的。同理**永不为 null**：返回 null 是把这张图交给桌面自己
+ * 那张算错极性的遮罩（`MonochromeIconFactory`），而"这张图只有一层"不是错误，是事实。
  */
 internal object MonochromeMask {
 
@@ -60,25 +58,6 @@ internal object MonochromeMask {
   /** 「这块像素算不透明」，也是形状统计的口径 —— 与全仓 `MIN_SHAPE_ALPHA` 同一条线。 */
   private const val A_SOLID = 128
 
-  /** 内容框内不透明占比到它，就认定「这张图有一整块底」，alpha 轮廓不再是答案。 */
-  private const val PLATE_MIN_BOX = 0.85f
-
-  /** 掩码占框比例的上下限：低于下限交出去是个看不见的洞，高于上限是一块色板。 */
-  private const val MIN_SHAPE_RATIO = 0.02f
-  private const val MAX_SHAPE_RATIO = 0.85f
-
-  /** 「仍是一整块板」的两条线：填到 [PLATE_FILL] 而且**内部没有洞**。字形总有字腔。 */
-  private const val PLATE_FILL = 0.55f
-  private const val PLATE_HOLE = 0.03f
-
-  /** alpha 轮廓交出来的东西像一块板：单个连通块占 ≥ 它，而且没有洞。 */
-  private const val ALPHA_SOLID_TOP = 0.90f
-
-  /** 「碎成一片」三条一起成立才算碎。块多 ≠ 碎：月亮加星点天生十几块各自成块的正形。 */
-  private const val SHATTER_COMPONENTS = 8
-  private const val SHATTER_TOP = 0.35f
-  private const val SHATTER_SMALL_SHARE = 0.5f
-
   /** 碎渣下限：连通块小于 `总面积 / MIN_SPECK_DIVISOR`（且不少于 8 像素）就擦掉。
    *  按面积给比例而不是写死像素数 —— 出图尺寸跟着桌面要的大小变（本机 192 / 384 两档）。 */
   private const val MIN_SPECK_DIVISOR = 4096
@@ -86,12 +65,14 @@ internal object MonochromeMask {
   /** 边界取样带的宽度 = 框短边 / [RING_BAND_DIV]，夹在 2..8 像素。底只从这条带里找。 */
   private const val RING_BAND_DIV = 24
 
-  /** 底色候选的个数上限，以及一个候选至少要占环带不透明像素的比例。 */
+  /** 底色家族的个数上限：内容框四个角，最多四块拼底。 */
   private const val CANDIDATE_K = 4
-  private const val CANDIDATE_MIN_SHARE = 0.05f
 
   /** 候选之间的互异线：两个候选差不到它，就只算一个颜色（ΔE76 真值）。 */
   private const val CANDIDATE_DISTINCT = 18
+
+  /** 边界带上至少有这么多是实心的，才谈得上"四个角上那块底"（见 [cornerFamilies]）。 */
+  private const val BAND_SOLID_MIN = 85
 
   /**
    * 洪泛容差，单位 ΔE76 真值。[TOL_COARSE] 是第一轮（还没有色场、只有一个候选色）用的；
@@ -110,22 +91,6 @@ internal object MonochromeMask {
    * 也解释成背景。6 个 ΔE 是"肉眼分不出"的量级，比它更紧的容差没有意义。
    */
   private const val TOL_MIN = 6
-
-  /** 洪泛至少要摘掉框内这么多像素，才认为这张图真有一块底可刻。 */
-  private const val PLATE_MIN_SHARE = 0.15f
-
-  /**
-   * 透明底那一支：主体（与背景连成一片、离中位主色够近的那些墨）至少要占图形像素这么多，
-   * 才允许把"被它围住的不同颜色"当镂空。
-   *
-   * 不到它就没有主体可言 —— 几个色块拼出来的 logo 里，每一块都"与别的块差得远"，
-   * 按镂空处理会把其中一整块擦掉。量的是**洪泛之后的实际占比**，不是色桶占比：
-   * 立体渲染的机身满屏明暗渐变，最大的色桶只占十几个百分点，但连成一片的主体占九成。
-   */
-  private const val BODY_MIN_SHARE = 0.45f
-
-  /** 透明底那一支：一块墨与**局部**主色差到它以上，才有资格被当成镂空候选（ΔE76 真值）。 */
-  private const val FEATURE_MIN_DELTA = 20
 
   /**
    * 色场网格边长（框短边不足 [FIELD_MIN_SIDE] 时退到 [FIELD_GRID_MIN]）。
@@ -147,29 +112,24 @@ internal object MonochromeMask {
   private const val FIELD_ITERS = 3
 
   /** 实心参照：形层像素距离的这一个分位映射到 alpha 255（镂空那一步还在用）。 */
-  private const val INK_REF_PCT = 66
+  private const val INK_REF_PCT = 85
 
   /**
-   * 明度分侧的幅度（占原浓度的百分比）与饱和跨度（L\\* 单位）。
+   * 明度序的幅度（占原浓度的百分比）与归一跨度（形层自身 L\\* 的这两个分位之差）。
    *
-   * 同一距离、一暗一亮两块被 |ΔE| 撞成一个值时，暗侧最多往上 [SPLIT_UP]%、亮侧最多往下
-   * [SPLIT_DOWN]%。**不对称是有理由的**：白字在红底上是最常见的"亮侧实心"，往下压狠了
-   * 就是他报过的「主题色发浅」；而暗侧本来就该更实，往上不给余地才是浪费层次。
-   * 跨度 [SPLIT_SPAN] 个 L\\* 算拉满 —— 25 个 L\\* 已经是很明显的明暗差。
+   * 比底暗的往上、比底亮的往下，**按这张图自己的明度跨度成比例**，所以同一距离上有多少
+   * 层就能分出多少层，不是"暗/亮"两档。上限不对称是有理由的：白字在彩色底上是最常见的
+   * "亮侧实心"，往下压狠了就是他报过的「主题色发浅」。乘法保住了"底必为 0"这条性质。
    */
-  private const val SPLIT_UP = 16
+  private const val SPLIT_UP = 20
   private const val SPLIT_DOWN = 8
-  private const val SPLIT_SPAN = 25
 
-  /**
-   * 没有底可摘时那一级的明度端点分位，与"至少要有多少 L\\* 跨度才算有层次可搬"。
-   *
-   * 取 p5/p95 而不是最小/最大：一两个 JPEG 噪点或一条高光不该决定整张图的明暗标尺。
-   * 12 个 L\\* = 肉眼可辨的明暗差，比这还平的图本来就没有层次可言。
-   */
+  /** 明度那一条斜坡的端点分位，与"底占低到多少 / 高到多少时明度整个接管浓度"（见 [build] 里
+   *  的那一个 q：低到没多少东西是底、高到洪泛把整框都吞了，两种都是"没有可用的参照"）。 */
   private const val LUM_LOW_PCT = 5
   private const val LUM_HIGH_PCT = 95
-  private const val LUM_MIN_SPREAD = 12
+  private const val LUM_TAKEOVER = 0.5f
+  private const val LUM_SWALLOW = 0.97f
 
   /** 底板散度的分位，用来定每一轮的洪泛容差。 */
   private const val TOL_PCT = 97
@@ -248,10 +208,11 @@ internal object MonochromeMask {
   // ───────────────────────────── 产出 ─────────────────────────────
 
   /**
-   * @param mask 白 + alpha 的掩码（连续斜坡）；null = 这张图交不出能用的形状。
-   * @param boxFill 掩码（alpha ≥ [A_SOLID]）占**内容外接框**的比例。被拒时它就是致拒的那个数。
+   * @param mask 白 + alpha 的掩码（连续斜坡）。**只有「这张图压根没有像素」两种情况才会交空白**，
+   *   其余一律交出一张图 —— null 的语义不是"没做"，是把这张图交给桌面那张算错极性的遮罩。
+   * @param boxFill 掩码（alpha ≥ [A_SOLID]）占**内容外接框**的比例。
    * @param soft 只到 alpha < [A_SOLID] 的那一层占框比例 —— 「细节有没有留下来」看它。
-   * @param report 一行判据数字。每个数都是**这一支自己决策吃的那一个**，不是事后复算 ——
+   * @param report 一行判据数字。每个数都是**模型自己决策吃的那一个**，不是事后复算 ——
    *   上一轮的教训是「数打了，打在错的分母上，看着完全健康」。
    */
   class Output(
@@ -287,19 +248,34 @@ internal object MonochromeMask {
     var visited = ByteArray(0)
     var queue = IntArray(0)
     var hist = IntArray(DBUCKETS)
+    /** 第二块直方图：距离与明度要同时统计（明度序的跨度归一用它）。 */
+    var hist2 = IntArray(DBUCKETS)
     var fieldHist = IntArray(0)
     var cellR = ShortArray(0)
     var cellG = ShortArray(0)
     var cellB = ShortArray(0)
     var cellN = IntArray(0)
-    /** 每格中位色的 Lab（×64）—— 距离直接查它，不再每像素现算转换。 */
+    /** 每格参照像素的个数与 alpha 之和 —— 出 [fCov]（原语里的那一个 β）。 */
+    var cellTot = IntArray(0)
+    var cellSum = IntArray(0)
+    /** 每格参照色的 Lab（×64）与覆盖率 β —— 距离与浓度都直接查它们，不每像素现算转换。 */
     var fL = IntArray(0)
     var fA = IntArray(0)
     var fB = IntArray(0)
+    var fCov = IntArray(0)
     /** 每个像素"背后那块底"是哪个格子（[propagateField] 的产物）；-1 = 还没传到。 */
     var ref = IntArray(0)
+    /** 第一遍量完就固化的三样：这一像素的参照覆盖率 β、参照亮度（×64）、第二遍的离主体距离。
+     *  固化是因为第二遍要复用 [fL] / [ref] —— 不复制出来就没有"背后的底"可查了。 */
+    var beta = ShortArray(0)
+    var gRefL = ShortArray(0)
+    var off = ShortArray(0)
+    /** 第二遍的参照集：墨里压在底上的那一块 = 图形的外壳。 */
+    var body = ByteArray(0)
 
     var grid = 0
+    /** 内容框边界带里实心占多少（0..255）——「这张图到底有没有一块底」的那一个数，进日志。 */
+    var bandSolid = 0
     /** 底家族（≤4 个角上颜色）的 Lab 与原始色，以及实际个数。 */
     var famL = IntArray(CANDIDATE_K)
     var famA = IntArray(CANDIDATE_K)
@@ -314,11 +290,13 @@ internal object MonochromeMask {
         pass = ByteArray(total); plate = ByteArray(total)
         mark = ByteArray(total); grown = ByteArray(total); visited = ByteArray(total)
         queue = IntArray(total); ref = IntArray(total)
+        body = ByteArray(total)
+        beta = ShortArray(total); gRefL = ShortArray(total); off = ShortArray(total)
       }
       if (cellR.size < cells) {
         cellR = ShortArray(cells); cellG = ShortArray(cells); cellB = ShortArray(cells)
-        cellN = IntArray(cells)
-        fL = IntArray(cells); fA = IntArray(cells); fB = IntArray(cells)
+        cellN = IntArray(cells); cellTot = IntArray(cells); cellSum = IntArray(cells)
+        fL = IntArray(cells); fA = IntArray(cells); fB = IntArray(cells); fCov = IntArray(cells)
         fieldHist = IntArray(cells * 768)
       }
     }
@@ -326,25 +304,72 @@ internal object MonochromeMask {
 
   private val pool = ThreadLocal.withInitial { Scratch() }
 
-  private fun reject(report: String) = Output(null, 0f, 0f, 0f, 0, 0f, 0f, report)
-
   // ───────────────────────────── 主流程 ─────────────────────────────
 
   /**
-   * 把一张光栅化的图标压成掩码。
+   * 一遍参照的产物：**两点标定**（都按这张图自己的分布量，不是绝对值）与几个进日志的数。
    *
-   * @param pixels ARGB（非预乘）整张画布，尺寸 = 图层 bounds。
+   * @param zero dep 的零点 = 参照自己的散度（p[TOL_PCT]）→ 浓度 0
+   * @param solid dep 的实心点 = 工作集另一侧的 p[INK_REF_PCT] → 浓度 255
+   * @param span solid − zero，夹在 [DEP_MIN_SPAN] 以上（整张没有对比时它就是除数）
+   * @param share 参照占内容框的比例
+   * @param meanCov 参照在工作集上的平均覆盖率 β —— 「这一张的浓度是颜色给的还是覆盖率给的」
+   */
+  private class Pass(
+    var zero: Int = 0,
+    var solid: Int = 255,
+    var span: Int = 255,
+    var share: Float = 0f,
+    var meanCov: Int = 0,
+    /** 这一遍的结果最多能起作用多少（0..255）。第二遍用它管住"能降多少"，见 [bodyPass]。 */
+    var weight: Int = 255,
+    var families: Int = 0,
+  )
+
+  /**
+   * 把一张光栅化的图标**合成**成单色层。
+   *
+   * 只有一个量、应用两遍 —— 这就是"没有分支"的意思。
+   *
+   * **量**：[departure] —— `dep = a × [ (1−β) + β × min(ΔE,EMAX)/EMAX ]`，0..255。
+   *  a = 这一像素自己的覆盖率；β = **参照自己的**覆盖率；ΔE = 与参照色的 CIELAB 距离。
+   *  参照是透明的（β=0）→ dep 退成覆盖率；参照是一整块实心底（β=1）→ dep 就是「离参照多远」；
+   *  中间连续过渡。所以「这张图属于哪一类」不再是模型要问的问题：
+   *  · 一张透明底上的白色剪影 → β=0 → 轮廓**被算出来**，不是照抄图标自带的 alpha；
+   *  · 一张带柔光底板的（β 介于两者之间）→ 底板按它自己的透明度压回去，不留一条绝对 alpha 线；
+   *  · 一张整幅插画（根本没有"底"这个区域，四角也是画的一部分）→ 参照仍然是**局部的**
+   *    8×8 色场，量出来的就是「离自己周围多远」= 局部对比 = 它自己的明暗层次。
+   *  过去这三支各自一支、各一套阈值、谁赢由一串比较决定；现在它们是同一个式子的三个 β。
+   *
+   * **两遍**：同一个式子，只是换参照，而两次的参照都是同一句话问出来的 ——
+   *  「与这一遍的工作集**边界连通**的那块色与覆盖率」：
+   *  · 第一遍参照 = 与内容框边界带连成一片的那块 = **底** → dep 定「该有多实」（[groundPass]）；
+   *  · 第二遍参照 = 第一遍剩下的那一半里、压在底上的那块 = **主体** → dep 定「图形内部的
+   *    第二层降多少」（[bodyPass]）。贴着底的那一半不算第二层，它是图形的组成部分
+   *    （红蓝双色 logo 的另一半、两色拼接的图标）—— 这个区分只有连通性能给，颜色给不了。
+   *
+   * 两遍之外只剩三件配套的事，都不引入新判据：底色场（[fitField] + [propagateField] +
+   * [absorbSeams]）、每遍各自的两点标定、明度序（同一距离上一暗一亮两块撞成一个值，按「比参照
+   * 暗还是亮」把它们排开；参照色取两遍按 β 加权后的那一个，见 [refLight]）。
+   *
+   * ⚠ **永不为 null**。返回 null 在功能上不是"什么都不做"，是把这张图交给桌面那张自己生成的
+   *   遮罩（`MonochromeIconFactory`，极性还会算反的那条路）—— 而"这张图本来就只有一层"不是
+   *   错误，是事实，那种图的正确答案就是它自己该有的样子：一块平色上屏本来就是一块平色。
+   *   所以这里没有"够不够格被合成"这种闸，只有**量出来是多少就是多少**。
    */
   fun build(pixels: IntArray, w: Int, h: Int): Output {
-    if (w <= 0 || h <= 0) return reject("尺寸非法")
     val total = w * h
-    val box = contentBounds(pixels, w, h) ?: return reject("整张透明")
+    if (total <= 0) return Output(IntArray(0), 0f, 0f, 0f, 0, 0f, 0f, "尺寸非法 → 空层")
+    val box = contentBounds(pixels, w, h)
+      ?: return Output(IntArray(total), 0f, 0f, 0f, 0, 0f, 0f, "整张透明 → 空层")
     val boxArea = box.width().toLong() * box.height()
     val band = (minOf(box.width(), box.height()) / RING_BAND_DIV).coerceIn(2, 8)
+    val g = if (minOf(box.width(), box.height()) >= FIELD_MIN_SIDE) FIELD_GRID else FIELD_GRID_MIN
     val s = pool.get()
-    s.ensure(total, FIELD_GRID * FIELD_GRID)
+    s.grid = g
+    s.ensure(total, g * g)
 
-    // 0) 每个像素的 Lab 只算一次：后面每一轮洪泛、每一次候选比较都只是查表 + 一次开方。
+    // 0) 每个像素的 Lab 只算一次：后面每一轮洪泛、每一次距离都只是查表 + 一次开方。
     for (i in 0 until total) {
       val p = pixels[i]
       s.labL[i] = labChannel(p, 0).toShort()
@@ -352,289 +377,563 @@ internal object MonochromeMask {
       s.labB[i] = labChannel(p, 2).toShort()
     }
 
-    // ── 支一：透明底。图标自带的 alpha 就是形状，一个像素都不改。 ──
-    // ⚠ 这一支不做任何形态学：那是设计者画好的轮廓，多做一次只会凭空造像素。
-    val alphaBoxFill = opaqueShare(pixels, w, box)
-    val alphaMask = IntArray(total)
-    for (i in 0 until total) {
-      val a = Color.alpha(pixels[i])
-      // ⚠ 「哪些像素算图形」= `a >= A_SOLID`，「写出去的 alpha 是多少」= 原值。两件事不能混，
-      //   混了就回归成那条老 bug：桌面图标的前景层常自带一层很淡的柔光 / 投影 / 半透明底板，
-      //   实测能占画布 60% 以上（真机日志里就是 `a1=0.66` 那种），照收进掩码的话上色之后
-      //   **整块图标被一层淡色铺满，看上去就是一个纯色块**。保留原值（不二值化到 255）是为了
-      //   留住边缘那圈抗锯齿 —— 桌面图标渲染尺寸大，硬边放大就是一圈锯齿。
-      if (a >= A_SOLID) alphaMask[i] = (a shl 24) or 0x00FFFFFF
-    }
-    // 但**紧贴实心的那一圈淡值**要照原样留着：桌面图标的渲染尺寸大，只留 ≥128 会把每条
-    // 笔画的边变成一级硬台阶（观感就是一圈锯齿，旧版为此专门开过 `preserveAlpha`）。
-    // 只补"贴着实心的那一圈"，所以柔光底板剩下的 60% 仍然被上面那道线挡在外面 ——
-    // 边缘过渡与淡色铺满这两件事，靠"离实心多远"分开，不靠再画一条绝对浓度线。
+    // 1) 两遍参照。顺序固定：第二遍要用第一遍剩下的那一半当工作集。
+    val ground = groundPass(pixels, w, h, box, band, g, s)
+    val body = bodyPass(pixels, w, h, box, g, s)
+
+    // 2) 明度序的两个刻度，都从这张图自己的分布量：
+    //    · `amp` = |ΔL| 的 p[LAYER_AMP_PCT] —— 同一距离上把两侧排开时要按多大跨度归一；
+    //    · `lumLo/lumHi` = **有符号** ΔL 的 p[LUM_LOW_PCT]/p[LUM_HIGH_PCT] —— 一整张没有底的图
+    //      （插画、照片底）唯一还有信息的轴就是"比周围暗还是亮"，这两个分位就是那条斜坡的端点。
+    //      端点取分位而不是最值：一条 JPEG 噪点线、一块高光不该决定整张图的明暗标尺。
+    s.hist.fill(0)
+    s.hist2.fill(0)
+    var ampN = 0
+    var lo = 0
+    var hi = 0
+    var spread = 1
     for (y in box.top until box.bottom) {
       val row = y * w
       for (x in box.left until box.right) {
         val i = row + x
-        val a = Color.alpha(pixels[i])
-        if (a in 1 until A_SOLID && hasSolidNeighbour(pixels, w, h, i, x, y)) {
-          alphaMask[i] = (a shl 24) or 0x00FFFFFF
-        }
+        if (s.plate[i] != 0.toByte()) continue
+        val dev = refLight(i, s) - (s.labL[i].toInt() and 0xffff)
+        s.hist[(if (dev < 0) -dev else dev).shr(6).coerceAtMost(DBUCKETS - 1)]++
+        s.hist2[(dev.shr(6) + 128).coerceIn(0, DBUCKETS - 1)]++
+        ampN++
       }
     }
-    val alphaStats = measure(alphaMask, w, h, box, s, bridge = false, despeckle = false)
-    val alphaFill = alphaStats.kept.toFloat() / boxArea
-    // 「像一块板」= 一个连通块占满 + 里面没有洞。那种 alpha 描述的是**那块底的外轮廓**，
-    // 不是图形 —— 照交出去就是一整块色（真机 元宝 `cc=1 top=1.00 空洞=0.00`）。
-    val alphaIsPlate = alphaStats.largest >= ALPHA_SOLID_TOP && alphaStats.hole <= PLATE_HOLE
-    val alphaUsable = alphaBoxFill > MIN_SHAPE_RATIO && alphaBoxFill < PLATE_MIN_BOX &&
-      alphaFill < MAX_SHAPE_RATIO
-
-    // ── 支二：有一整块不透明的底（或 alpha 轮廓自己像一块板）→ 按「离局部底多远」刻 ──
-    // ⚠ carve 永远返回一个 Output（mask 可空）+ **它自己那一条拒绝理由**。它以前返回 `null`，
-    //   于是真机上 23 个图标只留下一句「刻底不适用」—— 看不出是"没有候选"、"底摘不掉"、
-    //   "整张没有对比"还是"被形状闸拦下"，而那四种要改的东西完全不同。这个项目已经在
-    //   「提前 return 静默失效」上吃过两次亏，判据的每一个出口都必须带自己的数。
-    val carved = if (!alphaUsable || alphaIsPlate) carve(pixels, w, h, box, band, s) else null
-    // 换掉图标自带的形状，条件必须**两条一起**：占框更少（底真被摘掉了）**而且**洞更多
-    //（刻出了字腔）。只少不多 = 把图形一起刻没了；只多不少 = 在底上又添一层。
-    val carvedWins = carved?.mask != null &&
-      (!alphaUsable || (alphaIsPlate && carved.boxFill < alphaBoxFill && carved.hole > alphaStats.hole))
-    if (carvedWins) return carved!!
-
-    // ⚠ **可用但像一块板 ≠ 不交**。上一版在这里判「alpha 连垫底都不配」，两支都不成立就返回
-    //   null 让桌面自己画。合成用例台把这条打穿了：一张透明底上的实心圆盘、一张柔光加一个
-    //   实心核（就是皎月连那一类），刻底找不到可刻的第二层 → 两支全灭 → 桌面回去按**亮度**
-    //   重画 → 整块被涂成实心。回落从来不是中性的（它算的就是错的那个极性），而"这张图本来就
-    //   只有一层"不是错误，是事实 —— 那种图的正确答案就是它自己的轮廓。
-    //   真正该拦的是「满幅不透明的一块底」，那由 [PLATE_MIN_BOX] 挡在 alphaUsable 外面，
-    //   不靠这一条。
-    if (alphaUsable) {
-      // 透明底 ≠ 细节已经在里面。纯 alpha 轮廓会把图形**内部**的镂空（字腔、白色 logo 上的
-      // 洞、高光）全填平 —— 判据台上那个绿色机器人：机身、白立方体、两只眼睛一样浓。
-      val knocked = carveInside(pixels, w, h, box, band, alphaMask, s)
-      val st = measure(alphaMask, w, h, box, s, bridge = false, despeckle = false)
-      val fill = st.kept.toFloat() / boxArea
-      return Output(alphaMask, fill, st.hole, st.largest, st.components, st.smallShare,
-        softShare(st, box),
-        "支=透明底 框内=${pct(fill)} 空洞=${pct(st.hole)} top=${pct(st.largest)} " +
-          "cc=${st.components} 镂空=${pct(knocked)} 淡=${pct(softShare(st, box))}" +
-          if (carved != null) "（刻底换不过：${carved.report}）" else "")
+    val amp = maxOf(
+      if (ampN > 0) percentile(s.hist, ampN, LAYER_AMP_PCT) shl 6 else 0,
+      LAYER_MIN_AMP shl 6
+    )
+    if (ampN > 0) {
+      lo = (percentile(s.hist2, ampN, LUM_LOW_PCT) - 128) shl 6
+      hi = (percentile(s.hist2, ampN, LUM_HIGH_PCT) - 128) shl 6
+      spread = (hi - lo).coerceAtLeast(1 shl 6)
     }
-    // ── 最后一级：**不许退回桌面** ──
-    // 用户这一轮的裁定是「没适配的图标全部走纯合成」。之前 1.7% 的图标（王者荣耀 /
-    // zyddz.wisdomgame 这类整张插画，四族底只摘掉 0.14 的框）在这里返回 null ——
-    // 而 null 在功能上不是"什么都不做"，是**把这张图交给桌面那条算错极性的工厂**，
-    // 观感就是他报的「不是纯色 / 一块白」。退回从来不是中性的，所以这一级必须有。
-    // 插画的正确答案也不是"抠字形"（它没有字形与底之分），是把**它自己的明暗层次**
-    // 搬到一个通道上：越暗越实。端点仍按这张图自己的分布量（p5/p95），不是绝对阈值。
-    val lum = luminanceRamp(pixels, w, h, box, s)
-    if (lum.mask != null) return lum
-    return Output(null, alphaFill, alphaStats.hole, alphaStats.largest, alphaStats.components,
-      alphaStats.smallShare, 0f,
-      "支=无 透明底框内=${pct(alphaBoxFill)}不成立；刻底：${carved?.report ?: "未尝试"}；${lum.report}")
+    // 浓度由哪一条给，只看「有多少东西真的是底」这一个数，而且它**两头都要退**：
+    //  · 底占高（红底白方块 0.89）→ 参照就是一块板，距离项是主信息，明暗只在同一个距离上把
+    //    两侧排开一点（±[SPLIT_UP]/−[SPLIT_DOWN]%），q=0，一切与过去按 ΔE 标定等价；
+    //  · 底占太低（整张插画，四角也是画，参照只占 7%）→ 每个像素离参照都远，距离项整个饱和，
+    //    能把画面排开的只剩明暗；
+    //  · 底占太高（≈1.00，洪泛把整框都吞了 —— 王者荣耀那种满幅插画每一块都跟邻域像）→
+    //    参照是"整张图"，等于没有参照，距离项给不出任何形状（真机重放里那张脸整个消失了，
+    //    屏幕上就是他报的「一块白」）。
+    // 两端都是"没有可用的底"，所以同一个 q 从两头往上走。中间连续。
+    // ⚠ 还要乘上 β（参照自己的覆盖率 [Pass.meanCov]）：透明底图标的"底占"也低，但那是
+    //  **参照本来就没有东西**，覆盖率恰恰是唯一有信息的轴（不乘就会把剪影洗成一块灰）；
+    //  区分这两者的就是 β —— 透明底 β≈0，插画 β=255。
+    val q = (maxOf(
+      1f - ground.share / LUM_TAKEOVER,
+      (ground.share - LUM_SWALLOW) / (1f - LUM_SWALLOW)
+    ).coerceIn(0f, 1f) * ground.meanCov / 255f * 100).toInt()
+    val up = SPLIT_UP * (100 - q) / 100
+    val down = SPLIT_DOWN * (100 - q) / 100
+
+    // 3) 出图：距离与明暗两条按 q 混成浓度，明度序排同距，第二遍降层次。
+    val out = IntArray(total)
+    val hollow = HOLLOW * body.weight / 255
+    var knocked = 0
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      for (x in box.left until box.right) {
+        val i = row + x
+        val dep = s.dist[i].toInt() and 0xffff
+        val ref = refLight(i, s)
+        // ⚠ 感知曲线只加在**距离**那一条上，混完不再过一次。桌面拿 alpha 当不透明度，ΔE 距离
+        //   线性排会把大半图形留在六成浓度以下（观感就是「主题色怎么这么浅」），所以要抬中低段；
+        //   而 L\\* 本身就是感知量，再抬一次就把一张插画洗成一块实色（判据台上 多色插画 量出来
+        //   框内 0.91 —— 中间调全被推到实心那一侧去了）。
+        val td = CURVE[((dep - ground.zero) * 255 / ground.span).coerceIn(0, 255)]
+        val u = ref - (s.labL[i].toInt() and 0xffff)
+        val tl = ((u - lo) * 255 / spread).coerceIn(0, 255)
+        var a = (td * (100 - q) + tl * q) / 100
+        if (a == 0) continue
+        // 比参照暗的往上、亮的往下，**按这张图自己的跨度成比例** —— 不是"暗/亮"两档。
+        // ⚠ 上限不对称是有理由的：白字在彩色底上是最常见的"亮侧实心"，往下压狠了就是他报过的
+        //   「主题色怎么这么浅」。q 上去之后这两侧自动退场：那时明暗已经是浓度本身了。
+        a = (a + a * (u * 100 / amp).coerceIn(-down, up) / 100).coerceIn(0, 255)
+        // 第二遍只降**比主体亮**的那一侧（镂空、高光、白 logo 上的洞）。比主体暗的那些是图形
+        // 自己的暗部，降它等于把细节擦了 —— 与上面那条明度序同一个极性。
+        if ((s.labL[i].toInt() and 0xffff) - bodyLight(i, s) > 0) {
+          val off = s.off[i].toInt() and 0xffff
+          val k = CURVE[((off - body.zero) * 255 / body.span).coerceIn(0, 255)]
+          if (k > 0) {
+            val b = a * (25500 - hollow * k) / 25500
+            if (b != a) knocked++
+            a = b
+          }
+        }
+        if (a > 0) out[i] = (a shl 24) or 0x00FFFFFF
+      }
+    }
+
+    // 4) 形状体检。**修不修形状看浓度是谁给的**：颜色给的（β 高）才可能有"切底切出来的杂点"，
+    //    覆盖率给的（β≈0）那些淡值全是设计者自己画的柔光与抗锯齿，擦掉就是一圈锯齿、桥起来
+    //    就是给一条笔画凭空加粗。（旧版这里是两支各写死的 `bridge=/despeckle=` 常量。）
+    val colourDriven = ground.meanCov >= 128
+    val st = measure(out, w, h, box, s, bridge = colourDriven, despeckle = colourDriven)
+    val fill = st.kept.toFloat() / boxArea
+    return Output(
+      out, fill, st.hole, st.largest, st.components, st.smallShare, softShare(st, box),
+      "带占=${s.bandSolid * 100 / 255} 底占=${pct(ground.share)} 族=${ground.families} 零=${ground.zero} 实=${ground.solid} 端=${lo shr 6}/${hi shr 6} " +
+        "壳占=${pct(body.share)} 降=${pct(knocked.toFloat() / boxArea)} 降力=${body.weight} 明暗=${q} " +
+        "框内=${pct(fill)} cc=${st.components} top=${pct(st.largest)} 小片=${pct(st.smallShare)} " +
+        "空洞=${pct(st.hole)} 淡=${pct(softShare(st, box))} 色驱=${ground.meanCov}"
+    )
+  }
+
+  /** 浓度里"颜色给的那一段"最多占多少 β：低于它就不做形状修整（见 [build] 第 4 步）。 */
+  private const val COLOUR_DRIVEN = 128
+
+  // ───────────────────────────── 极性判据 ─────────────────────────────
+  //
+  // 遮罩模式下桌面自己出剪影，它的算法是**亮度当 alpha**（min→0、max→255 归一，再叠一条以
+  // 128 为中心的对比度曲线）—— 也就是它假定「亮的就是墨」。深色字形 + 浅色底的图标因此被画成
+  // "字形是洞、底色是形"，这就是用户报的那一句「颜色反一下」。
+  //
+  // 要不要翻，只有一个问题要答：**墨比它的参照亮还是暗**。
+  // 暗过一截 → 桌面的假定错了 → 翻；亮着或差不多 → 不翻（不翻 = 桌面的原始行为，安全默认）。
+  //
+  // "墨"与"参照"都不是新的线：墨 = [groundPass] 算出的 dep 加权（dep 为 0 的底板与留白自动
+  // 不投票）；参照 = 底像素的平均亮度，按底的覆盖率 β 与"没有东西"（中灰）混合 —— 与浓度那条
+  // 用的同一个 β。透明底上的单色剪影因此也能判：那时参照就是中灰，黑剪影落在暗侧 → 翻。
+
+  /** [polarity] 的产物。[known] = false 时**不要动遮罩**，[report] 是那一句进日志的数。 */
+  class Polarity(val invert: Boolean, val known: Boolean, val report: String)
+
+  /** 判据用的降采样边长。384 全幅跑一遍要 20~170ms（真机实测），而极性只需要知道"墨偏哪一侧"，
+   *  96 就够 —— 尺寸不变性由判据台那条性质钉着，降采样不会换结论。 */
+  private const val POLAR_EDGE = 96
+
+  /** 差多少 L\\* 才算"落在暗侧"。**留死区是因为中间调不该翻**：墨与参照一样亮的图，
+   *  桌面的归一化本来就把它排在前面，硬翻只是换一种错法。判不了也走不翻（= 桌面的原始行为）。 */
+  private const val POLAR_DEADBAND = 8
+
+  /** "没有东西"的代表亮度（L\\* 50 = 中灰）：透明底那部分参照按它算，见 [polarity]。 */
+  private const val L_MID = 50 shl 6
+
+  fun polarity(pixels: IntArray, w: Int, h: Int): Polarity {
+    val small = downsample(pixels, w, h, POLAR_EDGE)
+      ?: return Polarity(false, false, "极性=降采样不成立，不动遮罩")
+    val n = POLAR_EDGE
+    val total = n * n
+    val box = contentBounds(small, n, n)
+      ?: return Polarity(false, false, "极性=整张透明，不动遮罩")
+    val s = pool.get()
+    val g = if (minOf(box.width(), box.height()) >= FIELD_MIN_SIDE) FIELD_GRID else FIELD_GRID_MIN
+    s.grid = g
+    s.ensure(total, g * g)
+    for (i in 0 until total) {
+      val p = small[i]
+      s.labL[i] = labChannel(p, 0).toShort()
+      s.labA[i] = labChannel(p, 1).toShort()
+      s.labB[i] = labChannel(p, 2).toShort()
+    }
+    val band = (minOf(box.width(), box.height()) / RING_BAND_DIV).coerceIn(2, 8)
+    val ground = groundPass(small, n, n, box, band, g, s)
+
+    // 墨的平均亮度 = 按 dep 加权（dep 为 0 的底板与留白自动不投票，不需要再判"哪些算图形"）。
+    // 参照的平均亮度同理按**底**加权。两者一比就是"墨落在底的亮侧还是暗侧"。
+    var wsum = 0L
+    var lsum = 0L
+    var gsum = 0L
+    var gn = 0
+    var visible = 0
+    for (y in box.top until box.bottom) {
+      val row = y * n
+      for (x in box.left until box.right) {
+        val i = row + x
+        val l = s.labL[i].toInt() and 0xffff
+        if (Color.alpha(small[i]) >= A_SOLID) visible++
+        if (s.plate[i] != 0.toByte()) {
+          gsum += l; gn++
+          continue
+        }
+        val dep = s.dist[i].toInt() and 0xffff
+        wsum += dep
+        lsum += dep.toLong() * l
+      }
+    }
+    if (visible < total / 64 || wsum == 0L) {
+      return Polarity(
+        false, false,
+        "极性=没有可判的墨(可见 $visible 底 $gn w=$wsum 族=${ground.families} " +
+          "带占=${s.bandSolid * 100 / 255} 框=${box.width()}x${box.height()})，不动遮罩"
+      )
+    }
+    // **参照亮度**：底有几分实，就用几分底的亮度；剩下的那份是"没有东西"，
+    // 而"没有东西"在桌面上就是那块底板 —— 它既不算亮也不算暗，取中灰 L=50 作代表。
+    // 于是透明底上的单色剪影也能判（旧写法按可见像素自己的 p5..p95 量范围，一张纯黑剪影
+    // 量出范围为 0 → "判不了" → 不翻 → 屏幕上整个图标消失，正是他报的那一类）。
+    val beta = ground.meanCov
+    val groundL = if (gn > 0) (gsum / gn).toInt() else L_MID
+    val refL = (beta * groundL + (255 - beta) * L_MID) / 255
+    val figL = (lsum / wsum).toInt()
+    val cut = refL - (POLAR_DEADBAND shl 6)
+    val invert = figL < cut
+    return Polarity(
+      invert, true,
+      "极性=${if (invert) "翻" else "不翻"} 墨L=${figL shr 6} 参照L=${refL shr 6} " +
+        "(底L=${groundL shr 6} β=$beta) 死线=${cut shr 6} " +
+        "底占=${pct(ground.share)} 族=${ground.families}"
+    )
+  }
+
+  /** 面积平均降采样，**按 alpha 加权**（`getPixels` 给的是非预乘值，直接平均 RGB 会把透明的
+   *  垃圾色算进去）。任一通道装不下或尺寸不合法 → null。 */
+  private fun downsample(pixels: IntArray, w: Int, h: Int, n: Int): IntArray? {
+    if (w <= 0 || h <= 0 || n <= 0) return null
+    if (w <= n && h <= n) return if (w == n && h == n) pixels else null
+    val out = IntArray(n * n)
+    for (j in 0 until n) {
+      val y0 = (j.toLong() * h / n).toInt()
+      val y1 = (((j + 1).toLong() * h + n - 1) / n).toInt().coerceAtLeast(y0 + 1).coerceAtMost(h)
+      for (i in 0 until n) {
+        val x0 = (i.toLong() * w / n).toInt()
+        val x1 = (((i + 1).toLong() * w + n - 1) / n).toInt().coerceAtLeast(x0 + 1).coerceAtMost(w)
+        var a = 0L; var r = 0L; var gg = 0L; var b = 0L; var cnt = 0
+        for (y in y0 until y1) {
+          val row = y * w
+          for (x in x0 until x1) {
+            val p = pixels[row + x]
+            val pa = Color.alpha(p)
+            a += pa; r += pa * ((p shr 16) and 0xff); gg += pa * ((p shr 8) and 0xff)
+            b += pa * (p and 0xff); cnt++
+          }
+        }
+        if (a == 0L) { out[j * n + i] = 0; continue }
+        val av = (a / cnt).toInt().coerceIn(0, 255)
+        // 非预乘回去：均值的是 a·RGB，所以除 a 而不是除 cnt。
+        out[j * n + i] = (av shl 24) or
+          ((r / a).toInt().coerceIn(0, 255) shl 16) or
+          ((gg / a).toInt().coerceIn(0, 255) shl 8) or
+          (b / a).toInt().coerceIn(0, 255)
+      }
+    }
+    return out
   }
 
   /**
-   * 没有"底"可摘的图（整张插画、照片底、几块色拼满）按**自己的明度**出一张单色稿。
+   * **第一遍：参照 = 这一像素背后那块底。**
    *
-   * ⚠ 这是兜底的**一级**，不是兜底的开关：它永远给出一个结果，除非这张图连 12 个 L\\*
-   *   都没散开（那种图确实没有层次可搬，返回 null 并说明为什么）。
+   * 三步，全是原来「刻底」那一条，但**一条拒绝都没有了** —— 每一步量不出东西时它自己就退化：
+   *  · 四个角都不实心（透明底）→ 家族数 0 → 洪泛只穿得过透明像素 → 参照 = 四周那片"没有东西"，
+   *    色场由它定、β≈0 → 原语自动退成覆盖率；
+   *  · 底把整框吞了（整张一块平色）→ 工作集另一侧为空 → 实心点没得量 → 浓度全 0 = 一块平色；
+   *  · 底一格都没有（满幅、四角彼此不像）→ 色场全是补出来的空格、β=0 → 又是覆盖率。
+   *
+   * 洪泛**穿过所有底家族的并集**，不是冠军那一个：底不是一个颜色，是几块拼的（高德四块拼底、
+   * 饿了么上橙下蓝、云闪付上红下白）。只选一个家族，剩下那块底整块变成墨 = 「还剩一块大色块」。
    */
-  private fun luminanceRamp(pixels: IntArray, w: Int, h: Int, box: Rect, s: Scratch): Output {
+  private fun groundPass(
+    pixels: IntArray, w: Int, h: Int, box: Rect, band: Int, g: Int, s: Scratch,
+  ): Pass {
     val total = w * h
     val boxArea = box.width().toLong() * box.height()
-    val hist = s.hist
-    hist.fill(0)
-    var ink = 0
-    for (y in box.top until box.bottom) {
-      val row = y * w
-      for (x in box.left until box.right) {
-        if (Color.alpha(pixels[row + x]) < A_SOLID) continue
-        hist[(s.labL[row + x].toInt() and 0xffff) shr 5]++   // L\*×64 → 0..200，一桶 0.5 L\*
-        ink++
-      }
-    }
-    if (ink == 0) return reject("明度=框内没有不透明像素")
-    val lo = percentile(hist, ink, LUM_LOW_PCT) shl 5
-    val hi = percentile(hist, ink, LUM_HIGH_PCT) shl 5
-    if (hi - lo < LUM_MIN_SPREAD shl 6) {
-      return reject("明度=整张只散开 ${hi - lo shr 6}L*，没有层次可搬")
-    }
-    val out = IntArray(total)
-    for (y in box.top until box.bottom) {
-      val row = y * w
-      for (x in box.left until box.right) {
-        val i = row + x
-        val a = Color.alpha(pixels[i])
-        if (a < A_SOLID) continue
-        val t = (hi - (s.labL[i].toInt() and 0xffff)) * 255 / (hi - lo)
-        val v = t.coerceIn(0, 255) * a / 255
-        if (v > 0) out[i] = (v shl 24) or 0x00FFFFFF
-      }
-    }
-    val st = measure(out, w, h, box, s, bridge = true, despeckle = true)
-    val fill = st.kept.toFloat() / boxArea
-    return Output(out, fill, st.hole, st.largest, st.components, st.smallShare, softShare(st, box),
-      "支=明度 暗端=${lo shr 6}L* 亮端=${hi shr 6}L* 框内=${pct(fill)} cc=${st.components} " +
-        "top=${pct(st.largest)} 淡=${pct(softShare(st, box))}")
-  }
+    val fams = cornerFamilies(pixels, w, box, band, s)
 
-  // ─────────────────── 支二：局部底色场 + 距离斜坡 ───────────────────
-
-  private fun carve(pixels: IntArray, w: Int, h: Int, box: Rect, band: Int, s: Scratch): Output {
-    val total = w * h
-    val boxArea = box.width().toLong() * box.height()
-    val g = if (minOf(box.width(), box.height()) >= FIELD_MIN_SIDE) FIELD_GRID else FIELD_GRID_MIN
-    s.ensure(total, g * g)
-    s.grid = g
-
-    // 1) 底 = 内容框**四个角**上的颜色家族（「透明」也算一族，它在 pass 里恒过）。
-    //    ⚠ 为什么按角、不按"哪个候选摘掉的面积多"：真机抓回来的 11 张里有 3 张是同一个病 ——
-    //    高德（绿/白/蓝/灰四块拼底）、饿了么（上橙下蓝两段）、云闪付（上红下白两段）。
-    //    **底不是一个颜色，是几块拼的**；按面积只选一个家族，剩下那块底整块变成墨，
-    //    屏幕上就是他报的「还剩一块大色块」。角是判据：一块底铺满它所在那块区域，必然占住
-    //    某个角；图形即使贴着边一般也占不到角（占到了的那种，本来就没有"底在它下面"这回事）。
-    val famCount = cornerFamilies(pixels, w, box, band, s)
-    if (famCount == 0) return reject("刻底=四个角都没有不透明的底")
-
-    // 2) 一次洪泛穿过**所有**底家族 —— 底是这些家族的并集，不是冠军那一个。
-    //    ⚠ 放行条件是「到某个家族色的距离」，不是「与相邻像素的色差」。后者是区域生长，
-    //    两头都实测过：容差小跨不过分带的渐变底（底擦不掉），容差大能顺着柔光字形一路
-    //    漂出去（图形整个被擦光）。局部连续性根本分不开「渐变底」与「柔光字形」。
+    // 「拟合色场 → 重算距离 → 重新洪泛」跑 [FIELD_ITERS] 轮。第一轮只有一个全局候选色，容差
+    // 必须给到能容下整道渐变（ΔE [TOL_COARSE]），代价是把与底相近的字形也圈进去；有色场之后
+    // 每格只需容下自己那点抖动，容差自动掉到个位数，那些字形就留下来了。
+    // 「拟合色场 → 用同一个 dep 重判连通 → 重新洪泛」跑 [FIELD_ITERS] 轮。
+    // ⚠ 洪泛与浓度**必须是同一把尺**。dep 带 β（参照到底有没有颜色），ΔE 不带：用 ΔE 判连通时，
+    //   [fillEmptyCells] 给零参照的格补的那个中灰会变成一个"真实的参照色"，而离它 45 个 ΔE 的
+    //   **白色剪影正好落在容差上界以内** → 整块图形被当成底吸收（判据台上 透明底白剪影 量出
+    //   底占=1.00，极性判据跟着找不到墨）。换成 dep 之后 β=0 的格上 dep 退成覆盖率，实心白像素
+    //   恒为 255，容差怎么夹都吸不进去。
+    var tol = DEP_COARSE
     passFromFamilies(pixels, w, box, s, TOL_COARSE shl 6)
-    val flooded0 = flood(s, pixels, w, box, band, atRim = true)
-    // 连六分之一框都摘不掉，说明这张图没有「一块底」可谈（几个色块拼出来的 logo）。
-    if (flooded0.toLong() * 6 < boxArea) {
-      return reject("刻底=$famCount 族底只摘掉 ${pct(flooded0.toFloat() / boxArea)} 的框")
-    }
-
-    // 3) 拟合局部色场 → 重算距离 → 按新容差重新洪泛，跑 [FIELD_ITERS] 轮。
-    //    第一轮只有一个全局候选色，容差必须给到能容下整道渐变（ΔE 18），代价是把与底相近的
-    //    字形也圈进去；有色场之后每格只需容下自己那点抖动，容差自动掉到个位数，那些字形就
-    //    留下来了。这就是「底是区域、不是颜色」的解法。
-    var tol = TOL_COARSE shl 6
-    var flooded = 0
+    // 第一轮之前先洪泛一次：色场是从「与边界连通的底」上拟合的，没有这一步就没有种子像素。
+    flood(s, w, box, band)
+    var nGround = 0
+    var nInk = 0
+    var covSum = 0L
     for (iter in 0 until FIELD_ITERS) {
       if (iter > 0) {
         for (y in box.top until box.bottom) {
           val row = y * w
           for (x in box.left until box.right) {
             val i = row + x
-            s.pass[i] = if ((s.dist[i].toInt() and 0xffff) <= tol) 1 else 0
+            // 「没有颜色」永远算参照的一部分 —— 参照本来就是"透明"时它当然在参照里。
+            s.pass[i] = if (Color.alpha(pixels[row + x]) < A_SOLID ||
+              (s.dist[i].toInt() and 0xffff) <= tol
+            ) 1 else 0
           }
         }
+        flood(s, w, box, band)
       }
-      flooded = flood(s, pixels, w, box, band, atRim = true)
-      if (flooded == 0) return reject("刻底=洪泛为空")
-      fitField(pixels, w, box, g, s)
-      propagateField(w, h, total, box, s)
+      fitField(pixels, w, box, g, s, s.plate, solidRef = false)
+      propagateField(w, h, total, box, s, s.plate)
       // 中缝要在**算距离之前**并进底：它借的是邻格所属的那块底，晚一步就会先被算成"差得远的墨"。
       absorbSeams(w, total, box, s)
-      var spread = 0
       s.hist.fill(0)
+      s.hist2.fill(0)
+      nGround = 0
+      nInk = 0
+      covSum = 0L
       for (y in box.top until box.bottom) {
         val row = y * w
         for (x in box.left until box.right) {
           val i = row + x
-          val d = distanceOf(pixels[i], i, s)
+          val cell = if (s.ref[i] >= 0) s.ref[i] else 0
+          val b = s.fCov[cell]
+          // ⚠ 这里存的是**原始 dep**，每一轮的重分类都读它。底的那条"只按覆盖算"的规则不能在这里
+          //   应用 —— 一旦把已归入底的像素写成 0，下一轮的 `dist <= tol` 就恒成立，被误吸收的
+          //   像素再也回不来（判据台上 三段距离 最近那一档 ΔE 16，第一轮被 TOL_COARSE=18 收进去，
+          //   之后每一轮都自己给自己投赞成票，整块就此消失）。那条规则是**出图时**的事。
+          val d = departure(pixels[i], i, s)
           s.dist[i] = d.toShort()
+          s.beta[i] = b.toShort()
+          s.gRefL[i] = s.fL[cell].toShort()
           if (s.plate[i] != 0.toByte()) {
-            s.hist[(d shr 6).coerceAtMost(DBUCKETS - 1)]++
-            spread++
+            // 零点只量参照**自己颜色的散度**，不量它本身的透明度：参照是透明的时候颜色那一段
+            // 就不存在，把覆盖率算进散度会把零点抬到 76（判据台上 白底柔光 那一圈光晕），
+            // 于是淡的那一层整个被当成噪声扣掉，剩下的断环变成 7 个连通块。
+            s.hist[departure(pixels[i], i, s, withCoverage = false).coerceAtMost(DBUCKETS - 1)]++
+            nGround++
           }
         }
       }
-      if (spread == 0) return reject("刻底=底板为空")
-      tol = (percentile(s.hist, spread, TOL_PCT) shl 6)
-        .coerceIn(TOL_MIN shl 6, TOL_MAX shl 6)
-      // 底占就用这一轮**实际数出来**的底板像素，不再用洪泛返回的数：洪泛之后还有吸收中缝
-      // 一步，两个数会不一致，而日志里的 `底占` 必须是交出去那张图的底。
-      flooded = spread
+      tol = percentile(s.hist, nGround, TOL_PCT).coerceIn(DEP_TOL_MIN, DEP_TOL_MAX)
     }
-    val plateShare = flooded.toFloat() / boxArea
-    if (plateShare < PLATE_MIN_SHARE) return reject("刻底=无主导底板 底占=${pct(plateShare)}")
 
-    // 4) 归一：实心参照取**这张图自己的形层**分位，不是绝对值，也不是最大值。
-    //    取最大值的话，渐变尾端、一条高光、JPEG 块效应就能把整段斜率压平 ——
-    //   「渐变又被做成平色」就是这么来的。
-    s.hist.fill(0)
-    var ink = 0
+    // 出图：底按覆盖重算（实心板与自己比必然差 0，按颜色量它量到的都是噪声与拼底的中缝），
+    // 而且只有**贴着墨**的那一圈才算数 —— 淡的像素要么是某条笔画的抗锯齿边，要么是背景的一部分，
+    // 这两件事靠"离墨多远"分开，不靠再画一条绝对 alpha 线。（旧版在"透明底"那一支里用
+    // `hasSolidNeighbour` 干这件同样的事；两支合一，规则也合一。）
+    s.hist2.fill(0)
+    nInk = 0
+    covSum = 0L
     for (y in box.top until box.bottom) {
       val row = y * w
       for (x in box.left until box.right) {
         val i = row + x
-        if (s.plate[i] != 0.toByte()) continue
-        s.hist[((s.dist[i].toInt() and 0xffff) shr 6).coerceAtMost(DBUCKETS - 1)]++
-        ink++
-      }
-    }
-    if (ink == 0) return reject("刻底=底占满了整框")
-    // 归一仍是**两点标定**（底散度 → 0、形层 p[INK_REF_PCT] → 255）。
-    // ⚠ 试过改成三点拉伸（p50→200、p90→255）想把中段拉开 —— 判据台上直接砸了：
-    //   图标的主体往往就是那个中位色，把它钉在 200 上，白块从 255 掉到 184，
-    //   正是他报过的「主题色怎么这么浅」。层次不能从"把实心段降下来"换。
-    //   真正丢层次的地方在别处：**同样离底远、但一个比底亮一个比底暗**的两块，
-    //   被 |ΔE| 撞成同一个值 —— 那一条由下面的明度分侧处理。
-    val ref = percentile(s.hist, ink, INK_REF_PCT) shl 6
-    // 形层与底散在同一个范围里 = 这张图本来就只有一种颜色，没有可刻的细节。
-    if (ref <= tol) return reject("刻底=整张没有对比 容ΔE=${tol shr 6} 实ΔE=${ref shr 6}")
-    val span = ref - tol
-
-    val out = IntArray(total)
-    for (y in box.top until box.bottom) {
-      val row = y * w
-      for (x in box.left until box.right) {
-        val i = row + x
-        if (s.plate[i] != 0.toByte()) continue
+        if (s.plate[i] != 0.toByte()) {
+          val b = s.beta[i].toInt() and 0xffff
+          s.dist[i] = (if (touchesInk(s.plate, w, box, x, y))
+            Color.alpha(pixels[i]) * (255 - b) / 255 else 0).toShort()
+          continue
+        }
         val d = s.dist[i].toInt() and 0xffff
-        var a = CURVE[((d - tol) * 255 / span).coerceIn(0, 255)]
-        // **同一距离、不同明度侧 = 不同浓度**。|ΔE| 把"比底暗 42"和"比底亮 46"两块撞成同一个
-        // 值，可它们在原图里明明是两样东西 —— 这就是「每处都单独上色」还差的那一环。
-        // 方向按单色稿的常规：比底暗的往上（更实的墨）。亮侧只往下压 [SPLIT_DOWN]%，
-        // 因为白字在红底上是最常见的"亮侧实心"，压狠了就是「主题色发浅」；
-        // 两侧都仍然接近实心，差别是层次不是对错。乘法保住了"底必为 0"这条性质。
-        val cell = if (s.ref[i] >= 0) s.ref[i] else 0
-        val dark = (s.fL[cell] - s.labL[i].toInt()) * 100 / (SPLIT_SPAN shl 6)
-        a = if (dark >= 0) (a + a * dark.coerceAtMost(SPLIT_UP) / 100).coerceAtMost(255)
-        else (a + a * dark.coerceAtLeast(-SPLIT_DOWN) / 100).coerceAtLeast(0)
-        if (a > 0) out[i] = (a shl 24) or 0x00FFFFFF
+        s.hist2[d.coerceAtMost(DBUCKETS - 1)]++
+        covSum += s.beta[i].toInt() and 0xffff
+        nInk++
       }
     }
-
-    // 5) 形状体检：桥 1 像素的缝 → 擦碎渣 → 三道闸。
-    val st = measure(out, w, h, box, s, bridge = true, despeckle = true)
-    val fill = st.kept.toFloat() / boxArea
-    val note = "支=刻底 底占=${pct(plateShare)} 容ΔE=${tol shr 6} 实ΔE=${ref shr 6} 框内=${pct(fill)} " +
-      "cc=${st.components} top=${pct(st.largest)} 小片=${pct(st.smallShare)} " +
-      "空洞=${pct(st.hole)} 淡=${pct(st.soft.toFloat() / boxArea)}"
-    // 闸门只看「交出去的东西能不能看」，不参与怎么算 —— 算法已经不会主动产出色板了。
-    if (fill < MIN_SHAPE_RATIO) return reject("刻底=修整后几乎全空 框内=${pct(fill)}")
-    if (fill > MAX_SHAPE_RATIO) return reject("刻底=仍是整块底 框内=${pct(fill)}")
-    if (fill >= PLATE_FILL && st.hole <= PLATE_HOLE) return reject("刻底=填满却没有洞 框内=${pct(fill)} 空洞=${pct(st.hole)}")
-    if (st.components >= SHATTER_COMPONENTS && st.largest <= SHATTER_TOP &&
-      st.smallShare >= SHATTER_SMALL_SHARE
-    ) return reject("刻底=桥接后仍碎成 ${st.components} 块 top=${pct(st.largest)} 小片=${pct(st.smallShare)}")
-    return Output(out, fill, st.hole, st.largest, st.components, st.smallShare,
-      st.soft.toFloat() / boxArea, note)
+    val p = Pass()
+    p.share = nGround.toFloat() / boxArea
+    p.families = fams
+    p.zero = (if (nGround > 0) percentile(s.hist, nGround, TOL_PCT) else 0)
+      .coerceIn(DEP_TOL_MIN, DEP_TOL_MAX)
+    p.solid = if (nInk > 0) percentile(s.hist2, nInk, INK_REF_PCT) else p.zero
+    p.span = (p.solid - p.zero).coerceAtLeast(DEP_MIN_SPAN)
+    p.meanCov = if (nInk > 0) (covSum / nInk).toInt() else 0
+    return p
   }
 
   /**
-   * 一个像素的「离底多远」，返回 ΔE76 × 64。
+   * **第二遍：参照 = 这一像素近旁那块主体。** 结构与第一遍**一模一样**，只是把"底"换成
+   * "压在底上的那些墨"、把"内容框边界带"换成"图形与底接触的那一圈"：
+   *  · 种子 = 墨里贴着底的像素 = 图形的外壳（它直接与底相接，所以它是图形的第一层）；
+   *  · 洪泛 = 从外壳出发，穿过「离局部主体色够近」的墨；
+   *  · 剩下的那些墨（被外壳围住、又离主体远）就是图形的第二层 —— 字腔、高光、白 logo 上的洞，
+   *    按 dep₂ 连续降下来，不是一条"是不是洞"的线。
    *
-   * 参照色来自 [propagateField]：**这一像素背后那块底是什么**，而不是"它落在哪个网格里"。
-   *
-   * alpha 按覆盖率收一道：半透明字形只贡献它真正显示出来的那点对比。这不是绝对的 alpha 线
-   * （旧版 `MIN_SHAPE_ALPHA` 那种切法正是「柔光字形被切成骨架」的来源）—— 差为 0 才归 0，
-   * 淡而可分的照旧留。
+   * ⚠ 为什么"够近"与"连得上"两样都要，只问一样一定错：
+   *  · 只问颜色（离主体色远就降）→ 红蓝双色 logo 的另一半一样远，降下去等于把半个 logo 擦了。
+   *    两半都压着底，连通性正好把它们都留在第一层。
+   *  · 只问连通性（先把整片墨洪泛成一个主体）→ 围在里面的洞顺着墨一起连进参照，那一层就没了。
+   *  这与第一遍「底取角上的家族、不取摘得最多的那个颜色」是同一条道理：**位置与色相各管一半**。
    */
-  private fun distanceOf(pixel: Int, i: Int, s: Scratch): Int {
+  private fun bodyPass(pixels: IntArray, w: Int, h: Int, box: Rect, g: Int, s: Scratch): Pass {
+    val total = w * h
+    val boxArea = box.width().toLong() * box.height()
+    val body = s.body
+    val shell = s.grown      // 种子集要单独留着：body 每一轮都被洪泛重写
+    val plate = s.plate
+    val p = Pass()
+    var inks = 0
+    var seeds = 0
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      for (x in box.left until box.right) {
+        val i = row + x
+        val ink = plate[i] == 0.toByte()
+        // 贴着内容框边界 = 它就是图标的轮廓；四邻里有一个底 = 它压在底上。
+        // ⚠ 短路的顺序不能改：先判边界，才不会去读框外的 [plate]（框外从来没被清零过）。
+        val onGround = ink &&
+          (x == box.left || y == box.top || x == box.right - 1 || y == box.bottom - 1 ||
+            plate[i - 1] != 0.toByte() || plate[i + 1] != 0.toByte() ||
+            plate[i - w] != 0.toByte() || plate[i + w] != 0.toByte())
+        shell[i] = if (onGround) 1 else 0
+        body[i] = shell[i]
+        if (ink) inks++
+        if (onGround) seeds++
+      }
+    }
+    p.share = seeds.toFloat() / boxArea
+    if (inks == 0 || seeds == 0) {
+      // 没有墨（整框就是一块底），或墨没有一处压在底上：第二遍不参与 —— 降幅恒 0，
+      // 明度序的参照退回第一遍那块底（β=255）。
+      for (y in box.top until box.bottom) {
+        val row = y * w
+        for (x in box.left until box.right) {
+          val i = row + x
+          s.off[i] = 0
+          s.beta[i] = 255
+        }
+      }
+      p.zero = 255
+      p.span = 255
+      return p
+    }
+    // 「拟合主体色场 → 量 dep₂ → 够近的从外壳洪泛过去」跑两轮，与第一遍同一个结构、
+    // 同一套夹持值。第一轮还没有色场，容差给宽（[DEP_COARSE]，就是 ΔE [TOL_COARSE] 换算到
+    // dep 单位上），之后每轮的容差由主体自己量。
+    var nRef = 0
+    var nOff = 0
+    var tol = DEP_COARSE
+    for (iter in 0 until BODY_ITERS) {
+      if (iter > 0) connect(s, w, box, shell)
+      fitField(pixels, w, box, g, s, body, solidRef = true)
+      propagateField(w, h, total, box, s, body)
+      s.hist.fill(0)
+      s.hist2.fill(0)
+      nRef = 0
+      nOff = 0
+      for (y in box.top until box.bottom) {
+        val row = y * w
+        for (x in box.left until box.right) {
+          val i = row + x
+          if (plate[i] != 0.toByte()) {
+            s.pass[i] = 0
+            s.off[i] = 0
+            continue
+          }
+          val d = departure(pixels[i], i, s)
+          s.off[i] = d.toShort()
+          s.pass[i] = if (d <= tol) 1 else 0
+          if (body[i] != 0.toByte()) {
+            s.hist[d.coerceAtMost(DBUCKETS - 1)]++
+            nRef++
+          } else {
+            s.hist2[d.coerceAtMost(DBUCKETS - 1)]++
+            nOff++
+          }
+        }
+      }
+      tol = percentile(s.hist, nRef, TOL_PCT).coerceIn(DEP_TOL_MIN, DEP_TOL_MAX)
+    }
+    // 降幅的标定与第一遍同一条：零点 = 主体自己的散度，实心点 = 剩下那些墨的 p[INK_REF_PCT]。
+    p.zero = (if (nRef > 0) percentile(s.hist, nRef, TOL_PCT) else 255)
+      .coerceIn(DEP_TOL_MIN, DEP_TOL_MAX)
+    p.solid = if (nOff > 0) percentile(s.hist2, nOff, INK_REF_PCT) else p.zero
+    // 第二遍能降多少，先看第一层占不占到一半：主体（连得上底的那些墨）只占墨 6% 的那张 ——
+    // 整张插画，根本没有"主体"可言 —— 就没有"第二层"可刻，硬刻等于把整张图降下来。
+    // 旧版这里是一条二值的 `bodyShare < BODY_MIN_SHARE → 不做`，现在按占比连续给。
+    p.weight = (nRef.toLong() * 510 / inks.coerceAtLeast(1)).coerceAtMost(255).toInt()
+    p.span = (p.solid - p.zero).coerceAtLeast(DEP_MIN_SPAN)
+    return p
+  }
+
+  /** 从 [seed] 出发、穿过 `pass==1` 的像素洪泛，结果写进 `body`（= 这一遍的参照集）。
+   *  四邻域，与 [flood] 同一个理由：八邻域会顺着对角线从笔画之间的缝里钻过去。 */
+  private fun connect(s: Scratch, w: Int, box: Rect, seed: ByteArray): Int {
+    val pass = s.pass
+    val out = s.body
+    val q = s.queue
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      for (x in box.left until box.right) out[row + x] = 0
+    }
+    var tail = 0
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      for (x in box.left until box.right) {
+        val i = row + x
+        if (seed[i] == 0.toByte() || pass[i] == 0.toByte()) continue
+        out[i] = 1
+        q[tail++] = i
+      }
+    }
+    var head = 0
+    while (head < tail) {
+      val i = q[head++]
+      val y = i / w
+      val x = i - y * w
+      if (x > box.left && out[i - 1] == 0.toByte() && pass[i - 1] != 0.toByte()) {
+        out[i - 1] = 1; q[tail++] = i - 1
+      }
+      if (x < box.right - 1 && out[i + 1] == 0.toByte() && pass[i + 1] != 0.toByte()) {
+        out[i + 1] = 1; q[tail++] = i + 1
+      }
+      if (y > box.top && out[i - w] == 0.toByte() && pass[i - w] != 0.toByte()) {
+        out[i - w] = 1; q[tail++] = i - w
+      }
+      if (y < box.bottom - 1 && out[i + w] == 0.toByte() && pass[i + w] != 0.toByte()) {
+        out[i + w] = 1; q[tail++] = i + w
+      }
+    }
+    return tail
+  }
+
+  /** 第二遍洪泛的轮数与第一轮容差（ΔE [TOL_COARSE] 换算到 dep 单位上）。 */
+  private const val BODY_ITERS = 2
+  private const val DEP_COARSE = 46
+
+  /** 这一像素**混好之后**的参照亮度（真值 ×64）：β 占几分用「背后的底」，剩下用「近旁的主体」。
+   *  β=1（一整块实心底）时它就是底色的 L，β=0（透明底）时它就是主体的 L —— 明度序不需要两版。 */
+  private fun refLight(i: Int, s: Scratch): Int {
+    val b = s.beta[i].toInt() and 0xffff
+    return (b * (s.gRefL[i].toInt() and 0xffff) + (255 - b) * bodyLight(i, s)) / 255
+  }
+
+  /** 第二遍那个参照（主体）在这一像素处的亮度（真值 ×64）。 */
+  private fun bodyLight(i: Int, s: Scratch): Int = s.fL[if (s.ref[i] >= 0) s.ref[i] else 0]
+
+  /**
+   * **唯一的浓度量**：这一像素离它的参照多远，0..255。
+   *
+   *     dep = a × [ (1−β) + β × min(ΔE, EMAX) / EMAX ]
+   *
+   * 一个式子覆盖掉过去三支：β=0（参照是透明的）时 dep 就是覆盖率；β=1（一整块不透明的底）
+   * 时 dep 就是"离参照多远"（对 ΔE 线性，标定与过去按 ΔE 量等价）；中间连续过渡。
+   * 所以「这张图属于哪一支」不再是问题，也不用再为"透明底"开一支。
+   *
+   * 参照色与 β 都来自 [propagateField]：**这一像素背后那块参照是什么**，不是"它落在哪个网格里"。
+   *
+   * ⚠ 这里没有任何绝对的 alpha 线（旧版 `MIN_SHAPE_ALPHA` 那种切法正是「柔光字形被切成骨架」
+   *   的来源）：淡只让 dep 变小，变小到多少浓度由这张图自己的分布标定。
+   * ⚠ 半透明像素先按自己的 alpha 合成到参照上再比色是不做的 —— `getPixels` 给的是**非预乘**值，
+   *   它的 RGB 就是它自己，而 dep 已经整体乘了 a：淡的本来就该近，不需要再改它的色相。
+   */
+  private fun departure(pixel: Int, i: Int, s: Scratch, withCoverage: Boolean = true): Int {
     val a = Color.alpha(pixel)
     if (a == 0) return 0
     val cell = if (s.ref[i] >= 0) s.ref[i] else 0
     val de = deltaE(
       s.labL[i].toInt(), s.labA[i].toInt(), s.labB[i].toInt(),
       s.fL[cell], s.fA[cell], s.fB[cell]
-    )
-    return if (a >= 255) de else de * a / 255
+    ) shr 6
+    val cf = if (de >= EMAX) 255 else de * 255 / EMAX
+    val b = s.fCov[cell]
+    return if (withCoverage) a * ((255 - b) * 255 + b * cf) / 65025 else a * b * cf / 65025
   }
+
+  /** ΔE 到多少算"完全不像参照"。超过就按这个数截断，再往上的差别交给标定。 */
+  private const val EMAX = 100
+
+  /** dep 单位上的三个夹持值。dep 对 ΔE 是 ×2.55 的线性（β=1 时），所以这些数就是
+   *  [TOL_MIN]、[TOL_MAX] 换算过来的，不是新的一条线；[DEP_MIN_SPAN] 是除数下限。 */
+  private const val DEP_TOL_MIN = 15
+  private const val DEP_TOL_MAX = 115
+  private const val DEP_MIN_SPAN = 16
+
+  /** 第二遍最多把浓度降下来多少（百分比）。100 = 完全透明 = 那块东西整个不算图形，
+   *  留 12% 是给"其实是个很淡的高光"那种留的余地。 */
+  private const val HOLLOW = 88
 
   /**
    * 把每格的底色**传播**到整张画布：每个像素的参照色 = 离它最近的那块底的色。
@@ -649,7 +948,9 @@ internal object MonochromeMask {
    *
    * 洪泛从底像素出发四邻域扩散（与 [flood] 同一个道理：八邻域会顺着对角线钻过笔画之间的缝）。
    */
-  private fun propagateField(w: Int, h: Int, total: Int, box: Rect, s: Scratch) {
+  private fun propagateField(
+    w: Int, h: Int, total: Int, box: Rect, s: Scratch, seed: ByteArray,
+  ) {
     val ref = s.ref
     val q = s.queue
     val g = s.grid
@@ -663,7 +964,7 @@ internal object MonochromeMask {
       val cy = ((y - box.top) * g / bh).coerceAtMost(g - 1)
       for (x in box.left until box.right) {
         val i = row + x
-        if (s.plate[i] == 0.toByte()) continue
+        if (seed[i] == 0.toByte()) continue
         val cx = ((x - box.left) * g / bw).coerceAtMost(g - 1)
         ref[i] = cy * g + cx
         q[tail++] = i
@@ -718,6 +1019,29 @@ internal object MonochromeMask {
     val bh = box.height()
     val win = (band * 2).coerceAtMost(minOf(bw, bh))
     val limit = minOf(bw, bh) / 3
+    // **这张图到底有没有"一块底"**：底是铺满一整片区域的东西，它落在内容框边界带上必然是
+    // 实心的一大片。内切于内容框的那种图形只在几个切点上碰到那条带 —— 靠下面"往里走"同样
+    // 能找到它的颜色，但那颜色是图形，拿它当底就会顺着切点把整个图形洪泛成底
+    // （判据台上 透明底蓝圆 量出 底占=0.79、圆整个消失）。
+    // 低于这条线就没有家族色：参照退回"没有东西"，原语自己退成覆盖率 —— 不需要为透明底开一支。
+    var bandPx = 0
+    var bandOn = 0
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      for (x in box.left until box.right) {
+        if (!inBand(x, y, box, band)) continue
+        bandPx++
+        if (Color.alpha(pixels[row + x]) >= A_SOLID) bandOn++
+      }
+    }
+    s.bandSolid = if (bandPx == 0) 0 else bandOn * 255 / bandPx
+    if (s.bandSolid < BAND_SOLID_MIN) {
+      // 「底」这个区域不存在 —— 但**透明仍然是参照**：洪泛穿过 a<[A_SOLID] 的像素（见
+      // [passFromFamilies] 里那条恒通过），色场由淡的那一层定，覆盖率 β 自己就接近 0。
+      // 于是原语在第一遍就退成覆盖率，柔光与投影按它们自己的透明度压回去，
+      // 层次整个交给第二遍（离主体多远）。
+      return 0
+    }
     for (cy in 0..1) for (cx in 0..1) {
       // ⚠ 窗口要**往里走**直到落在底上，不能钉在角点上：圆角方、圆形这些形状，内容框的角
       //   本来就是空的。上一版钉在角上，云闪付 / 12123 / 闲鱼 三张满幅圆角图标量出
@@ -776,19 +1100,17 @@ internal object MonochromeMask {
   }
 
   /**
-   * 穿过 `pass==1` 的像素洪泛。结果写进 `plate`（1 = 通得过），返回像素数。
+   * 穿过 `pass==1` 的像素洪泛。结果写进 `plate`（1 = 与参照连通），返回像素数。
    *
-   * 两种种子，对应两个问题：
-   *  · [atRim]=true —— 种子放在**内容框边界带**里：「这块底与外面连成一片」= 它是背景。
-   *    框外本就是留白，图形不可能从那里被围住，所以种子只能在带里。
-   *  · [atRim]=false —— 种子放在**紧贴背景**的像素上：这一块的边缘就是图标的轮廓，
-   *    它是图形的一个组成部分，不是被掏空的洞。透明底那一支用它区分「另一半 logo」与
-   *    「logo 上的镂空」。
+   * 种子放在**内容框边界带**里：「这块底与外面连成一片」= 它是参照。框外本就是留白，图形
+   * 不可能从那里被围住，所以种子只能在带里。
+   * ⚠ 边界带而不是"整条框边"：一条框边像素在圆角图标的角上是空的，带宽按短边算，
+   *   保证任何一块铺满某片区域的底都至少有一段落在带里。
    *
    * ⚠ 四邻域，不是八邻域 —— 八邻域会顺着对角线从笔画之间的缝里钻到图形内部，
    * 把本该留下的字腔一起当底擦掉。
    */
-  private fun flood(s: Scratch, pixels: IntArray, w: Int, box: Rect, band: Int, atRim: Boolean): Int {
+  private fun flood(s: Scratch, w: Int, box: Rect, band: Int): Int {
     val pass = s.pass
     val plate = s.plate
     val queue = s.queue
@@ -801,10 +1123,7 @@ internal object MonochromeMask {
       val row = y * w
       for (x in box.left until box.right) {
         val i = row + x
-        if (pass[i] == 0.toByte()) continue
-        if (atRim) {
-          if (!inBand(x, y, box, band)) continue
-        } else if (!touchesBackground(pixels, w, box, x, y)) continue
+        if (pass[i] == 0.toByte() || !inBand(x, y, box, band)) continue
         plate[i] = 1
         queue[tail++] = i
       }
@@ -832,6 +1151,14 @@ internal object MonochromeMask {
 
   private fun inBand(x: Int, y: Int, box: Rect, band: Int): Boolean =
     x - box.left < band || box.right - x <= band || y - box.top < band || box.bottom - y <= band
+
+  /** 四邻域里有没有**墨**（不是底的那一侧）。贴着墨 = 这一格是某条笔画自己的抗锯齿边缘。 */
+  private fun touchesInk(plate: ByteArray, w: Int, box: Rect, x: Int, y: Int): Boolean {
+    if (x > box.left && plate[y * w + x - 1] == 0.toByte()) return true
+    if (x < box.right - 1 && plate[y * w + x + 1] == 0.toByte()) return true
+    if (y > box.top && plate[(y - 1) * w + x] == 0.toByte()) return true
+    return y < box.bottom - 1 && plate[(y + 1) * w + x] == 0.toByte()
+  }
 
   /**
    * 把「两块底之间的中缝」吸收进底。
@@ -938,176 +1265,52 @@ internal object MonochromeMask {
   /** 一条缝最多占框这么多。超过就不是缝，是色块，不许吞。 */
   private const val SEAM_MAX_SHARE = 0.02f
 
-  /** 这一像素是不是紧贴着「没有东西」（含框边）。贴着 = 它是图标轮廓的一部分。 */
-  private fun touchesBackground(pixels: IntArray, w: Int, box: Rect, x: Int, y: Int): Boolean {
-    if (x <= box.left || y <= box.top || x >= box.right - 1 || y >= box.bottom - 1) return true
-    val i = y * w + x
-    return Color.alpha(pixels[i - 1]) < A_SOLID || Color.alpha(pixels[i + 1]) < A_SOLID ||
-      Color.alpha(pixels[i - w]) < A_SOLID || Color.alpha(pixels[i + w]) < A_SOLID
-  }
 
-  /** 四邻域里有没有实心像素 —— 有，这一格就是某条笔画的抗锯齿边缘，不是铺开的柔光。 */
-  private fun hasSolidNeighbour(pixels: IntArray, w: Int, h: Int, i: Int, x: Int, y: Int): Boolean {
-    if (x > 0 && Color.alpha(pixels[i - 1]) >= A_SOLID) return true
-    if (x < w - 1 && Color.alpha(pixels[i + 1]) >= A_SOLID) return true
-    if (y > 0 && Color.alpha(pixels[i - w]) >= A_SOLID) return true
-    return y < h - 1 && Color.alpha(pixels[i + w]) >= A_SOLID
-  }
+
+  /** 跨度分位与"至少要有多少明暗差才值得排层次"（L\\* 单位）。 */
+  private const val LAYER_AMP_PCT = 98
+  private const val LAYER_MIN_AMP = 6
 
   /**
-   * 图形自己的主色 = 不透明像素的**逐通道中位色**。
+   * 每格取「该格**参照**像素」的中位 RGB，外加这一格的**覆盖率 β**。
    *
-   * 不用最大色桶：立体渲染的机身（判据台上那个绿色机器人）满屏都是明暗渐变，最大的
-   * 4 bit 桶也只占十几个百分点，按"有没有主导色"问就会永远答"没有"，镂空那一步根本不会跑。
-   * 中位数不会被骗走。**"这张图到底有没有主体"改到洪泛之后用实际结果判**（见
-   * [carveInside] 里的 `bodyShare`）—— 量产物永远比量前提可靠。
+   * 中位而不是均值：一两个切错的字形像素不该拖动整格参照色。
+   * β = 这一格参照像素的平均 alpha：`0` = 这一格参照是"没有东西"（透明底），`255` = 一整块
+   *   实心底。它就是原语 [departure] 里的那一个 β —— **一支"参照是什么颜色"与一支"参照存不存在"
+   *   合并在这里量**，所以透明底与实心底板之间不需要分类，也不需要哪一条绝对 alpha 线。
+   * 没有参照像素的格子（被图形整个盖住）由 [fillEmptyCells] 补出来，**补出来的格 β=0**：
+   * 那是"这一格根本没量到参照"，不是"参照是实心的一块"。
+   *
+   * @param seed 这一遍的参照集（第一遍 = 底，第二遍 = 主体）
    */
-  private fun medianInkColor(pixels: IntArray, w: Int, box: Rect, s: Scratch): Int? {
-    var ink = 0
-    for (y in box.top until box.bottom) {
-      val row = y * w
-      for (x in box.left until box.right) if (Color.alpha(pixels[row + x]) >= A_SOLID) ink++
-    }
-    if (ink == 0) return null
-    val hist = s.hist
-    var color = 0xff shl 24
-    for (c in 0 until 3) {
-      hist.fill(0)
-      for (y in box.top until box.bottom) {
-        val row = y * w
-        for (x in box.left until box.right) {
-          val p = pixels[row + x]
-          if (Color.alpha(p) >= A_SOLID) hist[(p shr (16 - 8 * c)) and 0xff]++
-        }
-      }
-      color = color or (median(hist, 0, ink) shl (16 - 8 * c))
-    }
-    return color
-  }
-
-  /**
-   * **透明底那一支的内部镂空**。
-   *
-   * 这一支的底是「没有东西」，所以图标整个都是墨 —— 但照抄 alpha 会把图形**内部**的层次
-   * 全填平：白立方体、两只眼睛、机身上的高光，在 alpha 里都是同一个「不透明」。判据台上
-   * 那个绿色机器人交出去就是一整块实心，正是用户说的「不够细致」。
-   *
-   * 做法与刻底支同一条原理，只把参照物从「底」换成「图形自己的主色」，并且只动**被围住的**
-   * 那部分：
-   *  · 与背景连成一片的主色 = 主体，照旧实心（一个像素不动）；
-   *  · 被主体围住、又与**局部**主色场差得多的那一块 = 镂空，按差多少把浓度降下来 ——
-   *    桌面拿 alpha 当不透明度，降下去就是"透出系统底色"，正是主题图标该长的样子；
-   *  · 与主色不同、但自己就贴着背景的那一块**不算镂空**（红蓝双色 logo 的另一半、
-   *    两色拼接的图标）：那是图形的组成部分，降下去等于把一半 logo 擦了。
-   *
-   * ⚠ 这一支不做任何"淡档清理"：这里的淡值全是源图自带的抗锯齿，擦掉就是一圈锯齿。
-   *
-   * @return 被镂空的像素占内容框的比例，进日志（`镂空=`）。
-   */
-  private fun carveInside(
-    pixels: IntArray, w: Int, h: Int, box: Rect, band: Int, argb: IntArray, s: Scratch,
-  ): Float {
-    val body = medianInkColor(pixels, w, box, s) ?: return 0f
-    val bl = labChannel(body, 0)
-    val ba = labChannel(body, 1)
-    val bb = labChannel(body, 2)
-    // 1) 主体 = 从背景出发、穿过「与主色够近」的像素能到达的那些墨。
-    var ink = 0
-    for (y in box.top until box.bottom) {
-      val row = y * w
-      for (x in box.left until box.right) {
-        val i = row + x
-        val opaque = Color.alpha(pixels[i]) >= A_SOLID
-        if (opaque) ink++
-        s.pass[i] = if (!opaque ||
-          deltaE(s.labL[i].toInt(), s.labA[i].toInt(), s.labB[i].toInt(), bl, ba, bb) <= TOL_COARSE shl 6
-        ) 1 else 0
-      }
-    }
-    if (flood(s, pixels, w, box, band, atRim = true) == 0) return 0f
-    // 「有没有主体」在这里量，不在色桶上量：主体要真的连成一片、占到图形的一大半，
-    // 才谈得上"剩下的那些是被它围住的洞"。几个色块拼出来的 logo 过不了这一关 ——
-    // 那种图的另一半贴着背景，第 3 步也会把它留下，但占比不够就不该动任何浓度。
-    var bodyInk = 0
-    for (y in box.top until box.bottom) {
-      val row = y * w
-      for (x in box.left until box.right) {
-        val i = row + x
-        if (s.plate[i] != 0.toByte() && Color.alpha(pixels[i]) >= A_SOLID) bodyInk++
-      }
-    }
-    if (ink == 0 || bodyInk.toFloat() / ink < BODY_MIN_SHARE) return 0f
-    // 2) 局部主色场：机身自己带渐变/明暗时，"离主色多远"必须按所在位置量，与刻底支同一个理由。
-    val g = if (minOf(box.width(), box.height()) >= FIELD_MIN_SIDE) FIELD_GRID else FIELD_GRID_MIN
-    s.grid = g
-    s.ensure(w * h, g * g)
-    fitField(pixels, w, box, g, s)
-    propagateField(w, h, w * h, box, s)
-    var feats = 0
-    for (y in box.top until box.bottom) {
-      val row = y * w
-      for (x in box.left until box.right) {
-        val i = row + x
-        if (Color.alpha(pixels[i]) < A_SOLID) { s.pass[i] = 0; continue }
-        val d = distanceOf(pixels[i], i, s)
-        s.dist[i] = d.toShort()
-        val feature = s.plate[i] == 0.toByte() && d > FEATURE_MIN_DELTA shl 6
-        s.pass[i] = if (feature) 1 else 0
-        if (feature) feats++
-      }
-    }
-    if (feats == 0) return 0f
-    // 3) 贴着背景的那部分特征 = 图形的另一半，不是洞：先把它从"可镂空"里摘出去。
-    flood(s, pixels, w, box, band, atRim = false)
-    s.hist.fill(0)
-    var n = 0
-    for (y in box.top until box.bottom) {
-      val row = y * w
-      for (x in box.left until box.right) {
-        val i = row + x
-        if (s.pass[i] == 0.toByte() || s.plate[i] != 0.toByte()) continue
-        s.hist[((s.dist[i].toInt() and 0xffff) shr 6).coerceAtMost(DBUCKETS - 1)]++
-        n++
-      }
-    }
-    if (n == 0) return 0f
-    val ref = (percentile(s.hist, n, INK_REF_PCT) shl 6).coerceAtLeast(1)
-    var knocked = 0
-    for (y in box.top until box.bottom) {
-      val row = y * w
-      for (x in box.left until box.right) {
-        val i = row + x
-        if (s.pass[i] == 0.toByte() || s.plate[i] != 0.toByte()) continue
-        val a = Color.alpha(argb[i])
-        if (a == 0) continue
-        val keep = (ref - (s.dist[i].toInt() and 0xffff).coerceAtMost(ref)) * a / ref
-        argb[i] = if (keep <= 0) 0 else (keep shl 24) or 0x00FFFFFF
-        knocked++
-      }
-    }
-    return knocked.toFloat() / (box.width().toLong() * box.height())
-  }
-
-  /** 每格取「该格底像素」的中位 RGB。中位而不是均值：一两个刻错的字形像素不该拖动整格底色。 */
-  private fun fitField(pixels: IntArray, w: Int, box: Rect, g: Int, s: Scratch) {
+  private fun fitField(
+    pixels: IntArray, w: Int, box: Rect, g: Int, s: Scratch, seed: ByteArray, solidRef: Boolean,
+  ) {
     val cells = g * g
     s.cellN.fill(0, 0, cells)
+    s.cellTot.fill(0, 0, cells)
+    s.cellSum.fill(0, 0, cells)
+    s.fCov.fill(0, 0, cells)
     s.fieldHist.fill(0, 0, cells * 768)
     for (y in box.top until box.bottom) {
       val row = y * w
       val cy = ((y - box.top) * g / box.height()).coerceAtMost(g - 1)
       for (x in box.left until box.right) {
         val i = row + x
-        if (s.plate[i] == 0.toByte()) continue
+        if (seed[i] == 0.toByte()) continue
         val p = pixels[i]
-        // 透明像素的 RGB 是垃圾（非预乘、未定义），不参与定色；它算底，但不算「底是什么颜色」。
-        if (Color.alpha(p) < A_SOLID) continue
         val cx = ((x - box.left) * g / box.width()).coerceAtMost(g - 1)
-        val at = (cy * g + cx) * 768
+        val k = cy * g + cx
+        val a = Color.alpha(p)
+        s.cellTot[k]++
+        s.cellSum[k] += a
+        // 透明像素的 RGB 是垃圾（非预乘、未定义），不参与定色；它算参照，但不算「参照是什么颜色」。
+        if (a < A_SOLID) continue
+        val at = k * 768
         s.fieldHist[at + ((p shr 16) and 0xff)]++
         s.fieldHist[at + 256 + ((p shr 8) and 0xff)]++
         s.fieldHist[at + 512 + (p and 0xff)]++
-        s.cellN[cy * g + cx]++
+        s.cellN[k]++
       }
     }
     for (k in 0 until cells) {
@@ -1118,6 +1321,19 @@ internal object MonochromeMask {
       s.cellB[k] = median(s.fieldHist, k * 768 + 512, n).toShort()
     }
     fillEmptyCells(g, s)
+    // 覆盖率：这一格参照像素平均有多实。一个参照像素都没有的格 = 0（见上面那条注释）。
+    // @param solidRef 参照是"图形自己"（第二遍）时为真：图形在不在，与它透不透明无关 ——
+    //   β 回答的是「**参照**还在不在」，而图形自己的淡是它自己的浓度，已经在工作集的 dep 里
+    //   乘过一遍 a 了。第二遍若按 alpha 量 β，外壳正好落在柔光的斜坡上（β≈190），
+    //   核那种实心像素就会被算成"离主体很远"而整块降下来（判据台上 白底柔光+实心核 就是这样坏的）。
+    for (k in 0 until cells) {
+      val tot = s.cellTot[k]
+      s.fCov[k] = when {
+        tot == 0 -> 0
+        solidRef -> 255
+        else -> (s.cellSum[k] / tot).coerceIn(0, 255)
+      }
+    }
     // 格子色一旦定了，就把 Lab 也一次性算出来（每轮 ≤ cells 次转换）：距离是每像素都要查的，
     // 放在像素循环里转就是每像素多两次色度学转换。
     for (k in 0 until cells) {
@@ -1229,6 +1445,12 @@ internal object MonochromeMask {
           if (v > inherit) inherit = v
         }
         if (inherit < A_SOLID) inherit = A_SOLID
+        // ⚠ 这一格原本在 `淡` 里数过（0<a<[A_SOLID] 才进得来这个分支），补成实心之后它属于
+        //   `框内` 了 —— 两个数都要动，否则 `框内 + 淡 > 1`，日志里就会出现不可能的比例
+        //   （判据台上 多色插画 打出过 0.91 + 0.40）。`框内` 与 `淡` 是互斥的两层，和必须 ≤ 1。
+        if (Color.alpha(argb[i]) in 1 until A_SOLID &&
+          y in box.top until box.bottom && x in box.left until box.right
+        ) soft--
         argb[i] = (inherit shl 24) or 0x00FFFFFF
         kept++
       }
@@ -1340,18 +1562,6 @@ internal object MonochromeMask {
       }
     }
     return if (maxX < 0) null else Rect(minX, minY, maxX + 1, maxY + 1)
-  }
-
-  /** 内容外接框里有多少是不透明的 —— 判「这张图有一整块底」的那一个数。 */
-  private fun opaqueShare(pixels: IntArray, w: Int, box: Rect): Float {
-    var solid = 0
-    for (y in box.top until box.bottom) {
-      val row = y * w
-      for (x in box.left until box.right) {
-        if (Color.alpha(pixels[row + x]) >= A_SOLID) solid++
-      }
-    }
-    return solid.toFloat() / (box.width().toLong() * box.height())
   }
 
   private fun median(hist: IntArray, at: Int, n: Int): Int {
