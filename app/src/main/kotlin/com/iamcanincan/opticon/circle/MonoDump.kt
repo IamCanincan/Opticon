@@ -97,11 +97,33 @@ internal object MonoDump {
     }
   }
 
-  private fun pngOf(bmp: Bitmap): ByteArray =
+  /**
+   * PNG 是无损的，优先按原尺寸发 —— 重放要复现的就是模型实际看到的那张。
+   *
+   * ⚠ 但整张插画（王者荣耀那种 192 位图放大到 384）无损压完有 200KB+，base64 分片上百行，
+   *   logd 会直接丢片：实测 14 张里 3 张就是这么废的（`只收到 60/102 片`）。所以超过
+   *   [MAX_PNG_BYTES] 就先降到 192 再压 —— 层次与形状照样看得出，尺寸不变性另有
+   *   `SelfTest` 第 8 条钉着，不靠这里。
+   */
+  private fun pngOf(bmp: Bitmap): ByteArray {
+    var out = compress(bmp)
+    if (out.size > MAX_PNG_BYTES && bmp.width > SMALL_EDGE) {
+      val small = Bitmap.createScaledBitmap(bmp, SMALL_EDGE, SMALL_EDGE, true)
+      out = compress(small)
+      if (small !== bmp) small.recycle()
+    }
+    return out
+  }
+
+  private fun compress(bmp: Bitmap): ByteArray =
     ByteArrayOutputStream(64 * 1024).use {
       bmp.compress(Bitmap.CompressFormat.PNG, 100, it)
       it.toByteArray()
     }
+
+  /** 超过这个大小就降采样发。 */
+  private const val MAX_PNG_BYTES = 90 * 1024
+  private const val SMALL_EDGE = 192
 
   private fun emit(n: Int, id: Int, what: String, why: String, bytes: ByteArray) {
     val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)

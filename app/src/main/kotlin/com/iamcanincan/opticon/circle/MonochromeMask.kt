@@ -25,7 +25,14 @@ import kotlin.math.sqrt
  *   「渐变」不需要并层、不需要档内插值补偿，**它自己就是平的**。
  * 2. **差 = CIELAB 距离**，整数查表实现（见「感知色度学」）。不用 RGB 曼哈顿距离（同距离不同
  *    色相看起来差很远），也不只用亮度（同亮度的红与青量不出来）。
- * 3. **alpha = 差 ÷ 这张图自己的对比范围**（[INK_REF_PCT] 分位），再过一条单调曲线 [CURVE]。
+ * 3. **alpha = 差按这张图自己的范围标定**（底散度 → 0、形层 p66 → 255）过一条单调曲线
+ *    [CURVE]，再按「比底暗还是亮」把同一距离的两块**分侧**（暗侧最多 +16%、亮侧最多 −8%）。
+ *    ⚠ 试过把实心点从 p66 抬到 p90、中段拉成三点拉伸 —— 图标的主体往往就是那个中位色，
+ *    把它钉在 200 上白块就从 255 掉到 184，正是「主题色怎么这么浅」。**层次不能靠把实心段
+ *    降下来换**；能换的是同一距离上的明度分侧，那是不花实心度的层次。
+ * 4. **没有底可摘的图也不许退回桌面**：整张插画 / 照片底这类"四族底也只摘得掉 0.14"的，
+ *    走 [luminanceRamp] —— 把这张图自己的明暗层次搬到 alpha 上（越暗越实，端点按 p5/p95 量）。
+ *    返回 null 在功能上不是"什么都不做"，是把这张图交给桌面那条算错极性的工厂。
  *
  * 于是「一整块色板」在这条路上**不是被闸门拦掉的，是产生不出来**：底板与自己比必然差 0，归一
  * 之后必然透明。要涂满整张，得先让整张都不是它自己的底 —— 定义上的矛盾。
@@ -139,8 +146,30 @@ internal object MonochromeMask {
   /** 「拟合色场 → 重算距离 → 重新洪泛」跑几轮。第二轮起容差已小得多。 */
   private const val FIELD_ITERS = 3
 
-  /** 实心参照：形层像素距离的这一个分位映射到 alpha 255。 */
+  /** 实心参照：形层像素距离的这一个分位映射到 alpha 255（镂空那一步还在用）。 */
   private const val INK_REF_PCT = 66
+
+  /**
+   * 明度分侧的幅度（占原浓度的百分比）与饱和跨度（L\\* 单位）。
+   *
+   * 同一距离、一暗一亮两块被 |ΔE| 撞成一个值时，暗侧最多往上 [SPLIT_UP]%、亮侧最多往下
+   * [SPLIT_DOWN]%。**不对称是有理由的**：白字在红底上是最常见的"亮侧实心"，往下压狠了
+   * 就是他报过的「主题色发浅」；而暗侧本来就该更实，往上不给余地才是浪费层次。
+   * 跨度 [SPLIT_SPAN] 个 L\\* 算拉满 —— 25 个 L\\* 已经是很明显的明暗差。
+   */
+  private const val SPLIT_UP = 16
+  private const val SPLIT_DOWN = 8
+  private const val SPLIT_SPAN = 25
+
+  /**
+   * 没有底可摘时那一级的明度端点分位，与"至少要有多少 L\\* 跨度才算有层次可搬"。
+   *
+   * 取 p5/p95 而不是最小/最大：一两个 JPEG 噪点或一条高光不该决定整张图的明暗标尺。
+   * 12 个 L\\* = 肉眼可辨的明暗差，比这还平的图本来就没有层次可言。
+   */
+  private const val LUM_LOW_PCT = 5
+  private const val LUM_HIGH_PCT = 95
+  private const val LUM_MIN_SPREAD = 12
 
   /** 底板散度的分位，用来定每一轮的洪泛容差。 */
   private const val TOL_PCT = 97
@@ -389,9 +418,63 @@ internal object MonochromeMask {
           "cc=${st.components} 镂空=${pct(knocked)} 淡=${pct(softShare(st, box))}" +
           if (carved != null) "（刻底换不过：${carved.report}）" else "")
     }
+    // ── 最后一级：**不许退回桌面** ──
+    // 用户这一轮的裁定是「没适配的图标全部走纯合成」。之前 1.7% 的图标（王者荣耀 /
+    // zyddz.wisdomgame 这类整张插画，四族底只摘掉 0.14 的框）在这里返回 null ——
+    // 而 null 在功能上不是"什么都不做"，是**把这张图交给桌面那条算错极性的工厂**，
+    // 观感就是他报的「不是纯色 / 一块白」。退回从来不是中性的，所以这一级必须有。
+    // 插画的正确答案也不是"抠字形"（它没有字形与底之分），是把**它自己的明暗层次**
+    // 搬到一个通道上：越暗越实。端点仍按这张图自己的分布量（p5/p95），不是绝对阈值。
+    val lum = luminanceRamp(pixels, w, h, box, s)
+    if (lum.mask != null) return lum
     return Output(null, alphaFill, alphaStats.hole, alphaStats.largest, alphaStats.components,
       alphaStats.smallShare, 0f,
-      "支=无 透明底框内=${pct(alphaBoxFill)}不成立；刻底：${carved?.report ?: "未尝试"}")
+      "支=无 透明底框内=${pct(alphaBoxFill)}不成立；刻底：${carved?.report ?: "未尝试"}；${lum.report}")
+  }
+
+  /**
+   * 没有"底"可摘的图（整张插画、照片底、几块色拼满）按**自己的明度**出一张单色稿。
+   *
+   * ⚠ 这是兜底的**一级**，不是兜底的开关：它永远给出一个结果，除非这张图连 12 个 L\\*
+   *   都没散开（那种图确实没有层次可搬，返回 null 并说明为什么）。
+   */
+  private fun luminanceRamp(pixels: IntArray, w: Int, h: Int, box: Rect, s: Scratch): Output {
+    val total = w * h
+    val boxArea = box.width().toLong() * box.height()
+    val hist = s.hist
+    hist.fill(0)
+    var ink = 0
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      for (x in box.left until box.right) {
+        if (Color.alpha(pixels[row + x]) < A_SOLID) continue
+        hist[(s.labL[row + x].toInt() and 0xffff) shr 5]++   // L\*×64 → 0..200，一桶 0.5 L\*
+        ink++
+      }
+    }
+    if (ink == 0) return reject("明度=框内没有不透明像素")
+    val lo = percentile(hist, ink, LUM_LOW_PCT) shl 5
+    val hi = percentile(hist, ink, LUM_HIGH_PCT) shl 5
+    if (hi - lo < LUM_MIN_SPREAD shl 6) {
+      return reject("明度=整张只散开 ${hi - lo shr 6}L*，没有层次可搬")
+    }
+    val out = IntArray(total)
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      for (x in box.left until box.right) {
+        val i = row + x
+        val a = Color.alpha(pixels[i])
+        if (a < A_SOLID) continue
+        val t = (hi - (s.labL[i].toInt() and 0xffff)) * 255 / (hi - lo)
+        val v = t.coerceIn(0, 255) * a / 255
+        if (v > 0) out[i] = (v shl 24) or 0x00FFFFFF
+      }
+    }
+    val st = measure(out, w, h, box, s, bridge = true, despeckle = true)
+    val fill = st.kept.toFloat() / boxArea
+    return Output(out, fill, st.hole, st.largest, st.components, st.smallShare, softShare(st, box),
+      "支=明度 暗端=${lo shr 6}L* 亮端=${hi shr 6}L* 框内=${pct(fill)} cc=${st.components} " +
+        "top=${pct(st.largest)} 淡=${pct(softShare(st, box))}")
   }
 
   // ─────────────────── 支二：局部底色场 + 距离斜坡 ───────────────────
@@ -484,12 +567,12 @@ internal object MonochromeMask {
       }
     }
     if (ink == 0) return reject("刻底=底占满了整框")
-    // 归一是**两点标定**，不是一条绝对线：底板自己散到多远（[tol]）= 0，这张图的形层
-    // 占到 [INK_REF_PCT] 分位的那个距离（[ref]）= 实心。
-    // ⚠ 只标一个点（零点摆在"离底 0"）会把底板噪声带里那些像素留在很淡的一层上 ——
-    //   渐变底残下来的一片晕就是这么来的（判据台上 小步点 黄底左边那道影子）。
-    //   这条也**不是**旧版那条绝对的 `TONE_FLOOR`：零点是这张图自己的底量出来的，
-    //   只压到"与底不可分"的那一段；柔光字形只要比底可分一点就照旧留。
+    // 归一仍是**两点标定**（底散度 → 0、形层 p[INK_REF_PCT] → 255）。
+    // ⚠ 试过改成三点拉伸（p50→200、p90→255）想把中段拉开 —— 判据台上直接砸了：
+    //   图标的主体往往就是那个中位色，把它钉在 200 上，白块从 255 掉到 184，
+    //   正是他报过的「主题色怎么这么浅」。层次不能从"把实心段降下来"换。
+    //   真正丢层次的地方在别处：**同样离底远、但一个比底亮一个比底暗**的两块，
+    //   被 |ΔE| 撞成同一个值 —— 那一条由下面的明度分侧处理。
     val ref = percentile(s.hist, ink, INK_REF_PCT) shl 6
     // 形层与底散在同一个范围里 = 这张图本来就只有一种颜色，没有可刻的细节。
     if (ref <= tol) return reject("刻底=整张没有对比 容ΔE=${tol shr 6} 实ΔE=${ref shr 6}")
@@ -501,7 +584,17 @@ internal object MonochromeMask {
       for (x in box.left until box.right) {
         val i = row + x
         if (s.plate[i] != 0.toByte()) continue
-        val a = CURVE[(((s.dist[i].toInt() and 0xffff) - tol) * 255 / span).coerceIn(0, 255)]
+        val d = s.dist[i].toInt() and 0xffff
+        var a = CURVE[((d - tol) * 255 / span).coerceIn(0, 255)]
+        // **同一距离、不同明度侧 = 不同浓度**。|ΔE| 把"比底暗 42"和"比底亮 46"两块撞成同一个
+        // 值，可它们在原图里明明是两样东西 —— 这就是「每处都单独上色」还差的那一环。
+        // 方向按单色稿的常规：比底暗的往上（更实的墨）。亮侧只往下压 [SPLIT_DOWN]%，
+        // 因为白字在红底上是最常见的"亮侧实心"，压狠了就是「主题色发浅」；
+        // 两侧都仍然接近实心，差别是层次不是对错。乘法保住了"底必为 0"这条性质。
+        val cell = if (s.ref[i] >= 0) s.ref[i] else 0
+        val dark = (s.fL[cell] - s.labL[i].toInt()) * 100 / (SPLIT_SPAN shl 6)
+        a = if (dark >= 0) (a + a * dark.coerceAtMost(SPLIT_UP) / 100).coerceAtMost(255)
+        else (a + a * dark.coerceAtLeast(-SPLIT_DOWN) / 100).coerceAtLeast(0)
         if (a > 0) out[i] = (a shl 24) or 0x00FFFFFF
       }
     }
