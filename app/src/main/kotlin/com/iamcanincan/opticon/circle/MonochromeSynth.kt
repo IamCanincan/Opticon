@@ -136,8 +136,17 @@ internal object MonochromeSynth {
    */
   private const val TONE_SAMPLE = 64
 
-  /** 缓存上限。图标数量本来就有界，超过就整体清掉重来，避免长歪。 */
-  private const val CACHE_LIMIT = 256
+  /**
+   * 掩码缓存的字节上限（见 [store]）。8 MB ≈ 55 张 384² 的掩码。
+   *
+   * 换算法：一张 ALPHA_8 掩码 = 边长² 字节（384² = 147 KB），桌面一次会话里会问几百个
+   * 图标 —— 按条数封顶的话上限是多少内存，取决于桌面问的是哪些尺寸，等于没人管。
+   * 超了就整体清掉（图标数有界，清一次的重建代价只是几毫秒 × N 张，比在桌面进程里
+   * 常驻几十 MB 划算；做 LRU 是给这个缓存加它不需要的复杂度）。
+   */
+  private const val MAX_CACHE_BYTES = 8L * 1024 * 1024
+
+  private var cacheBytes = 0L
 
   /**
    * 按图标**实例**缓存已经压好的**掩码位图**（[IdentityHashMap] 语义：同一个对象才命中）。
@@ -168,9 +177,25 @@ internal object MonochromeSynth {
     // 要 384 再重压一次 —— 真机日志里就是每个图标成对的 `edge=192` / `edge=384` 两行。
     // 一次会话里桌面给的图层 bounds 是常量，所以只有第一个图标付两次。
     val mask = render(source, if (knownEdge > 0) knownEdge else MIN_EDGE) ?: return null
-    if (cache.size >= CACHE_LIMIT) cache.clear()
-    cache[source] = mask
+    store(source, mask)
     return MonochromeLayer(source, mask).also { noteSynthesized() }
+  }
+
+  /**
+   * 写缓存：按**字节**而不是按条数封顶。
+   *
+   * 原来这里写的是「256 条，图标数量本来就有界」—— 但一条是一张 384² 的 ALPHA_8 = 147 KB，
+   * 256 条就是 **37 MB**，而这些字节住在桌面进程里。桌面的图标数本来就能到几百，
+   * 条数上限于是等于一个没人算过的内存数。
+   */
+  private fun store(source: Drawable, mask: Bitmap) {
+    val size = mask.byteCount.toLong()
+    if (cacheBytes + size > MAX_CACHE_BYTES && cache.isNotEmpty()) {
+      cache.clear()
+      cacheBytes = 0
+    }
+    val previous = cache.put(source, mask)
+    cacheBytes += size - (previous?.byteCount?.toLong() ?: 0L)
   }
 
   /**
@@ -194,10 +219,7 @@ internal object MonochromeSynth {
    * 所以直接覆盖没有回退风险。
    */
   @Synchronized
-  fun remember(source: Drawable, mask: Bitmap) {
-    if (cache.size >= CACHE_LIMIT) cache.clear()
-    cache[source] = mask
-  }
+  fun remember(source: Drawable, mask: Bitmap) = store(source, mask)
 
   /**
    * 累计交出去多少张单色层。**两条入口都经过 [forIcon]，所以一个计数器就够**。

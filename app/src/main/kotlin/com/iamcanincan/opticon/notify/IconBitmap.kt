@@ -534,8 +534,20 @@ object IconBitmap {
         if (opaque == 0) return Silhouette(null, 0f, "整张同色，无层可刻")
         // 占比不到 NOISE_LAYER 的那一层当作噪声，并回底板 —— 渐变底常会骗出一个只占几个
         // 百分点的"第三层"，让它参与字形就等于把底板的碎片留在掩码里。
-        if (l1.toFloat() / opaque < NOISE_LAYER_SHARE) { plateCount += l1; l1 = 0 }
-        if (l2.toFloat() / opaque < NOISE_LAYER_SHARE) { plateCount += l2; l2 = 0 }
+        // ⚠ 必须**改标签**，不能只把计数清零：只清 `l1 = 0` 的话，下面按面积定主体/点缀时
+        //   会把这一层派成"点缀"，而 `layer[i]` 里那些像素还在 —— 噪声照样被涂进掩码，
+        //   还正好涂上最显眼的中灰档（观感就是"去色没去干净、边上发脏"）。计数也会与
+        //   实际涂出的像素对不上，日志里 `像素=`/`boxFill=` 描述的就不是交出去的那张图。
+        val noise1 = l1 > 0 && l1.toFloat() / opaque < NOISE_LAYER_SHARE
+        val noise2 = l2 > 0 && l2.toFloat() / opaque < NOISE_LAYER_SHARE
+        if (noise1 || noise2) {
+            for (i in 0 until total) {
+                val l = layer[i]
+                if ((l == 1 && noise1) || (l == 2 && noise2)) layer[i] = 0
+            }
+            if (noise1) { plateCount += l1; l1 = 0 }
+            if (noise2) { plateCount += l2; l2 = 0 }
+        }
         count = l1 + l2
         if (plateCount.toFloat() / opaque < MIN_PLATE_SHARE) {
             return Silhouette(null, 0f, "无主导底板（底占 ${"%.2f".format(plateCount.toFloat() / opaque)}）")
