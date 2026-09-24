@@ -181,21 +181,6 @@ internal object MonochromeMask {
     Math.round(255.0 * Math.pow(it / 255.0, 0.75)).toInt()
   }
 
-  /**
-   * [CURVE] 的反表：`INV_CURVE[t]` = 要得到浓度 t，曲线自变量至少得走到哪一格。
-   *
-   * 只有一处用它：[depSpreadLut] 要把各块**在浓度轴上**铺匀，而它能改的是 dep 轴 ——
-   * 不反推回来，等分 dep 就等于把高档挤在一起（曲线是 t^0.75，高端本来就平）。
-   * 曲线单调不减，所以"第一个 ≥ t 的格"就是反值；t=0 落在 0。
-   */
-  private val INV_CURVE = IntArray(256).also { inv ->
-    var c = 0
-    for (t in 0 until 256) {
-      while (c < 255 && CURVE[c] < t) c++
-      inv[t] = c
-    }
-  }
-
   /** 一个 sRGB 像素的 Lab 某个通道（真值 ×64）。`which`：0=L 1=a 2=b。
    *  ⚠ internal 只为判据台能对着公开参考值核这两张表（`SelfTest` 第 0 条），不是给业务用的。 */
   internal fun labChannel(pixel: Int, which: Int): Int {
@@ -443,16 +428,16 @@ internal object MonochromeMask {
       1f - ground.share / LUM_TAKEOVER,
       (ground.share - LUM_SWALLOW) / (1f - LUM_SWALLOW)
     ).coerceIn(0f, 1f) * ground.meanCov / 255f * 100).toInt()
+    // 试过并否掉的第三条路（别再走一遍）：饱和段里有 ≥2 块竞争时，把明暗这条轴的
+    // ±up/down 拉宽。实测反而更糟：四块从 201/221/227 掉到 143/157/162 —— 整段一起被压淡，
+    // 间隔一点没开。原因是这条轴根本分不开它们：**白、黄、绿相对深蓝底都是"更亮"**，
+    // u 的符号与大小都差不多，真正的区别在色相，而单色墨没有色相这一维。
+    // 要在饱和段里排序只能另找一维（候选：按第二遍的 `off` —— 离主体的距离 —— 在段内全排序，
+    // 而不是像现在这样只降档）。
     val up = SPLIT_UP * (100 - q) / 100
     val down = SPLIT_DOWN * (100 - q) / 100
 
     // 3) 出图：距离与明暗两条按 q 混成浓度，明度序排同距，第二遍降层次。
-    //    「相邻部分必须有差别」这条要求落在**dep 轴**上：先把"图上真的有几块"按源色归出来，
-    //    再把这几块的 dep 铺到 `[zero..solid]`。不在浓度轴上排 —— 顶端已经饱和的那几块
-    //    在浓度轴上已经是同一个数了，只有这一轴上还分得开（见 [depSpreadLut]）。
-    val depLut = depSpreadLut(
-      partMeans(w, h, box, s) { s.dist[it].toInt() and 0xffff }, ground.zero, ground.span
-    )
     val out = IntArray(total)
     val hollow = HOLLOW * body.weight / 255
     var knocked = 0
@@ -460,8 +445,7 @@ internal object MonochromeMask {
       val row = y * w
       for (x in box.left until box.right) {
         val i = row + x
-        val raw = s.dist[i].toInt() and 0xffff
-        val dep = if (depLut != null) depLut[raw] else raw
+        val dep = s.dist[i].toInt() and 0xffff
         val ref = refLight(i, s)
         // ⚠ 感知曲线只加在**距离**那一条上，混完不再过一次。桌面拿 alpha 当不透明度，ΔE 距离
         //   线性排会把大半图形留在六成浓度以下（观感就是「主题色怎么这么浅」），所以要抬中低段；
@@ -471,15 +455,7 @@ internal object MonochromeMask {
         val u = ref - (s.labL[i].toInt() and 0xffff)
         val tl = ((u - lo) * 255 / spread).coerceIn(0, 255)
         var a = (td * (100 - q) + tl * q) / 100
-        if (a == 0) {
-          // 落在标定线以下 ≠ 它是底板 —— **底板必须继续是 0**（「板-板接缝必须消失」那条性质，
-          // 判据台钉着），所以这里先按 `plate` 挡一道，不能只看浓度。
-          // 挡下来之后剩下的那种：**实心、又不是底、浓度却是 0** —— 图上明明有一块东西，
-          // 交出去是全空，这就是「相邻部分没差别」在低端的形状。给它一档最低浓度，
-          // 剩下的交给下面的重排去铺。
-          if (s.plate[i] != 0.toByte() || Color.alpha(pixels[i]) < A_SOLID) continue
-          a = SEP_FLOOR
-        }
+        if (a == 0) continue
         // 比参照暗的往上、亮的往下，**按这张图自己的跨度成比例** —— 不是"暗/亮"两档。
         // ⚠ 上限不对称是有理由的：白字在彩色底上是最常见的"亮侧实心"，往下压狠了就是他报过的
         //   「主题色怎么这么浅」。q 上去之后这两侧自动退场：那时明暗已经是浓度本身了。
@@ -503,22 +479,13 @@ internal object MonochromeMask {
     //    覆盖率给的（β≈0）那些淡值全是设计者自己画的柔光与抗锯齿，擦掉就是一圈锯齿、桥起来
     //    就是给一条笔画凭空加粗。（旧版这里是两支各写死的 `bridge=/despeckle=` 常量。）
     val colourDriven = ground.meanCov >= 128
-    // 4a) 第二遍铺匀。dep 轴那一趟只保证"各块在进曲线之前还分得开"；曲线之后还有明暗那条
-    //     按 q 混进来、第二遍又按块各自降档，排好的等距会被这两步重新挤歪。所以在
-    //     **交出去的那条轴**上再铺一次。两趟各治一种合并：dep 轴治"顶端全饱和"（那种块在
-    //     浓度轴上已经是同一个数，救不回来），浓度轴治"混完又挤回去"。都是单调重排，
-    //     不改任何块的先后次序、不动 0（底板与留白继续是空的）。
-    // 只铺**一趟**：试过迭代到 2~3 趟，平均档数只从 2.94 抬到 3.00，而"完全分开的图标"
-    // 反而从 12/32 掉到 10/32 —— 一块内部的渐变越推越开，推到后来是把两块推到同一个位置上去。
-    // 换句话说多趟不是没有代价，而这点代价换不来可见的差别。
-    val pre = separation(out, w, h, box, s)
-    toneSpreadLut(pre.third)?.let { lut ->
-      for (i in 0 until total) {
-        val a = out[i] ushr 24
-        if (a != 0) out[i] = (lut[a] shl 24) or 0x00FFFFFF
-      }
-    }
     // 量的是**交出去那一张**：分档 = 几块 / 落在几档，括号里是每块的浓度。
+    // ⚠ 这个数现在**只是诊断**，没有配套的修法 —— 曾按它铺过两趟单调重排（dep 轴 + 浓度轴），
+    // 平均档数 2.66→2.94、完全分开的 8/32→12/32，看着是进步；但同一改动在真图上画出过
+    // **一块看得见的灰方框**（azure：盾牌外面那圈柔光被当成"一个部分"，重排就发给它一整格
+    // 浓度，于是留白变成实心方块，还带一条横带）。A/B 对过：撤掉保底仍在、撤掉重排才消失。
+    // 一笔买卖换不来一个方框，所以修法撤了、数留着 —— 下一步的锚点必须先把"柔光/留白"
+    // 排除在"部分"之外（按面积占比与离底距离双重门槛），而不是先铺匀再找补。
     val sep = separation(out, w, h, box, s)
     val st = measure(out, w, h, box, s, bridge = colourDriven, despeckle = colourDriven)
     val fill = st.kept.toFloat() / boxArea
@@ -562,17 +529,12 @@ internal object MonochromeMask {
   /** 两档之间至少差这么多浓度才算看得出是两个部分（255 的 ~12%）。 */
   private const val SEP_MIN_GAP = 30
 
-  /** 实心、又不是底、浓度却算成 0 的那些像素的最低浓度（见 [build] 第 3 步与 [SEP_FLOOR] 的说明）。 */
-  private const val SEP_FLOOR = 10
-
-  /** 少于这么多块就不重排：两块本来就该是"空 / 墨"，铺满反而把留白刷成灰。 */
-  private const val SEP_SPREAD_MIN = 3
 
   /**
    * 把画面按**源色**归成块（一块 = 图上的一个部分），返回每块的平均值，按值升序。
    *
-   * [of] 取的是这个像素的哪个量 —— 出图之前取 dep（排开要用），出图之后取浓度
-   * （`分档` 那个数要量）。同一个分块、同一个面积门槛，两处不会各自漂移。
+   * [of] 取的是这个像素的哪个量。现在只有一个调用者，取的是**交出去的浓度**（`分档`）；
+   * 留着这个参数是因为下一版修法可能要按离底距离重新归块 —— 到那时分块与面积门槛只写一处。
    *
    * 底板不参与：底板之间本来就该没有差别（「板-板接缝必须消失」那条性质钉着它），
    * 把它算进来就等于要求接缝起皱，两件事会互相打架。
@@ -624,65 +586,6 @@ internal object MonochromeMask {
     // 每一块的浓度值一起带回来：`2/6` 只说"合并了"，不说**在哪一端**合并的。
     // 全挤在 0 = 底下那道 clamp 把部分擦掉了；全挤在 255 = 顶上那道饱和了。修法不同。
     return Triple(parts.size, levels, parts)
-  }
-
-  /**
-   * 把各块的 **dep** 铺到 `[zero..solid]` 上，锚点之间线性插值 —— 也就是"相邻部分必须有
-   * 差别"这条要求在浓度轴上的因：浓度是 dep 过一条曲线得来的，dep 都挤到 255 之上时，
-   * 在浓度轴上已经没有可分的余地（那几块的值本来就相同了），只有在这一轴上还分得开。
-   *
-   * 与在浓度轴上排一次相比，这里多保住的是**顶端**：真机上那张 `(131,253,255,255,255,255)`
-   * 有四块已经饱和，浓度轴的重排对它们无能为力。
-   *
-   * 仍然是一条单调映射：不改任何一块的先后次序，渐变还是渐变、抗锯齿还是斜坡；
-   * 而 dep=0（底板与留白）钉在 0 不动，所以「板-板接缝必须消失」那条性质不受影响。
-   */
-  private fun depSpreadLut(anchorsIn: IntArray, zero: Int, span: Int): IntArray? {
-    val anchors = anchorsIn.distinctBy { it.coerceIn(1, 255) }.toIntArray()
-    if (anchors.size < SEP_SPREAD_MIN || span <= 0) return null
-    val n = anchors.size
-    // 目标**必须按浓度算、再经 INV_CURVE 回到 dep 轴**：直接等分 dep 是不行的 —— 浓度是 dep
-    // 过 `t^0.75` 得来的，dep 轴上均匀的几档落到浓度轴上会在高端挤成一团（实测就是这样
-    // 只把 6 块排成 3 档）。反过来铺在浓度轴上，交出去的才是均匀的 n 档。
-    return rampLut(anchors) { i -> zero + INV_CURVE[255 * (i + 1) / n] * span / 255 }
-  }
-
-  /**
-   * 在**浓度轴**上把各块铺匀：第 i 块 → 255×(i+1)/n。
-   *
-   * 与 [depSpreadLut] 是同一个原理、不同的轴 —— 那一趟管"进曲线之前别撞车"，这一趟管
-   * "出曲线、混完明暗、降完层次之后仍然别挤回去"。见 [build] 第 4a 步。
-   */
-  private fun toneSpreadLut(anchorsIn: IntArray): IntArray? {
-    val anchors = anchorsIn.distinctBy { it.coerceIn(1, 255) }.toIntArray()
-    if (anchors.size < SEP_SPREAD_MIN) return null
-    val n = anchors.size
-    return rampLut(anchors) { i -> 255 * (i + 1) / n }
-  }
-
-  /**
-   * 过一条**单调折线**做重排：(0,0) → 每一块 (它自己的值, [target] 给的档) → 顶到 255。
-   *
-   * 起点钉在 0 是关键：0 是"底板与留白"，它必须还是 0 —— 否则「板-板接缝必须消失」那条
-   * 性质当场破掉。中间线性插值，所以渐变与抗锯齿的斜坡只是被拉伸，没有被台阶化。
-   * [anchors] 必须升序且都 ≥ 1（由 [partMeans] 保证）。
-   */
-  private fun rampLut(anchors: IntArray, target: (Int) -> Int): IntArray {
-    val lut = IntArray(256)
-    var srcPrev = 0
-    var dstPrev = 0
-    for (i in anchors.indices) {
-      val src = anchors[i]
-      val dst = target(i)
-      val step = src - srcPrev
-      if (step > 0) for (t in srcPrev until src) lut[t] = dstPrev + (dst - dstPrev) * (t - srcPrev) / step
-      srcPrev = src
-      dstPrev = dst
-    }
-    val tail = 255 - srcPrev
-    if (tail > 0) for (t in srcPrev until 255) lut[t] = dstPrev + (255 - dstPrev) * (t - srcPrev) / tail
-    lut[255] = 255
-    return lut
   }
 
   // ───────────────────────────── 极性判据 ─────────────────────────────
@@ -1571,6 +1474,7 @@ internal object MonochromeMask {
 
   /** 跨度分位与"至少要有多少明暗差才值得排层次"（L\\* 单位）。 */
   private const val LAYER_AMP_PCT = 98
+
   private const val LAYER_MIN_AMP = 6
 
   /**
