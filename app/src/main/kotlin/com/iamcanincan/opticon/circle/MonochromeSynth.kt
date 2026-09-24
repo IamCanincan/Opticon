@@ -123,14 +123,10 @@ internal object MonochromeSynth {
    */
   private const val MIN_EDGE = 192
 
-  /**
-   * alpha 支的「这大概是一块底」提示线：框内填充率到这一步以上，就先试一次
-   * [IconBitmap.plateSilhouette] 把字形从底板里刻出来，别把整块底当图形交出去。
-   *
-   * ⚠ 这是**要不要再试一次**的门槛，不是拒绝线 —— 刻不出来时 alpha 的结果照旧生效，
-   * 所以试错的方向是安全的。定在 0.55 的理由见 `IconBitmap.PLATE_FILL` 那一段。
-   */
-  private const val PLATE_HINT = 0.55f
+  // alpha 支的「这大概是一块底」提示线 = IconBitmap.PLATE_FILL，**故意用同一个数**：
+  // 到这一步以上就先试着刻形（[IconBitmap.plateSilhouette]），而"刻完还是一整块板"的
+  // 拒绝线也是它。两条线量的是同一件事，分成两个常量的话迟早只调一个、判据自相矛盾。
+  // 注意提示线只是"要不要再试一次"，不是拒绝 —— 刻不出来时 alpha 的结果照旧生效。
 
   /**
    * 「整张图标是不是灰度」那道判据的出图尺寸。
@@ -305,13 +301,13 @@ internal object MonochromeSynth {
       //
       // 1. **alpha**（[IconBitmap.alphaSilhouette]）：交出去的就是图标自带的 alpha，不猜。
       // 2. **刻底板**（[IconBitmap.plateSilhouette]）：只要 alpha 说「框内已经是成片的底」
-      //    （≥ [PLATE_HINT]，含它直接判成底板那种），就先试着按**离底板主色的距离**把字形
+      //    （≥ [IconBitmap.PLATE_FILL]，含它直接判成底板那种），就先试着按**离底板主色的距离**把字形
       //    刻出来。这一步专治大色块 —— 0.55~0.85 那一段以前被 alpha 整块收下，屏幕上就是
       //    一块带几条镂空洞的色板，字形根本没露出来。刻不出来（多色 logo / 整张同色）就照旧
       //    用 alpha 的结果，不会因为试了而变差。
       // 3. **亮度 Otsu**（[IconBitmap.binarizeSilhouette]）：前两条都不成立时的兜底。
       val alpha = IconBitmap.alphaSilhouette(raster)
-      val carved = if (alpha.boxFill >= PLATE_HINT) IconBitmap.plateSilhouette(raster) else null
+      val carved = if (alpha.boxFill >= IconBitmap.PLATE_FILL) IconBitmap.plateSilhouette(raster) else null
       val bin = if (alpha.mask == null && carved?.mask == null)
         IconBitmap.binarizeSilhouette(raster) else null
       val chosen = carved?.mask?.let { carved }
@@ -830,8 +826,10 @@ internal object MonochromeSynth {
           // 为什么还要吸：非自适应图标在这之后要经 `intoVisibleArea` 缩放一次，双线性会把
           // 档与档之间混出中间值；重新吸附保证交到桌面手上的仍然是三个确定值。
           honorTones -> when {
-            a < 64 -> 0
-            a < 192 -> 128
+            // 吸附阈值由 TONE_MID 推出来（取相邻两档的中点），不写死数字 ——
+            // 点缀档哪天调了，这里忘了跟着改就会悄悄把档归错。
+            a < IconBitmap.TONE_MID / 2 -> 0
+            a < (IconBitmap.TONE_MID + 255) / 2 -> IconBitmap.TONE_MID
             else -> 255
           }
           a < MASK_DUMP_THRESHOLD -> 0

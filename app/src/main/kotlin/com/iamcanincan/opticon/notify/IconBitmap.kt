@@ -73,7 +73,14 @@ object IconBitmap {
      * 0.55 / 0.03 这两条是判据台上按「汉字字形（洞占比通常 0.05 以上）不误伤」定的，
      * 真机跑一轮要看 `hole=` 的分布再收。
      */
-    private const val PLATE_FILL = 0.55f
+    /**
+     * 「一整块板」的两条线之一：产出填满框内到这个比例，且**内部结构**少到 [PLATE_HOLE] 以下，
+     * 才判成"这就是一块底"。
+     *
+     * ⚠ [MonochromeSynth] 里"要不要先试着刻底"用的就是同一个数（不是另一个 0.55）——
+     *   两条线量的本是同一件事，分成两个常量的话，迟早只调一个、判据自相矛盾。
+     */
+    internal const val PLATE_FILL = 0.55f
     private const val PLATE_HOLE = 0.03f
 
     /**
@@ -112,6 +119,14 @@ object IconBitmap {
      */
     private const val NOISE_LAYER_SHARE = 0.02f
 
+    /**
+     * 一个色桶要占多少像素才"配当一层"：桶计数 × 本数 ≥ 不透明像素数，即占比 ≥ 1/[MIN_LAYER_VOTE]。
+     *
+     * 挑层心前先过这道线，是因为渐变底会把颜色散成几百个只占千分之几的小桶；不过这道线，
+     * 最远点采样就会挑中渐变尾端的一个小桶当"第二层"，把底板碎片当成字形。
+     */
+    private const val MIN_LAYER_VOTE = 100
+
     /** 二值化时每个像素的归类，用于连通性判断 */
     private const val CLASS_TRANSPARENT = 0
     private const val CLASS_DARK = 1
@@ -121,7 +136,7 @@ object IconBitmap {
      * 三层输出里"点缀"那一档的 alpha：50% 的系统前景色压在系统底色上 = 两档的**中值**。
      * 主体是 255、底板是 0（让系统的底色透出来），三档都是离散值。
      */
-    private const val TONE_MID = 128
+    internal const val TONE_MID = 128
 
     /**
      * 把 Drawable 画成指定边长的方形位图。
@@ -565,13 +580,13 @@ object IconBitmap {
         tones: Boolean = false,
     ): Silhouette {
         val boxTotal = bounds.width().toLong() * bounds.height()
-        val shape = polishBinarized(output, w, h, bounds)
+        val shape = polishBinarized(output, w, h, bounds, tones)
         val filled = shape.kept.toFloat() / boxTotal
         // 闭运算 + 去碎渣之后可能把仅剩的一点杂色全擦光 —— 空掩码交出去就是一个看不见的洞，
         // 比不合成糟得多。这道守卫必须在体检之后：之前那几条量的是体检**之前**的原始计数。
         if (filled < MIN_SHAPE_RATIO) return Silhouette(null, filled, "$from：修整后几乎全空")
-        if (filled >= PLATE_FILL && shape.holeRatio <= PLATE_HOLE) {
-            return Silhouette(null, filled, "$from：闭运算后仍是一整块板（空洞 ${"%.2f".format(shape.holeRatio)}）")
+        if (filled >= PLATE_FILL && shape.structureRatio <= PLATE_HOLE) {
+            return Silhouette(null, filled, "$from：仍是一整块板（内部结构 ${"%.2f".format(shape.structureRatio)}）")
         }
         if (shape.components >= SHATTER_COMPONENTS && shape.largestRatio <= SHATTER_TOP) {
             return Silhouette(null, filled, "$from：闭运算后仍碎成 ${shape.components} 块")
@@ -581,17 +596,24 @@ object IconBitmap {
         return Silhouette(
             result, filled,
             "$from ${shape.kept} 像素 cc=${shape.components} top=${"%.2f".format(shape.largestRatio)} " +
-                "hole=${"%.2f".format(shape.holeRatio)}",
+                "结构=${"%.2f".format(shape.structureRatio)}",
             tones = tones,
         )
     }
 
-    /** [polishBinarized] 的产出：修整完还剩多少像素，以及三个形状统计量。 */
+    /**
+     * [polishBinarized] 的产出。
+     *
+     * ⚠ 这里报的是**内部结构占比** [structureRatio]，不是"空洞占比"：带三档的掩码里，
+     *   字腔那部分常常是第三种颜色（点缀档），它是实心的、根本不算"洞"。只量洞的话，
+     *   三层模式下这条闸门会系统性失明（真机日志里 `hole=0.00` 一片就是这个原因），
+     *   「一整块板」那条闸就永远不触发。所以：**内部结构 = 封闭空洞 + 点缀档像素**。
+     */
     private class Shape(
         val kept: Int,
         val components: Int,
         val largestRatio: Float,
-        val holeRatio: Float,
+        val structureRatio: Float,
     )
 
     /**
@@ -614,20 +636,29 @@ object IconBitmap {
      * 闭完按连通块擦掉太小的孤立点（[MIN_SPECK]，按面积给比例）—— 那些是渐变底被 Otsu
      * 切出来的杂色碎屑，留着就是「脏」。多笔画图标不受影响：一笔画下来的块远大于这个尺寸。
      */
-    private fun polishBinarized(output: IntArray, w: Int, h: Int, box: Rect): Shape {
+    private fun polishBinarized(output: IntArray, w: Int, h: Int, box: Rect, tones: Boolean): Shape {
         val total = w * h
         val shape = outsideBuffer(total)   // 复用规则与理由见 [classBufferCache]：整体被外层锁串起来
         val dilated = morphBuffer(total)
 
         val stack = stackBuffer(total)
-        for (i in 0 until total) shape[i] = Color.alpha(output[i]) >= MIN_SHAPE_ALPHA
+        // ⚠ 「算不算图形」的线随掩码种类变：
+        //   · 不带档的掩码里 alpha 是**源图的抗锯齿值**，必须按 [MIN_SHAPE_ALPHA] 把淡色滤掉
+        //     —— 否则柔光/投影那一片淡底会整片进掩码（本项目踩过，出来就是一块色）；
+        //   · 带三档的掩码里 alpha 是**我们写死的 0 / [TONE_MID] / 255**，中间那档就是图形本身。
+        //     这时候还按 ≥128 判，等于把点缀档压在判定线的刀尖上 —— 任何一次取整把 128 压成
+        //     127，那一层就整个从掩码里消失。所以带档时只用「非 0」当线。
+        var accentPixels = 0
+        for (i in 0 until total) {
+            val a = Color.alpha(output[i])
+            shape[i] = if (tones) a > 0 else a >= MIN_SHAPE_ALPHA
+            if (shape[i] && tones && a < 255) accentPixels++
+            dilated[i] = false
+        }
         // ── 膨胀：形状周围半径 [radius] 的方框内都算形状 ──
-        // ⚠ 半径必须**跟着出图尺寸走**，不能写死 1 像素：同一条物理缝隙在 192 上是 1 像素
-        //   （闭得上），到 384 就变成 2 像素（闭不上）。真机日志抓到过现成的证据 ——
-        //   同一个图标 `edge=192 → cc=11`、`edge=384 → cc=17`，分辨率越高越"渣"，
-        //   （半径为什么固定为 1，见 morphRadius 上那段：线性放大过，把字腔填掉了。）
+        // 半径固定 1：要连的就是抗锯齿那 1 像素的缝。试过按出图尺寸线性放大（384 上半径 2
+        // = 5×5 的核），代价是把「日」「口」那类字腔和眼睛一起填掉 —— 见 morphRadius 上那段。
         val radius = morphRadius()
-        dilated.fill(false)
         for (y in 0 until h) for (x in 0 until w) {
             if (!shape[y * w + x]) continue
             val y0 = maxOf(0, y - radius); val y1 = minOf(h - 1, y + radius)
@@ -656,13 +687,28 @@ object IconBitmap {
             }
             eroded[i] = keep
         }
-        // 闭运算新添的像素没有原始 alpha，给实心白；原本就有的保持原值（抗锯齿）。
+        // 闭运算新添的像素：**继承邻域里那一档的值**，不是一律给实心白。
+        // 一律给 255 会把点缀区域外圈闭出来的一圈升成主体档 —— 中灰的细节被硬边吃掉，
+        // 观感就是「糊成一团」。原本就有的像素保持原值（抗锯齿或三档里的确定档）。
         var kept = 0
         for (i in 0 until total) {
             if (!eroded[i]) { output[i] = 0; shape[i] = false; continue }
-            if (!shape[i]) output[i] = Color.WHITE
+            if (!shape[i]) {
+                val y = i / w; val x = i - y * w
+                var inherit = 0
+                for (ny in maxOf(0, y - 1)..minOf(h - 1, y + 1)) {
+                    val row = ny * w
+                    for (nx in maxOf(0, x - 1)..minOf(w - 1, x + 1)) {
+                        val a = Color.alpha(output[row + nx])
+                        if (shape[row + nx] && a > inherit) inherit = a
+                    }
+                }
+                output[i] = Color.argb(if (inherit > 0) inherit else 255, 255, 255, 255)
+                kept++
+            } else {
+                kept++
+            }
             shape[i] = true   // 闭运算的结果留在 shape 里：下面两遍 BFS 读它
-            kept++
         }
         // ── 连通块：顺带擦掉太小的碎渣 ──
         val minSpeck = maxOf(8, total / MIN_SPECK_DIVISOR)
@@ -733,7 +779,7 @@ object IconBitmap {
             kept = kept,
             components = components,
             largestRatio = if (kept > 0) largest.toFloat() / kept else 0f,
-            holeRatio = if (boxArea > 0) holePixels.toFloat() / boxArea else 0f,
+            structureRatio = if (boxArea > 0) (holePixels + accentPixels).toFloat() / boxArea else 0f,
         )
     }
 
@@ -1181,48 +1227,80 @@ object IconBitmap {
      */
     private fun assignLayers(pixels: IntArray, plateR: Int, plateG: Int, plateB: Int): IntArray {
         val layer = IntArray(pixels.size) { -1 }
-        var b1r = plateR; var b1g = plateG; var b1b = plateB
-        var d1 = -1
-        var b2r = plateR; var b2g = plateG; var b2b = plateB
-        var d2 = -1
+        // 层心从**量化色板**里挑，而不是从单个精确像素里挑。上一版有两处不稳：
+        //   · 「离底板最远的那个像素」可以是一个孤立高饱和噪点 —— 它就能独占一层；
+        //   · 更糟的是同一遍循环里 `b1` 还在长大，`b2` 却已经拿它去选最近距离了 ——
+        //     于是点缀层落在哪一档取决于像素数组的遍历顺序。判据台上能看到表现：点缀档
+        //     占形体的比例从 4.6%（元宝）乱跳到 29%（12306），规定的"第三种颜色"根本不稳定。
+        // 现在：按 4 bit/通道统计色桶 → 只保留占 [MIN_LAYER_VOTE] 以上的桶（渐变底里散开的
+        // 小桶不算一层）→ 按桶计数排序（同数按桶号，结果与像素顺序无关）→ 依次挑「离已选
+        // 层心最远」的桶。
+        val counts = IntArray(4096)
+        val sumR = LongArray(4096); val sumG = LongArray(4096); val sumB = LongArray(4096)
+        var solid = 0
         for (p in pixels) {
             if (Color.alpha(p) < MIN_SHAPE_ALPHA) continue
-            val toPlate = colorDistance(p, plateR, plateG, plateB)
-            if (toPlate > d1) {
-                d1 = toPlate; b1r = Color.red(p); b1g = Color.green(p); b1b = Color.blue(p)
-            }
-            val nearest = minOf(toPlate, colorDistance(p, b1r, b1g, b1b))
-            if (nearest > d2) {
-                d2 = nearest; b2r = Color.red(p); b2g = Color.green(p); b2b = Color.blue(p)
-            }
+            solid++
+            val k = (Color.red(p) shr 4 shl 8) or (Color.green(p) shr 4 shl 4) or (Color.blue(p) shr 4)
+            counts[k]++
+            sumR[k] += Color.red(p); sumG[k] += Color.green(p); sumB[k] += Color.blue(p)
         }
-        if (d1 <= 0) return layer  // 整张就一个颜色，没有可分的层
-        val centers = intArrayOf(plateR, plateG, plateB, b1r, b1g, b1b, b2r, b2g, b2b)
+        if (solid == 0) return layer
+        val candidates = ArrayList<Int>()
+        for (k in counts.indices) if (counts[k] * MIN_LAYER_VOTE >= solid) candidates.add(k)
+        if (candidates.isEmpty()) return layer
+        candidates.sortWith(compareByDescending<Int> { counts[it] }.thenBy { it })
+        val centers = IntArray(9)
+        centers[0] = plateR; centers[1] = plateG; centers[2] = plateB
+        var taken = 1
+        while (taken < 3) {
+            var bestK = -1
+            var bestD = 0
+            for (k in candidates) {
+                val kr = (sumR[k] / counts[k]).toInt()
+                val kg = (sumG[k] / counts[k]).toInt()
+                val kb = (sumB[k] / counts[k]).toInt()
+                var d = Int.MAX_VALUE
+                for (c in 0 until taken) {
+                    val distance = abs(kr - centers[c * 3]) + abs(kg - centers[c * 3 + 1]) + abs(kb - centers[c * 3 + 2])
+                    if (distance < d) d = distance
+                }
+                if (d > bestD) { bestD = d; bestK = k }
+            }
+            // bestD == 0 = 所有候选桶都和已选层心同色，没有第二种颜色可分了
+            if (bestK < 0 || bestD <= 0) break
+            centers[taken * 3] = (sumR[bestK] / counts[bestK]).toInt()
+            centers[taken * 3 + 1] = (sumG[bestK] / counts[bestK]).toInt()
+            centers[taken * 3 + 2] = (sumB[bestK] / counts[bestK]).toInt()
+            taken++
+        }
+        if (taken < 2) return layer
+        val layerCount = taken
         for (pass in 0 until 2) {
             for (i in pixels.indices) {
                 val p = pixels[i]
                 if (Color.alpha(p) < MIN_SHAPE_ALPHA) continue
                 var best = 0
                 var bestD = Int.MAX_VALUE
-                for (k in 0..2) {
+                for (k in 0 until layerCount) {
                     val d = colorDistance(p, centers[k * 3], centers[k * 3 + 1], centers[k * 3 + 2])
                     if (d < bestD) { bestD = d; best = k }
                 }
                 layer[i] = best
             }
             if (pass == 1) break
-            // 均值修正：层心回到该类的真实中心（第一遍的层心是"某个精确色"，偏单点）
-            val sumR = LongArray(3); val sumG = LongArray(3); val sumB = LongArray(3); val n = IntArray(3)
+            // 均值修正：层心回到该类的真实中心（色桶中心带量化误差，一步就够）
+            val newR = LongArray(3); val newG = LongArray(3); val newB = LongArray(3); val n = IntArray(3)
             for (i in pixels.indices) {
                 val k = layer[i]
                 if (k < 0) continue
                 val p = pixels[i]
-                sumR[k] += Color.red(p); sumG[k] += Color.green(p); sumB[k] += Color.blue(p); n[k]++
+                newR[k] += Color.red(p); newG[k] += Color.green(p); newB[k] += Color.blue(p); n[k]++
             }
-            for (k in 0..2) if (n[k] > 0) {
-                centers[k * 3] = (sumR[k] / n[k]).toInt()
-                centers[k * 3 + 1] = (sumG[k] / n[k]).toInt()
-                centers[k * 3 + 2] = (sumB[k] / n[k]).toInt()
+            for (k in 0 until layerCount) if (n[k] > 0) {
+                centers[k * 3] = (newR[k] / n[k]).toInt()
+                centers[k * 3 + 1] = (newG[k] / n[k]).toInt()
+                centers[k * 3 + 2] = (newB[k] / n[k]).toInt()
             }
         }
         return layer
