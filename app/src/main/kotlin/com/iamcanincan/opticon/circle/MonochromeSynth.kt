@@ -321,7 +321,7 @@ internal object MonochromeSynth {
       val base = chosen?.mask
       // 非自适应图标的内容是满幅的，而它在图层 bounds 里只该占中间那 2/3（可见区），
       // 所以掩码算完**之后**才缩进 —— 顺序反了就会踩 [rasterize] 上面那个坑。
-      val placed = if (adaptive) base else base?.let { intoVisibleArea(it, edge) }
+      val placed = if (adaptive) base else base?.let { intoVisibleArea(it, edge, chosen?.tones == true) }
       val mask = placed?.let { toAlphaMask(it, chosen?.tones == true) }
       noteDiagnosis(edge, label, raster, mask, chosen === alpha)
       raster.recycle()
@@ -774,12 +774,16 @@ internal object MonochromeSynth {
    * ⚠ 只能在掩码**算完之后**调用，不能提前到光栅化那一步 ——
    * 为什么，见 [rasterize] 上面那段（这是「非自适应图标全是色块」的病根）。
    */
-  private fun intoVisibleArea(source: Bitmap, edge: Int): Bitmap {
+  private fun intoVisibleArea(source: Bitmap, edge: Int, tones: Boolean): Bitmap {
     val inset = visibleInset(edge)
     val out = Bitmap.createBitmap(edge, edge, Bitmap.Config.ARGB_8888)
+    // 带三档的掩码必须**最近邻**缩放：双线性会把 255 / 128 / 0 混出一堆中间值，
+    // 而后面那一步吸附只能把它们归到最近的档 —— 结果每条边都带一圈中灰，观感就是
+    // 「颜色浑浊、发糊」。最近邻不产生新值，档位保持纯净；代价是这一档缩放硬一点，
+    // 但桌面自己还要再缩放一次，那一步该柔的地方它会柔。
+    val paint = if (tones) Paint() else Paint(Paint.FILTER_BITMAP_FLAG)
     Canvas(out).drawBitmap(
-      source, null, Rect(inset, inset, edge - inset, edge - inset),
-      Paint(Paint.FILTER_BITMAP_FLAG)
+      source, null, Rect(inset, inset, edge - inset, edge - inset), paint
     )
     return out
   }

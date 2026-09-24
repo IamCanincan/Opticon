@@ -112,9 +112,6 @@ object IconBitmap {
      */
     private const val NOISE_LAYER_SHARE = 0.02f
 
-    /** 闭运算半径的基准边长：这个尺寸上半径为 1（详见 morphRadius）。 */
-    private const val MORPH_BASE_EDGE = 192
-
     /** 二值化时每个像素的归类，用于连通性判断 */
     private const val CLASS_TRANSPARENT = 0
     private const val CLASS_DARK = 1
@@ -628,8 +625,8 @@ object IconBitmap {
         // ⚠ 半径必须**跟着出图尺寸走**，不能写死 1 像素：同一条物理缝隙在 192 上是 1 像素
         //   （闭得上），到 384 就变成 2 像素（闭不上）。真机日志抓到过现成的证据 ——
         //   同一个图标 `edge=192 → cc=11`、`edge=384 → cc=17`，分辨率越高越"渣"，
-        //   连通块闸门跟着抖。半径按 MORPH_BASE_EDGE 线性放大，cc 才与尺寸无关。
-        val radius = morphRadius(w)
+        //   （半径为什么固定为 1，见 morphRadius 上那段：线性放大过，把字腔填掉了。）
+        val radius = morphRadius()
         dilated.fill(false)
         for (y in 0 until h) for (x in 0 until w) {
             if (!shape[y * w + x]) continue
@@ -1243,13 +1240,16 @@ object IconBitmap {
     }
 
     /**
-     * 闭运算的半径：按 [MORPH_BASE_EDGE] 线性放大，最小 1。
+     * 闭运算的半径：**固定 1**。
      *
-     * 要连的是**物理缝隙**，不是"1 像素"。抗锯齿那圈过渡带宽约等于图标的固定比例，
-     * 所以 192 上的 1 像素缝到 384 就是 2 像素。半径不跟着放大，高分辨率那张就会比
-     * 低分辨率那张碎得多（真机：同一图标 cc 11 → 17），连通块闸门也就跟着尺寸抖。
+     * 试过按出图尺寸线性放大（384 上半径 2），结果是**把字腔填掉** —— 5×5 的核能补上 4 像素
+     * 宽的缝，而「日」「口」那类空隙、图标上的眼睛正好就是这个量级。用户反馈的「细节糊成一团」
+     * 对得上，日志里几乎每行 `hole=0.00` 也对得上（洞是在闭运算**之后**量的，被填掉的洞数不到）。
+     *
+     * 高分辨率更碎这件事，交给三档颜色分类去解决（Otsu 切出来的缝，本来就不该靠形态学硬连），
+     * 而不是把半径加大去盖。
      */
-    private fun morphRadius(edge: Int): Int = maxOf(1, ((edge + MORPH_BASE_EDGE / 2) / MORPH_BASE_EDGE))
+    private fun morphRadius(): Int = 1
 
 
     /** Otsu：遍历所有可能阈值，取类间方差最大的那个 */
