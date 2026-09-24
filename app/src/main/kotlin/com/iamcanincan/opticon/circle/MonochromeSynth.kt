@@ -129,6 +129,17 @@ internal object MonochromeSynth {
   // 注意提示线只是"要不要再试一次"，不是拒绝 —— 刻不出来时 alpha 的结果照旧生效。
 
   /**
+   * alpha 交出来的那张掩码**像一块板**的第二条判据：整张掩码有 ≥ 这个比例挤在同一个
+   * 连通块里（配合 `IconBitmap.PLATE_HOLE` 的「内部没有结构」一起用）。
+   *
+   * 为什么要第二条：**覆盖率单独分不开**。真机一轮日志里 元宝 的 alpha 掩码量出
+   * `boxFill=0.27 cc=1 top=1.00 结构=0.00`（一整块实心卡片的轮廓），而一件正常字形
+   * 量出 0.31 —— 两个数前后脚，可后者有字腔。区别在「有没有内部结构」，不在占多少框。
+   * 这条线上报的每一个数都在逐条日志里（`结构=` / `top=`），不对就照数收。
+   */
+  private const val ALPHA_SOLID_TOP = 0.90f
+
+  /**
    * 「整张图标是不是灰度」那道判据的出图尺寸。
    *
    * `ToneCheck` 自己就会把输入缩到 64 再逐像素看三通道，画得更大只是白付一次光栅化 ——
@@ -293,11 +304,11 @@ internal object MonochromeSynth {
         raster.recycle()
         return@runCatching null
       }
-      // ── 走的**就是通知小图标那套方案的两支**，不为任何一类图标单独开分支 ──
+      // ── 三条判据，按「最忠实的先试」排：alpha → 从底板刻字形 → 亮度 Otsu ──
       //
-      // 通知侧（`NotificationIconPatch.launcherIconMonochrome`）是
-      // `fill(foregroundOf(图标))` → `grayscale(...)`。桌面只读 alpha，所以那一步的
-      // **两个成分各自成了这里的一支**，函数都在 [IconBitmap] 里、与通知共用同一份实现：
+      // 前两条**就是通知小图标那套方案**：通知侧（`NotificationIconPatch.launcherIconMonochrome`）
+      // 做的是 `fill(前景层)` → `grayscale(...)`，桌面只读 alpha，所以那一步的**两个成分各自成了
+      // 这里的一支**，函数都在 [IconBitmap] 里、与通知共用同一份实现：
       //
       // 1. **透明像素真的构成背景** → 取 alpha（[IconBitmap.alphaSilhouette]）。
       //    它就是 `grayscale` 保留 alpha 那一步，走的是 [IconBitmap.monochrome] 里
@@ -305,41 +316,48 @@ internal object MonochromeSynth {
       //    通知侧那句「先 fill 再 monochrome，fill 裁掉的透明边正好是判断形状的凭据」
       //    说的就是这一步；不裁框，自适应图标四周的安全区留白会把一张满幅不透明的底
       //    误当成「透明底 + 图形」，压出那块底的轮廓 = 一整块色（淘宝就是这么坏的）。
-      // 2. **否则** → 二值化（[IconBitmap.binarizeSilhouette]），也就是
+      // 2. **alpha 描述的其实是一块底** → 按颜色把字形从底板里**刻**出来
+      //    （[IconBitmap.plateSilhouette]）。触发线见下面 `plateLike`：覆盖率高只是一半，
+      //    另一半是「这块掩码里根本没有内部结构」—— 一整块板的 `top=1.00 结构=0.00`，
+      //    而字形有字腔、有笔画。光按覆盖率收线收不住：真机上 元宝 0.27（一块板）与
+      //    一件正常字形 0.31 前后脚，覆盖率上分不开，那两个结构数才分得开。
+      // 3. **否则** → 二值化（[IconBitmap.binarizeSilhouette]），也就是
       //    [IconBitmap.monochrome] 的 else 支：Otsu 自动阈值 + 连通性判据挖出图形。
       //    ⚠ 这一支是**二值**而不是连续灰度：桌面拿 alpha 当**不透明度**上色，
       //    灰阶染出来是同一颜色的渐变，而主题图标要的是**一整块纯色**。
       //    通知侧的 `grayscale` 之所以能用灰度，是因为它交出去的是**完整位图**
       //    （RGB 与 alpha 各司其职），桌面这条路上 RGB 根本没人看。
       //
-      // ⚠ 两支用**同一条**覆盖率线（`IconBitmap.MAX_SHAPE_RATIO`，0.85），而且必须按
-      //    **内容外接框**量、不能按整张画布量：自适应前景的框只占画布约 47%，
+      // ⚠ 判据必须按**内容外接框**量、不能按整张画布量：自适应前景的框只占画布约 47%，
       //    「整个框被填满」这种最坏的掩码按画布量永远只有 0.47，看着完全健康 ——
       //    真机那个 `out=0.47 cc=1 top=1.00` 的白块就是这么一路放行的。
-      //    两支各自把量出来的 `boxFill` 与结论带出来，交给下面那行逐条日志。
+      //    三支各自把量出来的 `boxFill` 与结论带出来，交给下面那行逐条日志。
       //
-      // 两条都不成立时返回 null，桌面照旧走它自己的路（[noteGiveUp] 会留痕）。
-      // 三条判据、按「最忠实的先试」排：alpha → 从底板刻字形 → 亮度 Otsu。
-      //
-      // 1. **alpha**（[IconBitmap.alphaSilhouette]）：交出去的就是图标自带的 alpha，不猜。
-      // 2. **刻底板**（[IconBitmap.plateSilhouette]）：只要 alpha 说「框内已经是成片的底」
-      //    （≥ [IconBitmap.PLATE_FILL]，含它直接判成底板那种），就先试着按**离底板主色的距离**把字形
-      //    刻出来。这一步专治大色块 —— 0.55~0.85 那一段以前被 alpha 整块收下，屏幕上就是
-      //    一块带几条镂空洞的色板，字形根本没露出来。刻不出来（多色 logo / 整张同色）就照旧
-      //    用 alpha 的结果，不会因为试了而变差。
-      // 3. **亮度 Otsu**（[IconBitmap.binarizeSilhouette]）：前两条都不成立时的兜底。
+      // 三支都不成立时返回 null，桌面照旧走它自己的路（[noteGiveUp] 会留痕）。
       val alpha = IconBitmap.alphaSilhouette(raster)
-      val carved = if (alpha.boxFill >= IconBitmap.PLATE_FILL) IconBitmap.plateSilhouette(raster) else null
-      val bin = if (alpha.mask == null && carved?.mask == null)
+      // alpha 交出来的这件东西**不像图形、像那块底**：单个大块 + 内部没有任何结构。
+      val plateLike = alpha.mask != null &&
+        alpha.largest >= ALPHA_SOLID_TOP && alpha.structure <= IconBitmap.PLATE_HOLE
+      val carved = if (alpha.mask == null || alpha.boxFill >= IconBitmap.PLATE_FILL || plateLike)
+        IconBitmap.plateSilhouette(raster) else null
+      val bin = if (carved?.mask == null && (alpha.mask == null || plateLike))
         IconBitmap.binarizeSilhouette(raster) else null
-      val chosen = carved?.mask?.let { carved }
-        ?: alpha.mask?.let { alpha }
-        ?: bin?.takeIf { it.mask != null }
+      // **谁赢**：另一支要压过 alpha，必须既刻掉得更多、又真的刻出了内部结构 ——
+      // 否则就是拿一次猜测去换一份图标自带的形状。alpha 自己判出来是板（`plateLike`）
+      // 时它垫底，两支都不成就照旧交出去（比"没有掩码"好）。
+      val chosen = listOfNotNull(
+        if (plateLike) null else alpha.mask?.let { alpha },
+        carved?.takeIf { beatsAlpha(it, alpha) },
+        if (plateLike) bin?.takeIf { beatsAlpha(it, alpha) } else null,
+        alpha.mask?.let { alpha },
+        carved?.takeIf { it.mask != null },
+        bin?.mask?.let { bin },
+      ).firstOrNull()
       noteBranch(edge, label, alpha, carved, bin, chosen)
       val base = chosen?.mask
       // 非自适应图标的内容是满幅的，而它在图层 bounds 里只该占中间那 2/3（可见区），
       // 所以掩码算完**之后**才缩进 —— 顺序反了就会踩 [rasterize] 上面那个坑。
-      val placed = if (adaptive) base else base?.let { intoVisibleArea(it, edge, chosen?.tones == true) }
+      val placed = if (adaptive) base else base?.let { intoVisibleArea(it, edge) }
       val mask = placed?.let { toAlphaMask(it, chosen?.tones == true) }
       noteDiagnosis(edge, label, raster, mask, chosen === alpha)
       raster.recycle()
@@ -416,6 +434,17 @@ internal object MonochromeSynth {
    * `out=0.47` 是画布口径，一整块底板也只量到 0.47，看上去完全健康，于是一路放行。
    * 这一行给的是**内容外接框**口径的那一个数，它才是真正决定走哪支、拦不拦得住的数。
    */
+  /**
+   * 猜出来的那支（刻底 / 亮度 Otsu）**压得过 alpha** 的条件：既刻掉得更多，又真的刻出了
+   * 内部结构。
+   *
+   * alpha 交出去的是图标自带的形状，不该被一次颜色猜测换掉 —— 只有一种情况例外：alpha
+   * 自己量出来是**一块实心板**（见 [ALPHA_SOLID_TOP]），那时它描述的根本不是字形。
+   * 这道比较就是为那个例外留的：换过去的必须确实更像图形，而不是"另一个猜测"。
+   */
+  private fun beatsAlpha(s: IconBitmap.Silhouette?, alpha: IconBitmap.Silhouette): Boolean =
+    s?.mask != null && s.boxFill < alpha.boxFill && s.structure > alpha.structure
+
   private fun noteBranch(
     edge: Int,
     label: String,
@@ -792,14 +821,12 @@ internal object MonochromeSynth {
    * ⚠ 只能在掩码**算完之后**调用，不能提前到光栅化那一步 ——
    * 为什么，见 [rasterize] 上面那段（这是「非自适应图标全是色块」的病根）。
    */
-  private fun intoVisibleArea(source: Bitmap, edge: Int, tones: Boolean): Bitmap {
+  private fun intoVisibleArea(source: Bitmap, edge: Int): Bitmap {
     val inset = visibleInset(edge)
     val out = Bitmap.createBitmap(edge, edge, Bitmap.Config.ARGB_8888)
-    // 带三档的掩码必须**最近邻**缩放：双线性会把 255 / 128 / 0 混出一堆中间值，
-    // 而后面那一步吸附只能把它们归到最近的档 —— 结果每条边都带一圈中灰，观感就是
-    // 「颜色浑浊、发糊」。最近邻不产生新值，档位保持纯净；代价是这一档缩放硬一点，
-    // 但桌面自己还要再缩放一次，那一步该柔的地方它会柔。
-    val paint = if (tones) Paint() else Paint(Paint.FILTER_BITMAP_FLAG)
+    // 双线性缩放。上一版这里对「带三档」的掩码走最近邻，是为了保住 0/128/255 三个离散
+    // 档不被混掉；现在 alpha 本来就是连续斜坡，混它只会更平滑，那条分支跟着删了。
+    val paint = Paint(Paint.FILTER_BITMAP_FLAG)
     Canvas(out).drawBitmap(
       source, null, Rect(inset, inset, edge - inset, edge - inset), paint
     )
