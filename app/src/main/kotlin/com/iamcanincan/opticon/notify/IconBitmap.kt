@@ -16,6 +16,7 @@ import android.os.Build
 import androidx.core.content.res.ResourcesCompat
 import com.iamcanincan.opticon.runtime.MemberLookup
 import kotlin.math.abs
+import kotlin.math.sqrt
 
 /**
  * 图标位图的取与造。
@@ -146,6 +147,16 @@ object IconBitmap {
      * 一半：视觉上不到半成色的地方一律当透明。
      */
     internal const val TONE_FLOOR = 64
+
+    /**
+     * 「独立第三种颜色」的最小离轴距离（RGB 欧氏空间，三通道求和口径，0..765）。
+     *
+     * 低于它就认为那层是**渐变 / 抗锯齿 / 同色阴影**的混合带 —— 并回相邻的主体层，
+     * 让它"跟旁边一个颜色"，而不是自己变成一条中色带。35 ≈ 每通道偏 12，肉眼分不出
+     * 色相的差别就在这个量级以内；再收会让真正的点缀色（比如黑卡上那抹绿光标）被误并。
+     * 真机日志的每条三层判定都带着这个数（`三层·离轴NN`），它是用来收这条线的。
+     */
+    private const val ACCENT_OFF_AXIS = 35.0
 
     /**
      * 把 Drawable 画成指定边长的方形位图。
@@ -584,17 +595,35 @@ object IconBitmap {
         //   吸进某一层会变成平色块。用户看完之后的裁定是「渐变直接做成纯色」—— 过渡在桌面
         //   上就是那个「不纯色 / 发糊」的老问题，宁可让渐变那段变成一整块。所以回到离散三档；
         //   插值那套（toneAlpha / meanDistanceFromPlate）一并删掉，留着就是死代码。
+        // ── 「渐变不是第三种颜色」：过渡带并回相邻那一层 ──
+        // 用户要的"纯色"是**跟旁边一个颜色**，不是自己成一块。判据是几何的：渐变段的
+        // 平均色一定落在「底板色 → 主体色」这条连线上（它本来就是两者的混合，同色系的
+        // 阴影也算），量它到这条线的垂直距离就知道它是混合还是独立的第三种颜色。
+        // 共线 → 整层并回主体（于是那一块和旁边一样，没有中色带）；离轴 → 才给它中间档。
+        var accent = accentLayer
+        var offAxis = -1.0
+        if (l1 > 0 && l2 > 0) {
+            offAxis = accentOffAxis(pixels, layer, accent, plateR, plateG, plateB)
+            if (offAxis >= 0.0 && offAxis < ACCENT_OFF_AXIS) {
+                for (i in 0 until total) if (layer[i] == accent) layer[i] = mainLayer
+                accent = -1
+            }
+        }
+        val toneNote = if (offAxis >= 0) "离轴${"%.0f".format(offAxis)}" else "单层"
         for (i in 0 until total) {
-            output[i] = when (layer[i]) {
-                mainLayer -> Color.argb(255, 255, 255, 255)
-                accentLayer -> Color.argb(TONE_MID, 255, 255, 255)
+            val l = layer[i]
+            // ⚠ 这里不能用 `when (l) { accent -> ... }`：并回主体后 accent 被置成 -1，
+            //   而**透明像素的标签也是 -1** —— 那会把整张画布涂成中档。
+            output[i] = when {
+                l == mainLayer -> Color.argb(255, 255, 255, 255)
+                accent >= 0 && l == accent -> Color.argb(TONE_MID, 255, 255, 255)
                 else -> 0
             }
         }
         val boxFill = count.toFloat() / boxTotal
         if (boxFill > MAX_SHAPE_RATIO) return Silhouette(null, boxFill, "刻出来的仍是整块底")
         if (boxFill < MIN_SHAPE_RATIO) return Silhouette(null, boxFill, "几乎刻不出东西")
-        return finish(output, w, h, bounds, "三层", tones = true)
+        return finish(output, w, h, bounds, "三层·$toneNote", tones = true)
     }
 
     /**
@@ -1314,6 +1343,46 @@ object IconBitmap {
             }
         }
         return layer
+    }
+
+    /**
+     * 点缀层的平均色到「底板色 → 主体色」连线的垂直距离（RGB 欧氏空间）。
+     *
+     * 用在 [plateSilhouette] 里判"这层是渐变带还是独立的第三种颜色"：渐变段本来就是两端
+     * 颜色的混合，所以它的平均色必然落在那条连线附近；真正独立的色相会偏出去。
+     * 同一 hue 深一档的阴影也偏不出去 —— 它会一起并回主体，而"阴影跟着形走"正是想要的。
+     *
+     * 返回 -1 = 有一层是空的（量不出来，调用方按"没有中间档"处理）。
+     */
+    private fun accentOffAxis(
+        pixels: IntArray,
+        layer: IntArray,
+        accent: Int,
+        plateR: Int,
+        plateG: Int,
+        plateB: Int,
+    ): Double {
+        var ar = 0L; var ag = 0L; var ab = 0L; var an = 0
+        var mr = 0L; var mg = 0L; var mb = 0L; var mn = 0
+        for (i in pixels.indices) {
+            val p = pixels[i]
+            if (Color.alpha(p) < MIN_SHAPE_ALPHA) continue
+            val l = layer[i]
+            if (l == accent) {
+                ar += Color.red(p); ag += Color.green(p); ab += Color.blue(p); an++
+            } else if (l >= 1) {
+                mr += Color.red(p); mg += Color.green(p); mb += Color.blue(p); mn++
+            }
+        }
+        if (an == 0 || mn == 0) return -1.0
+        val vx = mr / mn - plateR; val vy = mg / mn - plateG; val vz = mb / mn - plateB
+        val wx = ar / an - plateR; val wy = ag / an - plateG; val wz = ab / an - plateB
+        val cx = vy.toDouble() * wz - vz.toDouble() * wy
+        val cy = vz.toDouble() * wx - vx.toDouble() * wz
+        val cz = vx.toDouble() * wy - vy.toDouble() * wx
+        val line = sqrt((vx * vx + vy * vy + vz * vz).toDouble())
+        if (line <= 0.0) return -1.0
+        return sqrt(cx * cx + cy * cy + cz * cz) / line
     }
 
     /** 从 256 桶直方图里取中位数对应的档（0..255）。[total] 是不透明像素总数，>0。 */
