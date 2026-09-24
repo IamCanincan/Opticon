@@ -84,7 +84,7 @@ object IconBitmap {
     private const val PLATE_HOLE = 0.03f
 
     /**
-     * 「碎成一片」：闭运算**之后**仍然块数 ≥[SHATTER_COMPONENTS] 且最大块占比 ≤[SHATTER_TOP]。
+     * 「碎成一片」：修整之后仍然块数 ≥[SHATTER_COMPONENTS] 且最大块占比 ≤[SHATTER_TOP]。
      *
      * ⚠ 两个数必须一起看，单看块数会误杀汉字 —— 「淘」这种四个字形的块天然 cc=4，
      * 而每一块都是实心笔画（top≈0.4）。真正的碎裂是渐变底被切出的一堆小渣。
@@ -575,21 +575,22 @@ object IconBitmap {
         // 哪层算主体按**面积**定：大的是形，小的是点缀。
         val mainLayer = if (l1 >= l2) 1 else 2
         val accentLayer = if (mainLayer == 1) 2 else 1
-        // ⚠ 三档是**控制点**，不是三个分箱。原来这里按层写死 0 / 128 / 255，结果图标里
-        //   那段渐变被整片吸进某一层 —— 平色块就是这么来的。现在 alpha 按「离底板色有多远」
-        //   在 0 → 128 → 255 之间**分段线性插值**，控制点取点缀层与主体层各自的平均距离：
-        //   平色区域照旧平色（同色的像素距离相同），真渐变恢复成过渡。
-        val dAccent = meanDistanceFromPlate(pixels, layer, accentLayer, plateR, plateG, plateB)
-        val dMain = meanDistanceFromPlate(pixels, layer, mainLayer, plateR, plateG, plateB)
-        var painted = 0
+        // ── 三档 = 三个确定值：底板 0、主体 255、点缀 TONE_MID ──
+        // 桌面给主题图标的是两层系统色（colors[0] 当底、colors[1] 当形，见
+        // MonoIconThemeController.createThemedAdaptiveIcon），而 alpha 合成是线性的：浅档
+        // 交给系统底色透出（0）、深档就是系统前景色（255）、中间档取两者中值。
+        //
+        // ⚠ 这里试过按「离底板色有多远」在 0 → 128 → 255 之间分段插值，理由是渐变段被整片
+        //   吸进某一层会变成平色块。用户看完之后的裁定是「渐变直接做成纯色」—— 过渡在桌面
+        //   上就是那个「不纯色 / 发糊」的老问题，宁可让渐变那段变成一整块。所以回到离散三档；
+        //   插值那套（toneAlpha / meanDistanceFromPlate）一并删掉，留着就是死代码。
         for (i in 0 until total) {
-            val p = pixels[i]
-            val a = if (layer[i] == 0 || Color.alpha(p) < MIN_SHAPE_ALPHA) 0
-            else toneAlpha(colorDistance(p, plateR, plateG, plateB) / 3, dAccent, dMain)
-            output[i] = if (a == 0) 0 else Color.argb(a, 255, 255, 255)
-            if (a >= TONE_FLOOR) painted++
+            output[i] = when (layer[i]) {
+                mainLayer -> Color.argb(255, 255, 255, 255)
+                accentLayer -> Color.argb(TONE_MID, 255, 255, 255)
+                else -> 0
+            }
         }
-        count = painted
         val boxFill = count.toFloat() / boxTotal
         if (boxFill > MAX_SHAPE_RATIO) return Silhouette(null, boxFill, "刻出来的仍是整块底")
         if (boxFill < MIN_SHAPE_RATIO) return Silhouette(null, boxFill, "几乎刻不出东西")
@@ -618,7 +619,7 @@ object IconBitmap {
             return Silhouette(null, filled, "$from：仍是一整块板（内部结构 ${"%.2f".format(shape.structureRatio)}）")
         }
         if (shape.components >= SHATTER_COMPONENTS && shape.largestRatio <= SHATTER_TOP) {
-            return Silhouette(null, filled, "$from：闭运算后仍碎成 ${shape.components} 块")
+            return Silhouette(null, filled, "$from：桥接后仍碎成 ${shape.components} 块")
         }
         val result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         result.setPixels(output, 0, w, 0, 0, w, h)
@@ -646,24 +647,22 @@ object IconBitmap {
     )
 
     /**
-     * 二值支的后处理：**闭运算 → 去碎渣 → 形状体检**，就地改 [output]。
+     * 二值支的后处理：**桥接 1 像素的缝 → 去碎渣 → 形状体检**，就地改 [output]。
      *
      * ## 为什么这一支需要、alpha 那一支不需要
      * alpha 支交出去的就是图标自带的 alpha —— 那是设计者画好的形状，多做一次形态学只会
-     * 凭空造像素。二值支不一样：它是**按亮度猜**出来的形状，而亮度 Otsu 一刀切下去会把
-     * 抗锯齿那一圈中间调判给另一侧，于是笔画被切出一条 1 像素的缝、字被拆成几截
-     * （真机实例：中国移动那张 `cc=5 top=0.24`，一个环形断成一截一截）。
-     * 补这种缝正是闭运算的本职，不是为某个图标打的补丁。
+     * 凭空造像素。二值支不一样：它是**按亮度 / 颜色猜**出来的形状，一刀切下去会把抗锯齿
+     * 那圈中间调判给另一侧，于是笔画被切出一条 1 像素的缝、字被拆成几截。
      *
-     * ## 为什么闭运算抹不掉真细节
-     * 闭运算 = 膨胀一次再腐蚀一次（8 邻域）。它**补得掉 1 像素的缝，补不掉 2 像素以上的洞** ——
-     * 字腔（「口」「日」中间那格）、眼睛这类内部细节远大于 1 像素，闭完照旧是洞。
-     * 也正因为顺手会抹掉小洞，[Shape.holeRatio] 只能当**下限**信号用（洞少到几乎没有才判成
-     * 底板），不能反过来拿「有洞」当放行理由。
+     * ## 为什么是「条件桥接」而不是闭运算
+     * 一开始用的是闭运算（膨胀一次再腐蚀一次，8 邻域）。它补得掉 1 像素的缝，也补得掉
+     * 2 像素的 —— 两笔之间那条本该看得见的空隙一起被填满，就是「缝隙小的部分粘连在一块」。
+     * 现在只做一个动作：透明像素在**相反的两个方向上都夹着图形**才算图形。1 像素的缝接得
+     * 上，2 像素的缝接不上；不膨胀所以不变粗，不腐蚀所以不削尖角。
      *
      * ## 去碎渣
-     * 闭完按连通块擦掉太小的孤立点（[MIN_SPECK]，按面积给比例）—— 那些是渐变底被 Otsu
-     * 切出来的杂色碎屑，留着就是「脏」。多笔画图标不受影响：一笔画下来的块远大于这个尺寸。
+     * 桥完按连通块擦掉太小的孤立点（比例见 [MIN_SPECK_DIVISOR]）—— 那些是渐变底被切出来
+     * 的杂色碎屑，留着就是「脏」。多笔画图标不受影响：一笔画下来的块远大于这个尺寸。
      */
     private fun polishBinarized(output: IntArray, w: Int, h: Int, box: Rect, tones: Boolean): Shape {
         val total = w * h
@@ -684,60 +683,42 @@ object IconBitmap {
             if (shape[i] && tones && a < 255) accentPixels++
             dilated[i] = false
         }
-        // ── 膨胀：形状周围半径 [radius] 的方框内都算形状 ──
-        // 半径固定 1：要连的就是抗锯齿那 1 像素的缝。试过按出图尺寸线性放大（384 上半径 2
-        // = 5×5 的核），代价是把「日」「口」那类字腔和眼睛一起填掉 —— 见 morphRadius 上那段。
-        val radius = morphRadius()
-        for (y in 0 until h) for (x in 0 until w) {
-            if (!shape[y * w + x]) continue
-            val y0 = maxOf(0, y - radius); val y1 = minOf(h - 1, y + radius)
-            val x0 = maxOf(0, x - radius); val x1 = minOf(w - 1, x + radius)
-            for (ny in y0..y1) {
-                val row = ny * w
-                for (nx in x0..x1) dilated[row + nx] = true
-            }
-        }
-        // ⚠ 腐蚀必须**读到另一块缓冲**：膨胀的结果要一边读一边原样不动。曾经就地写回
-        //   `dilated`，于是前面几行擦出来的洞被后面几行当成「邻域缺失」继续往里吃，
-        //   一张 22032 像素的掩码整张被级联吃掉、判成 0 像素 —— 形态学的第一课。
-        val eroded = visitedBuffer(total)
-        eroded.fill(false)
-        for (y in 0 until h) for (x in 0 until w) {
+        // ── 只补 1 像素的缝：条件桥接，不做膨胀 / 腐蚀 ──
+        // 原来是闭运算（3×3 膨胀再腐蚀）。它可不止能连 1 像素 —— 两笔之间那条本该看得见
+        // 的空隙一起被补满了，就是用户说的「缝隙小的部分粘连在一块」。换成条件桥接：一个
+        // 透明像素，只有在**相反的两个方向上都夹着图形**（上下 / 左右 / 两条对角）才算图形。
+        // 于是 1 像素的缝接得上，2 像素的缝接不上（中间那一格只有一侧是图形），也就不可能
+        // 把两笔粘成一块；并且不膨胀 → 形状不变粗，不腐蚀 → 不削尖角（连"腐蚀要另开缓冲"
+        // 那个坑一起省了，见下面注释里记的那次级联吃掉整张掩码）。
+        shape.copyInto(dilated)
+        for (y in 1 until h - 1) for (x in 1 until w - 1) {
             val i = y * w + x
-            if (!dilated[i]) continue
-            var keep = true
-            val y0 = maxOf(0, y - radius); val y1 = minOf(h - 1, y + radius)
-            val x0 = maxOf(0, x - radius); val x1 = minOf(w - 1, x + radius)
-            outer@ for (ny in y0..y1) {
-                val row = ny * w
-                for (nx in x0..x1) {
-                    if (!dilated[row + nx]) { keep = false; break@outer }
-                }
-            }
-            eroded[i] = keep
+            if (shape[i]) continue
+            val bridged = (shape[i - w] && shape[i + w]) ||
+                (shape[i - 1] && shape[i + 1]) ||
+                (shape[i - w - 1] && shape[i + w + 1]) ||
+                (shape[i - w + 1] && shape[i + w - 1])
+            if (bridged) dilated[i] = true
         }
-        // 闭运算新添的像素：**继承邻域里那一档的值**，不是一律给实心白。
-        // 一律给 255 会把点缀区域外圈闭出来的一圈升成主体档 —— 中灰的细节被硬边吃掉，
-        // 观感就是「糊成一团」。原本就有的像素保持原值（抗锯齿或三档里的确定档）。
+        // 桥出来的像素**继承对面那格的档位**（取最浓的一个），不一律给实心白 ——
+        // 一律 255 等于把点缀档周围桥出一圈主体档，中灰细节又被硬边吃掉。
         var kept = 0
         for (i in 0 until total) {
-            if (!eroded[i]) { output[i] = 0; shape[i] = false; continue }
+            if (!dilated[i]) { output[i] = 0; shape[i] = false; continue }
             if (!shape[i]) {
                 val y = i / w; val x = i - y * w
-                var inherit = 0
-                for (ny in maxOf(0, y - 1)..minOf(h - 1, y + 1)) {
-                    val row = ny * w
-                    for (nx in maxOf(0, x - 1)..minOf(w - 1, x + 1)) {
-                        val a = Color.alpha(output[row + nx])
-                        if (shape[row + nx] && a > inherit) inherit = a
-                    }
-                }
-                output[i] = Color.argb(if (inherit > 0) inherit else 255, 255, 255, 255)
-                kept++
-            } else {
-                kept++
+                var inherit = Color.alpha(output[i - w])
+                inherit = maxOf(inherit, Color.alpha(output[i + w]))
+                inherit = maxOf(inherit, Color.alpha(output[i - 1]))
+                inherit = maxOf(inherit, Color.alpha(output[i + 1]))
+                inherit = maxOf(inherit, Color.alpha(output[i - w - 1]))
+                inherit = maxOf(inherit, Color.alpha(output[i + w + 1]))
+                inherit = maxOf(inherit, Color.alpha(output[i - w + 1]))
+                inherit = maxOf(inherit, Color.alpha(output[i + w - 1]))
+                output[i] = Color.argb(inherit, 255, 255, 255)
             }
-            shape[i] = true   // 闭运算的结果留在 shape 里：下面两遍 BFS 读它
+            shape[i] = true   // 修整结果留在 shape 里：下面两遍 BFS 读它
+            kept++
         }
         // ── 连通块：顺带擦掉太小的碎渣 ──
         val minSpeck = maxOf(8, total / MIN_SPECK_DIVISOR)
@@ -1230,7 +1211,7 @@ object IconBitmap {
     private var stackBufferCache: IntArray? = null
     private var outsideBufferCache: BooleanArray? = null
 
-    /** 形态学第三块缓冲：闭运算的「膨胀结果」，与 outside / visited 同时在用，理由同 [outsideBufferCache]。 */
+    /** 形态学第二块缓冲：桥接的结果位，与 outside / visited 同时在用，理由同 [outsideBufferCache]。 */
     private var morphBufferCache: BooleanArray? = null
 
     private fun luma(pixel: Int): Int {
@@ -1335,45 +1316,6 @@ object IconBitmap {
         return layer
     }
 
-    /** 某一层像素到底板色的平均距离（0..255 口径）。该层为空时返回 0。 */
-    private fun meanDistanceFromPlate(
-        pixels: IntArray,
-        layer: IntArray,
-        which: Int,
-        plateR: Int,
-        plateG: Int,
-        plateB: Int,
-    ): Int {
-        var sum = 0L
-        var n = 0
-        for (i in pixels.indices) {
-            if (layer[i] != which || Color.alpha(pixels[i]) < MIN_SHAPE_ALPHA) continue
-            sum += colorDistance(pixels[i], plateR, plateG, plateB) / 3
-            n++
-        }
-        return if (n == 0) 0 else (sum / n).toInt()
-    }
-
-    /**
-     * 距离 → alpha 的分段线性映射：底板 0、点缀层平均距离处 [TONE_MID]、主体层平均距离处 255，
-     * 再往外饱和到 255。三档于是是**控制点**而不是格子 —— 渐变保留、平色仍然平色。
-     *
-     * 只有点缀层（dAccent 无效或与主体层重合）时退化成 0 → 255 的一条直线，也就是
-     * 按"离底板多远"给不透明度，不再硬分箱。
-     */
-    private fun toneAlpha(distance: Int, dAccent: Int, dMain: Int): Int {
-        if (distance <= 0) return 0
-        if (dMain <= 0) return 255
-        if (dAccent <= 0 || dAccent >= dMain) {
-            return if (distance >= dMain) 255 else distance * 255 / dMain
-        }
-        return when {
-            distance < dAccent -> distance * TONE_MID / dAccent
-            distance < dMain -> TONE_MID + (distance - dAccent) * (255 - TONE_MID) / (dMain - dAccent)
-            else -> 255
-        }
-    }
-
     /** 从 256 桶直方图里取中位数对应的档（0..255）。[total] 是不透明像素总数，>0。 */
     private fun medianOf(histogram: IntArray, total: Int): Int {
         val half = (total + 1) / 2
@@ -1384,19 +1326,6 @@ object IconBitmap {
         }
         return 255
     }
-
-    /**
-     * 闭运算的半径：**固定 1**。
-     *
-     * 试过按出图尺寸线性放大（384 上半径 2），结果是**把字腔填掉** —— 5×5 的核能补上 4 像素
-     * 宽的缝，而「日」「口」那类空隙、图标上的眼睛正好就是这个量级。用户反馈的「细节糊成一团」
-     * 对得上，日志里几乎每行 `hole=0.00` 也对得上（洞是在闭运算**之后**量的，被填掉的洞数不到）。
-     *
-     * 高分辨率更碎这件事，交给三档颜色分类去解决（Otsu 切出来的缝，本来就不该靠形态学硬连），
-     * 而不是把半径加大去盖。
-     */
-    private fun morphRadius(): Int = 1
-
 
     /** Otsu：遍历所有可能阈值，取类间方差最大的那个 */
     private fun otsuThreshold(pixels: IntArray): Int {
