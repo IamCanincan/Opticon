@@ -139,6 +139,15 @@ object IconBitmap {
     internal const val TONE_MID = 128
 
     /**
+     * 三档插值之后，多淡的像素才算"图形的一部分"。
+     *
+     * 有了分段插值，靠近底板色的像素会拿到一个很小的 alpha —— 那就又把柔光/渐变尾端
+     * 整片收进掩码了（本项目踩过的那类"淡色铺满"）。所以带档的掩码也要有条线，取中档的
+     * 一半：视觉上不到半成色的地方一律当透明。
+     */
+    internal const val TONE_FLOOR = 64
+
+    /**
      * 把 Drawable 画成指定边长的方形位图。
      *
      * 关键点：显式调用 setBounds 而不是依赖 intrinsicWidth/Height。
@@ -566,13 +575,21 @@ object IconBitmap {
         // 哪层算主体按**面积**定：大的是形，小的是点缀。
         val mainLayer = if (l1 >= l2) 1 else 2
         val accentLayer = if (mainLayer == 1) 2 else 1
+        // ⚠ 三档是**控制点**，不是三个分箱。原来这里按层写死 0 / 128 / 255，结果图标里
+        //   那段渐变被整片吸进某一层 —— 平色块就是这么来的。现在 alpha 按「离底板色有多远」
+        //   在 0 → 128 → 255 之间**分段线性插值**，控制点取点缀层与主体层各自的平均距离：
+        //   平色区域照旧平色（同色的像素距离相同），真渐变恢复成过渡。
+        val dAccent = meanDistanceFromPlate(pixels, layer, accentLayer, plateR, plateG, plateB)
+        val dMain = meanDistanceFromPlate(pixels, layer, mainLayer, plateR, plateG, plateB)
+        var painted = 0
         for (i in 0 until total) {
-            output[i] = when (layer[i]) {
-                mainLayer -> Color.argb(255, 255, 255, 255)
-                accentLayer -> Color.argb(TONE_MID, 255, 255, 255)
-                else -> 0
-            }
+            val p = pixels[i]
+            val a = if (layer[i] == 0 || Color.alpha(p) < MIN_SHAPE_ALPHA) 0
+            else toneAlpha(colorDistance(p, plateR, plateG, plateB) / 3, dAccent, dMain)
+            output[i] = if (a == 0) 0 else Color.argb(a, 255, 255, 255)
+            if (a >= TONE_FLOOR) painted++
         }
+        count = painted
         val boxFill = count.toFloat() / boxTotal
         if (boxFill > MAX_SHAPE_RATIO) return Silhouette(null, boxFill, "刻出来的仍是整块底")
         if (boxFill < MIN_SHAPE_RATIO) return Silhouette(null, boxFill, "几乎刻不出东西")
@@ -663,7 +680,7 @@ object IconBitmap {
         var accentPixels = 0
         for (i in 0 until total) {
             val a = Color.alpha(output[i])
-            shape[i] = if (tones) a > 0 else a >= MIN_SHAPE_ALPHA
+            shape[i] = if (tones) a >= TONE_FLOOR else a >= MIN_SHAPE_ALPHA
             if (shape[i] && tones && a < 255) accentPixels++
             dilated[i] = false
         }
@@ -1316,6 +1333,45 @@ object IconBitmap {
             }
         }
         return layer
+    }
+
+    /** 某一层像素到底板色的平均距离（0..255 口径）。该层为空时返回 0。 */
+    private fun meanDistanceFromPlate(
+        pixels: IntArray,
+        layer: IntArray,
+        which: Int,
+        plateR: Int,
+        plateG: Int,
+        plateB: Int,
+    ): Int {
+        var sum = 0L
+        var n = 0
+        for (i in pixels.indices) {
+            if (layer[i] != which || Color.alpha(pixels[i]) < MIN_SHAPE_ALPHA) continue
+            sum += colorDistance(pixels[i], plateR, plateG, plateB) / 3
+            n++
+        }
+        return if (n == 0) 0 else (sum / n).toInt()
+    }
+
+    /**
+     * 距离 → alpha 的分段线性映射：底板 0、点缀层平均距离处 [TONE_MID]、主体层平均距离处 255，
+     * 再往外饱和到 255。三档于是是**控制点**而不是格子 —— 渐变保留、平色仍然平色。
+     *
+     * 只有点缀层（dAccent 无效或与主体层重合）时退化成 0 → 255 的一条直线，也就是
+     * 按"离底板多远"给不透明度，不再硬分箱。
+     */
+    private fun toneAlpha(distance: Int, dAccent: Int, dMain: Int): Int {
+        if (distance <= 0) return 0
+        if (dMain <= 0) return 255
+        if (dAccent <= 0 || dAccent >= dMain) {
+            return if (distance >= dMain) 255 else distance * 255 / dMain
+        }
+        return when {
+            distance < dAccent -> distance * TONE_MID / dAccent
+            distance < dMain -> TONE_MID + (distance - dAccent) * (255 - TONE_MID) / (dMain - dAccent)
+            else -> 255
+        }
     }
 
     /** 从 256 桶直方图里取中位数对应的档（0..255）。[total] 是不透明像素总数，>0。 */

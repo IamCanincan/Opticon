@@ -847,13 +847,11 @@ internal object MonochromeSynth {
           // **吸附归档**，绝不钳实心 —— 钳了就等于把中间档抹掉、三层塌回两层。
           // 为什么还要吸：非自适应图标在这之后要经 `intoVisibleArea` 缩放一次，双线性会把
           // 档与档之间混出中间值；重新吸附保证交到桌面手上的仍然是三个确定值。
-          honorTones -> when {
-            // 吸附阈值由 TONE_MID 推出来（取相邻两档的中点），不写死数字 ——
-            // 点缀档哪天调了，这里忘了跟着改就会悄悄把档归错。
-            a < IconBitmap.TONE_MID / 2 -> 0
-            a < (IconBitmap.TONE_MID + 255) / 2 -> IconBitmap.TONE_MID
-            else -> 255
-          }
+          // 带档的掩码**原样透传**：alpha 已经是「离底板色多远」的分段插值结果，
+          // 钳实心会抹掉渐变、吸附会把过渡重新变成色块（这两件事都是这个函数以前的
+          // 行为，正是"渐变被做成色块"的直接原因）。该滤的淡色已经在 IconBitmap 体检时
+          // 用 TONE_FLOOR 滤掉了，缩放也走的是最近邻（不会混出新值），这里不需要再动。
+          honorTones -> a
           a < MASK_DUMP_THRESHOLD -> 0
           a >= 255 -> 255
           isSilhouetteEdge(pixels, w, h, x, y) -> maxOf(a, EDGE_ALPHA_FLOOR)
