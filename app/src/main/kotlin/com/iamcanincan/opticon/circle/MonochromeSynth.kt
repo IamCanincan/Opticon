@@ -123,6 +123,14 @@ internal object MonochromeSynth {
    */
   private const val MIN_EDGE = 192
 
+  /**
+   * 「整张图标是不是灰度」那道判据的出图尺寸。
+   *
+   * `ToneCheck` 自己就会把输入缩到 64 再逐像素看三通道，画得更大只是白付一次光栅化 ——
+   * 这一步只为了回答「要不要动手」，不参与任何形状计算。
+   */
+  private const val TONE_SAMPLE = 64
+
   /** 缓存上限。图标数量本来就有界，超过就整体清掉重来，避免长歪。 */
   private const val CACHE_LIMIT = 256
 
@@ -223,15 +231,22 @@ internal object MonochromeSynth {
       }
       // ── 「原本就适配取色的图标，一个像素都不要碰」 ──
       // 应用自己提供单色层的那种「已适配」，`getMonochrome()` 非 null，钩子在最外层就透传了
-      // （见 `IconHooks.hookSynthesizedMonochrome`）。但还有第二种已适配：**图标本身就是灰度
-      // 剪影**、等着系统按主题上色 —— 那种根本没有单色层，会一路走进这里被我们重压一遍，
-      // 白丢它自己画好的层次。通知侧对这一种早有判据（`ToneCheck.isGrayscale` +
-      // `preserveTinted`，「单色说明人家已经适配好了，不动」），桌面这边一直没接 ——
-      // 两边说的是同一件事，所以复用同一个函数，不另写一套标准。
-      // ⚠ 量的是**我们要动的那一层**（自适应=前景层、非自适应=整张），不是合成后的图：
-      //   拿合成结果去判等于用「我压出来的形状」去决定「要不要压」，自己证自己。
-      if (ModuleRuntime.options().preserveTinted && ToneCheck.isGrayscale(raster)) {
-        noteGiveUp(edge, label, "已是灰度（应用自己适配过取色）→ 不动")
+      // （见 `IconHooks.hookSynthesizedMonochrome`）。还有第二种：**图标整体就是一张灰度图**、
+      // 等系统按主题上色 —— 那种没有单色层，会一路走进这里被我们重压一遍。判据复用通知侧
+      // 那一个函数（`ToneCheck.isGrayscale` + `preserveTinted`），两边说的同一件事不另写一套。
+      //
+      // ⚠ 量的必须是**整个图标**，不是「我们要动的那一层」。上一版我在这里判了前景层，
+      //   真机 24 小时内就错杀 295 次：自适应图标**最典型的没适配结构**就是
+      //   「白色剪影前景 + 一层彩色底板」，只看前景当然是灰度，于是我们撒手不管，
+      //   桌面回去走自己那条算错极性的路 —— 观感直接退成「不是纯色」。
+      //   真正算「已经适配」的，是把背景也算进去之后整体仍然只有明暗、没有彩色。
+      // 非自适应图标的前景层就是整张图，直接复用刚才那次光栅化，不多画一遍。
+      val whole = if (adaptive) rasterize(source, TONE_SAMPLE) else raster
+      val alreadyTinted = whole != null && ModuleRuntime.options().preserveTinted &&
+        ToneCheck.isGrayscale(whole)
+      if (whole !== raster) whole?.recycle()
+      if (alreadyTinted) {
+        noteGiveUp(edge, label, "整张图标已是灰度（应用自己适配过取色）→ 不动")
         raster.recycle()
         return@runCatching null
       }
