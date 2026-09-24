@@ -62,14 +62,36 @@ object IconBitmap {
     private const val MAX_SHAPE_RATIO = 0.85f
 
     /**
-     * 外接框口径下「一整块底板」的分界线就是 [MAX_SHAPE_RATIO]，**不再另设一条**。
+     * 「一整块底板」的两条线：产出**填得满**（≥[PLATE_FILL]）而且**里面几乎是空的**
+     * （洞占比 ≤[PLATE_HOLE]）才判成板。
      *
-     * 之前这里有一条 [FULL_BOX_FILL]（0.92）专管「这是不是底」，而产出守卫用 0.85 管画布，
-     * 两条线量的是不同的东西，中间那段（框内 0.85~0.92）既没人拦也没人看。
-     * 现在统一成一条：框内 ≥0.85 就当底板、降级到二值支。
-     * 0.85 仍然不会误伤**实心圆**：圆的框内填充率是 π/4 ≈ 0.785，
-     * 而圆形底板本来就该压成一个圆 —— 那是它的形状，不是脏块。
+     * 为什么要两条一起用：只填得满是不够的 —— 一张带字形的彩色底板（中国移动那种
+     * 「白底 + 彩色 logo」被 Otsu 保住的圆角方）框内也能到 0.9+，但它的洞就是字形，
+     * 那是**对的形状**。真正要拦的是「连洞都没有」的那一类：前景就是一张满幅不透明的
+     * 彩图、亮度切不出任何东西，交出去屏幕上就是一块纯色。
+     * 0.55 / 0.03 这两条是判据台上按「汉字字形（洞占比通常 0.05 以上）不误伤」定的，
+     * 真机跑一轮要看 `hole=` 的分布再收。
      */
+    private const val PLATE_FILL = 0.55f
+    private const val PLATE_HOLE = 0.03f
+
+    /**
+     * 「碎成一片」：闭运算**之后**仍然块数 ≥[SHATTER_COMPONENTS] 且最大块占比 ≤[SHATTER_TOP]。
+     *
+     * ⚠ 两个数必须一起看，单看块数会误杀汉字 —— 「淘」这种四个字形的块天然 cc=4，
+     * 而每一块都是实心笔画（top≈0.4）。真正的碎裂是渐变底被切出的一堆小渣。
+     * 先闭运算再判，是因为闭运算本来就该把抗锯齿切断的笔画连回去；连不回去的才是真碎。
+     */
+    private const val SHATTER_COMPONENTS = 8
+    private const val SHATTER_TOP = 0.35f
+
+    /**
+     * 碎渣的最小尺寸：连通块小于 `总面积 / MIN_SPECK_DIVISOR`（且不少于 8 像素）就擦掉。
+     *
+     * 按面积给比例而不是写死像素数，是因为掩码出图尺寸跟着桌面要的大小变
+     * （本机 192 / 384 两档）—— 定死 36 像素的话，192 那一档上就等于抹掉一整笔。
+     */
+    private const val MIN_SPECK_DIVISOR = 4096
 
     /** 二值化时每个像素的归类，用于连通性判断 */
     private const val CLASS_TRANSPARENT = 0
@@ -374,17 +396,193 @@ object IconBitmap {
         val output = IntArray(total)
         input.getPixels(pixels, 0, w, 0, 0, w, h)
         val count = binarize(pixels, output, w, h, preserveAlpha)
-        val bounds = contentBoundsOf(pixels, w, h)
-            ?: return Silhouette(null, 0f, "整张透明")
+        val bounds = contentBoundsOf(pixels, w, h) ?: return Silhouette(null, 0f, "整张透明")
         val boxTotal = bounds.width().toLong() * bounds.height()
         if (boxTotal <= 0) return Silhouette(null, 0f, "外接框为空")
-        // 分子是「保住了的那一侧」，分母是**内容外接框** —— 两侧都不是整张画布。
+        // 分子是「保住了的那一侧」，分母是**内容外接框** —— 两侧都不是整张画布，见 [MAX_SHAPE_RATIO]。
         val boxFill = count.toFloat() / boxTotal
         if (boxFill > MAX_SHAPE_RATIO) return Silhouette(null, boxFill, "保住的那侧=整块底")
         if (boxFill < MIN_SHAPE_RATIO) return Silhouette(null, boxFill, "几乎没保住东西")
+
+        // 形状体检（就地修整 + 打分），只有这一支需要 —— 理由见 [polishBinarized] 上面那段。
+        val shape = polishBinarized(output, w, h, bounds)
+        val filled = shape.kept.toFloat() / boxTotal
+        // 闭运算 + 去碎渣之后可能把仅剩的一点杂色全擦光 —— 空掩码交出去就是一个看不见的洞，
+        // 比不合成糟得多。这道守卫必须在体检之后、而不是之前：上面两条量的是闭运算**之前**
+        // 的原始计数，擦完渣之后真实比例只会更小，用旧数判会放行一张空图。
+        if (filled < MIN_SHAPE_RATIO) return Silhouette(null, filled, "修整后几乎全空")
+        if (filled >= PLATE_FILL && shape.holeRatio <= PLATE_HOLE) {
+            return Silhouette(null, filled, "闭运算后仍是一整块板（空洞 ${"%.2f".format(shape.holeRatio)}）")
+        }
+        if (shape.components >= SHATTER_COMPONENTS && shape.largestRatio <= SHATTER_TOP) {
+            return Silhouette(null, filled, "闭运算后仍碎成 ${shape.components} 块")
+        }
         val result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         result.setPixels(output, 0, w, 0, 0, w, h)
-        return Silhouette(result, boxFill, "$count 像素")
+        return Silhouette(
+            result, filled,
+            "${shape.kept} 像素 cc=${shape.components} top=${"%.2f".format(shape.largestRatio)} " +
+                "hole=${"%.2f".format(shape.holeRatio)}"
+        )
+    }
+
+    /** [polishBinarized] 的产出：修整完还剩多少像素，以及三个形状统计量。 */
+    private class Shape(
+        val kept: Int,
+        val components: Int,
+        val largestRatio: Float,
+        val holeRatio: Float,
+    )
+
+    /**
+     * 二值支的后处理：**闭运算 → 去碎渣 → 形状体检**，就地改 [output]。
+     *
+     * ## 为什么这一支需要、alpha 那一支不需要
+     * alpha 支交出去的就是图标自带的 alpha —— 那是设计者画好的形状，多做一次形态学只会
+     * 凭空造像素。二值支不一样：它是**按亮度猜**出来的形状，而亮度 Otsu 一刀切下去会把
+     * 抗锯齿那一圈中间调判给另一侧，于是笔画被切出一条 1 像素的缝、字被拆成几截
+     * （真机实例：中国移动那张 `cc=5 top=0.24`，一个环形断成一截一截）。
+     * 补这种缝正是闭运算的本职，不是为某个图标打的补丁。
+     *
+     * ## 为什么闭运算抹不掉真细节
+     * 闭运算 = 膨胀一次再腐蚀一次（8 邻域）。它**补得掉 1 像素的缝，补不掉 2 像素以上的洞** ——
+     * 字腔（「口」「日」中间那格）、眼睛这类内部细节远大于 1 像素，闭完照旧是洞。
+     * 也正因为顺手会抹掉小洞，[Shape.holeRatio] 只能当**下限**信号用（洞少到几乎没有才判成
+     * 底板），不能反过来拿「有洞」当放行理由。
+     *
+     * ## 去碎渣
+     * 闭完按连通块擦掉太小的孤立点（[MIN_SPECK]，按面积给比例）—— 那些是渐变底被 Otsu
+     * 切出来的杂色碎屑，留着就是「脏」。多笔画图标不受影响：一笔画下来的块远大于这个尺寸。
+     */
+    private fun polishBinarized(output: IntArray, w: Int, h: Int, box: Rect): Shape {
+        val total = w * h
+        val shape = outsideBuffer(total)   // 复用规则与理由见 [classBufferCache]：整体被外层锁串起来
+        val dilated = morphBuffer(total)
+
+        val stack = stackBuffer(total)
+        for (i in 0 until total) shape[i] = Color.alpha(output[i]) >= MIN_SHAPE_ALPHA
+        // ── 膨胀：形状周围的 8 邻域都算形状 ──
+        dilated.fill(false)
+        for (y in 0 until h) for (x in 0 until w) {
+            if (!shape[y * w + x]) continue
+            for (dy in -1..1) {
+                val ny = y + dy
+                if (ny !in 0 until h) continue
+                for (dx in -1..1) {
+                    val nx = x + dx
+                    if (nx in 0 until w) dilated[ny * w + nx] = true
+                }
+            }
+        }
+        // ⚠ 腐蚀必须**读到另一块缓冲**：膨胀的结果要一边读一边原样不动。曾经就地写回
+        //   `dilated`，于是前面几行擦出来的洞被后面几行当成「邻域缺失」继续往里吃，
+        //   一张 22032 像素的掩码整张被级联吃掉、判成 0 像素 —— 形态学的第一课。
+        val eroded = visitedBuffer(total)
+        eroded.fill(false)
+        for (y in 0 until h) for (x in 0 until w) {
+            val i = y * w + x
+            if (!dilated[i]) continue
+            var keep = true
+            outer@ for (dy in -1..1) {
+                val ny = y + dy
+                for (dx in -1..1) {
+                    val nx = x + dx
+                    if (ny !in 0 until h || nx !in 0 until w || !dilated[ny * w + nx]) {
+                        keep = false; break@outer
+                    }
+                }
+            }
+            eroded[i] = keep
+        }
+        // 闭运算新添的像素没有原始 alpha，给实心白；原本就有的保持原值（抗锯齿）。
+        var kept = 0
+        for (i in 0 until total) {
+            if (!eroded[i]) { output[i] = 0; shape[i] = false; continue }
+            if (!shape[i]) output[i] = Color.WHITE
+            shape[i] = true   // 闭运算的结果留在 shape 里：下面两遍 BFS 读它
+            kept++
+        }
+        // ── 连通块：顺带擦掉太小的碎渣 ──
+        val minSpeck = maxOf(8, total / MIN_SPECK_DIVISOR)
+        val visited = dilated   // 膨胀结果已经用完，这块直接当「已访问」复用
+        visited.fill(false)
+        var components = 0
+        var largest = 0
+        for (start in 0 until total) {
+            if (!shape[start] || visited[start]) continue
+            components++
+            var head = 0
+            var tail = 0
+            visited[start] = true
+            stack[tail++] = start
+            while (head < tail) {
+                val i = stack[head++]
+                val x = i % w; val y = i / w
+                for (dy in -1..1) {
+                    val ny = y + dy
+                    if (ny !in 0 until h) continue
+                    for (dx in -1..1) {
+                        val nx = x + dx
+                        if (nx !in 0 until w) continue
+                        val j = ny * w + nx
+                        if (shape[j] && !visited[j]) { visited[j] = true; stack[tail++] = j }
+                    }
+                }
+            }
+            if (tail >= minSpeck) {
+                if (tail > largest) largest = tail
+            } else {
+                // 整块擦掉：stack[0 until tail] 就是这一块的坐标（队列式 BFS，弹出不清记录）
+                for (k in 0 until tail) { output[stack[k]] = 0; shape[stack[k]] = false }
+                kept -= tail
+                components--
+            }
+        }
+        // ── 洞：外接框内、不接触框边界的那些「非形状」连通块 ──
+        var holePixels = 0
+        visited.fill(false)
+        for (y in box.top until box.bottom) for (x in box.left until box.right) {
+            val start = y * w + x
+            if (shape[start] || visited[start]) continue
+            var head = 0
+            var tail = 0
+            var touchesBorder = false
+            visited[start] = true
+            stack[tail++] = start
+            while (head < tail) {
+                val i = stack[head++]
+                val x = i % w; val yy = i / w
+                if (x == box.left || x == box.right - 1 || yy == box.top || yy == box.bottom - 1) touchesBorder = true
+                for (dy in -1..1) {
+                    val ny = yy + dy
+                    if (ny !in box.top until box.bottom) continue
+                    for (dx in -1..1) {
+                        val nx = x + dx
+                        if (nx !in box.left until box.right) continue
+                        val j = ny * w + nx
+                        if (!shape[j] && !visited[j]) { visited[j] = true; stack[tail++] = j }
+                    }
+                }
+            }
+            if (!touchesBorder) holePixels += tail
+        }
+        val boxArea = box.width().toLong() * box.height()
+        return Shape(
+            kept = kept,
+            components = components,
+            largestRatio = if (kept > 0) largest.toFloat() / kept else 0f,
+            holeRatio = if (boxArea > 0) holePixels.toFloat() / boxArea else 0f,
+        )
+    }
+
+    /** 形态学用的第三块布尔缓冲。必须与 outside / visited 分开 —— 三者同时在用。 */
+    private fun morphBuffer(size: Int): BooleanArray {
+        var buf = morphBufferCache
+        if (buf == null || buf.size < size) {
+            buf = BooleanArray(size)
+            morphBufferCache = buf
+        }
+        return buf
     }
 
     /** 非透明像素的外接矩形；整张都透明时返回 null。位图版只是 [contentBoundsOf] 的薄壳。 */
@@ -794,6 +992,9 @@ object IconBitmap {
     private var visitedBufferCache: BooleanArray? = null
     private var stackBufferCache: IntArray? = null
     private var outsideBufferCache: BooleanArray? = null
+
+    /** 形态学第三块缓冲：闭运算的「膨胀结果」，与 outside / visited 同时在用，理由同 [outsideBufferCache]。 */
+    private var morphBufferCache: BooleanArray? = null
 
     private fun luma(pixel: Int): Int {
         return (Color.red(pixel) * 299 + Color.green(pixel) * 587 + Color.blue(pixel) * 114) / 1000
