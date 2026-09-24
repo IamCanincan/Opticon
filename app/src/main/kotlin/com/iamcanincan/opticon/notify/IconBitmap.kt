@@ -121,6 +121,12 @@ object IconBitmap {
     private const val CLASS_LIGHT = 2
 
     /**
+     * 三层输出里"点缀"那一档的 alpha：50% 的系统前景色压在系统底色上 = 两档的**中值**。
+     * 主体是 255、底板是 0（让系统的底色透出来），三档都是离散值。
+     */
+    private const val TONE_MID = 128
+
+    /**
      * 把 Drawable 画成指定边长的方形位图。
      *
      * 关键点：显式调用 setBounds 而不是依赖 intrinsicWidth/Height。
@@ -204,8 +210,16 @@ object IconBitmap {
      * @param mask 白色 + alpha 的掩码；null = 这一支不成立，调用方该换支或放弃合成。
      * @param boxFill 内容外接框内的等效覆盖率（0..1）。被拒时它就是**致拒的那个数**。
      * @param verdict 一句话结论，直接拼进日志。
+     * @param tones 这张掩码带**有意的三档浓度**（主体 255 / 点缀 128 / 底 0）。
+     *   调用方（`MonochromeSynth.toAlphaMask`）据此决定还能不能做"内部一律钳实心"那一步 ——
+     *   钳了就等于把中档抹平，三层又变回两层。
      */
-    internal class Silhouette(val mask: Bitmap?, val boxFill: Float, val verdict: String)
+    internal class Silhouette(
+        val mask: Bitmap?,
+        val boxFill: Float,
+        val verdict: String,
+        val tones: Boolean = false,
+    )
 
     /**
      * **通知方案的第一支**（`grayscale` 保留 alpha 那一步）—— 透明底 + 图形的轮廓。
@@ -450,7 +464,7 @@ object IconBitmap {
      * 全图距离≈0 → 走到第 2 条返回 null → 仍然由 alpha 支交出原形状。
      */
     @Synchronized
-    internal fun plateSilhouette(input: Bitmap, preserveAlpha: Boolean = true): Silhouette {
+    internal fun plateSilhouette(input: Bitmap): Silhouette {
         val w = input.width
         val h = input.height
         if (w <= 0 || h <= 0) return Silhouette(null, 0f, "尺寸非法")
@@ -515,15 +529,30 @@ object IconBitmap {
             return Silhouette(null, 0f, "无主导底板（底占 ${"%.2f".format(plateCount.toFloat() / opaque)}）")
         }
         if (count == 0) return Silhouette(null, 0f, "除底板外没有别的层")
+        // ── 三档浓度（用户规定：图标就该有三种颜色）──
+        // 桌面给主题图标的是**两层系统色**：`colors[0]` 当底板、`colors[1]` 当字形
+        // （`MonoIconThemeController.createThemedAdaptiveIcon` 里就是
+        // `new AdaptiveIconDrawable(new ColorDrawable(colors[0]), mono)`）。
+        // 而 alpha 合成是线性的，所以：
+        //   · 底板层 → alpha 0：让系统的底色透出来（浅那一档**由系统给**，我们不猜颜色）；
+        //   · 主体层 → alpha 255：系统的前景色（深那一档也**由系统给**）；
+        //   · 点缀层 → alpha [TONE_MID]：50% 的前景压在那块底上，正好落在两档的**中值**。
+        // 三档都是离散值，不是连续渐变 —— 之前"别用灰度"那条约束守住了：渐变指的是
+        // 把整片原始 alpha 透出去，这里是三个确定值。
+        // 哪层算主体按**面积**定：大的是形，小的是点缀。
+        val mainLayer = if (l1 >= l2) 1 else 2
+        val accentLayer = if (mainLayer == 1) 2 else 1
         for (i in 0 until total) {
-            val l = layer[i]
-            if (l != 1 && l != 2) continue
-            output[i] = if (preserveAlpha) Color.argb(Color.alpha(pixels[i]), 255, 255, 255) else Color.WHITE
+            output[i] = when (layer[i]) {
+                mainLayer -> Color.argb(255, 255, 255, 255)
+                accentLayer -> Color.argb(TONE_MID, 255, 255, 255)
+                else -> 0
+            }
         }
         val boxFill = count.toFloat() / boxTotal
         if (boxFill > MAX_SHAPE_RATIO) return Silhouette(null, boxFill, "刻出来的仍是整块底")
         if (boxFill < MIN_SHAPE_RATIO) return Silhouette(null, boxFill, "几乎刻不出东西")
-        return finish(output, w, h, bounds, "三层")
+        return finish(output, w, h, bounds, "三层", tones = true)
     }
 
     /**
@@ -536,6 +565,7 @@ object IconBitmap {
         h: Int,
         bounds: Rect,
         from: String,
+        tones: Boolean = false,
     ): Silhouette {
         val boxTotal = bounds.width().toLong() * bounds.height()
         val shape = polishBinarized(output, w, h, bounds)
@@ -554,7 +584,8 @@ object IconBitmap {
         return Silhouette(
             result, filled,
             "$from ${shape.kept} 像素 cc=${shape.components} top=${"%.2f".format(shape.largestRatio)} " +
-                "hole=${"%.2f".format(shape.holeRatio)}"
+                "hole=${"%.2f".format(shape.holeRatio)}",
+            tones = tones,
         )
     }
 

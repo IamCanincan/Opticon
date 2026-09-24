@@ -322,7 +322,7 @@ internal object MonochromeSynth {
       // 非自适应图标的内容是满幅的，而它在图层 bounds 里只该占中间那 2/3（可见区），
       // 所以掩码算完**之后**才缩进 —— 顺序反了就会踩 [rasterize] 上面那个坑。
       val placed = if (adaptive) base else base?.let { intoVisibleArea(it, edge) }
-      val mask = placed?.let { toAlphaMask(it) }
+      val mask = placed?.let { toAlphaMask(it, chosen?.tones == true) }
       noteDiagnosis(edge, label, raster, mask, chosen === alpha)
       raster.recycle()
       if (placed !== base) placed?.recycle()
@@ -801,7 +801,7 @@ internal object MonochromeSynth {
    * 同一条口径在 `IconHooks.kt` 的 `invertAlphaMask` 那边本来就是按
    * `rowBytes × height` 整块搬的，这里照同一个做法。
    */
-  private fun toAlphaMask(source: Bitmap): Bitmap? {
+  private fun toAlphaMask(source: Bitmap, honorTones: Boolean): Bitmap? {
     val w = source.width
     val h = source.height
     if (w <= 0 || h <= 0) return null
@@ -810,7 +810,7 @@ internal object MonochromeSynth {
     val mask = Bitmap.createBitmap(w, h, Bitmap.Config.ALPHA_8)
     val stride = mask.rowBytes
     val bytes = ByteArray(stride * h) // 末尾那 (stride-w)×h 个 padding 留 0 = 透明，无害
-    // ⚠ 内部一律钳成实心，轮廓那一圈也托个底。
+    // ⚠ 内部一律钳成实心，轮廓那一圈也托个底 —— 但带三档的掩码除外（见 [honorTones]）。
     //   桌面把 alpha 当**不透明度**上色，而 `preserveAlpha` 保留的是整片原始 alpha，
     //   不只是抗锯齿那圈边：源图标里 alpha 150~200 的区域会被画成六到八成浓度。
     //   细笔画更糟 —— 三四像素宽的描边整个都是"边界"，逐像素保留过渡值等于整条笔画半透明，
@@ -821,6 +821,15 @@ internal object MonochromeSynth {
       for (x in 0 until w) {
         val a = Color.alpha(pixels[read++])
         bytes[row + x] = when {
+          // 三层刻底那条路交出来的掩码自带三档（255 主体 / 128 点缀 / 0 底板）：这里只做
+          // **吸附归档**，绝不钳实心 —— 钳了就等于把中间档抹掉、三层塌回两层。
+          // 为什么还要吸：非自适应图标在这之后要经 `intoVisibleArea` 缩放一次，双线性会把
+          // 档与档之间混出中间值；重新吸附保证交到桌面手上的仍然是三个确定值。
+          honorTones -> when {
+            a < 64 -> 0
+            a < 192 -> 128
+            else -> 255
+          }
           a < MASK_DUMP_THRESHOLD -> 0
           a >= 255 -> 255
           isSilhouetteEdge(pixels, w, h, x, y) -> maxOf(a, EDGE_ALPHA_FLOOR)
