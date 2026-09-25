@@ -241,7 +241,9 @@ internal object MonochromeSynth {
       val id = noteBranch(edge, label, out)
       // 可疑的那几张把**原像素**带回来（PNG → base64 → 分片进日志），判据台原样重放。
       // 没有这条通道，"不够细致"永远只能靠猜：他报的应用发的是 vector / webp，台子解不出。
-      if (MonoDump.suspicious(out)) {
+      // ⚠ 但只按 `suspicious` 会把他**点名**的那几张漏掉：一块灰框在形状体检里是"规整、连通、
+      // 面积合适"的好形状，一个可疑指标都不触发 —— 而它恰恰是要看的东西。所以点名的必带。
+      if (MonoDump.suspicious(out) || MonoDump.watched(label)) {
         // 带上包名：不带回来的话，重放出来的预览图不知道是哪个应用的 —— 而那正是要对的东西。
         MonoDump.maybe(id, label, raster, pixels, out.mask, edge, edge,
           "${label.substringBefore(' ')} | ${out.report}")

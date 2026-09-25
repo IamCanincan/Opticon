@@ -29,7 +29,7 @@ import java.util.Locale
 internal object MonoDump {
 
   /** 每进程最多带回来几张。PNG 压完一张十几 KB、六到十八行日志，所以这个数可以比想象中大。 */
-  private const val MAX_ICONS = 34
+  private const val MAX_ICONS = 48
 
   /** 一条日志的安全长度：logd 单条约 4000 字节，留足余量免得截断。 */
   private const val CHUNK = 3000
