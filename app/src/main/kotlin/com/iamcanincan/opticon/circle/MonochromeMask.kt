@@ -472,7 +472,12 @@ internal object MonochromeMask {
         //   框内 0.91 —— 中间调全被推到实心那一侧去了）。
         val td = CURVE[((dep - ground.zero) * 255 / ground.span).coerceIn(0, 255)]
         val u = ref - (s.labL[i].toInt() and 0xffff)
-        val tl = ((u - lo) * 255 / spread).coerceIn(0, 255)
+        val tl = ((u - lo) * 255 / spread).coerceIn(0, 255) * Color.alpha(pixels[i]) / 255
+        // ⚠ 明暗这一条**必须乘上覆盖率**，距离那条本来就是 `a × […]`（见 departure）。
+        //   透明的像素没有"亮度"可言：它的 RGB 未定义，读出来是黑，于是 `u = 参照L − 0` 直接顶格，
+        //   按 q 混进去就是**在空气上上墨**。真机抖音量出来：模型上墨的像素里 51.4% 的源 alpha
+        //   恰好是 0（最浓 68/255），屏幕上就是他报的那块灰框 —— 而它的形状是矩形，因为那是
+        //   内容外接框。判据台新增一条「全透明的像素不许上墨」钉住它。
         var a = (td * (100 - q) + tl * q) / 100
         if (a == 0) continue
         // 比参照暗的往上、亮的往下，**按这张图自己的跨度成比例** —— 不是"暗/亮"两档。
