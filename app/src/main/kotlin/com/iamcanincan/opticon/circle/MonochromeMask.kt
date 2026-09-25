@@ -494,7 +494,17 @@ internal object MonochromeMask {
       }
     }
 
-    // 4) 形状体检。**修不修形状看浓度是谁给的**：颜色给的（β 高）才可能有"切底切出来的杂点"，
+    // 4) 交出去之前把墨量抬到满阶：最深的必须真的最深（他要「图标上必须有系统最深和最浅的
+    //    取色」）。抬法是"只往上、锚在 0"的一条直线，理由与两次失败都在 [stretchLut] 上。
+    val stretch = stretchLut(out, total)
+    stretch?.let { s2 ->
+      for (i in 0 until total) {
+        val a = out[i] ushr 24
+        if (a != 0) out[i] = (s2.first[a] shl 24) or 0x00FFFFFF
+      }
+    }
+
+    // 5) 形状体检。**修不修形状看浓度是谁给的**：颜色给的（β 高）才可能有"切底切出来的杂点"，
     //    覆盖率给的（β≈0）那些淡值全是设计者自己画的柔光与抗锯齿，擦掉就是一圈锯齿、桥起来
     //    就是给一条笔画凭空加粗。（旧版这里是两支各写死的 `bridge=/despeckle=` 常量。）
     val colourDriven = ground.meanCov >= 128
@@ -514,6 +524,7 @@ internal object MonochromeMask {
         "壳占=${pct(body.share)} 层比=$keep/$knockCand 降=${pct(knocked.toFloat() / boxArea)} 降力=${body.weight} 力度=$hollow 明暗=${q} " +
         "框内=${pct(fill)} cc=${st.components} top=${pct(st.largest)} 小片=${pct(st.smallShare)} " +
         "空洞=${pct(st.hole)} 淡=${pct(softShare(st, box))} 色驱=${ground.meanCov} " +
+        "色阶=${stretch?.second ?: "已满"} " +
         "分档=${sep.second}/${sep.first}" +
         (if (sep.third.isEmpty()) "" else "(${sep.third.joinToString(",")})")
     )
@@ -605,6 +616,34 @@ internal object MonochromeMask {
     // 每一块的浓度值一起带回来：`2/6` 只说"合并了"，不说**在哪一端**合并的。
     // 全挤在 0 = 底下那道 clamp 把部分擦掉了；全挤在 255 = 顶上那道饱和了。修法不同。
     return Triple(parts.size, levels, parts)
+  }
+
+  /** 交付前把墨量拉到满阶用的分位（见 [stretchLut]）。取分位不取最值：
+   *  一圈抗锯齿的极值不该决定整张图的色阶。 */
+  private const val STRETCH_HI_PCT = 99
+
+  /**
+   * 把墨量**只往上抬**的一条直线：`t → t·255/p99`（封顶 255）。这就是"必须有系统最深的取色"。
+   *
+   * 只抬、不压、不重排，锚在 0 上 —— 这三条都是踩过坑换来的：
+   *  · 分段折线按块重排：把"0 → 第一个锚点"整段抬起来，真图上多出一块灰方框（已撤，见 `分档` 那节）；
+   *  · 连低端一起拉（`[p1..p99] → [22..255]`）：判据台四条同时红 —— 一条 2px 细线本来就占不到
+   *    墨量的 1%，按 p1 归一等于把它当成噪点擦掉。**"最浅的一档"不能靠压别的档来给。**
+   *  所以这里只保证最深那一头，浅的那一头保持原样：抬不动的（已经铺满）一个像素都不动。
+   */
+  private fun stretchLut(out: IntArray, total: Int): Pair<IntArray, String>? {
+    val hist = IntArray(256)
+    var n = 0
+    for (i in 0 until total) {
+      val a = out[i] ushr 24
+      if (a > 0) { hist[a]++; n++ }
+    }
+    if (n < 64) return null
+    val hi = percentile(hist, n, STRETCH_HI_PCT)
+    if (hi >= 250) return null                              // 本来就铺满了，一个像素都不许动
+    val lut = IntArray(256)
+    for (t in 1..255) lut[t] = (t * 255 / hi).coerceIn(t, 255)
+    return lut to "p99=$hi→255"
   }
 
   // ───────────────────────────── 极性判据 ─────────────────────────────
