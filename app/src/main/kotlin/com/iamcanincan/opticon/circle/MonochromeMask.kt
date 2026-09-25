@@ -452,26 +452,40 @@ internal object MonochromeMask {
     val down = SPLIT_DOWN * (100 - q) / 100
 
     // 3) 出图：距离与明暗两条按 q 混成浓度，第二遍降层次。
-    //    **第二遍能降多狠，只问一句：被降的那一层，有没有比留下来的那层更大？**
+    //    **第二遍能降多狠，只问一句：被降的那一层交出的墨，有没有比留下来的那层还多？**
     //    第二遍的前提是"壳是主体、比它亮的只是第二层（高光、镂空）"。这个前提会破：
     //    云闪付与淘宝闪购的白色主字相对深蓝/橙底就是"更亮"，于是**主体自己被当成第二层**
     //    压掉四成 —— 实测主字只落在 89~143/255，他报的「细节不足、过渡不自然」就是这个。
     //    判据不看"壳占画面多少"（试过：小洞本来就该刻掉，按面积一刀切正好把它否了），
-    //    只看这两层的相对大小：谁大谁才是主体。留不下多少墨的一层，就不该去降别人。
-    var knockCand = 0
-    var keep = 0
+    //    也不看两层的**像素个数**（真机重放里华为应用市场 / 12123 / 米家 三张全栽在这）：
+    //    个数比的是"底板洪泛没吃干净的那圈中间调残边"和白色主字谁多 —— 残边天生贴底、
+    //    天生占多数（华为：留 11668 像素 vs 被降 9131 → 按个数是"留的多"→ 满力降层，
+    //    主字 dep₁=207 最后只剩 37）。屏幕上就是他报的「上色没上全」。
+    //    ⚠ 也不能比**平均实度**（试过：被降侧均值 > 留下侧就退出）：它和"比主体更亮"是同一件事
+    //    的两个说法，于是一下子命中 36/84 张 —— 太宽。按"两边各交出多少墨"（Σ dep₁）只命中
+    //    13/84：华为 3442 vs 6431（被降的才是主体 → 退出）、饿了么 1382 vs 9012（退出，
+    //    分档 4/6→5/6 反而更好）、抖音 7565 vs 7765（也退出：音符外面那两层错位影不再被刻开，
+    //    分档 4→2，但框内 0.25→0.46，屏幕上是一个结实的音符而不是一圈重影）。
+    //    全 84 张重放：框内没有一张下降，档数 7 张变多、2 张变少，空洞 0.032 不变。
+    //    被降那一侧的墨**多过**留下来的那一侧 → 前提不成立，第二遍对这一张整个退出；
+    //    否则力度只由"主体在墨里占多少"给（[bodyPass] 里同一个 Σ dep₁ 加权）。
+    var knockCand = 0L
+    var keep = 0L
     for (y in box.top until box.bottom) {
       val row = y * w
       for (x in box.left until box.right) {
         val i = row + x
         if (s.plate[i] != 0.toByte() || Color.alpha(pixels[i]) < A_SOLID) continue
+        val dep = (s.dist[i].toInt() and 0xffff).toLong()
         if ((s.labL[i].toInt() and 0xffff) - bodyLight(i, s) > 0 &&
           (s.off[i].toInt() and 0xffff) > body.zero
-        ) knockCand++ else keep++
+        ) knockCand += dep else keep += dep
       }
     }
-    val hollow = (HOLLOW * body.weight / 255 *
-      (if (knockCand == 0) 1f else (keep.toFloat() / knockCand).coerceAtMost(1f))).toInt()
+    // 日志里的这一对 = 两边各交出多少墨，除以 255 换成"等效实心像素数"。
+    val keepInk = keep / 255
+    val knockInk = knockCand / 255
+    val hollow = if (knockCand > keep) 0 else HOLLOW * body.weight / 255
     val out = IntArray(total)
     var knocked = 0
     for (y in box.top until box.bottom) {
@@ -540,7 +554,8 @@ internal object MonochromeMask {
     return Output(
       out, fill, st.hole, st.largest, st.components, st.smallShare, softShare(st, box),
       "带占=${s.bandSolid * 100 / 255} 底占=${pct(ground.share)} 族=${ground.families} 零=${ground.zero} 实=${ground.solid} 端=${lo shr 6}/${hi shr 6} " +
-        "壳占=${pct(body.share)} 层比=$keep/$knockCand 降=${pct(knocked.toFloat() / boxArea)} 降力=${body.weight} 力度=$hollow 明暗=${q} " +
+        "壳占=${pct(body.share)} 层比=$keepInk/$knockInk " +
+        "降=${pct(knocked.toFloat() / boxArea)} 降力=${body.weight} 力度=$hollow 明暗=${q} " +
         "框内=${pct(fill)} cc=${st.components} top=${pct(st.largest)} 小片=${pct(st.smallShare)} " +
         "空洞=${pct(st.hole)} 淡=${pct(softShare(st, box))} 色驱=${ground.meanCov} " +
         "色阶=${stretch?.second ?: "已满"} " +
@@ -1028,6 +1043,11 @@ internal object MonochromeMask {
    *    两半都压着底，连通性正好把它们都留在第一层。
    *  · 只问连通性（先把整片墨洪泛成一个主体）→ 围在里面的洞顺着墨一起连进参照，那一层就没了。
    *  这与第一遍「底取角上的家族、不取摘得最多的那个颜色」是同一条道理：**位置与色相各管一半**。
+   *
+   * ⚠ 试过把工作集从"所有非底"收紧成"第一遍真的上了墨的那些"（dep₁ > 那个零点），理由是
+   *  底板残边不该当主体。真机重放量下来**几乎不动**（框内 0.312→0.313）：那圈残边的 dep₁ 均值
+   *  本来就有 77~84，远在零点之上，收紧收不掉它们。管用的是下面按 Σdep₁ 加权的 [Pass.weight]
+   *  与出图处那条"谁交出的墨多谁是主体"的前提，不是这里。
    */
   private fun bodyPass(pixels: IntArray, w: Int, h: Int, box: Rect, g: Int, s: Scratch): Pass {
     val total = w * h
@@ -1076,6 +1096,9 @@ internal object MonochromeMask {
     // dep 单位上），之后每轮的容差由主体自己量。
     var nRef = 0
     var nOff = 0
+    // 最后一轮的"两边各有多少**墨**"：主体那一边与全部墨那一边，都按第一遍的 dep₁ 加权。
+    var inkDep = 0L
+    var bodyDep = 0L
     var tol = DEP_COARSE
     for (iter in 0 until BODY_ITERS) {
       if (iter > 0) connect(s, w, box, shell)
@@ -1085,6 +1108,8 @@ internal object MonochromeMask {
       s.hist2.fill(0)
       nRef = 0
       nOff = 0
+      inkDep = 0
+      bodyDep = 0
       for (y in box.top until box.bottom) {
         val row = y * w
         for (x in box.left until box.right) {
@@ -1097,9 +1122,12 @@ internal object MonochromeMask {
           val d = departure(pixels[i], i, s)
           s.off[i] = d.toShort()
           s.pass[i] = if (d <= tol) 1 else 0
+          val d1 = (s.dist[i].toInt() and 0xffff).toLong()
+          inkDep += d1
           if (body[i] != 0.toByte()) {
             s.hist[d.coerceAtMost(DBUCKETS - 1)]++
             nRef++
+            bodyDep += d1
           } else {
             s.hist2[d.coerceAtMost(DBUCKETS - 1)]++
             nOff++
@@ -1112,10 +1140,14 @@ internal object MonochromeMask {
     p.zero = (if (nRef > 0) percentile(s.hist, nRef, TOL_PCT) else 255)
       .coerceIn(DEP_TOL_MIN, DEP_TOL_MAX)
     p.solid = if (nOff > 0) percentile(s.hist2, nOff, INK_REF_PCT) else p.zero
-    // 第二遍能降多少，先看第一层占不占到一半：主体（连得上底的那些墨）只占墨 6% 的那张 ——
-    // 整张插画，根本没有"主体"可言 —— 就没有"第二层"可刻，硬刻等于把整张图降下来。
-    // 旧版这里是一条二值的 `bodyShare < BODY_MIN_SHARE → 不做`，现在按占比连续给。
-    p.weight = (nRef.toLong() * 510 / inks.coerceAtLeast(1)).coerceAtMost(255).toInt()
+    // 第二遍能降多少，先看主体在**墨**里占不占到一半：只占 6% 的那张 —— 整张插画，根本没有
+    // "主体"可言 —— 就没有"第二层"可刻，硬刻等于把整张图降下来。
+    // 旧版这里是一条二值的 `bodyShare < BODY_MIN_SHARE → 不做`，后来改成按占比连续给。
+    // ⚠ 占比必须按**墨**（Σ dep₁）算，不能按像素数 —— 真机重放里华为应用市场 / 12123 两张
+    // 量出来的病灶：底板洪泛没吃干净的中间调残边（dep₁ 4~21，本来几乎不上屏）也是"贴着底的墨"，
+    // 于是它们把主体那一边整个占满（11.5k 像素 vs 白色主字 9k），按个数算主体占到 55% → 满力
+    // 降层 → 主字从 dep=205 被压到 37。按墨加权，那些残边加起来不到 8%，权重自动退回去。
+    p.weight = if (inkDep == 0L) 0 else (bodyDep * 510 / inkDep).coerceAtMost(255L).toInt()
     p.span = (p.solid - p.zero).coerceAtLeast(DEP_MIN_SPAN)
     return p
   }
