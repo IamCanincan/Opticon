@@ -26,6 +26,7 @@ import android.os.Looper
 import android.os.Parcel
 import android.os.Process
 import android.util.Log
+import com.iamcanincan.opticon.BuildConfig
 import com.iamcanincan.opticon.runtime.ModuleRuntime
 import com.iamcanincan.opticon.runtime.TAG
 import io.github.libxposed.api.XposedInterface
@@ -134,6 +135,7 @@ private fun install(xposed: XposedInterface, classLoader: ClassLoader, packageNa
     // 下面那条不是兜底、是**漏接计数** —— 它非零就说明上面那条没接住，屏幕上会是反的。
     hookSynthesizedMonochrome(xposed)
     hookMaskFallThrough(xposed, classLoader)
+    warnStaleIconCache(packageName)
   }
   if (packageName == "com.android.systemui") hookSplashScreenIcon(xposed, classLoader)
   if (packageName == "com.android.settings") {
@@ -199,6 +201,29 @@ private fun launcherDataDir(packageName: String): String =
   "/data/user/${Process.myUid() / 100000}/$packageName"
 
 /**
+ * 「你明明改了，屏幕上没变」的根：桌面的图标是**预渲染再缓存**的，`am force-stop` 不删
+ * `app_icons.db`，于是缓存里还是旧模块画的那批位图。这一轮就吃了它一次 —— 灰方框在离线
+ * 判据台上已经量没了，手机上还在。
+ *
+ * 所以把"缓存是哪个模块版本画的"记成一个戳，对不上就在每次启动时**说出来**。
+ * 不自动删：删桌面的数据库交给他手动按按钮，那是他定的规矩（见 [deleteIconCache] 下面那段）。
+ */
+private fun cacheStamp(packageName: String) =
+  File("${launcherDataDir(packageName)}/cache", "opticon-render-stamp")
+
+private fun warnStaleIconCache(packageName: String) {
+  runCatching {
+    val stamp = cacheStamp(packageName)
+    val mine = BuildConfig.VERSION_NAME
+    val by = if (stamp.exists()) runCatching { stamp.readText().trim() }.getOrDefault("") else ""
+    val db = File("${launcherDataDir(packageName)}/databases/app_icons.db")
+    if (db.exists() && by != mine) Log.w(TAG,
+      "IconCache: 桌面上这批图标是" + (if (by.isEmpty()) "旧模块（没记过戳）" else "模块 $by") +
+        " 渲染的缓存，当前 $mine —— 看到的还不是现在的算法画的。按界面里的「清缓存重启」才会重画。")
+  }
+}
+
+/**
  * 删掉桌面的图标缓存 `app_icons.db*`。
  *
  * **只删图标缓存**，绝不碰 `launcher.db` / `launcher_4_by_5.db` —— 那是桌面布局，
@@ -222,6 +247,13 @@ private fun deleteIconCache(packageName: String): Boolean {
   }
   for (suffix in listOf("-journal", "-wal", "-shm")) {
     runCatching { File(db.path + suffix).delete() }
+  }
+  // 缓存没了，下一批图标就是**当前这个模块**画的 —— 戳记跟着改成它的版本，
+  // 否则 [warnStaleIconCache] 会一直误报。
+  runCatching {
+    val stamp = cacheStamp(packageName)
+    stamp.parentFile?.mkdirs()
+    stamp.writeText(BuildConfig.VERSION_NAME)
   }
   return true
 }
