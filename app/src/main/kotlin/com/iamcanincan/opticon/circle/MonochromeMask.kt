@@ -437,9 +437,28 @@ internal object MonochromeMask {
     val up = SPLIT_UP * (100 - q) / 100
     val down = SPLIT_DOWN * (100 - q) / 100
 
-    // 3) 出图：距离与明暗两条按 q 混成浓度，明度序排同距，第二遍降层次。
+    // 3) 出图：距离与明暗两条按 q 混成浓度，第二遍降层次。
+    //    **第二遍能降多狠，只问一句：被降的那一层，有没有比留下来的那层更大？**
+    //    第二遍的前提是"壳是主体、比它亮的只是第二层（高光、镂空）"。这个前提会破：
+    //    云闪付与淘宝闪购的白色主字相对深蓝/橙底就是"更亮"，于是**主体自己被当成第二层**
+    //    压掉四成 —— 实测主字只落在 89~143/255，他报的「细节不足、过渡不自然」就是这个。
+    //    判据不看"壳占画面多少"（试过：小洞本来就该刻掉，按面积一刀切正好把它否了），
+    //    只看这两层的相对大小：谁大谁才是主体。留不下多少墨的一层，就不该去降别人。
+    var knockCand = 0
+    var keep = 0
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      for (x in box.left until box.right) {
+        val i = row + x
+        if (s.plate[i] != 0.toByte() || Color.alpha(pixels[i]) < A_SOLID) continue
+        if ((s.labL[i].toInt() and 0xffff) - bodyLight(i, s) > 0 &&
+          (s.off[i].toInt() and 0xffff) > body.zero
+        ) knockCand++ else keep++
+      }
+    }
+    val hollow = (HOLLOW * body.weight / 255 *
+      (if (knockCand == 0) 1f else (keep.toFloat() / knockCand).coerceAtMost(1f))).toInt()
     val out = IntArray(total)
-    val hollow = HOLLOW * body.weight / 255
     var knocked = 0
     for (y in box.top until box.bottom) {
       val row = y * w
@@ -492,7 +511,7 @@ internal object MonochromeMask {
     return Output(
       out, fill, st.hole, st.largest, st.components, st.smallShare, softShare(st, box),
       "带占=${s.bandSolid * 100 / 255} 底占=${pct(ground.share)} 族=${ground.families} 零=${ground.zero} 实=${ground.solid} 端=${lo shr 6}/${hi shr 6} " +
-        "壳占=${pct(body.share)} 降=${pct(knocked.toFloat() / boxArea)} 降力=${body.weight} 明暗=${q} " +
+        "壳占=${pct(body.share)} 层比=$keep/$knockCand 降=${pct(knocked.toFloat() / boxArea)} 降力=${body.weight} 力度=$hollow 明暗=${q} " +
         "框内=${pct(fill)} cc=${st.components} top=${pct(st.largest)} 小片=${pct(st.smallShare)} " +
         "空洞=${pct(st.hole)} 淡=${pct(softShare(st, box))} 色驱=${ground.meanCov} " +
         "分档=${sep.second}/${sep.first}" +
