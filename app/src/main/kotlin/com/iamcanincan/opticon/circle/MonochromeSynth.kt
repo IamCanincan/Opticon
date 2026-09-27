@@ -170,8 +170,27 @@ internal object MonochromeSynth {
   private fun noteSynthesized() {
     val total = synthesized.incrementAndGet()
     if (total <= LOG_FIRST || total % LOG_EVERY == 0) {
-      Log.d(TAG, "Mono: $total layers synthesized")
+      // H0 的射程跟着报：这一支成立的前提是"桌面交给我们的位图"的几何口径（见 [regionGround]
+      //  那道画布门槛）。换一台桌面看不见像素的时候，这两个数是唯一能看见的东西 ——
+      //  接手数掉到 0 而"画布拦"涨起来 = 这台桌面把图标都留了边距，那一类我们不修，
+      //  但这必须**说出来**，不能静默。
+      Log.d(
+        TAG, "Mono: $total layers synthesized  H0: 接手=${h0Taken.get()} 画布拦=${h0Canvas.get()}" +
+          " 关系拦=${h0Relation.get()}"
+      )
     }
+  }
+
+  /** H0（区域关系那一支）逐张归类的三个数。0 与"没走到"不记 —— 那既不是成绩也不是失败。 */
+  private val h0Taken = AtomicInteger(0)
+  private val h0Canvas = AtomicInteger(0)
+  private val h0Relation = AtomicInteger(0)
+
+  private fun noteH0(why: Int) = when (why) {
+    1 -> { h0Taken.incrementAndGet(); Unit }
+    2 -> { h0Canvas.incrementAndGet(); Unit }
+    3 -> { h0Relation.incrementAndGet(); Unit }
+    else -> Unit
   }
 
   private val synthesized = AtomicInteger(0)
@@ -219,6 +238,8 @@ internal object MonochromeSynth {
       val pixels = IntArray(total)
       raster.getPixels(pixels, 0, edge, 0, 0, edge, edge)
       val out = MonochromeMask.build(pixels, edge, edge)
+      // H0 的射程跟着记：见 [noteSynthesized] 那条汇总为什么带它。
+      noteH0(out.h0why)
       // 指纹打在判据行上：解不出包名的那一批（快捷方式）在日志里都叫 `?`，没有这个数
       // 就对不上"哪一行判据是哪一个带回来的 PNG"。见 [MonoDump.sigOf]。
       val sig = MonoDump.sigOf(pixels, edge, edge)

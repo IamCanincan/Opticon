@@ -241,6 +241,10 @@ internal object MonochromeMask {
     /** 哪一支赢了（[groundPass] 的 H1/H2/H3/H0）。-1 = 没走到判据（尺寸非法 / 整张透明）。
      *  带出来只为一个用途：[MonoDump] 要能认出"这一张是新开的那一支接手的"，见那里的说明。 */
     val hyp: Int = -1,
+    /** H0（区域关系那一支）走到哪一步：0=没走到、1=接手、2=画布关系不成立、3=区域关系不成立。
+     *  与 [hyp] 分开记，是因为**换桌面时要看的正是"没接手的那部分被哪道拦下"** —— 只报 hyp
+     *  就只能看见"接手了几张"，看不见这一支在新桌面上有没有整体失声。见 [MonoDump.suspicious]。 */
+    val h0why: Int = 0,
   )
 
   private class Stats(
@@ -298,6 +302,9 @@ internal object MonochromeMask {
     var body = ByteArray(0)
 
     var grid = 0
+    /** H0（[regionGround]）这一支走到哪一步了：0=没走到、1=接手、2=被画布门槛拦、3=被区域关系拦。
+     *  每次 [groundPass] 开头归零。带它是因为**换桌面时这一支的射程必须看得见**，见那条汇总日志。 */
+    var h0why = 0
     /** 内容框边界带里实心占多少（0..255）——「这张图到底有没有一块底」的那一个数，进日志。 */
     var bandSolid = 0
     /** 底家族（≤4 个角上颜色）的 Lab 与原始色，以及实际个数。 */
@@ -584,7 +591,7 @@ internal object MonochromeMask {
     return Output(
       out, fill, st.hole, st.largest, st.components, st.smallShare, softShare(st, box),
       "带占=${s.bandSolid * 100 / 255} 底占=${pct(ground.share)} H=${ground.hyp} 族=${ground.families} 底厚=${ground.thick}" +
-      " 盒布=${boxArea * 100 / (w.toLong() * h)}" +
+      " 盒布=${boxArea * 100 / (w.toLong() * h)} H0=${s.h0why}" +
       (if (ground.holed < 0) "" else " 洞墨=${ground.holed}") +
       (if (ground.h2 < 0f) "" else " H2被否=${pct(ground.h2)}/${ground.h2thick}/${ground.h2enc}/${ground.h2spread}") +
       " 围=${ground.enclosed} 环散=${ground.spread} 零=${ground.zero} 实=${ground.solid} 端=${lo shr 6}/${hi shr 6} " +
@@ -595,7 +602,8 @@ internal object MonochromeMask {
         "色阶=${stretch?.second ?: "已满"} " +
         "分档=${sep.second}/${sep.first}" +
         (if (sep.third.isEmpty()) "" else "(${sep.third.joinToString(",")})"),
-      ground.hyp
+      ground.hyp,
+      s.h0why
     )
   }
 
@@ -1002,6 +1010,7 @@ internal object MonochromeMask {
     pixels: IntArray, w: Int, h: Int, box: Rect, band: Int, g: Int, s: Scratch,
   ): Pass {
     val seed = s.mark      // 洪泛的种子掩码（measure 之前没人用这块）
+    s.h0why = 0            // 这一张走到 H0 没有、被哪道拦下，逐张归零（见 [Scratch.h0why]）
     val fams = cornerFamilies(pixels, w, box, band, s)
     if (fams > 0) {
       bandSeed(s, w, box, band, seed)
@@ -1087,7 +1096,9 @@ internal object MonochromeMask {
     pixels: IntArray, w: Int, h: Int, box: Rect, g: Int, s: Scratch, seed: ByteArray,
   ): Pass? {
     val boxArea = box.width().toLong() * box.height()
-    if (boxArea * 100 < w.toLong() * h * REGION_FULL_PCT) return null
+    if (boxArea * 100 < w.toLong() * h * REGION_FULL_PCT) { s.h0why = 2; return null }
+    // 走到这里就是在**考区域关系**了：先按"不成立"记，接手了再改 1（三个 return null 都在考完之前）。
+    s.h0why = 3
     val rid = s.region
     val q = s.queue
     for (y in box.top until box.bottom) {
@@ -1178,6 +1189,7 @@ internal object MonochromeMask {
     p.ring = 1
     p.thick = plateThickness(w, box, s)
     p.holed = (holeInk * 100 / boxArea).toInt()
+    s.h0why = 1     // 接手了：这一张的底是"区域关系"给的，不是颜色位置给的
     return p
   }
 
