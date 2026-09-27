@@ -85,15 +85,20 @@ internal object MonoDump {
 
   fun watched(label: String): Boolean = WATCH.any { label.contains(it) }
 
-  /** 8×8 的 alpha 指纹：同一张形状不管被问多少次，只带一次。 */
+  /** 8×8 的指纹：**形状 + 颜色**都要一样才算同一张。 */
   private fun signature(pixels: IntArray, w: Int, h: Int): Long {
     var hash = 1469598103934665603L
     for (gy in 0 until 8) for (gx in 0 until 8) {
       val x = (gx + 0.5f) * w / 8
       val y = (gy + 0.5f) * h / 8
-      val a = pixels[y.toInt() * w + x.toInt()].ushr(24) and 0xff
-      hash = hash xor a.toLong()
-      hash *= 1099511628211L
+      val p = pixels[y.toInt() * w + x.toInt()]
+      // ⚠ 只按 alpha 指纹会撞车：真机实测 `bd40c4d749c7` 同时是 小步点 与 中国移动 ——
+      //   两个都是"圆盘里坐一个字形"，形状指纹逐位相同，于是去重把后带的那张吞掉了
+      //   （67 张接手只带回 40 张，这就是主因）。颜色才是它们之间的区别，必须参加。
+      for (sh in 0 until 4) {
+        hash = hash xor ((p ushr sh) and 0xff).toLong()
+        hash *= 1099511628211L
+      }
     }
     return hash
   }
