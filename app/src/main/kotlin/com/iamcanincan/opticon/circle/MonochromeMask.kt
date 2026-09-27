@@ -564,6 +564,9 @@ internal object MonochromeMask {
       }
     }
 
+    // 3.5) 把"源色看得出差别、交付却并成一片"的那几块各自让开一档（见 [assignLevels]）。
+    assignLevels(out, pixels, w, box, s)
+
     // 4) 交出去之前把墨量抬到满阶（他要「图标上必须有系统最深和最浅的取色」）。**两层叠加**：
     //    全局那一层管"整张最深都不够"，字形那一层管"只有 1% 到顶、主体停在 140"。
     val global = stretchGlobal(out, total)
@@ -661,6 +664,10 @@ internal object MonochromeMask {
   /** 两档之间至少差这么多浓度才算看得出是两个部分（255 的 ~12%）。 */
   private const val SEP_MIN_GAP = 30
 
+  /** [assignLevels] 往下发档的地板：低于这个浓度就不再让开（宁可并列）。
+   *  200 ≈ 8 成墨 —— 过了这条线，"分得开"就变成他先报的那句「偏淡」了。 */
+  private const val LEVEL_FLOOR = 200
+
 
   /**
    * 把画面按**源色**归成块（一块 = 图上的一个部分），返回每块的平均值，按值升序。
@@ -715,6 +722,87 @@ internal object MonochromeMask {
     // 每一块的浓度值一起带回来：`2/6` 只说"合并了"，不说**在哪一端**合并的。
     // 全挤在 0 = 底下那道 clamp 把部分擦掉了；全挤在 255 = 顶上那道饱和了。修法不同。
     return Triple(parts.size, levels, parts)
+  }
+
+  /**
+   * **按部分分配档位** —— "不够细腻"那一类的修法（三次试错之后剩下的那一条）。
+   *
+   * ## 病灶与为什么单标量必输
+   * 判据台 `_harness/NuanceKt` 量到：37 对"两块都上了墨、源色 ΔE≥15"的部分里 **17 对（46%）
+   * 交付后被并掉**，最狠的一对 ΔE=153 只差 4 个单位。试过并否掉的两条都是"给像素找一个标量"：
+   *  · 只按彩度 → 30 对，**空转**（整个 logo 通常是一个连通主体，豁免主体等于豁免全部）；
+   *  · 亮度×2 + 彩度 → 11 对，但顶占比中位 50→22，且「两块底上的白块都还在」当场 FAIL
+   *    （白剪影被"比底亮"那一维排进淡档 = 上一轮刚修掉的「偏淡」又回来了）。
+   * 原因是结构性的：**墨是一维，颜色是二维**。按任何标量排都只能保住一半的差别 ——
+   * 按"比底暗"排，白与浅灰并列；按"比底亮多少的绝对值"排，白与黑并列。
+   *
+   * ## 这一条怎么绕开它
+   * 不再给像素找标量，而是**给部分发档位**：先按源色认出图上那几块（与 [separation] 同一套桶、
+   * 同一个面积门槛，所以"几块"在这里和日志里是同一件事），最浓的那块抬到满墨，其余每块
+   * 至少让开 [SEP_MIN_GAP]。并列是被"分配"掉的，不是被排序挤掉的 —— 白对黑、白对黄都能各得其所。
+   * 每块挪的是**整块的偏移量**（`a + 目标 − 本块均值`），块内部的渐变与抗锯齿原样保留，
+   * 不会画成硬边色块；本来就差得开（≥ 目标间隔）的一块不动。
+   *
+   * ⚠ 已知的代价：让开的那几块会**变淡** —— 那是"分得开"的价格，最多让 [SEP_MAX_PARTS] 块。
+   *   接在后面的 [stretchMark] 会把单色字形重新抬实，两层是配套的，不是互相打脸。
+   */
+  private fun assignLevels(out: IntArray, pixels: IntArray, w: Int, box: Rect, s: Scratch) {
+    val cnt = IntArray(SEP_BUCKETS)
+    val sum = LongArray(SEP_BUCKETS)
+    var ink = 0
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      for (x in box.left until box.right) {
+        val i = row + x
+        if (s.plate[i] != 0.toByte() || Color.alpha(pixels[i]) < A_SOLID) continue
+        val a = out[i] ushr 24
+        if (a == 0) continue
+        val k = bucketOf(i, s)
+        cnt[k]++; sum[k] += a; ink++
+      }
+    }
+    if (ink < 256) return
+    val min = maxOf(64, ink * SEP_MIN_SHARE_PCT / 100)
+    val left = cnt.copyOf()
+    val pick = ArrayList<Int>(SEP_MAX_PARTS)
+    repeat(SEP_MAX_PARTS) {
+      var best = -1
+      for (k in 0 until SEP_BUCKETS) if (left[k] >= min && (best < 0 || left[k] > left[best])) best = k
+      if (best < 0) return@repeat
+      left[best] = 0; pick.add(best)
+    }
+    if (pick.size < 2) return
+    val mean = IntArray(pick.size) { (sum[pick[it]] / cnt[pick[it]]).toInt() }
+    // 从最浓的那块往下发档：第一块满墨，其余"不超过上一块 − 间隔"，也不高于自己原来的位置。
+    val order = pick.indices.sortedByDescending { mean[it] }
+    val target = IntArray(pick.size) { mean[it] }
+    var prev = 255
+    for ((j, idx) in order.withIndex()) {
+      // 地板：让开可以，但没让到"淡"。低于 [LEVEL_FLOOR] 就不再往下发档 —— 那几块宁可并列。
+      // 这条是被点名的应用逼出来的：没有地板时中国移动 的实心占比从 76% 掉到 16%（均浓 229→168），
+      // 而"偏淡"正是他先报的那一条。细腻与实心冲突时，**这里选的是先不伤人**。
+      target[idx] = if (j == 0) 255
+      else minOf(mean[idx], maxOf(prev - SEP_MIN_GAP, LEVEL_FLOOR)).coerceAtLeast(0)
+      prev = target[idx]
+    }
+    val shift = HashMap<Int, Int>(pick.size)
+    for (idx in pick.indices) {
+      val d = target[idx] - mean[idx]
+      if (d in -7..7) continue                                // 本来就分得开：一个像素都不动
+      shift[pick[idx]] = d
+    }
+    if (shift.isEmpty()) return
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      for (x in box.left until box.right) {
+        val i = row + x
+        val a = out[i] ushr 24
+        if (a == 0) continue
+        val d = shift[bucketOf(i, s)] ?: continue
+        val v = (a + d).coerceIn(0, 255)
+        out[i] = if (v == 0) 0 else (v shl 24) or 0x00FFFFFF
+      }
+    }
   }
 
   /** 全局抬顶的分位（[stretchGlobal]）：取分位不取最值，一圈抗锯齿的极值不该决定整张的色阶。 */
