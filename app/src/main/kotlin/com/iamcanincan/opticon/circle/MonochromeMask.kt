@@ -263,6 +263,8 @@ internal object MonochromeMask {
     var queue = IntArray(0)
     /** [plateThickness] 的距离场（只在内容框里用，按需自己扩容）。 */
     var thickDist = IntArray(0)
+    /** H2 那一圈轮廓到自己中位色的 p97 ΔE —— 「这一圈是不是一种颜色」（见 [outlineFamilies]）。 */
+    var ringSpread = 0
     var hist = IntArray(DBUCKETS)
     /** 第二块直方图：距离与明度要同时统计（明度序的跨度归一用它）。 */
     var hist2 = IntArray(DBUCKETS)
@@ -346,11 +348,14 @@ internal object MonochromeMask {
     var hyp: Int = 0,
     /** 这块参照**有多厚**（底像素到自身边界的距离 p85，像素）。见 [plateThickness]。 */
     var thick: Int = -1,
+    /** H2 那一圈轮廓自己的散度（p97 ΔE）。见 [outlineFamilies] 里那段。 */
+    var spread: Int = -1,
     /** 剩下的墨里有多少百分比**碰不到空气**（被这块底围住）。见 [enclosedShare]。 */
     var enclosed: Int = -1,
     /** 被 [PLATE_ALL_SHARE] 否决的那一支 H2 的占比与厚度（-1 = 没走到那一步）。只为进日志。 */
     var h2: Float = -1f,
     var h2thick: Int = -1,
+    var h2spread: Int = -1,
     var h2enc: Int = -1,
   )
 
@@ -568,8 +573,8 @@ internal object MonochromeMask {
     return Output(
       out, fill, st.hole, st.largest, st.components, st.smallShare, softShare(st, box),
       "带占=${s.bandSolid * 100 / 255} 底占=${pct(ground.share)} H=${ground.hyp} 族=${ground.families} 底厚=${ground.thick}" +
-      (if (ground.h2 < 0f) "" else " H2被否=${pct(ground.h2)}/${ground.h2thick}/${ground.h2enc}") +
-      " 围=${ground.enclosed} 零=${ground.zero} 实=${ground.solid} 端=${lo shr 6}/${hi shr 6} " +
+      (if (ground.h2 < 0f) "" else " H2被否=${pct(ground.h2)}/${ground.h2thick}/${ground.h2enc}/${ground.h2spread}") +
+      " 围=${ground.enclosed} 环散=${ground.spread} 零=${ground.zero} 实=${ground.solid} 端=${lo shr 6}/${hi shr 6} " +
         "壳占=${pct(body.share)} 层比=$keepInk/$knockInk " +
         "降=${pct(knocked.toFloat() / boxArea)} 降力=${body.weight} 力度=$hollow 明暗=${q} " +
         "框内=${pct(fill)} cc=${st.components} top=${pct(st.largest)} 小片=${pct(st.smallShare)} " +
@@ -985,6 +990,7 @@ internal object MonochromeMask {
     // H2 被否决时它的数也要能进日志 —— 用局部变量带，不碰对象上的字段（这是多线程的钩子路径）。
     var h2share = -1f
     var h2thick = -1
+    var h2spread = -1
     var h2enc = -1
     if (ring > 0) {
       val alt = fitGround(pixels, w, h, box, g, s, ring, seed)
@@ -992,22 +998,26 @@ internal object MonochromeMask {
       alt.thick = plateThickness(w, box, s)
       alt.enclosed = enclosedShare(pixels, w, box, s)
       alt.hyp = 2
-      // ⚠ 这里**仍然**只看占比 —— 另外两条（厚度、被围住）已经量到位了，但还没接进来，
-      //  卡在一个不是判据的问题上：要量 H2 就得让它跑，而 `fitGround` 会留下 Scratch 状态
-      //  （plate / 色场 / ref 传播），跑完再退回 H3 时**已经不是原来那张答案**了。
-      //  把门槛放开让 H2 跑之后，判据台四条同时红：圆内实心 心=0.0、主体照旧实心 机身=0.0、
-      //  镂空刻出来了 洞=235、两半都留着 蓝=0.0 —— 而这四个用例的 `围` 全是 0，
-      //  也就是说**第三条验收把它们都正确拒了**，红的是"跑过一遍"这件事本身。
-      //  下一步：把这次试跑做成无副作用（进 H2 前存 plate/场，退回 H3 前还原），再换验收。
-      //  分界已经量好了：小步点 厚39 围? / 翻译 61 / 华为 47 / 米家 43 该收；
-      //  azure 15 / taptap 9 / 美团 4 / 哔哩哔哩 0 该拒（见 [plateThickness]）。
+      alt.spread = s.ringSpread
+      // ⚠ **只看占比，是量出来的结论，不是没来得及改。** 另外三条（厚度 / 围合 / 环散）都接进
+      //  日志了，也真拿去当过验收：放开门槛 + 三条一起用，84 张里 6 张明确变好
+      //  （taptap、钉钉、微信、WPS、小步点、拼多多）、2 张明确变坏（steamlink、哔哩哔哩）；
+      //  再给"空主张"开豁免（占比=0 时不吃厚度 —— 拿"太薄"去否一个没主张的人，等于把参照
+      //  从轮廓色悄悄换成空气），哔哩哔哩回来了，但联系人 / Song Search 被推进 H2-空，
+      //  框内 0.72→0.90，整块实心。
+      //  真值表（该收 / 该拒，四列依次是 占比 / 厚度 / 围合 / 环散）：
+      //    收 小步点 .81 39 64 1      收 steamlink .39 17 0 0      收 哔哩哔哩 0 0 0 59
+      //    拒 taptap  .75  9 0 0      拒 联系人     0  0 0 24      拒 SongSearch 0 0 0 7
+      //  哔哩哔哩和联系人在前三列**逐位相同**、第四列方向相反 —— 这四个量里没有能分开两组的信息，
+      //  别再试第五个阈值。要修这一类，得换一个不是"描述这块参照长什么样"的证据。
+      //  （试跑污染那个 bug 已经在 `31fe511` 修掉了：fitGround 的退路现在逐张与不跑它一致。）
       if (alt.share < PLATE_ALL_SHARE) return alt
-      h2share = alt.share; h2thick = alt.thick; h2enc = alt.enclosed
+      h2share = alt.share; h2thick = alt.thick; h2enc = alt.enclosed; h2spread = alt.spread
     }
     bandSeed(s, w, box, band, seed)
     val air = fitGround(pixels, w, h, box, g, s, 0, seed)
     air.hyp = 3
-    air.h2 = h2share; air.h2thick = h2thick; air.h2enc = h2enc
+    air.h2 = h2share; air.h2thick = h2thick; air.h2enc = h2enc; air.h2spread = h2spread
     return air
   }
 
@@ -1156,10 +1166,13 @@ internal object MonochromeMask {
    *   数量只跟周长走（∝边长），而框是面积（∝边长²）—— 于是**越铺满的圆盘越容易被拒**，
    *   而小得多的线条字反而能过。真机上他点名的三个「反色」有两个正是死在这儿：
    *   小步点 / 中国移动 那种铺满框的圆底图标，轮廓占框 0.8% → H2 直接不跑 → 退到 H3
-   *   「参照=空气」→ dep 变成覆盖率 → 整张涂满、图形反而镂空（日志里就是 `族=0 底厚=-1`）。
-   *   ⚠ **这条门槛还没改**：改成"只要轮廓存在"之后 H2 会跑，而跑一次就脏一次 Scratch，
-   *   退路 H3 不再是原来的答案（判据台四条同时红，详见 [groundPass] 里那条验收的注释）。
-   *   要动它，先把 H2 的试跑做成无副作用。
+   *   「参照=空气」→ dep 变成覆盖率 → 整张涂满、图形反而镂空（日志里就是 `H=3 底厚=-1`）。
+   *   ⚠ **这条门槛还没改，但不是因为不敢**：把它改成"只要轮廓存在"之后 H2 会跑（试跑污染那个 bug
+   *   已经修掉了，`31fe511`），小步点确实翻正 —— 可同时放进来 6 张、打翻 2 张（steamlink、
+   *   哔哩哔哩），而给"空主张"开豁免又会把联系人 / Song Search 从 H3 推进 H2-空（整块实心）。
+   *   四个候选判据（占比 / 厚度 / 围合 / 环散）全部量过，**没有一个分得开这两组**，
+   *   详见 [plateThickness]、[enclosedShare] 与下面 `ringSpread` 那段的真值表。
+   *   所以这一类要修，缺的不是阈值，是一个新的证据种类。
    */
   private fun outlineFamilies(pixels: IntArray, w: Int, box: Rect, s: Scratch, seed: ByteArray): Int {
     var n = 0
@@ -1195,6 +1208,31 @@ internal object MonochromeMask {
     s.famB[0] = labChannel(color, 2)
     s.famColor[0] = color
     s.fams = 1
+    // **这一圈自己是不是一种颜色。** 猜的是：轮廓可以横跨好几块（联系人的卡片边上同时切过
+    //  深卡片、浅色人像、信封三角），那时中位色谁都不是，于是"离参照多远"对整张图都大 →
+    //  屏幕上是一整块实心。量的还是模型已有的那个东西：参照自己的散度（轮廓到它自己中位色的 p97 ΔE）。
+    // ⚠ **猜错了，数在这儿**（该收 / 该拒 分不开，方向还反着）：
+    //    小步点 1（收）  steamlink 0（收）  哔哩哔哩 59（收）
+    //    taptap 0（拒）  联系人 24（拒）    Song Search 7（拒）
+    //  理由回头看也站得住：taptap 那一圈**就是字形自己的颜色**（单一、散度 0），拿它当参照
+    //  当然把字形吃掉一半；哔哩哔哩的环是混色，可它的洪泛本来什么都没 claim 住，参照只是个起点。
+    //  留着这个数，是因为它和 [plateThickness] / [enclosedShare] 一起把结论钉死：
+    //  **这四个量里没有能分开这两组的信息**（哔哩哔哩与联系人在 占比/厚度/围合 上逐位相同 0/0/0），
+    //  别再试第五个阈值 —— 要修这一类，得换一个不是"描述这块参照长什么样"的证据。
+    s.hist2.fill(0)
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      for (x in box.left until box.right) {
+        val i = row + x
+        if (seed[i] == 0.toByte()) continue
+        val de = deltaE(
+          s.labL[i].toInt(), s.labA[i].toInt(), s.labB[i].toInt(),
+          s.famL[0], s.famA[0], s.famB[0]
+        ) shr 6
+        s.hist2[de.coerceAtMost(DBUCKETS - 1)]++
+      }
+    }
+    s.ringSpread = percentile(s.hist2, n, TOL_PCT)
     return 1
   }
 
