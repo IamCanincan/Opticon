@@ -219,11 +219,15 @@ internal object MonochromeSynth {
       val pixels = IntArray(total)
       raster.getPixels(pixels, 0, edge, 0, 0, edge, edge)
       val out = MonochromeMask.build(pixels, edge, edge)
-      val id = noteBranch(edge, label, out)
+      // 指纹打在判据行上：解不出包名的那一批（快捷方式）在日志里都叫 `?`，没有这个数
+      // 就对不上"哪一行判据是哪一个带回来的 PNG"。见 [MonoDump.sigOf]。
+      val sig = MonoDump.sigOf(pixels, edge, edge)
+      val id = noteBranch(edge, sig, label, out)
       val dump = {
         // 带上包名：不带回来的话，重放出来的预览图不知道是哪个应用的 —— 而那正是要对的东西。
+        // 包名解不出来时（`?`）退而带指纹，重放的文件名里就带着它。
         MonoDump.maybe(id, label, raster, pixels, out.mask, edge, edge,
-          "${label.substringBefore(' ')} | ${out.report}")
+          "${label.substringBefore(' ')}_$sig | ${out.report}")
       }
       // 可疑的那几张把**原像素**带回来（PNG → base64 → 分片进日志），判据台原样重放。
       // 没有这条通道，"不够细致"永远只能靠猜：他报的应用发的是 vector / webp，台子解不出。
@@ -302,9 +306,9 @@ internal object MonochromeSynth {
    * 上一轮「白块」的教训不是没打数，而是**数打在错的分母上、看着完全健康** —— 所以这里的
    * `框内=` 就是判据自己吃的那一个口径（内容外接框）。
    */
-  private fun noteBranch(edge: Int, label: String, out: MonochromeMask.Output): Int {
+  private fun noteBranch(edge: Int, sig: String, label: String, out: MonochromeMask.Output): Int {
     val n = diagnosed.incrementAndGet()
-    Log.d(TAG, "Mono: diag#$n edge=$edge $label ${out.report} → " +
+    Log.d(TAG, "Mono: diag#$n edge=$edge sig=$sig $label ${out.report} → " +
       if (out.mask != null) "已交出掩码" else "判据不成立，放弃合成")
     return n
   }

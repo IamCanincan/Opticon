@@ -99,6 +99,16 @@ internal object MonoDump {
   }
 
   /**
+   * 同一个指纹的短十六进制形式，**进日志**用。
+   *
+   * 为什么要把指纹打出来：桌面有些图标是别人的快捷方式，`label` 解不出包名，日志里就是一串
+   * `?`（真机实测：H0 接手的 23 张里 18 张叫 `?`）。判据行与带回来的 PNG 从此没有对得上的
+   * 字段 —— 而 `dump#N BEGIN` 那行带的是同一个 `sig`，重放出来的文件名里也就带着它。
+   */
+  fun sigOf(pixels: IntArray, w: Int, h: Int): String =
+    java.lang.Long.toHexString(signature(pixels, w, h)).take(12)
+
+  /**
    * 带一张。**只带 src，不带 mask** —— 掩码是模型从 src 算出来的，重放那边跑同一份代码就能
    * 自己得到，双份发只是把日志量翻倍（而日志量正是这条通道的瓶颈：上一版 14 个图标里有 2 个
    * 的 src 因为片数太多被 logd 丢掉）。带上 mask 的唯一价值是"核对重放是否等价"，
