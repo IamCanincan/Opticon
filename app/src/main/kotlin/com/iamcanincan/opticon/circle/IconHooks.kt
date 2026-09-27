@@ -211,16 +211,47 @@ private fun launcherDataDir(packageName: String): String =
 private fun cacheStamp(packageName: String) =
   File("${launcherDataDir(packageName)}/cache", "opticon-render-stamp")
 
+/**
+ * 「这批图标是哪一次装机画的」—— 认的是**装机时间**，不是 versionName。
+ *
+ * 这一轮就栽在只认版本号上：两天里算法改了好几版（第二遍的前提、β 的均值/中位数之争、
+ * 抖音那批的重排），`versionName` 一直是 1.0.3 —— 于是戳记一直说"缓存就是当前模块画的"，
+ * 警告一条没出，而他盯着桌面看就是"没更新"。**装机时间每次 `adb install -r` 都动**，
+ * 那才是"代码换过了、缓存该重画"的证据；版本号只在正式发版时动。
+ *
+ * 拿不到 Context 时返回 null（调用方要么等，要么明说没法核对 —— 不许静默当成"一致"）。
+ */
+private fun renderId(): String? = runCatching {
+  val app = currentApplication() ?: return null
+  val pi = app.packageManager.getPackageInfo(BuildConfig.APPLICATION_ID, 0)
+  "${BuildConfig.VERSION_NAME}@${pi.lastUpdateTime / 1000L}"
+}.getOrNull()
+
 private fun warnStaleIconCache(packageName: String) {
-  runCatching {
-    val stamp = cacheStamp(packageName)
-    val mine = BuildConfig.VERSION_NAME
-    val by = if (stamp.exists()) runCatching { stamp.readText().trim() }.getOrDefault("") else ""
-    val db = File("${launcherDataDir(packageName)}/databases/app_icons.db")
-    if (db.exists() && by != mine) Log.w(TAG,
-      "IconCache: 桌面上这批图标是" + (if (by.isEmpty()) "旧模块（没记过戳）" else "模块 $by") +
-        " 渲染的缓存，当前 $mine —— 看到的还不是现在的算法画的。按界面里的「清缓存重启」才会重画。")
-  }
+  // 这里还在 `packageLoaded` 的 attach 阶段，`currentApplication()` 常常是 null ——
+  // 与 [hookProcessControlReceiver] 同一个坑、同一个解法：起个守护线程等它就绪，别去 hook onCreate。
+  Thread {
+    var id: String? = null
+    for (i in 0 until 60) {
+      id = renderId()
+      if (id != null) break
+      runCatching { Thread.sleep(100) }
+    }
+    if (id == null) {
+      Log.w(TAG, "IconCache: 拿不到自己的安装包信息，没法核对这批图标是谁画的")
+      return@Thread
+    }
+    runCatching {
+      val db = File("${launcherDataDir(packageName)}/databases/app_icons.db")
+      if (!db.exists()) return@runCatching                 // 没有缓存可谈
+      val stamp = cacheStamp(packageName)
+      val by = if (stamp.exists()) runCatching { stamp.readText().trim() }.getOrDefault("") else ""
+      if (by != id) Log.w(TAG,
+        "IconCache: 桌面上这批图标是" + (if (by.isEmpty()) "旧模块（没记过戳）" else "模块 $by") +
+          " 渲染的缓存，当前 $id —— 看到的还不是现在的算法画的。按界面里的「清缓存重启」才会重画。")
+      else Log.i(TAG, "IconCache: 缓存戳与当前构建一致（$id）")
+    }
+  }.apply { isDaemon = true; name = "opticon-cache-stamp" }.start()
 }
 
 /**
@@ -248,12 +279,15 @@ private fun deleteIconCache(packageName: String): Boolean {
   for (suffix in listOf("-journal", "-wal", "-shm")) {
     runCatching { File(db.path + suffix).delete() }
   }
-  // 缓存没了，下一批图标就是**当前这个模块**画的 —— 戳记跟着改成它的版本，
-  // 否则 [warnStaleIconCache] 会一直误报。
+  // 缓存没了，下一批图标就是**当前这个构建**画的 —— 戳记跟着改成它的装机身份，
+  // 否则 [warnStaleIconCache] 会一直误报。拿不到就写个明显的假值并说一声，
+  // 宁可就报一次"这批图标是旧模块画的"，也不许静默地把不一致说成一致。
   runCatching {
     val stamp = cacheStamp(packageName)
     stamp.parentFile?.mkdirs()
-    stamp.writeText(BuildConfig.VERSION_NAME)
+    val id = renderId()
+    if (id == null) Log.w(TAG, "IconCache: 拿不到装机身份，戳记只能写版本号（下次启动会误报一次）")
+    stamp.writeText(id ?: BuildConfig.VERSION_NAME)
   }
   return true
 }
