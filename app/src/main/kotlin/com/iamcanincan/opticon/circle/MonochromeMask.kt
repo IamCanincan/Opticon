@@ -1174,7 +1174,7 @@ internal object MonochromeMask {
         val i = row + x
         if (s.plate[i] != 0.toByte()) {
           val b = s.beta[i].toInt() and 0xffff
-          s.dist[i] = (if (touchesInk(s.plate, w, box, x, y))
+          s.dist[i] = (if (touchesInk(s.plate, pixels, w, box, x, y))
             Color.alpha(pixels[i]) * (255 - b) / 255 else 0).toShort()
           continue
         }
@@ -2067,11 +2067,22 @@ internal object MonochromeMask {
     x - box.left < band || box.right - x <= band || y - box.top < band || box.bottom - y <= band
 
   /** 四邻域里有没有**墨**（不是底的那一侧）。贴着墨 = 这一格是某条笔画自己的抗锯齿边缘。 */
-  private fun touchesInk(plate: ByteArray, w: Int, box: Rect, x: Int, y: Int): Boolean {
-    if (x > box.left && plate[y * w + x - 1] == 0.toByte()) return true
-    if (x < box.right - 1 && plate[y * w + x + 1] == 0.toByte()) return true
-    if (y > box.top && plate[(y - 1) * w + x] == 0.toByte()) return true
-    return y < box.bottom - 1 && plate[(y + 1) * w + x] == 0.toByte()
+  /**
+   * 底的这一格要不要留墨：**只有贴着"墨"的那一圈才算数**，贴着**空气**的那一圈不算。
+   *
+   * ⚠ "非底"不等于"墨"。旧写法拿 `plate==0` 当墨的代理，于是底盘自己那圈抗锯齿（内侧是底、
+   * 外侧是空气）被判成"贴着墨"，照样出 `α×(1−β)` —— 屏幕上是一圈看得见的淡边，而它在墨侧的
+   * p85 锚点里占着一大堆，把字形永远压在 255 以下（「偏淡」的上游）。判据台那条
+   * 「板子那圈抗锯齿交出 0 墨」量的就是它（`边上=32.3`，858 像素）。
+   * 两次改"归属"都打不中（单像素判据、从底出发的传递闭包），因为病在**这一条出图规则**上。
+   */
+  private fun touchesInk(
+    plate: ByteArray, pixels: IntArray, w: Int, box: Rect, x: Int, y: Int,
+  ): Boolean {
+    fun ink(nx: Int, ny: Int): Boolean =
+      nx >= box.left && nx < box.right && ny >= box.top && ny < box.bottom &&
+        plate[ny * w + nx] == 0.toByte() && Color.alpha(pixels[ny * w + nx]) >= A_SOLID
+    return ink(x - 1, y) || ink(x + 1, y) || ink(x, y - 1) || ink(x, y + 1)
   }
 
   /**
