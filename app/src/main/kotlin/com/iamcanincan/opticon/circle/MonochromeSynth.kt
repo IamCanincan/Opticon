@@ -13,7 +13,7 @@ import android.graphics.Rect
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.Drawable
 import android.util.Log
-import com.iamcanincan.opticon.notify.ToneCheck
+
 import com.iamcanincan.opticon.runtime.ModuleRuntime
 import com.iamcanincan.opticon.runtime.TAG
 import java.nio.ByteBuffer
@@ -83,14 +83,6 @@ internal object MonochromeSynth {
    * 比这个大就按需重合成（见 [MonochromeLayer.draw]）—— 所以这里只是「够用」而非「精确」。
    */
   private const val MIN_EDGE = 192
-
-  /**
-   * 「整张图标是不是灰度」那道判据的出图尺寸。
-   *
-   * `ToneCheck` 自己就会把输入缩到 64 再逐像素看三通道，画得更大只是白付一次光栅化 ——
-   * 这一步只为了回答「要不要动手」，不参与任何形状计算。
-   */
-  private const val TONE_SAMPLE = 64
 
   /**
    * 掩码缓存的字节上限（见 [store]）。8 MB ≈ 55 张 384² 的掩码。
@@ -213,22 +205,16 @@ internal object MonochromeSynth {
         noteGiveUp(edge, label, "光栅化失败")
         return@runCatching null
       }
-      // ── 「原本就适配取色的图标，一个像素都不要碰」 ──
-      // 应用自己提供单色层的那种「已适配」，`getMonochrome()` 非 null，钩子在最外层就透传了
-      // （见 `IconHooks.hookSynthesizedMonochrome`）。还有第二种：**图标整体就是一张灰度图**、
-      // 等系统按主题上色 —— 那种没有单色层，会一路走进这里被我们重压一遍。判据复用通知侧
-      // 那一个函数（`ToneCheck.isGrayscale` + `preserveTinted`），两边说的同一件事不另写一套。
-      //
-      // ⚠ 量的必须是**整个图标**，不是「我们要动的那一层」。上一版在这里判了前景层，真机
-      //   24 小时内就错杀 295 次：自适应图标**最典型的没适配结构**就是「白色剪影前景 +
-      //   一层彩色底板」，只看前景当然是灰度，于是我们撒手不管，桌面回去走自己那条算错极性
-      //   的路 —— 观感直接退成「不是纯色」。真正算「已经适配」的，是把背景也算进去之后
-      //   整体仍然只有明暗、没有彩色。
-      // 非自适应图标的前景层就是整张图，直接复用刚才那次光栅化，不多画一遍。
-      val whole = if (adaptive) rasterize(source, TONE_SAMPLE) else raster
-      val alreadyTinted = whole != null && ModuleRuntime.options().preserveTinted &&
-        ToneCheck.isGrayscale(whole)
-      if (whole !== raster) whole?.recycle()
+      // ── 这里原来有一道「整张已是灰度 → 放弃合成」，2026-09-27 删掉，两条理由 ──
+      //  ① 逻辑上它站不住：能走到这一行，说明最外层那次 `getMonochrome()` 返回了 null ——
+      //     也就是**这个应用没有单色层**。"应用自己适配过"这个前提已经被调用方否掉了，
+      //     一张黑白 logo 和一张真正的单色层，在这里不是同一件事。
+      //  ② 代价是看得见的：交回去 = 交给桌面的 `MonochromeIconFactory`，它假定「亮=墨」，
+      //     于是**浅底深形**的图标整个反色。真机点名的小黑盒就是这一类（原图：深灰六边形
+      //     在浅底上；我们合成给它 底占=0.77、框内=0.18、六边形成墨 —— 极性是对的；
+      //     桌面给的是反过来的一块）。它一天里在这条 return 上走了 18 次，
+      //     而漏接计数正好爬到 3 —— 屏幕上他看到的「反下色」。
+      //  通知侧仍然认这个选项（`preserveTinted`，那边是系统自己上色，不走这条遮罩路径）。
       val total = edge * edge
       val pixels = IntArray(total)
       raster.getPixels(pixels, 0, edge, 0, 0, edge, edge)
@@ -238,15 +224,6 @@ internal object MonochromeSynth {
         // 带上包名：不带回来的话，重放出来的预览图不知道是哪个应用的 —— 而那正是要对的东西。
         MonoDump.maybe(id, label, raster, pixels, out.mask, edge, edge,
           "${label.substringBefore(' ')} | ${out.report}")
-      }
-      if (alreadyTinted) {
-        // ⚠ 交回去**之前**先把原像素带回来。点名的应用如果正好走这条放弃的路，以前一张都留不下
-        //   （2026-09-27 三个反色里的小黑盒就是这样，只有它没数据，我因此猜错了一批）。
-        //   这里连"我们本来会画成什么"一起带回来 —— 这条灰度判据该不该存在，得看图才说得清。
-        if (MonoDump.watched(label)) dump()
-        noteGiveUp(edge, label, "整张图标已是灰度（应用自己适配过取色）→ 不动")
-        raster.recycle()
-        return@runCatching null
       }
       // 可疑的那几张把**原像素**带回来（PNG → base64 → 分片进日志），判据台原样重放。
       // 没有这条通道，"不够细致"永远只能靠猜：他报的应用发的是 vector / webp，台子解不出。
