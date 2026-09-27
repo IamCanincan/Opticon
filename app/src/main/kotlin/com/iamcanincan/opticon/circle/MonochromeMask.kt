@@ -341,6 +341,9 @@ internal object MonochromeMask {
     var families: Int = 0,
     /** 这一支的参照家族数（H1 的角上家族 / H2 的轮廓家族）。 */
     var ring: Int = 0,
+    /** **哪一支赢了**：1=角上家族(H1)、2=轮廓家族(H2)、3=没有参照(H3)。
+     *  没有它日志是会骗人的：H1 与 H2 都往 `族` 里写 1，"H2 有没有跑"这个问题我因此答错三次。 */
+    var hyp: Int = 0,
     /** 这块参照**有多厚**（底像素到自身边界的距离 p85，像素）。见 [plateThickness]。 */
     var thick: Int = -1,
     /** 剩下的墨里有多少百分比**碰不到空气**（被这块底围住）。见 [enclosedShare]。 */
@@ -564,7 +567,7 @@ internal object MonochromeMask {
     val fill = st.kept.toFloat() / boxArea
     return Output(
       out, fill, st.hole, st.largest, st.components, st.smallShare, softShare(st, box),
-      "带占=${s.bandSolid * 100 / 255} 底占=${pct(ground.share)} 族=${ground.families} 底厚=${ground.thick}" +
+      "带占=${s.bandSolid * 100 / 255} 底占=${pct(ground.share)} H=${ground.hyp} 族=${ground.families} 底厚=${ground.thick}" +
       (if (ground.h2 < 0f) "" else " H2被否=${pct(ground.h2)}/${ground.h2thick}/${ground.h2enc}") +
       " 围=${ground.enclosed} 零=${ground.zero} 实=${ground.solid} 端=${lo shr 6}/${hi shr 6} " +
         "壳占=${pct(body.share)} 层比=$keepInk/$knockInk " +
@@ -861,7 +864,7 @@ internal object MonochromeMask {
     //   底占=1.00，极性判据跟着找不到墨）。换成 dep 之后 β=0 的格上 dep 退成覆盖率，实心白像素
     //   恒为 255，容差怎么夹都吸不进去。
     var tol = DEP_COARSE
-    passFromFamilies(pixels, w, box, s, TOL_COARSE shl 6)
+    passFromFamilies(pixels, w, box, s, TOL_COARSE shl 6, fams)
     // 第一轮之前先洪泛一次：色场是从「与边界连通的底」上拟合的，没有这一步就没有种子像素。
     flood(s, w, box, seed)
     var nGround = 0
@@ -974,6 +977,7 @@ internal object MonochromeMask {
       bandSeed(s, w, box, band, seed)
       val p = fitGround(pixels, w, h, box, g, s, fams, seed)
       p.ring = fams
+      p.hyp = 1
       p.thick = plateThickness(w, box, s)
       return p
     }
@@ -987,6 +991,7 @@ internal object MonochromeMask {
       alt.ring = ring
       alt.thick = plateThickness(w, box, s)
       alt.enclosed = enclosedShare(pixels, w, box, s)
+      alt.hyp = 2
       // ⚠ 这里**仍然**只看占比 —— 另外两条（厚度、被围住）已经量到位了，但还没接进来，
       //  卡在一个不是判据的问题上：要量 H2 就得让它跑，而 `fitGround` 会留下 Scratch 状态
       //  （plate / 色场 / ref 传播），跑完再退回 H3 时**已经不是原来那张答案**了。
@@ -1001,6 +1006,7 @@ internal object MonochromeMask {
     }
     bandSeed(s, w, box, band, seed)
     val air = fitGround(pixels, w, h, box, g, s, 0, seed)
+    air.hyp = 3
     air.h2 = h2share; air.h2thick = h2thick; air.h2enc = h2enc
     return air
   }
@@ -1463,7 +1469,16 @@ internal object MonochromeMask {
    * pass = 「这一像素与**某个**底家族差不到 [tol]」。透明像素一律算过 —— 那是「没有东西」，
    * 本来就该被底吃掉。
    */
-  private fun passFromFamilies(pixels: IntArray, w: Int, box: Rect, s: Scratch, tol: Int) {
+  /**
+   * 第一轮能不能过，只看"离这一遍**指定的**那几族色够近"。
+   *
+   * ⚠ 家族数必须由参数给，不许读 [Scratch.fams]：那是上一个假设留下的。H3（"参照=没有东西"）
+   *   以前恰好没事 —— 走到它面前时 `s.fams` 总是 0；一旦 H2 先跑过（轮廓族=1），H3 就会拿着
+   *   **H2 那个轮廓色**去洪泛，退路不再是原来的答案。这就是"H2 跑一次就脏一次"的那一处。
+   */
+  private fun passFromFamilies(
+    pixels: IntArray, w: Int, box: Rect, s: Scratch, tol: Int, fams: Int,
+  ) {
     for (y in box.top until box.bottom) {
       val row = y * w
       for (x in box.left until box.right) {
@@ -1471,7 +1486,7 @@ internal object MonochromeMask {
         if (Color.alpha(pixels[i]) < A_SOLID) { s.pass[i] = 1; continue }
         val l = s.labL[i].toInt(); val a = s.labA[i].toInt(); val b = s.labB[i].toInt()
         var ok = false
-        for (c in 0 until s.fams) {
+        for (c in 0 until fams) {
           if (deltaE(l, a, b, s.famL[c], s.famA[c], s.famB[c]) <= tol) { ok = true; break }
         }
         s.pass[i] = if (ok) 1 else 0
