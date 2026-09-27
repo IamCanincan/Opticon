@@ -61,7 +61,10 @@ internal object MonoDump {
    *   判据数字看不出这一支刻得对不对（它自己的数全绿），只能看像素。
    */
   fun suspicious(o: MonochromeMask.Output): Boolean =
-    o.mask == null || o.boxFill > 0.55f || o.components >= 10 || o.soft > 0.08f || o.hyp == 0
+    o.mask == null || o.boxFill > 0.55f || o.components >= 10 || o.soft > 0.08f || o.hyp == 0 ||
+      // 「底与墨同色」退掉过至少一支的那几张**无条件带回来**：这一道换的是谁接手，而接手人换了
+      // 之后上面每一条旧判据都可能不再报警 —— 上一轮 H0 接手 22 张、像素回来 0 张，就是这么瞎的。
+      o.veto != 0
   /**
    * 用户点名的包：**不看可不可疑，无条件带回来**。
    *

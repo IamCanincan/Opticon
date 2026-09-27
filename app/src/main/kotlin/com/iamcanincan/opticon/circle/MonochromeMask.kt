@@ -256,10 +256,15 @@ internal object MonochromeMask {
     /** 哪一支赢了（[groundPass] 的 H1/H2/H3/H0）。-1 = 没走到判据（尺寸非法 / 整张透明）。
      *  带出来只为一个用途：[MonoDump] 要能认出"这一张是新开的那一支接手的"，见那里的说明。 */
     val hyp: Int = -1,
-    /** H0（区域关系那一支）走到哪一步：0=没走到、1=接手、2=画布关系不成立、3=区域关系不成立。
+    /** H0（区域关系那一支）走到哪一步：0=没走到、1=接手、2=画布关系不成立、3=区域关系不成立、
+     *  4=被 [GROUND_INK_SAME_PCT] 那道验收退掉。
      *  与 [hyp] 分开记，是因为**换桌面时要看的正是"没接手的那部分被哪道拦下"** —— 只报 hyp
      *  就只能看见"接手了几张"，看不见这一支在新桌面上有没有整体失声。见 [MonoDump.suspicious]。 */
     val h0why: Int = 0,
+    /** 哪些假设被「底与墨同色」这道验收退掉了（位：1=H1、2=H2、4=H0）。见 [GROUND_INK_SAME_PCT]。
+     *  单独带出来是因为这一道**改的是接手人**：不记下来，日志上只看见"H=3 的一张变多了"，
+     *  看不见是这一道把它们退下去的 —— 换桌面时这两件事要能分开。 */
+    val veto: Int = 0,
   )
 
   private class Stats(
@@ -317,9 +322,16 @@ internal object MonochromeMask {
     var body = ByteArray(0)
 
     var grid = 0
-    /** H0（[regionGround]）这一支走到哪一步了：0=没走到、1=接手、2=被画布门槛拦、3=被区域关系拦。
-     *  每次 [groundPass] 开头归零。带它是因为**换桌面时这一支的射程必须看得见**，见那条汇总日志。 */
+    /** H0（[regionGround]）这一支走到哪一步了：0=没走到、1=接手、2=被画布门槛拦、3=被区域关系拦、
+     *  4=被"底墨同色"那道验收拦。每次 [groundPass] 开头归零。
+     *  带它是因为**换桌面时这一支的射程必须看得见**，见那条汇总日志。 */
     var h0why = 0
+    /** 这一张被 [GROUND_INK_SAME_PCT] 那道验收退掉过哪几支（位：1=H1、2=H2、4=H0）。
+     *  每次 [groundPass] 开头归零。 */
+    var veto = 0
+    /** 被退那一支自己的 `inkSame`（最后退的那一支）。**没有它这道验收不可查**：日志上只看得见
+     *  接手人换成了 H3，看不见被退那支离门槛多近 —— 6b「浅盘+白字」被反过来那次就是这么找的。 */
+    var vetoSame = -1
     /** 内容框边界带里实心占多少（0..255）——「这张图到底有没有一块底」的那一个数，进日志。 */
     var bandSolid = 0
     /** 底家族（≤4 个角上颜色）的 Lab 与原始色，以及实际个数。 */
@@ -390,6 +402,9 @@ internal object MonochromeMask {
     var h2thick: Int = -1,
     var h2spread: Int = -1,
     var h2enc: Int = -1,
+    /** **墨那一侧有多少比例的格子与底的本色分不开**（0..100，只数 α=255 的格子；-1 = 有一侧是空的）。
+     *  这是这一支的**验收**而不是描述：见 [GROUND_INK_SAME_PCT]。 */
+    var inkSame: Int = -1,
   )
 
   /**
@@ -621,6 +636,7 @@ internal object MonochromeMask {
     return Output(
       out, fill, st.hole, st.largest, st.components, st.smallShare, softShare(st, box),
       "带占=${s.bandSolid * 100 / 255} 底占=${pct(ground.share)} H=${ground.hyp} 族=${ground.families} 底厚=${ground.thick}" +
+      " 同色=${ground.inkSame}/${s.vetoSame} 拦=${s.veto}" +
       " 盒布=${boxArea * 100 / (w.toLong() * h)} H0=${s.h0why}" +
       (if (ground.holed < 0) "" else " 洞墨=${ground.holed}") +
       (if (ground.h2 < 0f) "" else " H2被否=${pct(ground.h2)}/${ground.h2thick}/${ground.h2enc}/${ground.h2spread}") +
@@ -635,7 +651,8 @@ internal object MonochromeMask {
         "分档=${sep.second}/${sep.first}" +
         (if (sep.third.isEmpty()) "" else "(${sep.third.joinToString(",")})"),
       ground.hyp,
-      s.h0why
+      s.h0why,
+      s.veto
     )
   }
 
@@ -1183,10 +1200,20 @@ internal object MonochromeMask {
     s.hist2.fill(0)
     nInk = 0
     covSum = 0L
+    // 底与墨各自的平均色（只数本来就实心的格子：抗锯齿边在两半里都有，算进去就是拿一条边
+    // 去比一条边，量出来的 ΔE 与"这一刀切没切开东西"无关）。
+    var gl = 0L; var ga = 0L; var gb = 0L; var gn = 0
+    var inn = 0
     for (y in box.top until box.bottom) {
       val row = y * w
       for (x in box.left until box.right) {
         val i = row + x
+        if (Color.alpha(pixels[i]) == 255) {
+          if (s.plate[i] != 0.toByte()) {
+            gl += s.labL[i].toInt() and 0xffff; ga += s.labA[i].toInt() and 0xffff
+            gb += s.labB[i].toInt() and 0xffff; gn++
+          } else inn++
+        }
         if (s.plate[i] != 0.toByte()) {
           val b = s.beta[i].toInt() and 0xffff
           s.dist[i] = (if (touchesInk(s.plate, pixels, w, box, x, y))
@@ -1202,6 +1229,27 @@ internal object MonochromeMask {
     val p = Pass()
     p.share = nGround.toFloat() / boxArea
     p.families = fams
+    // 两半的平均色之差。写成"交叉相乘再除"是为了不出现两次除法带来的漂移；Lab 是 ×64 的，
+    // 所以最后除 64 回到 ΔE 单位，再 ×10 存成整数（日志里读 0..255 的人不需要那半位）。
+    p.inkSame = if (gn == 0 || inn == 0) -1 else {
+      // 底的本色（×64 的 Lab 均值），然后**逐格**问墨那一侧的每一格离它多近 —— 不问两半的均值
+      // 差多少，那条会被"跨在底两侧的墨"抵消，见 [GROUND_INK_SAME_PCT] 那段。
+      val gl0 = gl / gn; val ga0 = ga / gn; val gb0 = gb / gn
+      val lim = GROUND_INK_JND.toLong() * GROUND_INK_JND
+      var close = 0
+      for (y in box.top until box.bottom) {
+        val row = y * w
+        for (x in box.left until box.right) {
+          val i = row + x
+          if (Color.alpha(pixels[i]) != 255 || s.plate[i] != 0.toByte()) continue
+          val dl = (s.labL[i].toInt() and 0xffff) - gl0
+          val da = (s.labA[i].toInt() and 0xffff) - ga0
+          val db = (s.labB[i].toInt() and 0xffff) - gb0
+          if (dl * dl + da * da + db * db < lim) close++
+        }
+      }
+      close * 100 / inn
+    }
     p.zero = (if (nGround > 0) percentile(s.hist, nGround, TOL_PCT) else 0)
       .coerceIn(DEP_TOL_MIN, DEP_TOL_MAX)
     p.solid = if (nInk > 0) percentile(s.hist2, nInk, INK_REF_PCT) else p.zero
@@ -1233,6 +1281,7 @@ internal object MonochromeMask {
   ): Pass {
     val seed = s.mark      // 洪泛的种子掩码（measure 之前没人用这块）
     s.h0why = 0            // 这一张走到 H0 没有、被哪道拦下，逐张归零（见 [Scratch.h0why]）
+    s.veto = 0; s.vetoSame = -1  // 同上：被"底墨同色"退掉过哪几支、被退那支自己的数（见 [Output.veto]）
     val fams = cornerFamilies(pixels, w, box, band, s)
     if (fams > 0) {
       bandSeed(s, w, box, band, seed)
@@ -1240,7 +1289,9 @@ internal object MonochromeMask {
       p.ring = fams
       p.hyp = 1
       p.thick = plateThickness(w, box, s)
-      return p
+      // 角上确实有一块色，**并且它和剩下的东西不是一个颜色** —— 后半句才是这一支的验收。
+      if (!vacuous(s, p)) return p
+      s.veto = s.veto or 1
     }
     val ring = outlineFamilies(pixels, w, box, s, seed)
     // H2 被否决时它的数也要能进日志 —— 用局部变量带，不碰对象上的字段（这是多线程的钩子路径）。
@@ -1268,22 +1319,25 @@ internal object MonochromeMask {
       //  别再试第五个阈值。要修这一类，得换一个不是"描述这块参照长什么样"的证据。
       //  （试跑污染那个 bug 已经在 `31fe511` 修掉了：fitGround 的退路现在逐张与不跑它一致。）
       //
-      // ⚠ **2026-09-28 真机量到 H2 的另一条病，和上面那张表无关，别再往表里加列。**
+      // ⚠ **2026-09-28 真机量到 H2 的另一条病 —— 和上面那张表无关，别再往表里加列。当天定案。**
       //   钉钉（`com.alibaba.android.rimet`，`_harness/dd/icon5_…`）：`底占=0.84 框内=0.11
       //   cc=10 top=0.26 小片=0.25`，按源亮度分桶只有白那一桶（L=100）：**这桶 66.8% 被判成底**，
       //   剩下当墨的 4799 格平均只出 **57/255**。用户的话是"基本每个都少一块一块"。
-      //   **根因未定，两条候选都还没排除 —— 本条注释的前一版把 A 当结论写死了，重读 dump 后撤回。**
-      //     A. 参照/种子下在了字形上（轮廓采样撞到白鸟的翅膀 → 参照=白 → 白鸟与白色留白同色连通、
-      //        一起被当底擦）。但 `底占=0.84` 与"白底被正确认成底"同样自洽，**A 没被证实**。
-      //     B. 底认对了，是**交付端把墨画得又碎又淡**：鸟是白字在蓝盘上，dep 本该顶格，实测出墨
-      //        只有 57/255 且碎成 10 块 —— 那要查的是 [departure] 的 β 加权与第二遍的 `降/力度`。
-      //   分开 A/B 只要一张图：用 `PlateDump` 看那 4799 格 —— A 会看到鸟被划进 P（底），
-      //   B 会看到鸟在 D 上本来就低。先看它，再谈改哪一层。
-      //   **若 A 成立**，待验的修法是：轮廓色在**内容框内部**占比过高 → 说明它更像画不是底
-      //   → 拒绝这一支、退 H3。⚠ 它撞的就是上面那张真值表（steamlink / 哔哩哔哩 是反例），
-      //   所以动手前必须先把"钉钉不许碎成 10 块"（`cc≤4`、`top≥0.6`、出墨均值）钉成一条性质，
-      //   并带 class 的 md5 逐张量 113 张 —— 没有指纹的 A/B 今晚已经骗过我一次（见 `57ec6ac`）。
-      if (alt.share < PLATE_ALL_SHARE) return alt
+      //   **定案：是 A，不是 B。** 三条独立证据：
+      //     · 那一层的实心格**全是** (254,254,254) —— 根本没有蓝盘，"白字在蓝盘上"这个前提是我
+      //       凭空加的（B 就建在它上面）。盘在桌面那边，不在模块拿到的这张位图里。
+      //     · `RimDbg` 按源色分桶量到 11231 个实心格里 **8132 格（72%）被判成底**，即 A 说的
+      //       "鸟被划进 P"。三联图（`--dump`）直接看得见：中屏那一整块绿就是翅膀身体。
+      //     · 把这一支退掉之后（见 [GROUND_INK_SAME_PCT]），同一张变 `H=3 cc=1 身体=245.8 洞=0`。
+      //   修法当时写的"轮廓色在内容框内部占比过高"那条**没有采用** —— 它确实撞上面那张真值表。
+      //   采用的是一个不描述参照、只描述**这一刀**的量：墨那一侧与底的本色分不开的格子过半。
+      //   动手前钉的那条性质也钉了：`SelfTest` 里那条拿真机带回的 PNG 当样本的用例
+      //   （H2 不许接手 / 实心格均浓 ≥240 / 不许有洞 / cc≤3），带 class md5 逐张量过 113 张。
+      // 验收两件事：这块底**没吃掉整框**，而且它**与剩下的墨不是一个颜色**。后者是
+      // [GROUND_INK_SAME_PCT] 那一段：真机钉钉那一批（判据台 23 行）全靠它。
+      val vac = vacuous(s, alt)
+      if (alt.share < PLATE_ALL_SHARE && !vac) return alt
+      if (vac) s.veto = s.veto or 2
       h2share = alt.share; h2thick = alt.thick; h2enc = alt.enclosed; h2spread = alt.spread
     }
     // H1、H2 都没说出"哪块是底"之后，先问 H0（区域关系），再退到 H3（没有底）。
@@ -1427,8 +1481,19 @@ internal object MonochromeMask {
     p.ring = 1
     p.thick = plateThickness(w, box, s)
     p.holed = (holeInk * 100 / boxArea).toInt()
+    // 区域关系说"这块大区域是底"，最后一问仍然是它切开了没有：一块与画同色的"底"不是底。
+    if (vacuous(s, p)) { s.h0why = 4; s.veto = s.veto or 4; return null }
     s.h0why = 1     // 接手了：这一张的底是"区域关系"给的，不是颜色位置给的
     return p
+  }
+
+  /** 这一支交出的墨**大半与底是同一个颜色**（= 这一刀没切开任何东西，假设不作数）。
+   *  `inkSame < 0` 是"量不出来"（有一侧是空的），既不赞成也不推翻 —— 见 [GROUND_INK_SAME_PCT]。
+   *  退掉的那一支把自己的数留在 [Scratch.vetoSame]：不留在日志上，这道验收红了也没人知道为什么。 */
+  private fun vacuous(s: Scratch, p: Pass): Boolean {
+    if (p.inkSame < GROUND_INK_SAME_PCT) return false
+    s.vetoSame = p.inkSame
+    return true
   }
 
   /** H0 的三道区域门槛 + 那道画布门槛。分界都来自 [regionGround] 那段注释里的实测表，两侧差得远。 */
@@ -1551,6 +1616,47 @@ internal object MonochromeMask {
 
   /** 参照吃掉整框到这个比例，就说明"这块底"其实是图形自己（薄字形的轮廓=字形）→ 假设不成立。 */
   private const val PLATE_ALL_SHARE = 0.92f
+
+  /**
+   * **墨那一侧有多少比例的格子与底的本色分不开**（ΔE76 < [GROUND_INK_JND]），到这个比例这一刀
+   * 就不算切开了东西。
+   *
+   * 为什么要有这一道，以及它为什么不是 [PLATE_ALL_SHARE] 那张真值表里"第五个阈值"：
+   * 那张表（占比 / 厚度 / 围合 / 环散）量的全是**参照这一块自己长什么样**，而钉钉那一批的病是
+   * "参照 = 字形自己的颜色" —— 白翅膀浮在透明上，H2 从内容轮廓下种子，洪泛顺着同一种白灌进
+   * 翅膀身体，于是**身体成了底、抗锯齿边成了墨**，屏幕上就是一块没上色的洞（三联图见
+   * `_harness/RimDbg` 的 `--dump`：左=源、中=一遍判的底、右=交付的墨）。
+   *
+   * 它描述的不是"这块参照长什么样"，而是**这一刀有没有把图切成两个不同的东西**。切不开颜色的
+   * 一刀不携带任何信息，正确答案就是"这一层根本没有底"→ 退到下一支，最终退到 H3（空气），
+   * 整块实心剪影交出去 —— 那正是这一类图在单色规范下该有的样子。
+   *
+   * ⚠ **为什么按格子数、不按"两半的平均色之差"。** 第一版写的是后者，被判据台的
+   *   「同距离不同明度侧」当场拦下：那块底是中灰，墨是**一深一浅两块**——两个平均色正好
+   *   互相抵消在底上，ΔE(均值,均值)≈0 就被当成"没切开"，而它切得清清楚楚。按格子数是逐像素
+   *   问"这一格跟底本色分得开吗"，跨在底两侧的墨各算各的，抵消不了。
+   *   同一条性质在那一版上从 亮=225 掉到 亮=28（整块浅色被擦掉）。
+   *
+   * ⚠ 门槛画在 **65**，理由是判据台 113 张真机像素上的**实测分布**（被退那一支自己的 `inkSame`，
+   *   它进日志就是为了这一天）：
+   *     100 ×13 张（钉钉 / 微信 / taptap / WPS / steamlink / openlist / 小黑盒 / 音流记 / 拼多多…）
+   *     82 ×3 77 ×3 73 ×3 70 ×1        ← 全是 H2 接手的那一批，这一道要救的就是它们
+   *     ─────────────── 空档 ───────────────
+   *     54 —— 合成用例「白字在彩盘上」的 H0：浅蓝盘 + 一条通向盘边的白字，**这一刀切得清清楚楚**
+   *     50 —— 翻译（`com.google.android.apps.translate`）的 H1
+   *   第一版写的是 50，结果把 6b 那一张**整个反过来**：盘成了墨、白字成了洞（字=255 → 28）。
+   *   所以门槛只能落在 54 与 70 之间那个空档里；取 65。
+   *   代价说清楚：**翻译那一张因此救不到**（它停在 50，而它本可以 190→245、cc 4→2）。
+   *   它是"盘与字确实同色、但留白也是那个色"的一类，不是这一道管的东西 —— 别为了它把门槛
+   *   挪回 50，那等于把 6b 反过来。
+   *
+   * ⚠ 两个数都是**绝对**值，不是这张图自己的分位。是有意的："两个颜色人眼分不分得开"不是图像
+   *   相对的性质。量不出来（有一侧空）时返回 -1，[vacuous] 认它"不作证也不推翻"。
+   */
+  private const val GROUND_INK_SAME_PCT = 65
+
+  /** 刚可觉差：ΔE76 到 12 以下就是同一个颜色。Lab 存的是 ×64，所以比较时用 12×64。 */
+  private const val GROUND_INK_JND = 12 * 64
 
   /** H2 验收换候选：参照这块要**厚到框短边的 1/16** 才算一块底板（按短边归一，不写死像素 ——
    *  同一张图在 192 / 384 上必须给出同一个答案，判据台钉着尺寸不变性）。

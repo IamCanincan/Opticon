@@ -176,9 +176,19 @@ internal object MonochromeSynth {
       //  但这必须**说出来**，不能静默。
       Log.d(
         TAG, "Mono: $total layers synthesized  H0: 接手=${h0Taken.get()} 画布拦=${h0Canvas.get()}" +
-          " 关系拦=${h0Relation.get()}"
+          " 关系拦=${h0Relation.get()}  同色退=${vacuous.get()}"
       )
     }
+  }
+
+  /** 被「底与墨同色」那道验收退掉过至少一支假设的张数（见 [MonochromeMask.GROUND_INK_SAME_PCT]）。
+   *  这一道改的是**谁接手**，所以它必须单独有一个数：换一台桌面后如果这个数掉到 0，
+   *  说明那台桌面的图标全都有真底；如果它涨得比 `接手` 还快，说明送来的层大多是"单色剪影"，
+   *  那一类本来就该整块交出去。 */
+  private val vacuous = AtomicInteger(0)
+
+  private fun noteVeto(bits: Int) {
+    if (bits != 0) vacuous.incrementAndGet()
   }
 
   /** H0（区域关系那一支）逐张归类的三个数。0 与"没走到"不记 —— 那既不是成绩也不是失败。 */
@@ -240,6 +250,7 @@ internal object MonochromeSynth {
       val out = MonochromeMask.build(pixels, edge, edge)
       // H0 的射程跟着记：见 [noteSynthesized] 那条汇总为什么带它。
       noteH0(out.h0why)
+      noteVeto(out.veto)
       // 指纹打在判据行上：解不出包名的那一批（快捷方式）在日志里都叫 `?`，没有这个数
       // 就对不上"哪一行判据是哪一个带回来的 PNG"。见 [MonoDump.sigOf]。
       val sig = MonoDump.sigOf(pixels, edge, edge)
