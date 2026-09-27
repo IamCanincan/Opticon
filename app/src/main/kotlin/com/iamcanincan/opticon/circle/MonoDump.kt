@@ -72,6 +72,10 @@ internal object MonoDump {
     "com.fdg.flashplay.farsee", "com.huawei.appmarket", "com.handsgo.jiakao.android",
     "com.tmri.app.main", "com.moondroplab.moondrop.moondrop_app", "com.predidit.kazumi",
     "com.sankuai.meituan", "com.openlist.mobile",
+    // 2026-09-27 他点名的三个「反色」：小步点 / 中国移动是"没找到底→涂满"，
+    // 小黑盒是"判成已适配→交回桌面"。后两个之前一张像素都没回来（一个不在可疑名单里，
+    // 另一个在**放弃合成**那条 return 上，压根走不到出图的地方）—— 只能靠猜，就猜错了。
+    "run.xbud.android", "com.greenpoint.android.mc10086", "com.max.xiaoheihe",
   )
 
   fun watched(label: String): Boolean = WATCH.any { label.contains(it) }

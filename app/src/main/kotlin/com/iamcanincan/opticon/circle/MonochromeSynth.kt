@@ -229,25 +229,30 @@ internal object MonochromeSynth {
       val alreadyTinted = whole != null && ModuleRuntime.options().preserveTinted &&
         ToneCheck.isGrayscale(whole)
       if (whole !== raster) whole?.recycle()
-      if (alreadyTinted) {
-        noteGiveUp(edge, label, "整张图标已是灰度（应用自己适配过取色）→ 不动")
-        raster.recycle()
-        return@runCatching null
-      }
       val total = edge * edge
       val pixels = IntArray(total)
       raster.getPixels(pixels, 0, edge, 0, 0, edge, edge)
       val out = MonochromeMask.build(pixels, edge, edge)
       val id = noteBranch(edge, label, out)
-      // 可疑的那几张把**原像素**带回来（PNG → base64 → 分片进日志），判据台原样重放。
-      // 没有这条通道，"不够细致"永远只能靠猜：他报的应用发的是 vector / webp，台子解不出。
-      // ⚠ 但只按 `suspicious` 会把他**点名**的那几张漏掉：一块灰框在形状体检里是"规整、连通、
-      // 面积合适"的好形状，一个可疑指标都不触发 —— 而它恰恰是要看的东西。所以点名的必带。
-      if (MonoDump.suspicious(out) || MonoDump.watched(label)) {
+      val dump = {
         // 带上包名：不带回来的话，重放出来的预览图不知道是哪个应用的 —— 而那正是要对的东西。
         MonoDump.maybe(id, label, raster, pixels, out.mask, edge, edge,
           "${label.substringBefore(' ')} | ${out.report}")
       }
+      if (alreadyTinted) {
+        // ⚠ 交回去**之前**先把原像素带回来。点名的应用如果正好走这条放弃的路，以前一张都留不下
+        //   （2026-09-27 三个反色里的小黑盒就是这样，只有它没数据，我因此猜错了一批）。
+        //   这里连"我们本来会画成什么"一起带回来 —— 这条灰度判据该不该存在，得看图才说得清。
+        if (MonoDump.watched(label)) dump()
+        noteGiveUp(edge, label, "整张图标已是灰度（应用自己适配过取色）→ 不动")
+        raster.recycle()
+        return@runCatching null
+      }
+      // 可疑的那几张把**原像素**带回来（PNG → base64 → 分片进日志），判据台原样重放。
+      // 没有这条通道，"不够细致"永远只能靠猜：他报的应用发的是 vector / webp，台子解不出。
+      // ⚠ 但只按 `suspicious` 会把他**点名**的那几张漏掉：一块灰框在形状体检里是"规整、连通、
+      // 面积合适"的好形状，一个可疑指标都不触发 —— 而它恰恰是要看的东西。所以点名的必带。
+      if (MonoDump.suspicious(out) || MonoDump.watched(label)) dump()
       val ramp = out.mask
       if (ramp == null) {
         raster.recycle()

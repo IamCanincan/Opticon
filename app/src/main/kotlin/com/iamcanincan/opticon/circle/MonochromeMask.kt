@@ -261,6 +261,8 @@ internal object MonochromeMask {
     var grown = ByteArray(0)
     var visited = ByteArray(0)
     var queue = IntArray(0)
+    /** [plateThickness] 的距离场（只在内容框里用，按需自己扩容）。 */
+    var thickDist = IntArray(0)
     var hist = IntArray(DBUCKETS)
     /** 第二块直方图：距离与明度要同时统计（明度序的跨度归一用它）。 */
     var hist2 = IntArray(DBUCKETS)
@@ -337,6 +339,16 @@ internal object MonochromeMask {
     /** 这一遍的结果最多能起作用多少（0..255）。第二遍用它管住"能降多少"，见 [bodyPass]。 */
     var weight: Int = 255,
     var families: Int = 0,
+    /** 这一支的参照家族数（H1 的角上家族 / H2 的轮廓家族）。 */
+    var ring: Int = 0,
+    /** 这块参照**有多厚**（底像素到自身边界的距离 p85，像素）。见 [plateThickness]。 */
+    var thick: Int = -1,
+    /** 剩下的墨里有多少百分比**碰不到空气**（被这块底围住）。见 [enclosedShare]。 */
+    var enclosed: Int = -1,
+    /** 被 [PLATE_ALL_SHARE] 否决的那一支 H2 的占比与厚度（-1 = 没走到那一步）。只为进日志。 */
+    var h2: Float = -1f,
+    var h2thick: Int = -1,
+    var h2enc: Int = -1,
   )
 
   /**
@@ -552,7 +564,9 @@ internal object MonochromeMask {
     val fill = st.kept.toFloat() / boxArea
     return Output(
       out, fill, st.hole, st.largest, st.components, st.smallShare, softShare(st, box),
-      "带占=${s.bandSolid * 100 / 255} 底占=${pct(ground.share)} 族=${ground.families} 零=${ground.zero} 实=${ground.solid} 端=${lo shr 6}/${hi shr 6} " +
+      "带占=${s.bandSolid * 100 / 255} 底占=${pct(ground.share)} 族=${ground.families} 底厚=${ground.thick}" +
+      (if (ground.h2 < 0f) "" else " H2被否=${pct(ground.h2)}/${ground.h2thick}/${ground.h2enc}") +
+      " 围=${ground.enclosed} 零=${ground.zero} 实=${ground.solid} 端=${lo shr 6}/${hi shr 6} " +
         "壳占=${pct(body.share)} 层比=$keepInk/$knockInk " +
         "降=${pct(knocked.toFloat() / boxArea)} 降力=${body.weight} 力度=$hollow 明暗=${q} " +
         "框内=${pct(fill)} cc=${st.components} top=${pct(st.largest)} 小片=${pct(st.smallShare)} " +
@@ -958,19 +972,161 @@ internal object MonochromeMask {
     val fams = cornerFamilies(pixels, w, box, band, s)
     if (fams > 0) {
       bandSeed(s, w, box, band, seed)
-      return fitGround(pixels, w, h, box, g, s, fams, seed)
+      val p = fitGround(pixels, w, h, box, g, s, fams, seed)
+      p.ring = fams
+      p.thick = plateThickness(w, box, s)
+      return p
     }
     val ring = outlineFamilies(pixels, w, box, s, seed)
+    // H2 被否决时它的数也要能进日志 —— 用局部变量带，不碰对象上的字段（这是多线程的钩子路径）。
+    var h2share = -1f
+    var h2thick = -1
+    var h2enc = -1
     if (ring > 0) {
       val alt = fitGround(pixels, w, h, box, g, s, ring, seed)
+      alt.ring = ring
+      alt.thick = plateThickness(w, box, s)
+      alt.enclosed = enclosedShare(pixels, w, box, s)
+      // ⚠ 这里**仍然**只看占比 —— 另外两条（厚度、被围住）已经量到位了，但还没接进来，
+      //  卡在一个不是判据的问题上：要量 H2 就得让它跑，而 `fitGround` 会留下 Scratch 状态
+      //  （plate / 色场 / ref 传播），跑完再退回 H3 时**已经不是原来那张答案**了。
+      //  把门槛放开让 H2 跑之后，判据台四条同时红：圆内实心 心=0.0、主体照旧实心 机身=0.0、
+      //  镂空刻出来了 洞=235、两半都留着 蓝=0.0 —— 而这四个用例的 `围` 全是 0，
+      //  也就是说**第三条验收把它们都正确拒了**，红的是"跑过一遍"这件事本身。
+      //  下一步：把这次试跑做成无副作用（进 H2 前存 plate/场，退回 H3 前还原），再换验收。
+      //  分界已经量好了：小步点 厚39 围? / 翻译 61 / 华为 47 / 米家 43 该收；
+      //  azure 15 / taptap 9 / 美团 4 / 哔哩哔哩 0 该拒（见 [plateThickness]）。
       if (alt.share < PLATE_ALL_SHARE) return alt
+      h2share = alt.share; h2thick = alt.thick; h2enc = alt.enclosed
     }
     bandSeed(s, w, box, band, seed)
-    return fitGround(pixels, w, h, box, g, s, 0, seed)
+    val air = fitGround(pixels, w, h, box, g, s, 0, seed)
+    air.h2 = h2share; air.h2thick = h2thick; air.h2enc = h2enc
+    return air
   }
+
+  /**
+   * **这块"底"有多厚**：从它的边界（挨着非底或挨着框外）做多源 BFS，取底像素到边距离的
+   * p85（单位：像素）。
+   *
+   * 这是为开一条判据准备的数 —— 「底吃掉了整框」既可能是**满幅圆盘**（该认它是底，图形坐在上面），
+   * 也可能是**线条字自己的轮廓**（认了就等于把图形腾空，就是他报过并回退的「只剩线条」）。
+   * 两者 share 都接近 1，**厚度差一个量级**：圆盘几十像素，描边几像素。
+   * 而且它不依赖 β —— β 那条（中位数治灰框）之所以不敢动，就是因为 [PLATE_ALL_SHARE] 这个阈值
+   * 是绕着 β 的均值长出来的；换成厚度之后两件事解耦。
+   */
+  private fun plateThickness(w: Int, box: Rect, s: Scratch): Int {
+    val boxW = box.width(); val boxH = box.height()
+    val n = boxW * boxH
+    if (s.thickDist.size < n) s.thickDist = IntArray(n)
+    val d = s.thickDist; val q = s.queue
+    for (i in 0 until n) d[i] = -1
+    var head = 0; var tail = 0
+    for (y in 0 until boxH) {
+      val row = y * w
+      for (x in 0 until boxW) {
+        val i = row + x + box.left + box.top * w
+        if (s.plate[i] == 0.toByte()) continue
+        // 挨着非底（含框外，框外从没被清零，所以只看框内邻居）就是这块底的"边"
+        var isEdge = false
+        for ((dx, dy) in NEIGHBOURS) {
+          val nx = x + dx; val ny = y + dy
+          if (nx < 0 || ny < 0 || nx >= boxW || ny >= boxH ||
+            s.plate[(box.top + ny) * w + box.left + nx] == 0.toByte()
+          ) { isEdge = true; break }
+        }
+        if (isEdge) { d[y * boxW + x] = 0; q[tail++] = y * boxW + x }
+      }
+    }
+    if (tail == 0) return 0
+    var mx = 0
+    while (head < tail) {
+      val c = q[head++]
+      val x = c % boxW; val y = c / boxW
+      for ((dx, dy) in NEIGHBOURS) {
+        val nx = x + dx; val ny = y + dy
+        if (nx < 0 || ny < 0 || nx >= boxW || ny >= boxH) continue
+        val j = ny * boxW + nx
+        if (d[j] >= 0) continue
+        if (s.plate[(box.top + ny) * w + box.left + nx] == 0.toByte()) continue
+        d[j] = d[c] + 1
+        if (d[j] > mx) mx = d[j]
+        q[tail++] = j
+      }
+    }
+    // p85：一半的底厚到哪儿不算厚，取到八成 —— 描边的 p85 只有几像素，圆盘有几十。
+    val hist = IntArray(mx + 2)
+    var seen = 0
+    for (i in 0 until n) if (d[i] >= 0) { hist[d[i]]++; seen++ }
+    if (seen == 0) return 0
+    var run = 0
+    for (v in hist.indices) { run += hist[v]; if (run * 100 >= seen * 85) return v }
+    return mx
+  }
+
+  /**
+   * 剩下的那些"墨"里，有多大比例是**被底围住的**（它所在的那块连通域碰不到内容框的边）。
+   *
+   * 这是 H2 验收的第三条、也是最后一条：厚度说"这块底是一块板"，占比说"它没吞掉整框"，
+   * 但两者都还分不开**"两半拼的 logo"**：红蓝各半那种，两半都是厚块、都只占一半，
+   * 按前两条会把红半认成底、蓝半认成图形 —— 红半就此腾空（判据台「两半都留着」钉着它，
+   * 实测这条一红就是 红=237 蓝=6）。区别只在**位置**：拼板的每一半都露在空气里，
+   * 而坐在底板上的图形是被底**围住**的（小步点的闪电、华为的字标都是）。
+   */
+  private fun enclosedShare(pixels: IntArray, w: Int, box: Rect, s: Scratch): Int {
+    val bw = box.width(); val bh = box.height(); val n = bw * bh
+    if (s.thickDist.size < n) s.thickDist = IntArray(n)
+    val lab = s.thickDist                        // 0 = 未定，-1 = 底，-2 = 碰过边
+    for (i in 0 until n) lab[i] = 0
+    val q = s.queue
+    var ink = 0
+    for (y in 0 until bh) {
+      val row = (box.top + y) * w + box.left
+      for (x in 0 until bw) if (s.plate[row + x] != 0.toByte()) lab[y * bw + x] = -1 else ink++
+    }
+    if (ink == 0) return 0
+    // 「露在空气里」的起点：四邻里有一格是框外、或者本来就是**透明**的（α < A_SOLID）。
+    // 只按外接框的边算不行 —— 两半拼的 logo 常常整个缩在框中间，露的是自己那圈空气。
+    var tail = 0
+    for (y in 0 until bh) for (x in 0 until bw) {
+      if (lab[y * bw + x] != 0) continue
+      var open = false
+      for ((dx, dy) in NEIGHBOURS) {
+        val nx = x + dx; val ny = y + dy
+        if (nx < 0 || ny < 0 || nx >= bw || ny >= bh ||
+          Color.alpha(pixels[(box.top + ny) * w + box.left + nx]) < A_SOLID
+        ) { open = true; break }
+      }
+      if (open) { lab[y * bw + x] = -2; q[tail++] = y * bw + x }
+    }
+    // 挨着"露边的那块墨"的也算露边
+    var head = 0
+    while (head < tail) {
+      val c = q[head++]
+      val x = c % bw; val y = c / bw
+      for ((dx, dy) in NEIGHBOURS) {
+        val nx = x + dx; val ny = y + dy
+        if (nx < 0 || ny < 0 || nx >= bw || ny >= bh) continue
+        val j = ny * bw + nx
+        if (lab[j] == 0) { lab[j] = -2; q[tail++] = j }
+      }
+    }
+    var enclosed = 0
+    for (i in 0 until n) if (lab[i] == 0) enclosed++
+    return enclosed * 100 / ink
+  }
+
+  private val NEIGHBOURS = arrayOf(1 to 0, -1 to 0, 0 to 1, 0 to -1)
 
   /** 参照吃掉整框到这个比例，就说明"这块底"其实是图形自己（薄字形的轮廓=字形）→ 假设不成立。 */
   private const val PLATE_ALL_SHARE = 0.92f
+
+  /** H2 验收换候选：参照这块要**厚到框短边的 1/16** 才算一块底板（按短边归一，不写死像素 ——
+   *  同一张图在 192 / 384 上必须给出同一个答案，判据台钉着尺寸不变性）。
+   *  另一条候选是 [enclosedShare]：剩下的墨里要有大半**碰不到空气**，否则那块"底"只是并排的图形之一。
+   *  两条都还没接线，原因见 [groundPass] 里那条验收的注释。 */
+  private const val PLATE_THICK_DIV = 16
+  private const val ENCLOSED_MIN = 50
 
   /** 种子掩码 = 内容框的边界带（H1 / H3）。 */
   private fun bandSeed(s: Scratch, w: Int, box: Rect, band: Int, seed: ByteArray) {
@@ -989,7 +1145,15 @@ internal object MonochromeMask {
    *
    * 一块铺满画面的底板，必然在它自己的边界上露出来 —— 这与 H1「底按角取」是同一条道理，
    * 只是量的是**形状的边**而不是**外接矩形的角**：圆盘在方框里，角上是空气，边上才是盘。
-   * 轮廓太少（<1/50 框）就不成立：那说明内容几乎填满整框、没有"外圈"可言。
+   *
+   * ⚠ 入场券原来写的是「轮廓像素 < 1/50 框就不成立」，**那条是反的**：一圈 1px 的轮廓，
+   *   数量只跟周长走（∝边长），而框是面积（∝边长²）—— 于是**越铺满的圆盘越容易被拒**，
+   *   而小得多的线条字反而能过。真机上他点名的三个「反色」有两个正是死在这儿：
+   *   小步点 / 中国移动 那种铺满框的圆底图标，轮廓占框 0.8% → H2 直接不跑 → 退到 H3
+   *   「参照=空气」→ dep 变成覆盖率 → 整张涂满、图形反而镂空（日志里就是 `族=0 底厚=-1`）。
+   *   ⚠ **这条门槛还没改**：改成"只要轮廓存在"之后 H2 会跑，而跑一次就脏一次 Scratch，
+   *   退路 H3 不再是原来的答案（判据台四条同时红，详见 [groundPass] 里那条验收的注释）。
+   *   要动它，先把 H2 的试跑做成无副作用。
    */
   private fun outlineFamilies(pixels: IntArray, w: Int, box: Rect, s: Scratch, seed: ByteArray): Int {
     var n = 0
