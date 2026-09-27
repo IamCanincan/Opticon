@@ -261,6 +261,10 @@ internal object MonochromeMask {
     var grown = ByteArray(0)
     var visited = ByteArray(0)
     var queue = IntArray(0)
+    /** [regionGround] 的连通块编号：≥0 = 第几块，-1 = 还没走到，-2 = 求洞那一趟走过。
+     *  **单独一块数组**：上一版借用 [visited]，探测本身没接手也改了后面两支的答案 —— 借来的
+     *  数组留脏数据是抓不住的，自己的数组才谈得上"用完不用清"。 */
+    var region = IntArray(0)
     /** [plateThickness] 的距离场（只在内容框里用，按需自己扩容）。 */
     var thickDist = IntArray(0)
     /** H2 那一圈轮廓到自己中位色的 p97 ΔE —— 「这一圈是不是一种颜色」（见 [outlineFamilies]）。 */
@@ -307,6 +311,7 @@ internal object MonochromeMask {
         pass = ByteArray(total); plate = ByteArray(total)
         mark = ByteArray(total); grown = ByteArray(total); visited = ByteArray(total)
         queue = IntArray(total); ref = IntArray(total)
+        region = IntArray(total)
         body = ByteArray(total)
         beta = ShortArray(total); gRefL = ShortArray(total); off = ShortArray(total)
       }
@@ -352,6 +357,9 @@ internal object MonochromeMask {
     var spread: Int = -1,
     /** 剩下的墨里有多少百分比**碰不到空气**（被这块底围住）。见 [enclosedShare]。 */
     var enclosed: Int = -1,
+    /** H0：最大那块区域的**洞里**有多少个百分比的内容框是不透明的（= 坐在它上面的画）。
+     *  见 [regionGround]；-1 = 这一支没接手这张图。 */
+    var holed: Int = -1,
     /** 被 [PLATE_ALL_SHARE] 否决的那一支 H2 的占比与厚度（-1 = 没走到那一步）。只为进日志。 */
     var h2: Float = -1f,
     var h2thick: Int = -1,
@@ -573,6 +581,8 @@ internal object MonochromeMask {
     return Output(
       out, fill, st.hole, st.largest, st.components, st.smallShare, softShare(st, box),
       "带占=${s.bandSolid * 100 / 255} 底占=${pct(ground.share)} H=${ground.hyp} 族=${ground.families} 底厚=${ground.thick}" +
+      " 盒布=${boxArea * 100 / (w.toLong() * h)}" +
+      (if (ground.holed < 0) "" else " 洞墨=${ground.holed}") +
       (if (ground.h2 < 0f) "" else " H2被否=${pct(ground.h2)}/${ground.h2thick}/${ground.h2enc}/${ground.h2spread}") +
       " 围=${ground.enclosed} 环散=${ground.spread} 零=${ground.zero} 实=${ground.solid} 端=${lo shr 6}/${hi shr 6} " +
         "壳占=${pct(body.share)} 层比=$keepInk/$knockInk " +
@@ -605,6 +615,17 @@ internal object MonochromeMask {
   private const val SEP_AB = 32
   private const val SEP_BUCKETS = 13 * 8 * 8
 
+  /**
+   * 一个像素属于哪个"部分"。[partMeans] 数的"几块"与 [regionGround] 认的"一块区域"
+   * 必须查同一套词汇 —— 分块只能有一套。
+   */
+  private fun bucketOf(i: Int, s: Scratch): Int {
+    val l = (s.labL[i].toInt() and 0xffff) shr 6
+    val a = ((s.labA[i].toInt() shr 6) + 128).coerceIn(0, 255)
+    val b = ((s.labB[i].toInt() shr 6) + 128).coerceIn(0, 255)
+    return ((l / SEP_L) * 8 + (a / SEP_AB)) * 8 + (b / SEP_AB)
+  }
+
   /** 一块色至少占工作集百分之几才算"图上的一个部分"；少于它的是一圈抗锯齿或一个噪点。 */
   private const val SEP_MIN_SHARE_PCT = 3
 
@@ -634,10 +655,7 @@ internal object MonochromeMask {
         val i = row + x
         if (s.plate[i] != 0.toByte()) continue
         work++
-        val l = (s.labL[i].toInt() and 0xffff) shr 6
-        val a = ((s.labA[i].toInt() shr 6) + 128).coerceIn(0, 255)
-        val b = ((s.labB[i].toInt() shr 6) + 128).coerceIn(0, 255)
-        val k = ((l / SEP_L) * 8 + (a / SEP_AB)) * 8 + (b / SEP_AB)
+        val k = bucketOf(i, s)
         cnt[k]++
         sum[k] += of(i)
       }
@@ -960,7 +978,7 @@ internal object MonochromeMask {
   /**
    * **第一遍：参照 = 这一像素背后那块底。**
    *
-   * 三个假设按顺序问，取**第一个留下真图形**的 —— figure/ground 本来就不是适定的，任何做法
+   * 四个假设按顺序问，取**第一个留下真图形**的 —— figure/ground 本来就不是适定的，任何做法
    * 都得验一次结论，区别只在于验的是数字还是手感：
    *  · **H1 内容框四角上的颜色** —— 老式满幅图、以及底板画到边的自适应图标；
    *  · **H2 内容自己轮廓上的颜色** —— 圆盘 / 圆角方**整块画在前景层里**的那种：空气在内容框
@@ -969,6 +987,9 @@ internal object MonochromeMask {
    *    …）全栽在这条上：判据比的是"图形 vs 空气"，底根本不在比较里，于是七张全判成不翻。
    *  · **H3 参照 = 没有东西**（透明）—— 图形浮在空气上时的正确答案。H2 在这种图上会失败：
    *    薄字形的轮廓就是字形自己，洪泛吃掉整框，验收（[PLATE_ALL_SHARE]）把它挡回这里。
+   *  · **H0 区域关系**（[regionGround]）—— H1、H2 都说不出"哪块是底"时，最后问一次"有没有一块
+   *    大区域把别的画围在里面、并且铺满整幅画布"，再退到 H3。它问的不是某个位置的颜色，
+   *    这才是"底"这个词的本义；排在 H2 之后是有原因的，见那里的真值表与 [regionGround]。
    *
    * 洪泛**穿过所有底家族的并集**，不是冠军那一个：底常常是几块拼的（高德四块、云闪付红白两段、
    * 饿了么橙蓝两段），只选一个家族，剩下那块底整块变成墨 = 「还剩一块大色块」。
@@ -1014,12 +1035,152 @@ internal object MonochromeMask {
       if (alt.share < PLATE_ALL_SHARE) return alt
       h2share = alt.share; h2thick = alt.thick; h2enc = alt.enclosed; h2spread = alt.spread
     }
+    // H1、H2 都没说出"哪块是底"之后，先问 H0（区域关系），再退到 H3（没有底）。
+    // 位置很要紧：H0 抢在 H2 前面会撞翻判据台的「透明底+围住的镂空」那类用例，而它接手的活
+    // 本来就只有"今天注定退成空气"的那几张（84 张真图标里走得到这里的只有 3 张）。
+    regionGround(pixels, w, h, box, g, s, seed)?.let {
+      it.h2 = h2share; it.h2thick = h2thick; it.h2enc = h2enc; it.h2spread = h2spread
+      return it
+    }
     bandSeed(s, w, box, band, seed)
     val air = fitGround(pixels, w, h, box, g, s, 0, seed)
     air.hyp = 3
     air.h2 = h2share; air.h2thick = h2thick; air.h2enc = h2enc; air.h2spread = h2spread
     return air
   }
+
+  /**
+   * **H0：不问"哪个位置是什么色"，问"图上有没有一块大区域、肚子里坐着别的画、而且它就是画布自己那一层"。**
+   *
+   * 为什么要有这一支：H1 取内容框四角的色、H2 取内容轮廓的色 —— 两个种子都在**描述某个位置的颜色**。
+   * 而"底"本来说的是一种**关系**。这条关系正是 [groundPass] 那张真值表（占比 / 厚度 / 围合 / 环散）
+   * 里唯一没有的量，也是那四个量分不开的那一对唯一还分得开的地方。
+   *
+   * 四道门槛，每一道都在 `_harness/GateKt.kt` 上量过（edge=384，"该收"= 图上确实有一块承载面）：
+   *  ④ **内容框 ≥ [REGION_FULL_PCT] 的整幅画布**。这条才是把 H0 与判据台那四条"盘子"用例分开的东西：
+   *    一张图缩在画布中间时，"框外是空气"说的是**画里的留白**，不是"这张图没有底"。绿盘子中间坐
+   *    一个白圆（「透明底+围住的镂空」）与色盘子上坐一个闪电（小步点）在区域关系上**同构**，
+   *    区别只在前者的盘子是**被画出来的物体**、后者是**承载面**。两侧实测差得很开（`盒布=` 那一列）：
+   *      收 小步点 100 中国移动 100 Moondrop 100 元宝 100      ← icons/ 里点名的那几张
+   *      拒 合成「透明底+围住的镂空」44  icon81 21  icon500 14  ← rec3/ 里上一版 H0 顺手接手的两张
+   *    后两张正是那一次 A/B 里我说不出好坏就跟着变掉的图 —— ④ 把它们退回今天的行为。
+   *    ⚠ 这条门槛认的是"模块拿到的那张位图"：桌面自己留了边距的呈现（判据台 `--inset`，
+   *    名样本一律量到 37）会让 ④ 全体不放行 —— 那一类上 H0 不开口，等于今天，不会更坏。
+   *  ① 最大那块 ≥ [REGION_MIN_PCT] 的内容框；② 它**挨着内容框的边**（缩在正中的大家伙是图案）；
+   *  ③ 它的**洞里**（补集里碰不到框边的那些连通块）至少 [REGION_HOLE_PCT]% 的内容框是不透明的 ——
+   *    那就是"坐在它上面的画"。
+   *
+   * **两条候选被量掉，所以没写进来**（上一轮的报告把它们当成下一步，这里先量再说）：
+   *  · 「区域要比它围住的更**实**」：合成镂空 区α=255 洞α=255、小步点 254/254 —— 相等，分不开。
+   *  · 「围住的要比区域更**亮**」：合成镂空 L 74.3→100.0 与 小步点 78.9→95.9 **同向**，而该收的
+   *    中国移动是 99.7→61.1（反向）、QQ 99.7→43.9（反向）。它既分不开那一对，还会把点名的应用推掉。
+   *
+   * 已知管不到的：整张缩在画布中间、但确实该认底盘的那一类（老式图标里画一块盘当底）—— ④ 把它们
+   * 一起放掉了。这是**选了**的：那条边界上判据台钉着四条"盘子是画、不是底"的性质，而真机点名的一批
+   * 全在 100 那一侧。这一支只接手今天注定退成 H3（空气）的图：它排在 H2 被否之后、H3 之前。
+   */
+  private fun regionGround(
+    pixels: IntArray, w: Int, h: Int, box: Rect, g: Int, s: Scratch, seed: ByteArray,
+  ): Pass? {
+    val boxArea = box.width().toLong() * box.height()
+    if (boxArea * 100 < w.toLong() * h * REGION_FULL_PCT) return null
+    val rid = s.region
+    val q = s.queue
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      for (x in box.left until box.right) rid[row + x] = -1
+    }
+    var best = -1; var bestArea = 0L; var next = 0
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      for (x in box.left until box.right) {
+        val start = row + x
+        if (rid[start] >= 0 || Color.alpha(pixels[start]) < A_SOLID) continue
+        val want = bucketOf(start, s); val my = next++
+        var head = 0; var tail = 0
+        rid[start] = my; q[tail++] = start
+        var area = 0L
+        while (head < tail) {
+          val i = q[head++]
+          val cx = i % w; val cy = i / w
+          area++
+          for ((dx, dy) in NEIGHBOURS) {
+            val nx = cx + dx; val ny = cy + dy
+            if (nx < box.left || nx >= box.right || ny < box.top || ny >= box.bottom) continue
+            val j = ny * w + nx
+            if (rid[j] >= 0 || Color.alpha(pixels[j]) < A_SOLID || bucketOf(j, s) != want) continue
+            rid[j] = my; q[tail++] = j
+          }
+        }
+        if (area > bestArea) { bestArea = area; best = my }
+      }
+    }
+    if (best < 0 || bestArea * 100 < boxArea * REGION_MIN_PCT) return null
+    var rim = false
+    for (x in box.left until box.right) {
+      if (rid[box.top * w + x] == best || rid[(box.bottom - 1) * w + x] == best) { rim = true; break }
+    }
+    if (!rim) for (y in box.top until box.bottom) {
+      if (rid[y * w + box.left] == best || rid[y * w + box.right - 1] == best) { rim = true; break }
+    }
+    if (!rim) return null
+    // 求洞那一趟借用同一个数组打"走过"的记号（-2）：自己的数组，用完不必还原 —— 这正是上一版
+    // 借 [Scratch.visited] 时做不到的事（它留了脏数据，两张 H0 没接手的图跟着变了答案）。
+    var holeInk = 0L
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      for (x in box.left until box.right) {
+        val start = row + x
+        if (rid[start] == best || rid[start] == -2) continue
+        rid[start] = -2
+        var head = 0; var tail = 0
+        q[tail++] = start
+        var touches = false; var ink = 0L
+        while (head < tail) {
+          val i = q[head++]
+          val cx = i % w; val cy = i / w
+          if (cx == box.left || cx == box.right - 1 || cy == box.top || cy == box.bottom - 1) touches = true
+          if (Color.alpha(pixels[i]) >= A_SOLID) ink++
+          for ((dx, dy) in NEIGHBOURS) {
+            val nx = cx + dx; val ny = cy + dy
+            if (nx < box.left || nx >= box.right || ny < box.top || ny >= box.bottom) continue
+            val j = ny * w + nx
+            if (rid[j] == best || rid[j] == -2) continue
+            rid[j] = -2; q[tail++] = j
+          }
+        }
+        if (!touches) holeInk += ink
+      }
+    }
+    if (holeInk * 100 < boxArea * REGION_HOLE_PCT) return null
+    // 四条都过：这块区域就是承载面。种子 = 它自己（不再靠颜色容差去猜它到哪为止），参照色 = 它的平均色。
+    var sr = 0L; var sg = 0L; var sb = 0L
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      for (x in box.left until box.right) {
+        val i = row + x
+        if (rid[i] != best) { seed[i] = 0; continue }
+        seed[i] = 1
+        sr += (pixels[i] shr 16) and 0xff; sg += (pixels[i] shr 8) and 0xff; sb += pixels[i] and 0xff
+      }
+    }
+    val color = (0xff000000.toInt()) or
+      ((sr / bestArea).toInt() shl 16) or ((sg / bestArea).toInt() shl 8) or (sb / bestArea).toInt()
+    s.famL[0] = labChannel(color, 0); s.famA[0] = labChannel(color, 1)
+    s.famB[0] = labChannel(color, 2); s.famColor[0] = color
+    s.fams = 1
+    val p = fitGround(pixels, w, h, box, g, s, 1, seed)
+    p.hyp = 0
+    p.ring = 1
+    p.thick = plateThickness(w, box, s)
+    p.holed = (holeInk * 100 / boxArea).toInt()
+    return p
+  }
+
+  /** H0 的三道区域门槛 + 那道画布门槛。分界都来自 [regionGround] 那段注释里的实测表，两侧差得远。 */
+  private const val REGION_FULL_PCT = 80
+  private const val REGION_MIN_PCT = 25
+  private const val REGION_HOLE_PCT = 2
 
   /**
    * **这块"底"有多厚**：从它的边界（挨着非底或挨着框外）做多源 BFS，取底像素到边距离的
