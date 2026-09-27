@@ -564,15 +564,16 @@ internal object MonochromeMask {
       }
     }
 
-    // 4) 交出去之前把墨量抬到满阶：最深的必须真的最深（他要「图标上必须有系统最深和最浅的
-    //    取色」）。抬法是"只往上、锚在 0"的一条直线，理由与两次失败都在 [stretchLut] 上。
-    val stretch = stretchLut(out, total)
-    stretch?.let { s2 ->
+    // 4) 交出去之前把墨量抬到满阶（他要「图标上必须有系统最深和最浅的取色」）。**两层叠加**：
+    //    全局那一层管"整张最深都不够"，字形那一层管"只有 1% 到顶、主体停在 140"。
+    val global = stretchGlobal(out, total)
+    global?.let { g ->
       for (i in 0 until total) {
         val a = out[i] ushr 24
-        if (a != 0) out[i] = (s2.first[a] shl 24) or 0x00FFFFFF
+        if (a != 0) out[i] = (g.first[a] shl 24) or 0x00FFFFFF
       }
     }
+    val stretch = "${global?.second ?: "已满"}+${stretchMark(out, pixels, w, h, box, s)}"
 
     // 5) 形状体检。**修不修形状看浓度是谁给的**：颜色给的（β 高）才可能有"切底切出来的杂点"，
     //    覆盖率给的（β≈0）那些淡值全是设计者自己画的柔光与抗锯齿，擦掉就是一圈锯齿、桥起来
@@ -585,6 +586,17 @@ internal object MonochromeMask {
     // 浓度，于是留白变成实心方块，还带一条横带）。A/B 对过：撤掉保底仍在、撤掉重排才消失。
     // 一笔买卖换不来一个方框，所以修法撤了、数留着 —— 下一步的锚点必须先把"柔光/留白"
     // 排除在"部分"之外（按面积占比与离底距离双重门槛），而不是先铺匀再找补。
+    // 浓度的体检数，**只为进日志**（不参与任何判断）：只看"源像素本来就实心"那一堆墨 ——
+    // `字均` 是它们的平均浓度，`顶占比` 是其中到 250 以上的比例。为什么要单独两个数：
+    // `框内=` 只数"多少像素上了墨"，不数"墨有多实"，所以 87 张真机像素里 36 张字形平均不到 200，
+    // 判据却一条都不红（见 [stretchLut] 那段）。这两个数就是那条判据的原料。
+    var markN = 0; var markSum = 0L; var markTop = 0
+    for (i in 0 until total) {
+      if (Color.alpha(pixels[i]) < 255) continue
+      val a = out[i] ushr 24
+      if (a == 0) continue
+      markN++; markSum += a; if (a >= 250) markTop++
+    }
     val sep = separation(out, w, h, box, s)
     val st = measure(out, w, h, box, s, bridge = colourDriven, despeckle = colourDriven)
     val fill = st.kept.toFloat() / boxArea
@@ -597,9 +609,11 @@ internal object MonochromeMask {
       " 围=${ground.enclosed} 环散=${ground.spread} 零=${ground.zero} 实=${ground.solid} 端=${lo shr 6}/${hi shr 6} " +
         "壳占=${pct(body.share)} 层比=$keepInk/$knockInk " +
         "降=${pct(knocked.toFloat() / boxArea)} 降力=${body.weight} 力度=$hollow 明暗=${q} " +
-        "框内=${pct(fill)} cc=${st.components} top=${pct(st.largest)} 小片=${pct(st.smallShare)} " +
+        "框内=${pct(fill)} 字均=${if (markN == 0) -1 else (markSum / markN)}" +
+        " 顶占比=${if (markN == 0) -1 else markTop * 100 / markN} " +
+        "cc=${st.components} top=${pct(st.largest)} 小片=${pct(st.smallShare)} " +
         "空洞=${pct(st.hole)} 淡=${pct(softShare(st, box))} 色驱=${ground.meanCov} " +
-        "色阶=${stretch?.second ?: "已满"} " +
+        "色阶=$stretch " +
         "分档=${sep.second}/${sep.first}" +
         (if (sep.third.isEmpty()) "" else "(${sep.third.joinToString(",")})"),
       ground.hyp,
@@ -703,20 +717,22 @@ internal object MonochromeMask {
     return Triple(parts.size, levels, parts)
   }
 
-  /** 交付前把墨量拉到满阶用的分位（见 [stretchLut]）。取分位不取最值：
-   *  一圈抗锯齿的极值不该决定整张图的色阶。 */
+  /** 全局抬顶的分位（[stretchGlobal]）：取分位不取最值，一圈抗锯齿的极值不该决定整张的色阶。 */
   private const val STRETCH_HI_PCT = 99
 
   /**
-   * 把墨量**只往上抬**的一条直线：`t → t·255/p99`（封顶 255）。这就是"必须有系统最深的取色"。
+   * 第一层抬顶：**全体**交付墨的 p99 → 255，"只往上、锚在 0"的一条直线。
    *
-   * 只抬、不压、不重排，锚在 0 上 —— 这三条都是踩过坑换来的：
+   * 只抬、不压、不重排，锚在 0 上 —— 两条踩过的坑写在这里以免再被"优化"掉：
    *  · 分段折线按块重排：把"0 → 第一个锚点"整段抬起来，真图上多出一块灰方框（已撤，见 `分档` 那节）；
    *  · 连低端一起拉（`[p1..p99] → [22..255]`）：判据台四条同时红 —— 一条 2px 细线本来就占不到
    *    墨量的 1%，按 p1 归一等于把它当成噪点擦掉。**"最浅的一档"不能靠压别的档来给。**
-   *  所以这里只保证最深那一头，浅的那一头保持原样：抬不动的（已经铺满）一个像素都不动。
+   *
+   * 它的**盲区**是它自己那句 `色阶=已满`：p99 是尾部统计，一张图只要有 1% 的墨到顶就不动了，
+   * 剩下 87% 停在 140 的整块字形它管不着。那一半由 [stretchMark] 接手 —— 两层是**叠加**的：
+   * 曾把这条换成按字形统计的那一条，结果 84 张里 11 张反而掉回没抬的水位（`分档` 逐张对出来的）。
    */
-  private fun stretchLut(out: IntArray, total: Int): Pair<IntArray, String>? {
+  private fun stretchGlobal(out: IntArray, total: Int): Pair<IntArray, String>? {
     val hist = IntArray(256)
     var n = 0
     for (i in 0 until total) {
@@ -729,6 +745,109 @@ internal object MonochromeMask {
     val lut = IntArray(256)
     for (t in 1..255) lut[t] = (t * 255 / hi).coerceIn(t, 255)
     return lut to "p99=$hi→255"
+  }
+
+  /** 认作"一种颜色画出来的字形"的比例地板，见 [stretchMark]。
+   *  85 = 留余量给字形自己的抗锯齿与两色拼的字标；真机语料上该抬的那几张都在 95 以上。 */
+  private const val STRETCH_FLAT_SHARE = 85
+
+  /** 单色字形抬到满阶的锚：字形那一堆墨的**中位数**。不能取 p85/p99 —— 要修的正是
+   *  "13% 到顶、87% 停在 140"那种分布，高分位恰好被那 13% 撑满（前一版就栽在这上面）。 */
+  private const val STRETCH_MARK_PCT = 50
+
+  /** 多色（渐变填的）字形的锚与上限：锚取 p70（主体那一堆），倍率**封顶 ×1.35**。
+   *  倍率是看图定的：再狠就把设计者自己画的明暗抹成一块实色（见 [stretchMark]）。 */
+  private const val STRETCH_RAMP_PCT = 70
+  private const val STRETCH_RAMP_CAP = 135
+
+  /**
+   * 第二层抬顶：**一种颜色画出来的字形，必须实心。**（第一层在 [stretchGlobal]，两层是叠加的。）
+   *
+   * ## 病灶在哪
+   * `_harness/DensKt` 在 87 张真机像素上量的：把交出去的墨按"源像素本来实不实心"劈成两堆 ——
+   * 「那圈抗锯齿比字形还实」只有 **1 张**（我先前的那个猜想是错的，已推翻），而
+   * **36 张字形平均 <200、59 张实心占比 <50%**：华为市场 140、王者荣耀 154、小步点 161。
+   *
+   * ## 为什么第一层抬不到它
+   * [stretchGlobal] 取的是**全体墨的 p99**。一张图只要有 1% 的墨到顶，它就报 `色阶=已满` 收工 ——
+   * 剩下 87% 停在 140 的那一整块字形根本不在它的口径里。日志里那句"已满"当时被当成好消息。
+   *
+   * ## 为什么这一层不再管"并档"
+   * 前一版在这里加过一道否决：抬升会把 `分档` 里两个部分一起贴上顶、最小间隔 7→0，那撞上
+   * 判据台「相邻部分必须有差别」。可那道否决把**要修的图也一起挡掉了** —— 华为市场那张源色是
+   * 一整块同色（[modalShare] 95% 以上），它内部那两档浓度全是模型自己算出来的，不是设计者的
+   * 明暗；保护一个造出来的层次，就等于保住那份淡。所以门槛换成**源色单一不单一**：
+   *  · 单色字形 → 抬到中位数贴顶（内部那几档本就是我们的误差）；
+   *  · 多色字形 → 一个像素都不动（`色阶=…+多色`），那部分差别是设计者的，由 [separation] 管。
+   * 抗锯齿与柔光（源 α<255）始终不在统计里、也不在抬升里 —— 判据台钉着「那一圈原样传下去」。
+   *
+   * @return 进日志的那一句（`色阶=` 的第二段），抬升已就地写进 [out]。
+   */
+  private fun stretchMark(
+    out: IntArray, pixels: IntArray, w: Int, h: Int, box: Rect, s: Scratch,
+  ): String {
+    val total = out.size
+    val hist = IntArray(256)
+    var n = 0
+    for (i in 0 until total) {
+      if (Color.alpha(pixels[i]) < 255) continue          // 边与柔光：不在统计里，也不在抬升里
+      val a = out[i] ushr 24
+      if (a > 0) { hist[a]++; n++ }
+    }
+    if (n < 64) return "已满"
+    // 单色字形（源色 ≥[STRETCH_FLAT_SHARE]）：内部那几档浓度全是模型造的，抬到中位数贴顶。
+    // 多色字形（渐变填的袋子、有明暗的字标）：**倍率封顶**地抬 —— 屏幕上"淡"是主体那一堆给的，
+    // 而它自己的明暗是设计者画的，抬过这个倍率就把层次抹成一块实色（他报过两次）。
+    // 看图定的这个数：华为应用市场 140 的渐变袋子，×1.35 抬到 189 就已经不再是"灰蒙蒙"，
+    // 再狠（单色那条的 ×1.82）袋子的高光与暗部并成一片。
+    val flat = modalShare(pixels, out, total, s) >= STRETCH_FLAT_SHARE
+    val hi = percentile(hist, n, if (flat) STRETCH_MARK_PCT else STRETCH_RAMP_PCT)
+    if (hi >= 250) return "已满"
+    var mul = 25500 / hi                                     // 抬到贴顶需要的倍率（×100）
+    if (!flat) mul = minOf(mul, STRETCH_RAMP_CAP)
+    // 渐变那一支多一道否决：抬之前/之后各量一次"部分之间的最小间隔"。
+    // 单色那一支不设这道 —— 它内部那几档是模型造的，保护它就是保住那份淡（上面说过）。
+    // 第一版没分开这两件事，全局加了否决，结果要修的图全被挡掉；反过来不加，判据台
+    // 「相邻部分必须有差别」的最小间隔从 7 被压到 0（渐变袋子的三段并成一档）。
+    val baseGap = if (flat) -1 else minGap(separation(out, w, h, box, s).third)
+    // 回滚用的那一份借 [Scratch.queue]（这一步之后 [measure] 会自己重置它，不新分配 590KB）。
+    val buf = if (flat) null else s.queue.also { System.arraycopy(out, 0, it, 0, total) }
+    for (i in 0 until total) {
+      if (Color.alpha(pixels[i]) < 255) continue
+      val a = out[i] ushr 24
+      if (a > 0) out[i] = ((a * mul / 100).coerceIn(a, 255) shl 24) or 0x00FFFFFF
+    }
+    if (buf != null && minGap(separation(out, w, h, box, s).third) < baseGap) {
+      System.arraycopy(buf, 0, out, 0, total)
+      return "渐变并档不抬"
+    }
+    return (if (flat) "单色" else "渐变") + "p" + (if (flat) STRETCH_MARK_PCT else STRETCH_RAMP_PCT) +
+      "=$hi×" + mul / 100
+  }
+
+  /** [separation] 那几块平均浓度（升序）之间最小的那道差。少于一块没有"相邻"可言 → 不设限。
+   *  钉的是判据台「相邻部分必须有差别」那条，**间隔**才是它的尺 —— 数"几档"会把 255/255
+   *  这种并档算成还在，第一版就是这么漏的。 */
+  private fun minGap(means: IntArray): Int {
+    if (means.size < 2) return 255
+    var g = 255
+    for (i in 1 until means.size) g = minOf(g, means[i] - means[i - 1])
+    return g
+  }
+
+  /** 字形那一堆墨（源 α=255 且交出去非零）里，**同一个源色**占多少百分比。
+   *  接近 100 = 整块字形是一种颜色画出来的，那它交付浓度里的分档全是模型造的。
+   *  桶与 [separation] 同一套（[bucketOf]）—— "一种颜色"在这里和 `分档` 里必须是同一件事。 */
+  private fun modalShare(pixels: IntArray, out: IntArray, total: Int, s: Scratch): Int {
+    val cnt = IntArray(SEP_BUCKETS)
+    var n = 0; var top = 0
+    for (i in 0 until total) {
+      if (Color.alpha(pixels[i]) < 255 || (out[i] ushr 24) == 0) continue
+      val c = ++cnt[bucketOf(i, s)]
+      if (c > top) top = c
+      n++
+    }
+    return if (n == 0) 0 else top * 100 / n
   }
 
   // ───────────────────────────── 极性判据 ─────────────────────────────
