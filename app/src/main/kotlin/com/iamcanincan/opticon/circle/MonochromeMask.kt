@@ -238,6 +238,9 @@ internal object MonochromeMask {
     val smallShare: Float,
     val soft: Float,
     val report: String,
+    /** 哪一支赢了（[groundPass] 的 H1/H2/H3/H0）。-1 = 没走到判据（尺寸非法 / 整张透明）。
+     *  带出来只为一个用途：[MonoDump] 要能认出"这一张是新开的那一支接手的"，见那里的说明。 */
+    val hyp: Int = -1,
   )
 
   private class Stats(
@@ -591,7 +594,8 @@ internal object MonochromeMask {
         "空洞=${pct(st.hole)} 淡=${pct(softShare(st, box))} 色驱=${ground.meanCov} " +
         "色阶=${stretch?.second ?: "已满"} " +
         "分档=${sep.second}/${sep.first}" +
-        (if (sep.third.isEmpty()) "" else "(${sep.third.joinToString(",")})")
+        (if (sep.third.isEmpty()) "" else "(${sep.third.joinToString(",")})"),
+      ground.hyp
     )
   }
 
