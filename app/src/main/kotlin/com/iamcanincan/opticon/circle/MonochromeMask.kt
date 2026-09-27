@@ -269,9 +269,8 @@ internal object MonochromeMask {
     var cellG = ShortArray(0)
     var cellB = ShortArray(0)
     var cellN = IntArray(0)
-    /** 每格参照像素的个数与 alpha 之和 —— 出 [fCov]（原语里的那一个 β）。 */
+    /** 这一格里参照像素的**总数**（含透明的）—— 出 [fCov]（原语里的那一个 β）。 */
     var cellTot = IntArray(0)
-    var cellSum = IntArray(0)
     /** 每格参照色的 Lab（×64）与覆盖率 β —— 距离与浓度都直接查它们，不每像素现算转换。 */
     var fL = IntArray(0)
     var fA = IntArray(0)
@@ -309,9 +308,9 @@ internal object MonochromeMask {
       }
       if (cellR.size < cells) {
         cellR = ShortArray(cells); cellG = ShortArray(cells); cellB = ShortArray(cells)
-        cellN = IntArray(cells); cellTot = IntArray(cells); cellSum = IntArray(cells)
+        cellN = IntArray(cells); cellTot = IntArray(cells)
         fL = IntArray(cells); fA = IntArray(cells); fB = IntArray(cells); fCov = IntArray(cells)
-        fieldHist = IntArray(cells * 768)
+        fieldHist = IntArray(cells * 1024)
       }
     }
   }
@@ -1604,9 +1603,8 @@ internal object MonochromeMask {
     val cells = g * g
     s.cellN.fill(0, 0, cells)
     s.cellTot.fill(0, 0, cells)
-    s.cellSum.fill(0, 0, cells)
     s.fCov.fill(0, 0, cells)
-    s.fieldHist.fill(0, 0, cells * 768)
+    s.fieldHist.fill(0, 0, cells * 1024)
     for (y in box.top until box.bottom) {
       val row = y * w
       val cy = ((y - box.top) * g / box.height()).coerceAtMost(g - 1)
@@ -1618,10 +1616,12 @@ internal object MonochromeMask {
         val k = cy * g + cx
         val a = Color.alpha(p)
         s.cellTot[k]++
-        s.cellSum[k] += a
+        // 覆盖率也进直方图（第 4 个通道）：β 取**中位数**，理由与参照色取中位数是同一条 ——
+        // 见下面 [fCov] 那段。均值不许再用，一格里的少数抗锯齿会把整格的参照拖成"半不在"。
+        s.fieldHist[k * 1024 + 768 + a]++
         // 透明像素的 RGB 是垃圾（非预乘、未定义），不参与定色；它算参照，但不算「参照是什么颜色」。
         if (a < A_SOLID) continue
-        val at = k * 768
+        val at = k * 1024
         s.fieldHist[at + ((p shr 16) and 0xff)]++
         s.fieldHist[at + 256 + ((p shr 8) and 0xff)]++
         s.fieldHist[at + 512 + (p and 0xff)]++
@@ -1631,12 +1631,24 @@ internal object MonochromeMask {
     for (k in 0 until cells) {
       val n = s.cellN[k]
       if (n == 0) continue
-      s.cellR[k] = median(s.fieldHist, k * 768, n).toShort()
-      s.cellG[k] = median(s.fieldHist, k * 768 + 256, n).toShort()
-      s.cellB[k] = median(s.fieldHist, k * 768 + 512, n).toShort()
+      s.cellR[k] = median(s.fieldHist, k * 1024, n).toShort()
+      s.cellG[k] = median(s.fieldHist, k * 1024 + 256, n).toShort()
+      s.cellB[k] = median(s.fieldHist, k * 1024 + 512, n).toShort()
     }
     fillEmptyCells(g, s)
-    // 覆盖率：这一格参照像素平均有多实。一个参照像素都没有的格 = 0（见上面那条注释）。
+    // 覆盖率：这一格的参照**平均**有多实（α 的均值）。一个参照像素都没有的格 = 0。
+    // ⚠ **均值是绕着它标定过的，中位数试过、量着否掉了** —— 别再看错一遍：
+    //  板子边缘那圈抗锯齿（α 1..254）确实会把所在格的 β 拉到 170 左右，于是"与参照色完全相同
+    //  的板子像素"每人白拿几十单位墨 —— 华为应用市场量出来 8824 个红像素 ΔE 只有 0.6~1.0，
+    //  交出 97~102/255，屏幕上就是那圈灰边 + 四个角斑，判据台上新增一条 **GAP** 钉着它。
+    //  改成中位数，那些全部归零、层次也拉开了（12123 六块从 62/117/123/131/185/250 变成
+    //  49/91/160/198/225/231 一条干净的梯）。**但同一刀把 H2 的验收换了口径**：哔哩哔哩那种
+    //  透明底线条字，原本 H2 洪泛吃掉 ≥0.92 被 [PLATE_ALL_SHARE] 挡回 H3（参照=没有东西 →
+    //  dep 退成覆盖率 → 整个字形是墨，这才是对的），中位数让洪泛更容易穿，底占 0.00→0.74，
+    //  H2 被接受 → 电视机的身体被当成底腾空，框内 0.50→0.24，就是他报过并回退过的「只剩线条」
+    //  （拼多多同类 0.52→0.18）。一句话：[PLATE_ALL_SHARE] 那个数是**绕着均值长出来的**，
+    //  β 一动它就换了含义。要修 β，先把 H2 的验收换成不依赖 β 的判据（候选：底里有多大比例
+    //  的像素其实"贴着边"—— 线条字的所谓底整片都是边，真底板大部分是内部），别再拿阈值追。
     // @param solidRef 参照是"图形自己"（第二遍）时为真：图形在不在，与它透不透明无关 ——
     //   β 回答的是「**参照**还在不在」，而图形自己的淡是它自己的浓度，已经在工作集的 dep 里
     //   乘过一遍 a 了。第二遍若按 alpha 量 β，外壳正好落在柔光的斜坡上（β≈190），
@@ -1646,7 +1658,11 @@ internal object MonochromeMask {
       s.fCov[k] = when {
         tot == 0 -> 0
         solidRef -> 255
-        else -> (s.cellSum[k] / tot).coerceIn(0, 255)
+        else -> {
+          var sum = 0L
+          for (v in 0..255) sum += v.toLong() * s.fieldHist[k * 1024 + 768 + v]
+          (sum / tot).toInt().coerceIn(0, 255)
+        }
       }
     }
     // 格子色一旦定了，就把 Lab 也一次性算出来（每轮 ≤ cells 次转换）：距离是每像素都要查的，
