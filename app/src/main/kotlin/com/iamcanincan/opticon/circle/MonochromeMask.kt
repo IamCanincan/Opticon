@@ -1184,9 +1184,22 @@ internal object MonochromeMask {
           for (x in box.left until box.right) {
             val i = row + x
             // 「没有颜色」永远算参照的一部分 —— 参照本来就是"透明"时它当然在参照里。
-            s.pass[i] = if (Color.alpha(pixels[row + x]) < A_SOLID ||
-              (s.dist[i].toInt() and 0xffff) <= tol
-            ) 1 else 0
+            val a = Color.alpha(pixels[row + x])
+            val d = s.dist[i].toInt() and 0xffff
+            // ⚠ 判连通用的 `d` **含** β 那一项，而容差 `tol` 是按**不含** β 的量出来的
+            //   （`withCoverage = false`，理由见上面"零点只量参照自己颜色的散度"那段）。
+            //   两把尺不一样长，代价是**盘自己的边永远进不了底**：那一圈背后的色场格子跨在
+            //   "盘↔空气"之间，β 只有 178 而不是 255，于是 `d ≈ a×(255−β)/255 ≈ 77`，
+            //   而它的颜色与参照其实差 0 —— 小步点盘外那一圈看得见的灰环就是这么来的
+            //   （`_harness/RimDbg --res` 的反事实：换成纯色那把尺，dep 掉到 7，容差 15）。
+            //   这里把"那一格自己的空气"减回去（恒等式，不用重开一次 ΔE 开方）：
+            //       纯色距离 = d − a×(255−β)/255
+            //   **只在 β≥128 时这么问**：参照本来就是空气的图（H3、β≈0）不许靠这条把自己
+            //   圈成底 —— 那正是当初把连通改成带 β 的那把尺要挡的事（`透明底白剪影 底占=1.00`）。
+            //   `s.beta` 读的是上一轮拟合的 β，这里要的就是"这一格刚才有多实"。
+            val b = s.beta[i].toInt() and 0xffff
+            val solid = if (b >= 128) d - a * (255 - b) / 255 else d
+            s.pass[i] = if (a < A_SOLID || d <= tol || solid <= tol) 1 else 0
           }
         }
         flood(s, w, box, seed)
@@ -1526,10 +1539,21 @@ internal object MonochromeMask {
 
   /** 这一支交出的墨**大半与底是同一个颜色**（= 这一刀没切开任何东西，假设不作数）。
    *  `inkSame < 0` 是"量不出来"（有一侧是空的），既不赞成也不推翻 —— 见 [GROUND_INK_SAME_PCT]。
-   *  退掉的那一支把自己的数留在 [Scratch.vetoSame]：不留在日志上，这道验收红了也没人知道为什么。 */
+   *  退掉的那一支把自己的数留在 [Scratch.vetoSame]：不留在日志上，这道验收红了也没人知道为什么。
+   *
+   * ⚠ **底自己不实（β<128）时也算"没切开"**，这一条不是新加的门槛，是同一个守卫的第二处：
+   *   一块九成三是空气的"底"没有本色可问 —— `inkSame` 量的是一条噪声。2026-09-28 放宽连通之后
+   *   openlist 被 H2 以 `底占=0.89 β=18` 接手，cc 从 2 碎成 14，就是因为它的 `inkSame` 掉到 13
+   *   而不再被退。与 `残盘=` 那条用同一个 `colourDriven` 的门槛（128），不另立数。
+   */
   private fun vacuous(s: Scratch, p: Pass): Boolean {
-    if (p.inkSame < GROUND_INK_SAME_PCT) return false
-    s.vetoSame = p.inkSame
+    // `inkSame < 0` = 有一侧是空的（整张都是底，或整张都不是），**量不出来**：不赞成也不推翻。
+    // 这条不只是保守：`meanCov` 是在墨那一侧上量的，墨侧为空时它退化成 0 —— 没有下面那个
+    // `inkSame >= 0` 的短路，「整张纯色」（正确答案是一张空掩码）会被误判成"底是空气"而退到
+    // H3，整张涂成实心饼。2026-09-28 就是这么红了一次。
+    if (p.inkSame < 0) return false
+    if (p.inkSame < GROUND_INK_SAME_PCT && p.meanCov >= 128) return false
+    s.vetoSame = if (p.meanCov < 128) -p.meanCov else p.inkSame
     return true
   }
 
