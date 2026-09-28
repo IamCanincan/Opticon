@@ -352,6 +352,25 @@ internal object MonochromeMask {
     var fA = IntArray(0)
     var fB = IntArray(0)
     var fCov = IntArray(0)
+    /** 每格参照像素里**最实**的那一个 α（0 = 这一格压根没有实参照）。
+     *
+     *  为什么要与 [fCov] 分开一支：`fCov` 是"这一格参照平均有多实"，它同时被 H 判据
+     *  （`fCov >= 250` / `>= 128` 那两道洪泛门）和浓度标定读着，动它会换掉整张图走哪一支。
+     *  而**"盘自己的像素要不要画回去"**（[build] 出图循环里那条底格子透传）问的其实是另一个
+     *  问题：「这一格有没有实参照」，不是「这一格平均下来有多实」。两者只在**跨在盘↔渐变上的
+     *  格子**里才分家 —— 那正是翻译那条斜痕的来源：格子 25% 是不透明蓝、75% 是 α≈30 的淡影，
+     *  `fCov` 算出 60，于是**完全不透明的蓝盘**被算成"四分之三是空气"、按 `α×(1−β)` 画回去
+     *  一整条 195/255 的斜带（`_harness/InkWhere.kt` 量到 4px 宽、墨 195~255）。
+     *  `fTop` 在同一个格子上给 255，那一项就归零。 */
+    var fTop = IntArray(0)
+    /** **出图专用的那一份 dep**（[departure] 的 `byTop=true` 口径，见 [fTop]）。
+     *
+     *  为什么不直接改 [dist]：`dist` 是三件事共用的输入 —— ①第二遍的 `d1`（决定"降"多少）、
+     *  ②浓度标定 `hist2`（出 `p.solid`/`p.span`）、③"同源色同浓度"那张表 `cDep`。
+     *  动了它，驾考宝典那种"底 81%、字形压在底上"的图整套标定会跟着缩水
+     *  （`实` 237→178、`字均净` 184→145、`分档` 整条掉一档）。
+     *  只换**最后写出去的那一个数**，上面三样全部照旧 —— 这是这一版能同时保住两头的唯一办法。 */
+    var distT = ShortArray(0)
     /** 每个像素"背后那块底"是哪个格子（[propagateField] 的产物）；-1 = 还没传到。 */
     var ref = IntArray(0)
     /** 第一遍量完就固化的三样：这一像素的参照覆盖率 β、参照亮度（×64）、第二遍的离主体距离。
@@ -392,11 +411,13 @@ internal object MonochromeMask {
         region = IntArray(total)
         body = ByteArray(total)
         beta = ShortArray(total); gRefL = ShortArray(total); off = ShortArray(total)
+        distT = ShortArray(total)
       }
       if (cellR.size < cells) {
         cellR = ShortArray(cells); cellG = ShortArray(cells); cellB = ShortArray(cells)
         cellN = IntArray(cells); cellTot = IntArray(cells)
         fL = IntArray(cells); fA = IntArray(cells); fB = IntArray(cells); fCov = IntArray(cells)
+        fTop = IntArray(cells)
         fieldHist = IntArray(cells * 1024)
       }
     }
@@ -687,7 +708,7 @@ internal object MonochromeMask {
         if (s.plate[i] != 0.toByte() || Color.alpha(pixels[i]) != 255) continue
         val k = pixels[i] and 0x00FFFFFF
         val v = cDep.getOrPut(k) { LongArray(2) }
-        val d = s.dist[i].toInt() and 0xffff
+        val d = s.distT[i].toInt() and 0xffff
         if (d > v[0]) { v[0] = d.toLong(); v[1] = refLight(i, s).toLong() }
       }
     }
@@ -701,7 +722,7 @@ internal object MonochromeMask {
         //   让它借用同色另一格的浓度，等于把盘子画回去 —— `f2196b7` 落地时没量这一列，
         //   判据台 113 张真图标的 `残盘=` 从 4923 涨到 26440（40 行涨、0 行跌，9 行 >1000，
         //   最狠浙江在线 0→5334），正是他报过两次的那圈"看得见的灰盘"。
-        val own = s.dist[i].toInt() and 0xffff
+        val own = s.distT[i].toInt() and 0xffff
         val v = if (own > ground.zero && s.plate[i] == 0.toByte() && Color.alpha(pixels[i]) == 255)
           cDep[pixels[i] and 0x00FFFFFF] else null
         val dep = if (v != null) v[0].toInt() else own
@@ -801,7 +822,7 @@ internal object MonochromeMask {
       if (a == 0) continue
       markN++; markSum += a; if (a >= 250) markTop++
       // dep 在这里就是判连通用的那一个数（fitGround 交付段之后，非底的格子没被改写过）。
-      if (s.plate[i] == 0.toByte() && (s.dist[i].toInt() and 0xffff) <= ground.zero) { resN++; resSum += a }
+      if (s.plate[i] == 0.toByte() && (s.distT[i].toInt() and 0xffff) <= ground.zero) { resN++; resSum += a }
       else { figN++; figSum += a; if (a >= 250) figTop++ }
     }
     val sep = separation(out, w, h, box, s)
@@ -1609,12 +1630,28 @@ internal object MonochromeMask {
           } else inn++
         }
         if (s.plate[i] != 0.toByte()) {
-          val b = s.beta[i].toInt() and 0xffff
-          s.dist[i] = (if (touchesInk(s.plate, pixels, w, box, x, y))
-            Color.alpha(pixels[i]) * (255 - b) / 255 else 0).toShort()
+          // 底格子这一条用 [fTop] 问"这一格有没有实参照"，不是"平均有多实"：跨在
+          // "盘↔空气"（中国移动盘沿）与跨在"实心↔渐变淡影"（翻译那条斜痕）上的格子，
+          // β 都会被淡的那一半拖低，于是"完全不透明的一格盘"被算成"四分之三是空气"、
+          // 画回去一整条 `α×(1−β)` 的斜带。
+          val cell = if (s.ref[i] >= 0) s.ref[i] else 0
+          val t = s.fTop[cell]
+          val d = if (touchesInk(s.plate, pixels, w, box, x, y))
+            Color.alpha(pixels[i]) * (255 - t) / 255 else 0
+          s.dist[i] = d.toShort()
+          s.distT[i] = d.toShort()
           continue
         }
         val d = s.dist[i].toInt() and 0xffff
+        // 出图那一份换尺（见 [distT]）：`dist` 本身照旧，标定与第二遍读到的还是老口径。
+        s.distT[i] = departure(pixels[i], i, s, byTop = true).toShort()
+        // **交付侧收掉"盘自己那圈边"**（见 [thinInk]）：一个非底的像素，3×3 里至少 5 个是底。
+        // ⚠ 只改**写出去的那一个数**，`hist2` / `covSum` / `nInk` 照旧吃原来的 `d` ——
+        //   这一条绝不能顺手把标定的输入也换掉：判据台上 `icon554_…photos` 就是因为
+        //   `nInk` 被抽空（那张图的墨**全是**这种细结构）而 `p.solid` 退成 `p.zero`、
+        //   整张掩码归零（`框内 0.53→0.00`、`字均净 242→-1`）。标定要的是"这张图本来有多浓"，
+        //   与"最后写不写出去"是两件事。
+        if (thinInk(s.plate, w, box, x, y)) { s.dist[i] = 0; s.distT[i] = 0 }
         s.hist2[d.coerceAtMost(DBUCKETS - 1)]++
         covSum += s.beta[i].toInt() and 0xffff
         nInk++
@@ -2393,7 +2430,7 @@ internal object MonochromeMask {
    * ⚠ 半透明像素先按自己的 alpha 合成到参照上再比色是不做的 —— `getPixels` 给的是**非预乘**值，
    *   它的 RGB 就是它自己，而 dep 已经整体乘了 a：淡的本来就该近，不需要再改它的色相。
    */
-  private fun departure(pixel: Int, i: Int, s: Scratch, withCoverage: Boolean = true): Int {
+  private fun departure(pixel: Int, i: Int, s: Scratch, withCoverage: Boolean = true, byTop: Boolean = false): Int {
     val a = Color.alpha(pixel)
     if (a == 0) return 0
     val cell = if (s.ref[i] >= 0) s.ref[i] else 0
@@ -2403,7 +2440,23 @@ internal object MonochromeMask {
     ) shr 6
     val cf = if (de >= EMAX) 255 else de * 255 / EMAX
     val b = s.fCov[cell]
-    return if (withCoverage) a * ((255 - b) * 255 + b * cf) / 65025 else a * b * cf / 65025
+    // ⚠ `byTop` 只在**出图**那一步开（见 [build] 的出图循环）：覆盖率那一项问的是
+    //   「这一格有没有实参照」，用 [fTop]；而洪泛决策里问的是「这一格平均有多实」，
+    //   必须继续用 β —— 两个口径混用会把美团 / Google Photos 的 H 从 3 翻成 1、整张变空。
+    //
+    // ⚠ **而且只在"这一像素与参照根本是同一种料"时才换尺**（`de < SEAM_DIVERGE`）。
+    //   不设这道门的代价在判据台上量得很清楚：113 张真图标 `字均净` 净 −99，
+    //   且**几乎全落在驾考宝典（3 张 −31）与王者荣耀（1 张 −21、3 张 −13）**上 ——
+    //   那几张的字形压在盘上、格子跨在"盘↔**空气**"之间，`α×(1−β)` 那一项本来就是
+    //   它们唯一的墨量来源，一刀切掉就等于把字形抽淡。翻译那条斜痕不一样：
+    //   它的像素与盘**同色**（ΔE 0~19 < 25），换尺之后 dep 归零，正是我们要的。
+    val same = de < SEAM_DIVERGE
+    val c = if (byTop && same) s.fTop[cell] else b
+    return if (withCoverage) {
+      (if (a > c) a - c else 0) + a * b * cf / 65025
+    } else {
+      a * b * cf / 65025
+    }
   }
 
   /** ΔE 到多少算"完全不像参照"。超过就按这个数截断，再往上的差别交给标定。 */
@@ -2687,6 +2740,41 @@ internal object MonochromeMask {
   }
 
   /**
+   * **交付侧的"这一格是不是盘自己的一圈边"**：一个非底的像素，**3×3 邻域里至少 5 个是底**。
+   *
+   * 2026-09-28，用户点名的 `com.google.android.apps.translate` 那条**斜涂抹痕**就是这一条。
+   * 它的源是一圈 **1px 的浅蓝描边**（`_harness/InkWhere.kt` 逐行量到 `n=1`、源 α 全是 255、
+   * 颜色 `#6C9FF6` 而盘是 `#4F8DF4`，ΔE≈12），沿蓝盘的边界从左上斜贯到右下。
+   * 这一圈描边在栅格上是**阶梯**的，局部会连成 2×2 的小团，所以：
+   *  · "四邻全是底"只清掉 22/427；
+   *  · "某一对相反紧邻都是底"清掉 274/427，剩下的全是阶梯拐角（实测 (179,98) 四邻只有 2 个底）；
+   *  · 数 **3×3** 才把它整条收掉（实测该区域 `墨>3` 归零）。
+   *
+   * ⚠ **只认细，不认颜色、不认贴谁** —— 一旦掺进"颜色离盘多近"，就等于再调一次容差，
+   *   而容差那一路（`pass` → `flood` → `plate`）会反馈：2026-09-28 试过把 [seamAcross] 改成
+   *   "两侧同格时退到端点像素色"，翻译当场 `框内 0.02→0.55`、整块蓝盘被亮度轴上成墨。
+   *   这里只决定"这个数不写出去"，`plate` / `fCov` / `β` / `q` / `tol` 一个都不碰。
+   *
+   * ⚠ **阈值 5 不是随手取的**：判据台 `SelfTest` 第 9 条钉着"均匀底上 2px 细线必须留下"，
+   *   竖线上每一格的 3×3 里固定有 6 格是线自己 → 只有 3 个底邻，`≥5` 一格都不会误伤；
+   *   而 2px 是判据台认的下限，1px 在 108dp 的画布上是 0.28dp，屏幕上本来就分辨不出来。
+   *   取 4 会开始啃 2px 斜线的两端（斜线的 3×3 里线自己只有 4~5 格）。
+   */
+  private fun thinInk(plate: ByteArray, w: Int, box: Rect, x: Int, y: Int): Boolean {
+    if (x <= box.left || x >= box.right - 1 || y <= box.top || y >= box.bottom - 1) return false
+    val i = y * w + x
+    var n = 0
+    for (dy in -1..1) {
+      val row = i + dy * w
+      for (dx in -1..1) {
+        if (dx == 0 && dy == 0) continue
+        if (plate[row + dx] != 0.toByte()) n++
+      }
+    }
+    return n >= 5
+  }
+
+  /**
    * 把「两块底之间的中缝」吸收进底。
    *
    * 两块不同颜色的底相接处有一圈抗锯齿混色：它离两边家族都远，洪泛过不去，于是留在掩码上
@@ -2883,6 +2971,22 @@ internal object MonochromeMask {
           var sum = 0L
           for (v in 0..255) sum += v.toLong() * s.fieldHist[k * 1024 + 768 + v]
           (sum / tot).toInt().coerceIn(0, 255)
+        }
+      }
+      // 「这一格有没有实参照」：取这一格参照像素里最实的那个 α。没有参照像素的格子 = 0
+      // （那是"根本没量到参照"，不是"参照是实心的一块"，与 [fCov] 同一条口径）。
+      //
+      // ⚠ **只认 α ≥ [A_SOLID] 的那一段。** 不设这道门会连带把"空气 + 抗锯齿"的格子也算成
+      //   有实参照：哔哩哔哩 / Google logo / 美团那些格子里最高 α 是 104~127 —— 那正是**抗锯齿边**
+      //   自己的 α，不是"这一格有一块实心参照"。带上它们，判据台上 Google logo `字均净` 231→189、
+      //   哔哩哔哩 233→213，两处都是白挨的。有实参照的格子（≥128）才是我们要问的那一种。
+      s.fTop[k] = when {
+        tot == 0 -> 0
+        solidRef -> 255
+        else -> {
+          var top = 0
+          for (v in 255 downTo A_SOLID) if (s.fieldHist[k * 1024 + 768 + v] > 0) { top = v; break }
+          top
         }
       }
     }
