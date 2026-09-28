@@ -1903,7 +1903,17 @@ internal object MonochromeMask {
    */
   private fun thinPlate(p: Pass): Boolean = p.gN < p.iN
 
-  /** H0 的三道区域门槛 + 那道画布门槛。分界都来自 [regionGround] 那段注释里的实测表，两侧差得远。 */
+  /** H0 的三道区域门槛 + 那道画布门槛。分界都来自 [regionGround] 那段注释里的实测表，两侧差得远。
+   *
+   *  ⚠ **这一支接不了"满幅插画"那一张，量过的**（2026-09-28，用户先点智慧游戏「取色有点问题」、
+   *   再说「感觉反下色更好」）：把 H1/H2 的验收临时全关掉，让 H0 先挑 —— 六张插画
+   *   （wisdomgame / browndust2 / sgameGlobal / astralparty / songpal / kazumi）**一张都没走到接手**：
+   *   五张 `H0=3`（被区域关系拦），一张 `H0=2`（被画布门槛拦），全部落到 H3，
+   *   交出去是 `框内=0.94~1.00` 的实心方块。原因是结构性的：这里的"区域"是**按颜色量化后
+   *   的连通块**，而画出来的图是连续渐变，量化不出"一整块把别的东西围起来"的区域。
+   *   所以"给这一类做一支按区域认主体的分支"这条**不成立** —— 要做得换一套按色调切分
+   *   （先把画面切成两个色调，再问哪一侧是被另一侧围住的），那是新算法，不是这道门槛放宽能换来的。
+   */
   private const val REGION_FULL_PCT = 80
   private const val REGION_MIN_PCT = 25
   private const val REGION_HOLE_PCT = 2
