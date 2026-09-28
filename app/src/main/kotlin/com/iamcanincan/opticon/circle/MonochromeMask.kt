@@ -637,14 +637,42 @@ internal object MonochromeMask {
         }
       }
     }
+    // 3.4) **同一种源色交付同一种浓度。** `dep` 与参照都是**逐格**拟合的色场，所以"底"自己
+    //   多色的时候，同一个颜色的像素会在相邻两格里拿到差一倍的离底距离 —— 抖音
+    //   （`com.ss.android.ugc.aweme`，H2 把青+红两层错位影认成底）实测：白音符 8811 格全
+    //   是同一个色，dep 按格子从 **122 一路散到 241**，出墨跟着从 162 散到 255，屏幕上
+    //   就是一个被切成十几块灰度的音符（`_harness/RimDbg --cells` 那十二行）。
+    //   这里按**源色本身**取该色墨侧"离底最远的那一格"当这一色的 dep/参照：底匀的图两者本来就
+    //   相等（恒等，一个像素都不动），底多色的图整块回到一个浓度、且回到它最有把握的那一档。
+    //   ⚠ 键必须是**精确颜色**，不能用 [SEP_BUCKETS] 那种粗桶（L 每 8、a/b 每 32）：
+    //   第一版拿粗桶做，美团那张 `字均净 227→76` —— 黑字与黄底落进同一个桶，均值把字拖到中间调。
+    //   ⚠ 代表值必须是**最远那一格**，不是均值：精确色＋均值那一版是
+    //   `字均净 升84/降34（净+112）、淡(<200) 50→56（弄坏 9 张）、cc 变坏 37`；
+    //   同一个键换成最远那一格才是下面引号里那组数。理由：一块颜色跨在两种深的底上时，
+    //   均值把"看得清的那半"拖下来陪"本来就远的那半" —— 陪的是浓度，不是真相。
+    //   渐变不受影响：同一个精确颜色的像素本来就落在同一条带上。
+    val cDep = HashMap<Int, LongArray>()
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      for (x in box.left until box.right) {
+        val i = row + x
+        if (s.plate[i] != 0.toByte() || Color.alpha(pixels[i]) != 255) continue
+        val k = pixels[i] and 0x00FFFFFF
+        val v = cDep.getOrPut(k) { LongArray(2) }
+        val d = s.dist[i].toInt() and 0xffff
+        if (d > v[0]) { v[0] = d.toLong(); v[1] = refLight(i, s).toLong() }
+      }
+    }
     val out = IntArray(total)
     var knocked = 0
     for (y in box.top until box.bottom) {
       val row = y * w
       for (x in box.left until box.right) {
         val i = row + x
-        val dep = s.dist[i].toInt() and 0xffff
-        val ref = refLight(i, s)
+        val v = if (s.plate[i] == 0.toByte() && Color.alpha(pixels[i]) == 255)
+          cDep[pixels[i] and 0x00FFFFFF] else null
+        val dep = if (v != null) v[0].toInt() else s.dist[i].toInt() and 0xffff
+        val ref = if (v != null) v[1].toInt() else refLight(i, s)
         // ⚠ 感知曲线只加在**距离**那一条上，混完不再过一次。桌面拿 alpha 当不透明度，ΔE 距离
         //   线性排会把大半图形留在六成浓度以下（观感就是「主题色怎么这么浅」），所以要抬中低段；
         //   而 L\\* 本身就是感知量，再抬一次就把一张插画洗成一块实色（判据台上 多色插画 量出来
