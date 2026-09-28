@@ -322,6 +322,9 @@ internal object MonochromeMask {
      *  用途见 [fitGround] 里 `rb` 那一段。⚠ 自己的数组：借 `pass` / `visited` 的下场
      *  [region] 那条已经写过一遍。 */
     var rimBand = ByteArray(0)
+    /** 第二遍降层次的"围住"标记：1 = 比主体亮且够远（降档候选）；2 = 这些候选里能从**空气**
+     *  只踩候选格走得到的那些 —— 那是设计者的第二种颜色，不是镂空。用途见 [build] 里 `kc` 那段。 */
+    var knockReach = ByteArray(0)
     /** H2 那一圈轮廓到自己中位色的 p97 ΔE —— 「这一圈是不是一种颜色」（见 [outlineFamilies]）。 */
     var ringSpread = 0
     var hist = IntArray(DBUCKETS)
@@ -587,7 +590,53 @@ internal object MonochromeMask {
     // 日志里的这一对 = 两边各交出多少墨，除以 255 换成"等效实心像素数"。
     val keepInk = keep / 255
     val knockInk = knockCand / 255
+    // ⚠ 上面那条比的是"两边各交出多少墨"，它挡得住"主体自己被当成第二层"，挡不住另一种：
+    //   **比主体亮的那一块，可能是设计者的第二种颜色，不是镂空。** 哔哩哔哩（`tv.danmaku.bili`）
+    //   量到的就是这一种：粉色电视机壳 + 白色 wordmark 压在壳上并伸出两侧，白字相对壳就是
+    //   "更亮"，于是整条字被按高光刻下去 —— 交付成 143/218/240 一片灰渣，`空洞=0.35`、`cc=9`。
+    //   判据不能是"参照实不实"（试过 `ground.meanCov<128` 一刀切：钉着的性质
+    //   「透明底+围住的镂空」当场 FAIL，洞 0→225 —— 透明底上**被围住的**亮块确实该刻）。
+    //   分开两者的是**围合关系**：被主体围住的亮块是镂空，贴着空气的亮块是另一种颜色。
+    //   所以从"四邻有不是实心的地方"的那些候选格出发，只在候选格之间洪泛一次；
+    //   走得到的（kc==2）不刻，走不到的（kc==1）照旧刻。
+    //   ⚠ 种子只认**真的空气**（α<A_SOLID），不认底 —— 底上"透过亮块看得见板"正是镂空的定义，
+    //   把底也算进去等于在这类图上整条退出。没有空气的图一个种子都没有，行为与改之前逐像素相同。
     val hollow = if (knockCand > keep) 0 else HOLLOW * body.weight / 255
+    var kc = s.knockReach
+    if (kc.size < total) { kc = ByteArray(total); s.knockReach = kc }
+    if (hollow > 0) {
+      kc.fill(0, 0, total)
+      var head = 0
+      var tail = 0
+      val q2 = s.queue
+      for (y in box.top until box.bottom) {
+        val row = y * w
+        for (x in box.left until box.right) {
+          val i = row + x
+          if (s.plate[i] != 0.toByte() || Color.alpha(pixels[i]) < A_SOLID) continue
+          if ((s.labL[i].toInt() and 0xffff) - bodyLight(i, s) <= 0) continue
+          if ((s.off[i].toInt() and 0xffff) <= body.zero) continue
+          kc[i] = 1
+          val open = (x == box.left || y == box.top || x == box.right - 1 || y == box.bottom - 1 ||
+            Color.alpha(pixels[i - 1]) < A_SOLID || Color.alpha(pixels[i + 1]) < A_SOLID ||
+            Color.alpha(pixels[i - w]) < A_SOLID || Color.alpha(pixels[i + w]) < A_SOLID)
+          if (open) { kc[i] = 2; q2[tail++] = i }
+        }
+      }
+      while (head < tail) {
+        val i = q2[head++]
+        val y = i / w
+        val x = i - y * w
+        for (d in 0 until 4) {
+          val inside = when (d) {
+            0 -> x > box.left; 1 -> x < box.right - 1; 2 -> y > box.top; else -> y < box.bottom - 1
+          }
+          if (!inside) continue
+          val j = i + when (d) { 0 -> -1; 1 -> 1; 2 -> -w; else -> w }
+          if (kc[j] == 1.toByte()) { kc[j] = 2; q2[tail++] = j }
+        }
+      }
+    }
     val out = IntArray(total)
     var knocked = 0
     for (y in box.top until box.bottom) {
@@ -616,7 +665,7 @@ internal object MonochromeMask {
         a = (a + a * (u * 100 / amp).coerceIn(-down, up) / 100).coerceIn(0, 255)
         // 第二遍只降**比主体亮**的那一侧（镂空、高光、白 logo 上的洞）。比主体暗的那些是图形
         // 自己的暗部，降它等于把细节擦了 —— 与上面那条明度序同一个极性。
-        if ((s.labL[i].toInt() and 0xffff) - bodyLight(i, s) > 0) {
+        if ((s.labL[i].toInt() and 0xffff) - bodyLight(i, s) > 0 && kc[i] != 2.toByte()) {
           val off = s.off[i].toInt() and 0xffff
           val k = CURVE[((off - body.zero) * 255 / body.span).coerceIn(0, 255)]
           if (k > 0) {
