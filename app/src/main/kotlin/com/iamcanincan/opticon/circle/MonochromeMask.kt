@@ -58,6 +58,25 @@ internal object MonochromeMask {
   /** 「这块像素算不透明」，也是形状统计的口径 —— 与全仓 `MIN_SHAPE_ALPHA` 同一条线。 */
   private const val A_SOLID = 128
 
+  /** 算"空气"的门槛：低到这条才算**什么都没有**（不是"淡一点的画"）。 */
+  private const val A_AIR = 64
+
+  /**
+   * 「盘自己的外沿」有多宽：内侧挨着底、外侧这么几步之内就是空气的那些实心格。
+   *
+   * 为什么需要这一条：判连通比的是"含 `(1−β)` 的 dep"，容差却是**不含** β 量的（见
+   * [fitGround] 里那一段）。承载面的外沿背后那一格跨在"盘↔空气"之间，β 只有 27~29，
+   * 于是那一圈实心、颜色就是盘的像素 dep=227、出墨 255 —— 屏幕上就是盘轮廓外那 8 个
+   * 暗色小楔子（run.xbud / 中国移动 点名的"外圈瑕疵"：cell 1/6/8/15/48/55/57/62 =
+   * 圆盘与方形画布四角相接那几格，449/463 格）。把它们放回底里，唯一还没过的关是
+   * **别把贴着盘的图形一起放回去** —— 楔子的外侧是空气，贴盘的图形外侧还是底。
+   *
+   * 6 不是猜的：`_harness/RimDbg --rim` 量到那 449 格到最近空气的切比雪夫距离是
+   * **3 步 165 格、4 步 174、5 步 98、6 步 12，1~2 步与 7 步以上都是 0**。
+   * 取 6 刚好包住整条尾巴。（1~2 步为 0 也解释了为什么"四邻贴不贴空气"那一版完全惰性。）
+   */
+  private const val PLATE_EDGE_R = 6
+
   /** 碎渣下限：连通块小于 `总面积 / MIN_SPECK_DIVISOR`（且不少于 8 像素）就擦掉。
    *  按面积给比例而不是写死像素数 —— 出图尺寸跟着桌面要的大小变（本机 192 / 384 两档）。 */
   private const val MIN_SPECK_DIVISOR = 4096
@@ -294,6 +313,10 @@ internal object MonochromeMask {
     var region = IntArray(0)
     /** [plateThickness] 的距离场（只在内容框里用，按需自己扩容）。 */
     var thickDist = IntArray(0)
+    /** 每格到**最近一个空气像素**的切比雪夫距离（Short，封顶 32000）。
+     *  ⚠ 单独一块数组，不借 [thickDist]：借来的数组留脏数据是抓不住的（[region] 那条写过）。
+     *  用途见 [PLATE_EDGE_R] —— 盘自己的外沿是"内侧挨着底、外侧几步内是空气"的那一圈。 */
+    var airDist = ShortArray(0)
     /** H2 那一圈轮廓到自己中位色的 p97 ΔE —— 「这一圈是不是一种颜色」（见 [outlineFamilies]）。 */
     var ringSpread = 0
     var hist = IntArray(DBUCKETS)
@@ -1179,6 +1202,42 @@ internal object MonochromeMask {
     //   底占=1.00，极性判据跟着找不到墨）。换成 dep 之后 β=0 的格上 dep 退成覆盖率，实心白像素
     //   恒为 255，容差怎么夹都吸不进去。
     var tol = DEP_COARSE
+    // 到最近空气的切比雪夫距离：两趟扫描（正向看左上四邻、反向看右下四邻），O(框)。
+    // 空气=0，框外也算 0（画布的边就是"什么都没有"的边界）。见 [PLATE_EDGE_R]。
+    if (s.airDist.size < total) s.airDist = ShortArray(total)
+    val ad = s.airDist
+    val INF = (box.width() + box.height()).toShort()
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      for (x in box.left until box.right) {
+        val i = row + x
+        ad[i] = if (Color.alpha(pixels[i]) < A_AIR) 0 else INF
+        if (x > box.left && (ad[i - 1].toInt() + 1) < ad[i].toInt()) ad[i] = (ad[i - 1] + 1).toShort()
+        if (y > box.top) {
+          for (dx in -1..1) {
+            val xx = x + dx
+            if (xx < box.left || xx >= box.right) continue
+            val v = (ad[i - w + dx].toInt() + 1).toShort()
+            if (v < ad[i]) ad[i] = v
+          }
+        }
+      }
+    }
+    for (y in box.bottom - 1 downTo box.top) {
+      val row = y * w
+      for (x in box.right - 1 downTo box.left) {
+        val i = row + x
+        if (x < box.right - 1 && (ad[i + 1].toInt() + 1) < ad[i].toInt()) ad[i] = (ad[i + 1] + 1).toShort()
+        if (y < box.bottom - 1) {
+          for (dx in -1..1) {
+            val xx = x + dx
+            if (xx < box.left || xx >= box.right) continue
+            val v = (ad[i + w + dx].toInt() + 1).toShort()
+            if (v < ad[i]) ad[i] = v
+          }
+        }
+      }
+    }
     passFromFamilies(pixels, w, box, s, TOL_COARSE shl 6, fams)
     // 第一轮之前先洪泛一次：色场是从「与边界连通的底」上拟合的，没有这一步就没有种子像素。
     flood(s, w, box, seed)
@@ -1187,6 +1246,21 @@ internal object MonochromeMask {
     var covSum = 0L
     for (iter in 0 until FIELD_ITERS) {
       if (iter > 0) {
+        // 「离这块实的底有多远」的查表：每格找最近的一格全覆盖（β≥250）。一格都没有
+        // （H3「参照=空气」那种）就是 -1，外沿那条判断整条不参与 —— 白色剪影不许自吸。
+        val cells = g * g
+        val nFull = IntArray(cells) { c ->
+          val cx = c % g
+          val cy = c / g
+          var best = -1
+          var bd = Int.MAX_VALUE
+          for (j in 0 until cells) {
+            if (s.fCov[j] < 250) continue
+            val d2 = (j % g - cx) * (j % g - cx) + (j / g - cy) * (j / g - cy)
+            if (d2 < bd) { bd = d2; best = j }
+          }
+          best
+        }
         for (y in box.top until box.bottom) {
           val row = y * w
           for (x in box.left until box.right) {
@@ -1228,8 +1302,27 @@ internal object MonochromeMask {
             //     就是空气**（`--rim`：449 格里 441 格四邻最小 α≥200，可 6 步内一定摸得到空气）；
             //     贴着盘的图形外侧是底、不是空气。下一次从这条差异找，别再调 128。
             val b = s.beta[i].toInt() and 0xffff
+            val gnd = (x > box.left && s.plate[i - 1] != 0.toByte()) ||
+              (x < box.right - 1 && s.plate[i + 1] != 0.toByte()) ||
+              (y > box.top && s.plate[i - w] != 0.toByte()) ||
+              (y < box.bottom - 1 && s.plate[i + w] != 0.toByte())
+            val rim = gnd && ad[i].toInt() <= PLATE_EDGE_R
+            // 外沿那一圈**不能**用"减掉那一格的空气"来问：`b=28` 时 `d − a(255−b)/255 ≤ tol`
+            // 化简成 `d ≤ 242`，那一格里几乎任何像素都过 —— 贴着盘的两色 logo 因此被吃掉一半
+            // （红 225→135）。要问就得**拿一块实的底当尺**：离它最近的那格全覆盖色。
+            val byRim = rim && run {
+              val c0 = if (s.ref[i] >= 0) s.ref[i] else 0
+              val nc = if (c0 < g * g) nFull[c0] else -1
+              nc >= 0 && a > 0 && run {
+                val lim = tol.toLong() * 100L * 64L / a
+                val dl = (s.labL[i].toInt() and 0xffff) - s.fL[nc]
+                val da = (s.labA[i].toInt() and 0xffff) - s.fA[nc]
+                val db = (s.labB[i].toInt() and 0xffff) - s.fB[nc]
+                dl * dl + da * da + db * db <= lim * lim
+              }
+            }
             val solid = if (b >= 128) d - a * (255 - b) / 255 else d
-            s.pass[i] = if (a < A_SOLID || d <= tol || solid <= tol) 1 else 0
+            s.pass[i] = if (a < A_SOLID || d <= tol || solid <= tol || byRim) 1 else 0
           }
         }
         flood(s, w, box, seed)
