@@ -317,6 +317,11 @@ internal object MonochromeMask {
      *  ⚠ 单独一块数组，不借 [thickDist]：借来的数组留脏数据是抓不住的（[region] 那条写过）。
      *  用途见 [PLATE_EDGE_R] —— 盘自己的外沿是"内侧挨着底、外侧几步内是空气"的那一圈。 */
     var airDist = ShortArray(0)
+    /** 盘沿的**拓扑**标记：1 = 这一格不透明、且颜色与"最近一块实的底"对得上（plate-like）；
+     *  2 = 这样的格子里，能从"盘↔空气"那一圈出发、只踩 plate-like 格走到的一些。
+     *  用途见 [fitGround] 里 `rb` 那一段。⚠ 自己的数组：借 `pass` / `visited` 的下场
+     *  [region] 那条已经写过一遍。 */
+    var rimBand = ByteArray(0)
     /** H2 那一圈轮廓到自己中位色的 p97 ΔE —— 「这一圈是不是一种颜色」（见 [outlineFamilies]）。 */
     var ringSpread = 0
     var hist = IntArray(DBUCKETS)
@@ -1261,6 +1266,72 @@ internal object MonochromeMask {
           }
           best
         }
+        // ── 盘沿的拓扑 ──────────────────────────────────────────────────────────────
+        // 为什么非得是拓扑：盘自己的外沿与"被误吸进底的图形"（抖音音符的柄）在**颜色与 β 上
+        // 同构** —— 都是"不透明、与参照同色、背后那格半空"。三条按颜色/β 区分的交付侧修法都
+        // 因此连带砍掉真图形（见下面 `透传` 那段与 `PLATE_EDGE_R` 那段）。唯一把它们分开的是
+        // 位置：**盘沿能只踩着同色的实心格走到盘与空气的边界；被围进去的图形不能** ——
+        // 它四周是盘，不是空气，或者中间隔着半透明的柔光（洪泛过不去）。
+        // 三步：① plate-like = 实心且颜色与最近一块实的底对得上；② 种子 = plate-like 且四邻
+        // 里有不实心的一方（那就是盘的边界）；③ 只沿 plate-like 格洪泛。
+        // ⚠ 参照本来就是空气的图（H3、白色剪影）一格全覆盖的都没有 → nFull 全 -1 → 第一步就
+        //   全 false，这条整条不参与 —— 上面"白色剪影不许自吸"那条性质因此不受影响。
+        if (s.rimBand.size < total) s.rimBand = ByteArray(total)
+        val rb = s.rimBand
+        rb.fill(0, box.top * w + box.left, ((box.bottom - 1) * w + box.right).coerceAtMost(total))
+        val jnd2 = GROUND_INK_JND.toLong() * GROUND_INK_JND
+        for (y in box.top until box.bottom) {
+          val row = y * w
+          for (x in box.left until box.right) {
+            val i = row + x
+            if (Color.alpha(pixels[i]) != 255) continue
+            val c0 = if (s.ref[i] >= 0) s.ref[i] else 0
+            // ⚠ 只问**自己那一格是虚的**像素。不加这一条，`nFull` 会指回自己那一格 ——
+            //   实心格里的像素当然与自己的格同色，于是"plate-like"退化成"什么都是"，
+            //   洪泛从画布边一路淹穿整张图（第一次跑就是这样：`四块四档` 两块被擦成 0、
+            //   `多色插画` 框内=0.00、`三段距离` 最远那段没了）。
+            //   实心格里的像素本来就由正常的 dep 进底，不需要这条救它；这条只管
+            //   "盘的外沿那几格被空气稀释了参照"的那一种。
+            if (c0 >= cells || s.fCov[c0] >= 128) continue
+            val nc = nFull[c0]
+            // 整张没有一格是全覆盖的（H3「参照=空气」那一类）→ 没有"实的底"可借，这条不参与。
+            if (nc < 0) continue
+            val dl = (s.labL[i].toInt() and 0xffff) - s.fL[nc]
+            val da = (s.labA[i].toInt() and 0xffff) - s.fA[nc]
+            val db = (s.labB[i].toInt() and 0xffff) - s.fB[nc]
+            if (dl * dl + da * da + db * db < jnd2) rb[i] = 1
+          }
+        }
+        run {
+          var head = 0
+          var tail = 0
+          val q = s.queue
+          for (y in box.top until box.bottom) {
+            val row = y * w
+            for (x in box.left until box.right) {
+              val i = row + x
+              if (rb[i] != 1.toByte()) continue
+              // 盘的边界：四邻里有一个不是完全不透明的（含框外 —— 框外就是"什么都没有"）
+              val edge = (x == box.left || y == box.top || x == box.right - 1 || y == box.bottom - 1 ||
+                Color.alpha(pixels[i - 1]) < 255 || Color.alpha(pixels[i + 1]) < 255 ||
+                Color.alpha(pixels[i - w]) < 255 || Color.alpha(pixels[i + w]) < 255)
+              if (edge) { rb[i] = 2; q[tail++] = i }
+            }
+          }
+          while (head < tail) {
+            val i = q[head++]
+            val y = i / w
+            val x = i - y * w
+            for (d in 0 until 4) {
+              val j = i + when (d) { 0 -> -1; 1 -> 1; 2 -> -w; else -> w }
+              val jj = when (d) {
+                0 -> x > box.left; 1 -> x < box.right - 1; 2 -> y > box.top; else -> y < box.bottom - 1
+              }
+              if (!jj) continue
+              if (rb[j] == 1.toByte()) { rb[j] = 2; q[tail++] = j }
+            }
+          }
+        }
         for (y in box.top until box.bottom) {
           val row = y * w
           for (x in box.left until box.right) {
@@ -1322,7 +1393,7 @@ internal object MonochromeMask {
               }
             }
             val solid = if (b >= 128) d - a * (255 - b) / 255 else d
-            s.pass[i] = if (a < A_SOLID || d <= tol || solid <= tol || byRim) 1 else 0
+            s.pass[i] = if (a < A_SOLID || d <= tol || solid <= tol || byRim || rb[i] == 2.toByte()) 1 else 0
           }
         }
         flood(s, w, box, seed)
