@@ -164,6 +164,16 @@ internal object MonochromeMask {
   private const val LUM_TAKEOVER = 0.5f
   private const val LUM_SWALLOW = 0.97f
 
+  /** 内容框里实心像素占到这个比例以上，就当这张图**一格空气都没有** ——
+   *  那时"参照=空气"是空话，β 不再有权把亮度轴压回 0。见 [LUM_SWALLOW] 下面那段与 build() 里 `cov`。 */
+  private const val NO_AIR_OPAQUE_PCT = 95
+
+  /** 上面那条的配对门槛：**这张真的有两个调子**才允许接管。量的是有符号 ΔL 那条斜坡的端点跨度
+   *  `spread`（L\\*×64）。整张纯色也"没有空气"，可它的正确答案是一张空掩码（钉着的性质
+   *  「整张纯色 → 交出空掩码，不是 null」），而纯色那张 spread 退到下限 `1 shl 6`。
+   *  20 个 L\\* 单位是两侧差得远的位置：纯色=1，满幅插画实测 59。 */
+  private const val TWO_TONE_SPREAD = 20 shl 6
+
   /** 底板散度的分位，用来定每一轮的洪泛容差。 */
   // ⚠ **这条容差量的是"底内部的散度"，所以它天生收不下底的边界。** 2026-09-28 反射量过
   //   （`_harness/RimDbg.kt`，圆角渐变底板那张合成图）：底板内部的 p[TOL_PCT] 被夹在
@@ -546,10 +556,25 @@ internal object MonochromeMask {
     // ⚠ 还要乘上 β（参照自己的覆盖率 [Pass.meanCov]）：透明底图标的"底占"也低，但那是
     //  **参照本来就没有东西**，覆盖率恰恰是唯一有信息的轴（不乘就会把剪影洗成一块灰）；
     //  区分这两者的就是 β —— 透明底 β≈0，插画 β=255。
+    // ⚠ **可这条判别对"满幅、一格空气都没有"的图是反的**（智慧游戏 2026-09-28）：那种图
+    //   走到 H3、参照是空气，而图里根本没有空气 → 参照色的覆盖率 β=0 → q 被乘成 0 →
+    //   只剩距离轴 → "凡是实心都是墨"，交出去一块实心（`框内=0.94`）。用户对着它说的
+    //   「感觉反下色更好」，量的就是这件事：他要的是"亮=墨"，也就是亮度轴接管。
+    //   所以这里加一条**替身判别**：内容框几乎全不透明时，"参照=空气"这句话是空的，
+    //   β 不再有权把 q 压下去。但**必须再问一句这张是不是真有两个调子** ——
+    //   整张纯色也"没有空气"，而它的正确答案是一张空掩码（钉着的性质），
+    //   用 `spread`（有符号 ΔL 那条斜坡的端点跨度）挡它：纯色那张 spread 退到下限。
+    var boxOpaque = 0
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      for (x in box.left until box.right) if (Color.alpha(pixels[row + x]) >= A_SOLID) boxOpaque++
+    }
+    val noAir = boxOpaque.toLong() * 100 >= boxArea.toLong() * NO_AIR_OPAQUE_PCT
+    val cov = if (noAir && spread >= TWO_TONE_SPREAD) 255 else ground.meanCov
     val q = (maxOf(
       1f - ground.share / LUM_TAKEOVER,
       (ground.share - LUM_SWALLOW) / (1f - LUM_SWALLOW)
-    ).coerceIn(0f, 1f) * ground.meanCov / 255f * 100).toInt()
+    ).coerceIn(0f, 1f) * cov / 255f * 100).toInt()
     // 试过并否掉的第三条路（别再走一遍）：饱和段里有 ≥2 块竞争时，把明暗这条轴的
     // ±up/down 拉宽。实测反而更糟：四块从 201/221/227 掉到 143/157/162 —— 整段一起被压淡，
     // 间隔一点没开。原因是这条轴根本分不开它们：**白、黄、绿相对深蓝底都是"更亮"**，
