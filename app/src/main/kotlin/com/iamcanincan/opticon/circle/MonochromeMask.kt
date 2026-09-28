@@ -357,8 +357,8 @@ internal object MonochromeMask {
      *  4=被"底墨同色"那道验收拦。每次 [groundPass] 开头归零。
      *  带它是因为**换桌面时这一支的射程必须看得见**，见那条汇总日志。 */
     var h0why = 0
-    /** 这一张被 [GROUND_INK_SAME_PCT] 那道验收退掉过哪几支（位：1=H1、2=H2、4=H0）。
-     *  每次 [groundPass] 开头归零。 */
+    /** 这一张被"这一支的底不成立"那两道验收退掉过哪几支（位：1=H1、2=H2、4=H0 被同色退；
+     *  8=H2 被 [thinPlate]「盘比墨还小」退）。每次 [groundPass] 开头归零。 */
     var veto = 0
     /** 被退那一支自己的 `inkSame`（最后退的那一支）。**没有它这道验收不可查**：日志上只看得见
      *  接手人换成了 H3，看不见被退那支离门槛多近 —— 6b「浅盘+白字」被反过来那次就是这么找的。 */
@@ -443,6 +443,9 @@ internal object MonochromeMask {
     var gA: Int = 0,
     var gB: Int = 0,
     var gN: Int = 0,
+    /** **实心**像素里被判成"墨"的那一半有多少格（与 [gN] 同一趟、同一口径：α=255）。
+     *  两个数一起回答的是"这一刀把画面分成两半之后，哪一半才是主体" —— 见 [thinPlate]。 */
+    var iN: Int = 0,
   )
 
   /**
@@ -778,6 +781,9 @@ internal object MonochromeMask {
       out, fill, st.hole, st.largest, st.components, st.smallShare, softShare(st, box),
       "带占=${s.bandSolid * 100 / 255} 底占=${pct(ground.share)} H=${ground.hyp} 族=${ground.families} 底厚=${ground.thick}" +
       " 同色=${ground.inkSame}/${s.vetoSame} 拦=${s.veto}" +
+      // 实心两半各多少格：`盘实<墨实` 就是"这块底比它承载的东西还小"，见 [thinPlate]。
+      // 判据台上量过一次就够、日志上要能当场看见 —— 抖音那一张退掉之前是 6294/9614。
+      " 盘实=${ground.gN}/${ground.iN}" +
       " 盒布=${boxArea * 100 / (w.toLong() * h)} H0=${s.h0why}" +
       (if (ground.holed < 0) "" else " 洞墨=${ground.holed}") +
       (if (ground.h2 < 0f) "" else " H2被否=${pct(ground.h2)}/${ground.h2thick}/${ground.h2enc}/${ground.h2spread}") +
@@ -1589,6 +1595,7 @@ internal object MonochromeMask {
     p.gA = if (gn > 0) (ga / gn).toInt() else 0
     p.gB = if (gn > 0) (gb / gn).toInt() else 0
     p.gN = gn.toInt()
+    p.iN = inn.toInt()
     // 两半的平均色之差。写成"交叉相乘再除"是为了不出现两次除法带来的漂移；Lab 是 ×64 的，
     // 所以最后除 64 回到 ΔE 单位，再 ×10 存成整数（日志里读 0..255 的人不需要那半位）。
     p.inkSame = if (gn == 0 || inn == 0) -1 else {
@@ -1695,9 +1702,12 @@ internal object MonochromeMask {
       //   （H2 不许接手 / 实心格均浓 ≥240 / 不许有洞 / cc≤3），带 class md5 逐张量过 113 张。
       // 验收两件事：这块底**没吃掉整框**，而且它**与剩下的墨不是一个颜色**。后者是
       // [GROUND_INK_SAME_PCT] 那一段：真机钉钉那一批（判据台 23 行）全靠它。
+      // 第三件（2026-09-28，抖音「还是缺了一部分」）：它**不比墨那一侧小** —— 见 [thinPlate]。
       val vac = vacuous(s, alt)
-      if (alt.share < PLATE_ALL_SHARE && !vac) return alt
+      val thin = thinPlate(alt)
+      if (alt.share < PLATE_ALL_SHARE && !vac && !thin) return alt
       if (vac) s.veto = s.veto or 2
+      if (thin) s.veto = s.veto or 8
       h2share = alt.share; h2thick = alt.thick; h2enc = alt.enclosed; h2spread = alt.spread
     }
     // H1、H2 都没说出"哪块是底"之后，先问 H0（区域关系），再退到 H3（没有底）。
@@ -1866,6 +1876,16 @@ internal object MonochromeMask {
     s.vetoSame = if (p.meanCov < 128) -p.meanCov else p.inkSame
     return true
   }
+
+  /** **被判成底的那一半实心，比被判成墨的那一半还小 —— 那它就不是承载面。**
+   *  与 [vacuous] 同一族：量的都是**这一刀**，不是"这块参照长什么样"（那条路上四列已经试过并
+   *  否掉了，见 H2 那段真值表）。抖音（`com.ss.android.ugc.aweme`）2026-09-28：H2 把青+红两层
+   *  错位影认成底，`盘实=6294 < 墨实=9614` —— 于是那两层被当盘子擦掉，用户看到的正是
+   *  **「还是缺了一部分」**（音符外面那两条 crescent 没了）。Xbox SmartGlass 更极端：`盘实=0`，
+   *  所谓底一格实心都没有，全是空气与抗锯齿。
+   *  退掉之后落回 H0/H3（"没有底"），整张轮廓如实交成墨 —— 与钉钉那一次同一条路。
+   */
+  private fun thinPlate(p: Pass): Boolean = p.gN < p.iN
 
   /** H0 的三道区域门槛 + 那道画布门槛。分界都来自 [regionGround] 那段注释里的实测表，两侧差得远。 */
   private const val REGION_FULL_PCT = 80
