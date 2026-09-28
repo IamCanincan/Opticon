@@ -1040,7 +1040,9 @@ internal object MonochromeMask {
   private const val STRETCH_MARK_PCT = 50
 
   /** 多色（渐变填的）字形的锚与上限：锚取 p70（主体那一堆），倍率**封顶 ×1.35**。
-   *  倍率是看图定的：再狠就把设计者自己画的明暗抹成一块实色（见 [stretchMark]）。 */
+   *  ⚠ 这条上限**今天被证明基本不咬人**：整个去掉（135→255）在真机群体 64 行上只挪出
+   *  `字均净` 净 +9（升 2 行、降 0 行、最大 +6），判据台 46 条全过 —— 也就是说"插画偏淡"
+   *  不在这一层（我先猜的是它，错了）。留着是因为它不要钱，但**别再把它当淡的旋钮**。 */
   private const val STRETCH_RAMP_PCT = 70
   private const val STRETCH_RAMP_CAP = 135
 
@@ -2359,7 +2361,13 @@ internal object MonochromeMask {
   private const val EMAX = 100
 
   /** dep 单位上的三个夹持值。dep 对 ΔE 是 ×2.55 的线性（β=1 时），所以这些数就是
-   *  [TOL_MIN]、[TOL_MAX] 换算过来的，不是新的一条线；[DEP_MIN_SPAN] 是除数下限。 */
+   *  [TOL_MIN]、[TOL_MAX] 换算过来的，不是新的一条线；[DEP_MIN_SPAN] 是除数下限。
+   *
+   *  ⚠ [DEP_TOL_MAX] 在满幅插画上**会顶格**（判据台 113 张真图标里 17 张 `零>60`、其中 10 张
+   *   正好 115）—— 看着像"容差标定炸了"，把上限压到 60 试过：**两头都更差**
+   *   （`字均净` 214→207 / 真机群 197→191，`淡(<200)` 40→47 与 29→32，残盘暴涨 12/4 行，
+   *   cc 好坏各半）。顶格不是 bug 的成因，是插画本来就没有"一种颜色的底"。别再调这两个数。
+   */
   private const val DEP_TOL_MIN = 15
   private const val DEP_TOL_MAX = 115
   private const val DEP_MIN_SPAN = 16
