@@ -392,7 +392,7 @@ internal object MonochromeMask {
     }
   }
 
-  private val pool = ThreadLocal.withInitial { Scratch() }
+  private val pool: ThreadLocal<Scratch> = ThreadLocal.withInitial { Scratch() }
 
   // ───────────────────────────── 主流程 ─────────────────────────────
 
@@ -487,7 +487,7 @@ internal object MonochromeMask {
     val boxArea = box.width().toLong() * box.height()
     val band = (minOf(box.width(), box.height()) / RING_BAND_DIV).coerceIn(2, 8)
     val g = if (minOf(box.width(), box.height()) >= FIELD_MIN_SIDE) FIELD_GRID else FIELD_GRID_MIN
-    val s = pool.get()
+    val s = checkNotNull(pool.get()) { "withInitial 建的 ThreadLocal 不会给回 null" }
     s.grid = g
     s.ensure(total, g * g)
 
@@ -1198,7 +1198,7 @@ internal object MonochromeMask {
     val total = n * n
     val box = contentBounds(small, n, n)
       ?: return Polarity(false, false, "极性=整张透明，不动遮罩")
-    val s = pool.get()
+    val s = checkNotNull(pool.get()) { "withInitial 建的 ThreadLocal 不会给回 null" }
     val g = if (minOf(box.width(), box.height()) >= FIELD_MIN_SIDE) FIELD_GRID else FIELD_GRID_MIN
     s.grid = g
     s.ensure(total, g * g)

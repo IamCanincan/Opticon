@@ -35,5 +35,6 @@ core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
 
 [plugins]
 android-application = { id = "com.android.application", version = "9.4.1" }
-# Compose 编译器插件版本必须与 Kotlin Gradle 插件版本严格一致（都取上面的 kotlin）
+# Compose 编译器插件的版本钉在这里；**它不是 Kotlin Gradle 插件的版本**（上面第 2~8 行那段
+# 说的就是这件事：KGP 由 AGP 带进来，"必须严格一致"这条约束不由本文件保证）。
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
