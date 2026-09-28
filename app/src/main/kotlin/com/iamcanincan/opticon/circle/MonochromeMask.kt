@@ -1664,8 +1664,17 @@ internal object MonochromeMask {
       p.hyp = 1
       p.thick = plateThickness(w, box, s)
       // 角上确实有一块色，**并且它和剩下的东西不是一个颜色** —— 后半句才是这一支的验收。
-      if (!vacuous(s, p)) return p
-      s.veto = s.veto or 1
+      // ⚠ 实验（wisdomgame 2026-09-28）：还该有前半句的另一半 —— **它没吃掉整框**。
+      //   [PLATE_ALL_SHARE] 那道一直只挂在 H2 上，H1 从来没有：智慧游戏那张 H1 交出的
+      //   `底占=0.99 盘实=36591/墨实=273` —— 99.3% 的实心格都被说成底，剩下 273 格当墨，
+      //   于是 `明暗=76`（底占太高→参照等于没有→整个交给亮度轴）画成一片 1..254 的灰雾，
+      //   `字均=122 顶占比=1 淡=0.71`。同色验收救不了它：墨侧只有 273 格，`inkSame=0` 当然通过。
+      // ⚠ 但**只在"角上不止一种颜色"的时候**才拿整框去否它：钉着的性质「整张纯色 → 交出一张
+      //   空掩码」走的正是"底占=1.00 且族=1"这条路 —— 整张一个颜色时"什么都是底"是**对的**，
+      //   否掉它反而退成 H3、把整幅涂满（第一版就红在这条上，框内=1.0）。
+      if ((p.share < PLATE_ALL_SHARE || p.families <= 1) && !vacuous(s, p)) return p
+      if (p.share >= PLATE_ALL_SHARE && p.families > 1) s.veto = s.veto or 16
+      if (vacuous(s, p)) s.veto = s.veto or 1
     }
     val ring = outlineFamilies(pixels, w, box, s, seed)
     // H2 被否决时它的数也要能进日志 —— 用局部变量带，不碰对象上的字段（这是多线程的钩子路径）。
