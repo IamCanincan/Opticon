@@ -639,8 +639,13 @@ internal object MonochromeMask {
     //   那些格（＝字形），`残盘=` 是另一半的格数。判"淡不淡"用前者，判"盘边漏没漏"用后者。
     var markN = 0; var markSum = 0L; var markTop = 0
     var figN = 0; var figSum = 0L; var figTop = 0
-    var resN = 0
+    var resN = 0; var resSum = 0L
     val resLim = GROUND_INK_JND.toLong() * GROUND_INK_JND
+    // ⚠ **"底的本色"只有在底真的是块底的时候才存在。** 退到 H3（参照=空气）或底自己 β≈0 时，
+    //   gL/gA/gB 是**透明像素那堆没定义的 RGB 的平均** —— 拿它当尺去认残盘，量出来的全是噪声
+    //   （判据台上 icon547/587、meituan 那批 β均 1~33 的，"残盘"报了几万格，就是这么来的）。
+    //   所以这一列和 `colourDriven` 用同一个门槛：底给的覆盖率不到一半，就**不声称有残盘**。
+    val plateReal = ground.gN > 0 && ground.meanCov >= 128
     for (i in 0 until total) {
       if (Color.alpha(pixels[i]) < 255) continue
       val a = out[i] ushr 24
@@ -649,7 +654,7 @@ internal object MonochromeMask {
       val dl = (s.labL[i].toInt() and 0xffff) - ground.gL
       val da = (s.labA[i].toInt() and 0xffff) - ground.gA
       val db = (s.labB[i].toInt() and 0xffff) - ground.gB
-      if (ground.gN > 0 && dl * dl + da * da + db * db < resLim) resN++
+      if (plateReal && dl * dl + da * da + db * db < resLim) { resN++; resSum += a }
       else { figN++; figSum += a; if (a >= 250) figTop++ }
     }
     val sep = separation(out, w, h, box, s)
@@ -668,7 +673,11 @@ internal object MonochromeMask {
         "框内=${pct(fill)} 字均=${if (markN == 0) -1 else (markSum / markN)}" +
         " 顶占比=${if (markN == 0) -1 else markTop * 100 / markN} " +
         "字均净=${if (figN == 0) -1 else (figSum / figN)} 净顶=${if (figN == 0) -1 else figTop * 100 / figN}" +
-        " 残盘=$resN " +
+        // 残盘带两个数：**格数 / 它们平均出了多少墨**。只有后者才说"看不看得见" ——
+        // QQ 那 17730 格 dep 只有 10（围住的背景，洪泛只收与边界连通的），出墨≈0，屏幕上根本
+        // 不存在；小步点那 11640 格出墨 80~130，就是盘外那一圈看得见的灰环。只报格数会把两者
+        // 混成"52 张有残盘"这种没法用的数。
+        " 残盘=$resN/${if (resN == 0) 0 else resSum / resN} " +
         "cc=${st.components} top=${pct(st.largest)} 小片=${pct(st.smallShare)} " +
         "空洞=${pct(st.hole)} 淡=${pct(softShare(st, box))} 色驱=${ground.meanCov} " +
         "色阶=$stretch " +
