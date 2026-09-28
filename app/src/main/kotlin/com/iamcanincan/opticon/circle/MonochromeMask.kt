@@ -637,24 +637,21 @@ internal object MonochromeMask {
     //   12078 格没进底、出墨 13 —— 两个混一平均就成了 `字均=169`。于是"机上有 66/190 张偏淡"
     //   这个数是按一个假指标排出来的。所以这里把两半**分开量**：`字均净=` 只算与底本色分得开的
     //   那些格（＝字形），`残盘=` 是另一半的格数。判"淡不淡"用前者，判"盘边漏没漏"用后者。
+    // ⚠ **不能用"与底的全局均值同色"来认残盘。** 那样量出来的数好看、也完全错：盘子是渐变或
+    //   多块拼底时均值落在中间，会把一种**离自己那一格参照差 40 多个 dep 的真实颜色**判成"和底
+    //   同色"。浙江在线（`cn.com.zjol`）实测：按均值算 39624 格"残盘"、墨均 216，看着像一大块
+    //   盘被当墨画了；按模型自己的 dep 算，那些格子 dep=42 ≫ 零=15，它们是**真的图形**，只是
+    //   恰好接近盘的中间调。113 张上两种定义差 30 倍（614851 格 vs 127320 格）。
     var markN = 0; var markSum = 0L; var markTop = 0
     var figN = 0; var figSum = 0L; var figTop = 0
     var resN = 0; var resSum = 0L
-    val resLim = GROUND_INK_JND.toLong() * GROUND_INK_JND
-    // ⚠ **"底的本色"只有在底真的是块底的时候才存在。** 退到 H3（参照=空气）或底自己 β≈0 时，
-    //   gL/gA/gB 是**透明像素那堆没定义的 RGB 的平均** —— 拿它当尺去认残盘，量出来的全是噪声
-    //   （判据台上 icon547/587、meituan 那批 β均 1~33 的，"残盘"报了几万格，就是这么来的）。
-    //   所以这一列和 `colourDriven` 用同一个门槛：底给的覆盖率不到一半，就**不声称有残盘**。
-    val plateReal = ground.gN > 0 && ground.meanCov >= 128
     for (i in 0 until total) {
       if (Color.alpha(pixels[i]) < 255) continue
       val a = out[i] ushr 24
       if (a == 0) continue
       markN++; markSum += a; if (a >= 250) markTop++
-      val dl = (s.labL[i].toInt() and 0xffff) - ground.gL
-      val da = (s.labA[i].toInt() and 0xffff) - ground.gA
-      val db = (s.labB[i].toInt() and 0xffff) - ground.gB
-      if (plateReal && dl * dl + da * da + db * db < resLim) { resN++; resSum += a }
+      // dep 在这里就是判连通用的那一个数（fitGround 交付段之后，非底的格子没被改写过）。
+      if (s.plate[i] == 0.toByte() && (s.dist[i].toInt() and 0xffff) <= ground.zero) { resN++; resSum += a }
       else { figN++; figSum += a; if (a >= 250) figTop++ }
     }
     val sep = separation(out, w, h, box, s)
