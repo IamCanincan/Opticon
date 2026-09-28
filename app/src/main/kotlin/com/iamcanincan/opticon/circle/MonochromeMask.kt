@@ -672,9 +672,14 @@ internal object MonochromeMask {
       val row = y * w
       for (x in box.left until box.right) {
         val i = row + x
-        val v = if (s.plate[i] == 0.toByte() && Color.alpha(pixels[i]) == 255)
+        // ⚠ **只抬"本来就当它是墨"的格子。** 自己那一格 `dep ≤ 容差` 的像素按模型的说法就是底，
+        //   让它借用同色另一格的浓度，等于把盘子画回去 —— `f2196b7` 落地时没量这一列，
+        //   判据台 113 张真图标的 `残盘=` 从 4923 涨到 26440（40 行涨、0 行跌，9 行 >1000，
+        //   最狠浙江在线 0→5334），正是他报过两次的那圈"看得见的灰盘"。
+        val own = s.dist[i].toInt() and 0xffff
+        val v = if (own > ground.zero && s.plate[i] == 0.toByte() && Color.alpha(pixels[i]) == 255)
           cDep[pixels[i] and 0x00FFFFFF] else null
-        val dep = if (v != null) v[0].toInt() else s.dist[i].toInt() and 0xffff
+        val dep = if (v != null) v[0].toInt() else own
         val ref = if (v != null) v[1].toInt() else refLight(i, s)
         // ⚠ 感知曲线只加在**距离**那一条上，混完不再过一次。桌面拿 alpha 当不透明度，ΔE 距离
         //   线性排会把大半图形留在六成浓度以下（观感就是「主题色怎么这么浅」），所以要抬中低段；
