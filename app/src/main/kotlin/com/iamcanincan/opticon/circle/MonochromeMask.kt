@@ -405,6 +405,13 @@ internal object MonochromeMask {
     /** **墨那一侧有多少比例的格子与底的本色分不开**（0..100，只数 α=255 的格子；-1 = 有一侧是空的）。
      *  这是这一支的**验收**而不是描述：见 [GROUND_INK_SAME_PCT]。 */
     var inkSame: Int = -1,
+    /** 底自己的平均色（Lab ×64）与参与平均的格数。带出来只为一个用途：出图那一侧要把
+     *  **"没归进底的盘"** 从字形里分出去 —— 混在一起量的 `字均` 会骗人，见 [Scratch.vetoSame] 旁边
+     *  那段与 build() 里 `字均净=` 那一条。gN=0 时这一组数没有意义。 */
+    var gL: Int = 0,
+    var gA: Int = 0,
+    var gB: Int = 0,
+    var gN: Int = 0,
   )
 
   /**
@@ -623,12 +630,27 @@ internal object MonochromeMask {
     // `字均` 是它们的平均浓度，`顶占比` 是其中到 250 以上的比例。为什么要单独两个数：
     // `框内=` 只数"多少像素上了墨"，不数"墨有多实"，所以 87 张真机像素里 36 张字形平均不到 200，
     // 判据却一条都不红（见 [stretchLut] 那段）。这两个数就是那条判据的原料。
+    //
+    // ⚠ **`字均` 单独一个是会骗人的，2026-09-28 被它骗过一次。** 它把两样东西混在一个均值里：
+    //   真正的字形，和**"没归进底的盘"**（源里实心、颜色就是那块底、只是洪泛没走到）。小步点
+    //   （`run.xbud.android`）实测：白闪电 12314 格出墨 **253/255**（一点都不淡），而盘自己有
+    //   12078 格没进底、出墨 13 —— 两个混一平均就成了 `字均=169`。于是"机上有 66/190 张偏淡"
+    //   这个数是按一个假指标排出来的。所以这里把两半**分开量**：`字均净=` 只算与底本色分得开的
+    //   那些格（＝字形），`残盘=` 是另一半的格数。判"淡不淡"用前者，判"盘边漏没漏"用后者。
     var markN = 0; var markSum = 0L; var markTop = 0
+    var figN = 0; var figSum = 0L; var figTop = 0
+    var resN = 0
+    val resLim = GROUND_INK_JND.toLong() * GROUND_INK_JND
     for (i in 0 until total) {
       if (Color.alpha(pixels[i]) < 255) continue
       val a = out[i] ushr 24
       if (a == 0) continue
       markN++; markSum += a; if (a >= 250) markTop++
+      val dl = (s.labL[i].toInt() and 0xffff) - ground.gL
+      val da = (s.labA[i].toInt() and 0xffff) - ground.gA
+      val db = (s.labB[i].toInt() and 0xffff) - ground.gB
+      if (ground.gN > 0 && dl * dl + da * da + db * db < resLim) resN++
+      else { figN++; figSum += a; if (a >= 250) figTop++ }
     }
     val sep = separation(out, w, h, box, s)
     val st = measure(out, w, h, box, s, bridge = colourDriven, despeckle = colourDriven)
@@ -645,6 +667,8 @@ internal object MonochromeMask {
         "降=${pct(knocked.toFloat() / boxArea)} 降力=${body.weight} 力度=$hollow 明暗=${q} " +
         "框内=${pct(fill)} 字均=${if (markN == 0) -1 else (markSum / markN)}" +
         " 顶占比=${if (markN == 0) -1 else markTop * 100 / markN} " +
+        "字均净=${if (figN == 0) -1 else (figSum / figN)} 净顶=${if (figN == 0) -1 else figTop * 100 / figN}" +
+        " 残盘=$resN " +
         "cc=${st.components} top=${pct(st.largest)} 小片=${pct(st.smallShare)} " +
         "空洞=${pct(st.hole)} 淡=${pct(softShare(st, box))} 色驱=${ground.meanCov} " +
         "色阶=$stretch " +
@@ -1229,6 +1253,10 @@ internal object MonochromeMask {
     val p = Pass()
     p.share = nGround.toFloat() / boxArea
     p.families = fams
+    p.gL = if (gn > 0) (gl / gn).toInt() else 0
+    p.gA = if (gn > 0) (ga / gn).toInt() else 0
+    p.gB = if (gn > 0) (gb / gn).toInt() else 0
+    p.gN = gn.toInt()
     // 两半的平均色之差。写成"交叉相乘再除"是为了不出现两次除法带来的漂移；Lab 是 ×64 的，
     // 所以最后除 64 回到 ΔE 单位，再 ×10 存成整数（日志里读 0..255 的人不需要那半位）。
     p.inkSame = if (gn == 0 || inn == 0) -1 else {
