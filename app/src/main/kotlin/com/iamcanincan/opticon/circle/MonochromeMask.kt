@@ -2129,7 +2129,15 @@ internal object MonochromeMask {
       // ⚠ 但**只在"角上不止一种颜色"的时候**才拿整框去否它：钉着的性质「整张纯色 → 交出一张
       //   空掩码」走的正是"底占=1.00 且族=1"这条路 —— 整张一个颜色时"什么都是底"是**对的**，
       //   否掉它反而退成 H3、把整幅涂满（第一版就红在这条上，框内=1.0）。
-      if ((p.share < PLATE_ALL_SHARE || p.families <= 1) && !vacuous(s, p)) return p
+      // ⚠ **可这条豁免真机上漏了一整族图标**（2026-09-30 从设备日志抓到）：长按快捷方式那些
+      //   **单色线条矢量图形 + 全透明背景** —— YouTube 订阅 / 设置电池 / 相机视频，
+      //   全是 `底占=1.00 族=1 盘实=全部/0 框内=0.00`，**屏幕上整个看不见**。
+      //   它们和「整张纯色」的区别不在颜色数（都是一种），在**这座"底"占画布多少**：
+      //   快捷方式 `盒布=3%~10%`，而「整张纯色」`盒布=100%`。一座只占画布几个百分点的小岛，
+      //   四周全是空气 —— "什么都是底"不可能是对的，**岛本身就是图形**。所以豁免加一条前提。
+      val island = box.width().toLong() * box.height() * 100L <=
+        w.toLong() * h * GROUND_ISLAND_PCT.toLong()
+      if ((p.share < PLATE_ALL_SHARE || (p.families <= 1 && !island)) && !vacuous(s, p)) return p
       if (p.share >= PLATE_ALL_SHARE && p.families > 1) s.veto = s.veto or 16
       if (vacuous(s, p)) s.veto = s.veto or 1
       h1share = p.share; h1thick = p.thick; h1fams = p.families; h1ink = p.iN
@@ -2562,6 +2570,15 @@ internal object MonochromeMask {
 
   /** 参照吃掉整框到这个比例，就说明"这块底"其实是图形自己（薄字形的轮廓=字形）→ 假设不成立。 */
   private const val PLATE_ALL_SHARE = 0.92f
+
+  /**
+   * 内容框占画布不到这个比例，就**不许**用"整张只有一个颜色家族"去豁免 [PLATE_ALL_SHARE] 那道闸。
+   *
+   * 20 是这么来的（`_harness/SiloKt` + 真机日志）：中招的长按快捷方式 `盒布 = 3% / 4% / 10%`，
+   * 而必须保住的两个反例远在另一边 —— 「整张纯色」`盒布=100%`（钉着的性质：交出一张空掩码）、
+   * 合成方板 `盒布=49%`。取 20 让两边都有余量，不是拟合出来的最优点。
+   */
+  private const val GROUND_ISLAND_PCT = 20
 
   /**
    * **墨那一侧有多少比例的格子与底的本色分不开**（ΔE76 < [GROUND_INK_JND]），到这个比例这一刀
