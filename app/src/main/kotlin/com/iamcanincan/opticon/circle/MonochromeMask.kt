@@ -335,6 +335,9 @@ internal object MonochromeMask {
     /** 第二遍降层次的"围住"标记：1 = 比主体亮且够远（降档候选）；2 = 这些候选里能从**空气**
      *  只踩候选格走得到的那些 —— 那是设计者的第二种颜色，不是镂空。用途见 [build] 里 `kc` 那段。 */
     var knockReach = ByteArray(0)
+    /** [propagateBands] 自己那份"这一格已经归进某条带"的标记。
+     *  ⚠ **自己的数组，不借 [visited]** —— 借来的数组留脏数据抓不住，[region] 那条写过两遍了。 */
+    var bandSeen = ByteArray(0)
     /** H2 那一圈轮廓到自己中位色的 p97 ΔE —— 「这一圈是不是一种颜色」（见 [outlineFamilies]）。 */
     var ringSpread = 0
     var hist = IntArray(DBUCKETS)
@@ -812,6 +815,9 @@ internal object MonochromeMask {
       }
     }
 
+    // 3.9) 一条连续的描边被颜色渐变切成几截 —— 按**拓扑**把它接回去（见 [propagateBands]）。
+    //   放在两层抬顶与发档**之前**：补上的格随后一起被抬、一起进桶，不另做标定。
+    val bands = propagateBands(out, pixels, w, h, box, s)
     // 4) 交出去之前把墨量抬到满阶（他要「图标上必须有系统最深和最浅的取色」）。**两层叠加**：
     //    全局那一层管"整张最深都不够"，字形那一层管"只有 1% 到顶、主体停在 140"。
     //    ⚠ 中间夹一步发档（4.5），两层不能并排 —— 理由写在那一段里。
@@ -868,13 +874,21 @@ internal object MonochromeMask {
     var markN = 0; var markSum = 0L; var markTop = 0
     var figN = 0; var figSum = 0L; var figTop = 0
     var resN = 0; var resSum = 0L
+    var bfN = 0; var bfSum = 0L
     for (i in 0 until total) {
       if (Color.alpha(pixels[i]) < 255) continue
       val a = out[i] ushr 24
       if (a == 0) continue
       markN++; markSum += a; if (a >= 250) markTop++
       // dep 在这里就是判连通用的那一个数（fitGround 交付段之后，非底的格子没被改写过）。
-      if (s.plate[i] == 0.toByte() && (s.distT[i].toInt() and 0xffff) <= ground.zero) { resN++; resSum += a }
+      // ⚠ **沿细带补上去的那些格（`bandSeen==3`）另记一笔，不混进 [resN]**：
+      //   `残盘` 的定义是"非 plate 且 dep ≤ 零"，而 [propagateBands] 专门补的就是"颜色离底很近、
+      //   但属于一条已成墨的带"的格 —— 混在一起量，这一刀的**目标物**会被计成**损伤**
+      //   （第一次跑就是这么撞上 5787→12327 的：+6540 格 100% 落在 fired 的 8 张上，
+      //   没 fired 的一张没涨）。分开记，`残盘` 回到它原本要防的那件事："底被整片点亮"。
+      if (s.plate[i] == 0.toByte() && (s.distT[i].toInt() and 0xffff) <= ground.zero) {
+        if (i < s.bandSeen.size && s.bandSeen[i] == 3.toByte()) { bfN++; bfSum += a } else { resN++; resSum += a }
+      }
       else { figN++; figSum += a; if (a >= 250) figTop++ }
     }
     val sep = separation(out, w, h, box, s)
@@ -908,7 +922,11 @@ internal object MonochromeMask {
         "空洞=${pct(st.hole)} 淡=${pct(softShare(st, box))} 色驱=${ground.meanCov} " +
         "色阶=$stretch " +
         "分档=${sep.second}/${sep.first}" +
-        (if (sep.third.isEmpty()) "" else "(${sep.third.joinToString(",")})"),
+        (if (sep.third.isEmpty()) "" else "(${sep.third.joinToString(",")})") +
+        // 接回去的细带：几条、补了多少格。放在**整串末尾**，前面列位一个不动（`res.sh` 按列号读）。
+        // `带内残` 是这些补上去的格里"颜色本来就离底很近"的那些 —— 它**故意不从 `残盘` 里消失**，
+        // 只是换个名字记：这样"这一刀补了多少、其中有多少看着像底"两件事在日志里都看得见。
+        " 带补=${bands.first}/${bands.second} 带内残=$bfN/${if (bfN == 0) 0 else bfSum / bfN}",
       ground.hyp,
       s.h0why,
       s.veto
@@ -1122,6 +1140,159 @@ internal object MonochromeMask {
     // 全挤在 0 = 底下那道 clamp 把部分擦掉了；全挤在 255 = 顶上那道饱和了。修法不同。
     return Triple(parts.size, levels, parts)
   }
+
+  /**
+   * **沿一根连通的细带传播归属** —— 修「某条线粗出一截 / 部分缺一块」。
+   *
+   * ## 病灶
+   * 主人两次驳回之后指到形状上：一条**连续的描边**，沿路一段有一段没有，末端还碎成几块飘着。
+   * 两张点名的图是同一个病：易班那圈气泡青绿描边（@384 量到 **521 格、平均宽 1.0px、圆度 148、
+   * 断成 9 截**）、全球网测那条仪表弧（深色尾段贴着背景，整段被判成底）。
+   * 根子在**颜色**：一条带沿长度方向渐变，渐变里"离底近"的那一段与底对得上，就被归进底。
+   * 这一族以前量死过 —— 但那些量的是「**能不能从颜色上认出那是弧的延续**」（结论：颜色上它就是
+   * 连成一片的，任何颜色规则都分不开）。这里换的是**拓扑**：这一整条是**同一个源色连通块**，
+   * 大头已经成了墨，剩下那几截是同一条带 —— 位置与连通性说话，不再让颜色说话。
+   *
+   * ## 闸门（四个数全是从 `_harness/ShapeKt` 的表里读的，不是拍的）
+   *  1. **够大**：≥ 内容框的 0.3%（语料上低于这个的连通块大半是 21 格的噪点，见那段注释）；
+   *  2. **刻了一半**：已刻比例落在 15%~85% —— 全刻与全没刻都不关这一刀的事；
+   *  3. **又细又长**：平均宽 `2A/p ≤ 8px` 且圆度 `p²/(4πA) ≥ 4`（一条 L×w 的带这个值 ≈ L/(πw)）；
+   *  4. **断成 ≥2 截**：已刻的那部分自己不连通。**这一条是安全阀** —— 整条本来就全丢的，
+   *     说明它从头到尾都被认成底，补它就是点亮一片底，那不是这一刀要救的对象。
+   * 再加一道**两侧判据**（挑出"分界"、挡掉"盘沿/柔光"）：把带外的邻居按离底远近分两堆，
+   *  要求两堆的中位 dep 差 ≥40。**语料 @384 上 50 块候选里 36 块是这种"分界"，只有 1 块是
+   *  "两侧都近底"的那类**（浙江在线那块 3821 格、宽 11.8px 的盘边 —— 它被这道门单独挑出来挡住）。
+   *
+   * 补的值 = 这条带**已刻那部分的中位浓度**（不是 255，也不是全局某个档）：补进去的格要跟
+   * 同一条带的其它部分一样，才叫"一条线"，不叫"多一块墨"。
+   *
+     * 跑在出图之后、两层抬顶与发档之前 —— 补上的格随后会一起被抬、一起进桶，不用另做标定。
+   */
+  private fun propagateBands(out: IntArray, pixels: IntArray, w: Int, h: Int, box: Rect, s: Scratch): Pair<Int, Int> {
+    val total = w * h
+    if (s.bandSeen.size < total) s.bandSeen = ByteArray(total) else s.bandSeen.fill(0)
+    val q = s.queue
+    val min = maxOf(64, box.width().toLong() * box.height() * BAND_MIN_SHARE_PERMILLE / 1000).toInt()
+    var bands = 0; var filled = 0
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      for (x in box.left until box.right) {
+        val i0 = row + x
+        if (s.bandSeen[i0] != 0.toByte() || Color.alpha(pixels[i0]) < A_SOLID) continue
+        val my = bucketOf(i0, s)
+        var head = 0; var tail = 0
+        q[tail++] = i0; s.bandSeen[i0] = 1.toByte()
+        while (head < tail) {
+          val c = q[head++]; val cx = c % w; val cy = c / w
+          for (oy in -1..1) for (ox in -1..1) {
+            if (ox == 0 && oy == 0) continue
+            val nx = cx + ox; val ny = cy + oy
+            if (nx < box.left || ny < box.top || nx >= box.right || ny >= box.bottom) continue
+            val j = ny * w + nx
+            if (s.bandSeen[j] != 0.toByte() || Color.alpha(pixels[j]) < A_SOLID || bucketOf(j, s) != my) continue
+            s.bandSeen[j] = 1.toByte(); q[tail++] = j
+          }
+        }
+        if (tail < min) continue
+        // **当前这条带单独标 2**（`bandSeen` 里 1 = 以前处理过的带）。⚠ 第一版只判"非 0"，
+        // 于是数断截的那趟 BFS 会**漏进上一条带**里 —— 栈数组按本带长度开的，当场越界。
+        for (k in 0 until tail) s.bandSeen[q[k]] = 2.toByte()
+        val tone = bandTone(q, tail, w, h, out, pixels, s)
+        for (k in 0 until tail) s.bandSeen[q[k]] = 1.toByte()
+        if (tone <= 0) continue
+        // 补：这条带里**比它自己的中位浓度淡**的格，一律抬到那个中位。
+        // ⚠ 第一版只补 `alpha<32` 的格，全语料几乎不命中 —— 因为"缺一块"缺的不是 0，是**淡**
+        //   （那条描边漏掉的部分出墨 32~128）。只补 0 等于没补。
+        var did = 0
+        for (k in 0 until tail) {
+          val c = q[k]
+          val a = out[c] ushr 24
+          if (a >= tone) continue
+          out[c] = (tone shl 24) or 0x00FFFFFF
+          s.bandSeen[c] = 3.toByte()          // 3 = 这一格是**这一刀补上去的**，体检时要分得出来
+          did++
+        }
+        if (did > 0) { bands++; filled += did }
+      }
+    }
+    return Pair(bands, filled)
+  }
+
+  /**
+   * 这一条带该不该补、补成多浓。返回浓度，或 **-1 = 不归这一刀**。
+   * 四道门与两侧判据的出处见 [propagateBands]；`s.bandSeen[...] == 2` 的那一圈就是这条带自己。
+   */
+  private fun bandTone(
+    q: IntArray, tail: Int, w: Int, h: Int, out: IntArray, pixels: IntArray, s: Scratch,
+  ): Int {
+    var inked = 0; var perim = 0
+    val vals = ArrayList<Int>(tail)
+    for (k in 0 until tail) {
+      val c = q[k]; val cx = c % w; val cy = c / w
+      if ((out[c] ushr 24) >= 128) { inked++; vals += out[c] ushr 24 }
+      for (d in 0 until 4) {
+        val nx = cx + intArrayOf(1, -1, 0, 0)[d]; val ny = cy + intArrayOf(0, 0, 1, -1)[d]
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) { perim++; continue }
+        if (s.bandSeen[ny * w + nx] != 2.toByte()) perim++
+      }
+    }
+    if (perim == 0) return -1
+    val cov = inked * 100 / tail
+    if (cov < BAND_LO_PCT || cov > BAND_HI_PCT) return -1
+    if (2L * tail * 10 / perim > BAND_MAX_WIDTH * 10) return -1                 // 平均宽 > 8px：不是"一条线"
+    if (perim.toLong() * perim < BAND_MIN_CIRC4 * tail.toLong()) return -1       // 圆度 <4：不是"一条"
+    // 已刻的部分断成几截（<2 = 整条本来全丢或全留，不归这一刀）
+    val seen = BooleanArray(w * h)
+    val st = IntArray(tail)
+    var pieces = 0
+    for (k in 0 until tail) {
+      val c = q[k]
+      if (seen[c] || (out[c] ushr 24) < 128) continue
+      pieces++
+      var a = 0; var b = 0
+      st[b++] = c; seen[c] = true
+      while (a < b) {
+        val u = st[a++]; val ux = u % w; val uy = u / w
+        for (oy in -1..1) for (ox in -1..1) {
+          if (ox == 0 && oy == 0) continue
+          val nx = ux + ox; val ny = uy + oy
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+          val j = ny * w + nx
+          if (!seen[j] && s.bandSeen[j] == 2.toByte() && (out[j] ushr 24) >= 128 && b < tail) {
+            seen[j] = true; st[b++] = j
+          }
+        }
+      }
+    }
+    if (pieces < 2) return -1
+    // 两侧：带外的邻居按离底远近分两堆，两堆中位差够大才叫"图形与底的分界"
+    val near = ArrayList<Int>(); val far = ArrayList<Int>()
+    for (k in 0 until tail) {
+      val c = q[k]; val cx = c % w; val cy = c / w
+      for (d in 0 until 4) {
+        val nx = cx + intArrayOf(1, -1, 0, 0)[d]; val ny = cy + intArrayOf(0, 0, 1, -1)[d]
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+        val j = ny * w + nx
+        if (s.bandSeen[j] == 2.toByte() || Color.alpha(pixels[j]) < A_SOLID) continue
+        (if ((s.dist[j].toInt() and 0xffff) <= 60) near else far) += (s.dist[j].toInt() and 0xffff)
+      }
+    }
+    if (near.isEmpty() || far.isEmpty()) return -1
+    near.sort(); far.sort()
+    if (far[far.size / 2] - near[near.size / 2] < BAND_MIN_SIDE_GAP) return -1
+    vals.sort()
+    return vals[vals.size / 2]
+  }
+
+  /** [propagateBands] 的闸门，四个数都来自 `_harness/ShapeKt` 的语料表（@384，50 块候选）。 */
+  /** 一条带至少占内容框这么多（千分之 3 = 语料上 21 格那类噪点全挡在外面）。 */
+  private const val BAND_MIN_SHARE_PERMILLE = 3
+  private const val BAND_LO_PCT = 15
+  private const val BAND_HI_PCT = 85
+  private const val BAND_MAX_WIDTH = 8
+  /** 圆度 `p²/(4πA) ≥ 4` 的整数写法：`p² ≥ 50·A`。 */
+  private const val BAND_MIN_CIRC4 = 50L
+  private const val BAND_MIN_SIDE_GAP = 40
 
   /**
    * **按部分分配档位** —— "不够细腻"那一类的修法（三次试错之后剩下的那一条）。
