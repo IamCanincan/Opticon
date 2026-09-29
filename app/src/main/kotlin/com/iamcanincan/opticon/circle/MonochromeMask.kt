@@ -382,9 +382,14 @@ internal object MonochromeMask {
     var body = ByteArray(0)
 
     var grid = 0
-    /** H0（[regionGround]）这一支走到哪一步了：0=没走到、1=接手、2=被画布门槛拦、3=被区域关系拦、
-     *  4=被"底墨同色"那道验收拦。每次 [groundPass] 开头归零。
-     *  带它是因为**换桌面时这一支的射程必须看得见**，见那条汇总日志。 */
+    /** H0（[regionGround]）这一支走到哪一步了：0=没走到、1=接手、2=被画布门槛（④ `盒布`）拦、
+     *  4=被"底墨同色"那道验收拦、
+     *  **5=最大那块不够大（① `REGION_MIN_PCT`）、6=那块没挨着实心内容的边（②）、7=它的洞里没有墨（③）**。
+     *  每次 [groundPass] 开头归零。
+     *  带它是因为**换桌面时这一支的射程必须看得见**，见那条汇总日志。
+     *  ⚠ 5/6/7 是 2026-09-29 加的：原先 ①②③ 三道门都只写 3，`com.example.appui` 那张
+     *    （白圆角方底 + 蓝图形）报 `H0=3` 却查不出是哪道 —— 量出来是 **②**，而 ② 当时
+     *    **恒不成立**（见 [REGION_EDGE_SLACK]）。**诊断编码的粒度就是排查速度**。 */
     var h0why = 0
     /** 这一张被"这一支的底不成立"那两道验收退掉过哪几支（位：1=H1、2=H2、4=H0 被同色退；
      *  8=H2 被 [thinPlate]「盘比墨还小」退）。每次 [groundPass] 开头归零。 */
@@ -1870,15 +1875,41 @@ internal object MonochromeMask {
         if (area > bestArea) { bestArea = area; best = my }
       }
     }
-    if (best < 0 || bestArea * 100 < boxArea * REGION_MIN_PCT) return null
+    if (best < 0 || bestArea * 100 < boxArea * REGION_MIN_PCT) { s.h0why = 5; return null }
+    // ② 它**挨着内容框的边**（缩在正中的大家伙是图案）。
+    //
+    // ⚠ **"内容的边"要按 `α ≥ A_SOLID` 算，不能按内容框的边算，而且还要留 [REGION_EDGE_SLACK] 的余量。**
+    //   内容框是 `α ≥ A_BOX` 的边界，它外面裹着一圈**鬼影 + 抗锯齿**：
+    //   用户点名的 `com.example.appui`（白圆角方底 + 蓝图形）实测过圆心那一列 ——
+    //   `α=1~3` 的鬼影占 4 行（y=9..12）、抗锯齿过渡又占 4 行（y=13..16，53/116/209），
+    //   纯白要到 y=17 才开始。内容框顶在 y=9，白底区域够不到它 → `H0=6` 恒成立 →
+    //   H0 被否 → 一路退到 H3「参照=没有东西」→ **整块图标被涂满**
+    //   （`框内=0.73`，屏幕上就是"整个图标糊成一块"，`字均净=224` 但其实全是糊的）。
+    //   只放宽固定像素数不够用：鬼影环的宽度跟着源图被放大的倍率走（这张是 192→384 放大两倍）。
+    //   按实心边界判就与放大倍率无关了。
+    var sx0 = box.right; var sy0 = box.bottom; var sx1 = box.left - 1; var sy1 = box.top - 1
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      for (x in box.left until box.right) if (Color.alpha(pixels[row + x]) >= A_SOLID) {
+        if (x < sx0) sx0 = x; if (x > sx1) sx1 = x
+        if (y < sy0) sy0 = y; if (y > sy1) sy1 = y
+      }
+    }
+    if (sx1 < sx0) { s.h0why = 6; return null }     // 整块都是"鬼影"，没有实心内容
     var rim = false
-    for (x in box.left until box.right) {
-      if (rid[box.top * w + x] == best || rid[(box.bottom - 1) * w + x] == best) { rim = true; break }
+    for (k in 0 until REGION_EDGE_SLACK) {
+      val yt = sy0 + k; val yb = sy1 - k
+      for (x in sx0..sx1) {
+        if (rid[yt * w + x] == best || rid[yb * w + x] == best) { rim = true; break }
+      }
+      if (rim) break
+      val xl = sx0 + k; val xr = sx1 - k
+      for (y in sy0..sy1) {
+        if (rid[y * w + xl] == best || rid[y * w + xr] == best) { rim = true; break }
+      }
+      if (rim) break
     }
-    if (!rim) for (y in box.top until box.bottom) {
-      if (rid[y * w + box.left] == best || rid[y * w + box.right - 1] == best) { rim = true; break }
-    }
-    if (!rim) return null
+    if (!rim) { s.h0why = 6; return null }
     // 求洞那一趟借用同一个数组打"走过"的记号（-2）：自己的数组，用完不必还原 —— 这正是上一版
     // 借 [Scratch.visited] 时做不到的事（它留了脏数据，两张 H0 没接手的图跟着变了答案）。
     var holeInk = 0L
@@ -1907,7 +1938,7 @@ internal object MonochromeMask {
         if (!touches) holeInk += ink
       }
     }
-    if (holeInk * 100 < boxArea * REGION_HOLE_PCT) return null
+    if (holeInk * 100 < boxArea * REGION_HOLE_PCT) { s.h0why = 7; return null }
     // 四条都过：这块区域就是承载面。种子 = 它自己（不再靠颜色容差去猜它到哪为止），参照色 = 它的平均色。
     var sr = 0L; var sg = 0L; var sb = 0L
     for (y in box.top until box.bottom) {
@@ -1978,6 +2009,9 @@ internal object MonochromeMask {
    */
   private const val REGION_FULL_PCT = 80
   private const val REGION_MIN_PCT = 25
+  /** ② 「挨着内容框的边」允许的余量（像素）：抗锯齿环在任何 edge 下都是 1~2px，
+   *  框边那一行/列本身是混色，不属于任何"底色"的桶 —— 不留余量这道门恒不成立。 */
+  private const val REGION_EDGE_SLACK = 2
   private const val REGION_HOLE_PCT = 2
 
   /**
