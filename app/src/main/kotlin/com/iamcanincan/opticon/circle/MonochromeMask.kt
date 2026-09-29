@@ -726,13 +726,25 @@ internal object MonochromeMask {
     //   均值把"看得清的那半"拖下来陪"本来就远的那半" —— 陪的是浓度，不是真相。
     //   渐变不受影响：同一个精确颜色的像素本来就落在同一条带上。
     val cDep = HashMap<Int, LongArray>()
+    // 这张图有几种实心颜色，就得开几条表项 —— 所以这里必须有个上限。
+    // 语料实测（`_harness/PartAreaKt --colours`）：155 张真图标 中位 **1458** 种、
+    // p90 **11088**、最大 **29016**（王者荣耀那种照片式插画），所以 [CDEP_MAX] 定在 65536
+    // 对**现有真图标是惰性的**；它挡的是异常大的那一张：满幅照片 × 超大边长可以开到几十万个
+    // 精确色，就是几十 MB 的瞬时分配，而这段跑在桌面的图标加载线程上。
+    var cDepOff = false
     for (y in box.top until box.bottom) {
       val row = y * w
       for (x in box.left until box.right) {
         val i = row + x
         if (s.plate[i] != 0.toByte() || Color.alpha(pixels[i]) != 255) continue
+        if (cDepOff) continue
         val k = pixels[i] and 0x00FFFFFF
         val v = cDep.getOrPut(k) { LongArray(2) }
+        if (cDep.size > CDEP_MAX) {
+          // 越界就整张退回"按格子给浓度"（`f2196b7` 之前的行为）：颜色多到这个量级的图，
+          // 本来就没有"某一块颜色应当匀成同一档"这回事可言 —— 清掉比留着半张表更诚实。
+          cDep.clear(); cDepOff = true; continue
+        }
         val d = s.distT[i].toInt() and 0xffff
         if (d > v[0]) { v[0] = d.toLong(); v[1] = refLight(i, s).toLong() }
       }
@@ -921,6 +933,10 @@ internal object MonochromeMask {
 
   /** 一块色至少占工作集百分之几才算"图上的一个部分"；少于它的是一圈抗锯齿或一个噪点。 */
   private const val SEP_MIN_SHARE_PCT = 3
+
+  /** [build] 里"同一种源色交付同一种浓度"那张表最多开多少条（见用处的地方）。
+   *  65536 ≈ 语料实测最大值（29016）的 2.3 倍 —— 对现有真图标惰性，只挡异常大的那一张。 */
+  private const val CDEP_MAX = 65536
 
   /** 最多看几个部分（按面积取前几），再多就不是"相邻有没有差别"而是数颜色了。 */
   private const val SEP_MAX_PARTS = 6
