@@ -739,16 +739,22 @@ internal object MonochromeMask {
         if (s.plate[i] != 0.toByte() || Color.alpha(pixels[i]) != 255) continue
         if (cDepOff) continue
         val k = pixels[i] and 0x00FFFFFF
-        val v = cDep.getOrPut(k) { LongArray(2) }
+        val v = cDep.getOrPut(k) { LongArray(3) }
         if (cDep.size > CDEP_MAX) {
           // 越界就整张退回"按格子给浓度"（`f2196b7` 之前的行为）：颜色多到这个量级的图，
           // 本来就没有"某一块颜色应当匀成同一档"这回事可言 —— 清掉比留着半张表更诚实。
           cDep.clear(); cDepOff = true; continue
         }
         val d = s.distT[i].toInt() and 0xffff
+        v[2]++                                              // 顺手数这种颜色交付了多少格（见 [modalInk]）
         if (d > v[0]) { v[0] = d.toLong(); v[1] = refLight(i, s).toLong() }
       }
     }
+    // **主体是哪一种颜色**：交付了墨的那批格子里最多的那一种源色。下面第二遍的镂空那一层要用它。
+    // 放在这张表里数而不是另开一趟扫描：这张表访问的正是同一批格子（非底、实心），而这一段
+    // 跑在桌面的图标加载线程上，多一趟全框遍历是白花的。
+    var modalInk = -1; var modalN = 0L
+    for ((k, v) in cDep) if (v[0] > ground.zero && v[2] > modalN) { modalN = v[2]; modalInk = k }
     val out = IntArray(total)
     var knocked = 0
     for (y in box.top until box.bottom) {
@@ -784,7 +790,16 @@ internal object MonochromeMask {
         a = (a + a * (u * 100 / amp).coerceIn(-down, up) / 100).coerceIn(0, 255)
         // 第二遍只降**比主体亮**的那一侧（镂空、高光、白 logo 上的洞）。比主体暗的那些是图形
         // 自己的暗部，降它等于把细节擦了 —— 与上面那条明度序同一个极性。
-        if ((s.labL[i].toInt() and 0xffff) - bodyLight(i, s) > 0 && kc[i] != 2.toByte()) {
+        // ⚠ 但**主体自己那一色不许降**。这一层的参照取的是"离这格最近的那块主体"，于是一块
+        //   大的实心字形（白 logo、白条）坐在渐变底上时，字形中间那片"最近主体"会落到它自己
+        //   压着的深色上 —— **主体把自己挖空**。兼容性台 `渐变底+白字` 就是这个现场，而且它
+        //   **随边长变坏**：96/192 好，384/768 字形内部只剩 76% 实心（`_harness/LineDbg` 沿
+        //   y=192 那一行量到：同一条纯白、源 α 都是 255，x=84 出墨 255 而 x=192 出墨 83，
+        //   那两列的 `离体=175`、参照 L 从 100 翻到 49）。加上这一条之后 384/768 回到 100%，
+        //   而「镂空刻出来了」那条性质照旧绿 —— 洞本来就是**另一种**颜色，不是主体的颜色。
+        if ((s.labL[i].toInt() and 0xffff) - bodyLight(i, s) > 0 && kc[i] != 2.toByte() &&
+          (pixels[i] and 0x00FFFFFF) != modalInk
+        ) {
           val off = s.off[i].toInt() and 0xffff
           val k = CURVE[((off - body.zero) * 255 / body.span).coerceIn(0, 255)]
           if (k > 0) {
