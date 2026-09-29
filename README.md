@@ -316,6 +316,13 @@ intentresolver / permissioncontroller / wellbeing。
 - **尺寸填满**：自适应图标光栅化后内容只占画布中间约 61%，四周是空的。模块会先裁掉空白
   再放大填满，否则缩到通知里那点尺寸会又小又糊。
 - 仅注入 `com.android.systemui`，不碰其他进程。
+- **活路径已在真机核过（2026-09-30，XQ-DQ72 / Android 16）**：SystemUI 里
+  `inflateViews hooked (1 overload(s))`，而 `not resolvable` / `inflateViews not found` /
+  `inflateViews patch failed` **三条各 0 次** —— 这条通道装上了、没静默失败。
+  ⚠ 同一段时间里 `patched` 也是 0 条，那**不是**"修了 0 次都成功"，是**这段时间没有哪条通知的
+  小图标需要被修**。判"钩子活着"要看装钩那一行，不能看 `patched` 的条数 —— 零条 `patched`
+  加零条错误，在这条通道上读不出任何结论（这个坑踩过一次，靠的正是"每一条早退都要留下名字"
+  那次修复才分得开"没装上"与"没有东西要修"）。
 
 ### 改模式为什么不生效
 
