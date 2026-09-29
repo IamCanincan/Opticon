@@ -469,6 +469,12 @@ internal object MonochromeMask {
     var h2thick: Int = -1,
     var h2spread: Int = -1,
     var h2enc: Int = -1,
+    /** 被退掉的那一支 **H1** 自己的数（-1 = 没走到 / 没被退）。见 [groundPass] 里 `h1share` 那一段：
+     *  只报"拦=16"看不出它吞到多少、剩下几格当墨，而这两样正是"该不该给这块底开豁免"的依据。 */
+    var h1: Float = -1f,
+    var h1thick: Int = -1,
+    var h1fams: Int = -1,
+    var h1ink: Int = -1,
     /** **墨那一侧有多少比例的格子与底的本色分不开**（0..100，只数 α=255 的格子；-1 = 有一侧是空的）。
      *  这是这一支的**验收**而不是描述：见 [GROUND_INK_SAME_PCT]。 */
     var inkSame: Int = -1,
@@ -857,6 +863,9 @@ internal object MonochromeMask {
       " 盒布=${boxArea * 100 / (w.toLong() * h)} H0=${s.h0why}" +
       (if (ground.holed < 0) "" else " 洞墨=${ground.holed}") +
       (if (ground.h2 < 0f) "" else " H2被否=${pct(ground.h2)}/${ground.h2thick}/${ground.h2enc}/${ground.h2spread}") +
+      // H1 被退掉的那一档：`占比/厚度/族数/剩下当墨的实心格`。放在**整串末尾**，
+      // 前面所有列的位置一个都不动 —— 按列号读的脚本（`res.sh`）不能再被挪一次。
+      (if (ground.h1 < 0f) "" else " H1被否=${pct(ground.h1)}/${ground.h1thick}/${ground.h1fams}/${ground.h1ink}") +
       " 围=${ground.enclosed} 环散=${ground.spread} 零=${ground.zero} 实=${ground.solid} 端=${lo shr 6}/${hi shr 6} " +
         "壳占=${pct(body.share)} 层比=$keepInk/$knockInk " +
         "降=${pct(knocked.toFloat() / boxArea)} 降力=${body.weight} 力度=$hollow 明暗=${q} " +
@@ -1749,6 +1758,14 @@ internal object MonochromeMask {
     val seed = s.mark      // 洪泛的种子掩码（measure 之前没人用这块）
     s.h0why = 0            // 这一张走到 H0 没有、被哪道拦下，逐张归零（见 [Scratch.h0why]）
     s.veto = 0; s.vetoSame = -1  // 同上：被"底墨同色"退掉过哪几支、被退那支自己的数（见 [Output.veto]）
+    // H1 被否时**它自己的数**也要能进日志（与 H2 那条 `H2被否=` 同一做法）。
+    // 判据台 2026-09-29 撞出来的缺口：`拦=16` 只说"被整框那道退了"，不说它吞到多少、
+    // 剩下几格当墨 —— 于是"这块底该不该开豁免"只能靠猜（当年 `同色=接手/被退` 一加出来，
+    // 65 与 54 之间那个空档才看得见，是同一件事）。
+    var h1share = -1f
+    var h1thick = -1
+    var h1fams = -1
+    var h1ink = -1
     val fams = cornerFamilies(pixels, w, box, band, s)
     if (fams > 0) {
       bandSeed(s, w, box, band, seed)
@@ -1768,6 +1785,7 @@ internal object MonochromeMask {
       if ((p.share < PLATE_ALL_SHARE || p.families <= 1) && !vacuous(s, p)) return p
       if (p.share >= PLATE_ALL_SHARE && p.families > 1) s.veto = s.veto or 16
       if (vacuous(s, p)) s.veto = s.veto or 1
+      h1share = p.share; h1thick = p.thick; h1fams = p.families; h1ink = p.iN
     }
     val ring = outlineFamilies(pixels, w, box, s, seed)
     // H2 被否决时它的数也要能进日志 —— 用局部变量带，不碰对象上的字段（这是多线程的钩子路径）。
@@ -1814,7 +1832,10 @@ internal object MonochromeMask {
       // 第三件（2026-09-28，抖音「还是缺了一部分」）：它**不比墨那一侧小** —— 见 [thinPlate]。
       val vac = vacuous(s, alt)
       val thin = thinPlate(alt)
-      if (alt.share < PLATE_ALL_SHARE && !vac && !thin) return alt
+      if (alt.share < PLATE_ALL_SHARE && !vac && !thin) {
+        alt.h1 = h1share; alt.h1thick = h1thick; alt.h1fams = h1fams; alt.h1ink = h1ink
+        return alt
+      }
       if (vac) s.veto = s.veto or 2
       if (thin) s.veto = s.veto or 8
       h2share = alt.share; h2thick = alt.thick; h2enc = alt.enclosed; h2spread = alt.spread
@@ -1824,12 +1845,14 @@ internal object MonochromeMask {
     // 本来就只有"今天注定退成空气"的那几张（84 张真图标里走得到这里的只有 3 张）。
     regionGround(pixels, w, h, box, g, s, seed)?.let {
       it.h2 = h2share; it.h2thick = h2thick; it.h2enc = h2enc; it.h2spread = h2spread
+      it.h1 = h1share; it.h1thick = h1thick; it.h1fams = h1fams; it.h1ink = h1ink
       return it
     }
     bandSeed(s, w, box, band, seed)
     val air = fitGround(pixels, w, h, box, g, s, 0, seed)
     air.hyp = 3
     air.h2 = h2share; air.h2thick = h2thick; air.h2enc = h2enc; air.h2spread = h2spread
+    air.h1 = h1share; air.h1thick = h1thick; air.h1fams = h1fams; air.h1ink = h1ink
     return air
   }
 
