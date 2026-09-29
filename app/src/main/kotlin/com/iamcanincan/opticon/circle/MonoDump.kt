@@ -84,6 +84,10 @@ internal object MonoDump {
     // 小黑盒是"判成已适配→交回桌面"。后两个之前一张像素都没回来（一个不在可疑名单里，
     // 另一个在**放弃合成**那条 return 上，压根走不到出图的地方）—— 只能靠猜，就猜错了。
     "run.xbud.android", "com.greenpoint.android.mc10086", "com.max.xiaoheihe",
+    // 2026-09-29 他又点名两个「细节不足」。yiban 的像素在语料里（判据能直接重放），
+    // globalspeed **一张都没回来过** —— 它 `字均=179` 却不触发任何旧的可疑判据，
+    // 于是只能看着数字猜。加进来：下次清缓存重渲染时把原图带回来。
+    "com.yiban.app", "com.cnspeedtest.globalspeed",
   )
 
   fun watched(label: String): Boolean = WATCH.any { label.contains(it) }
