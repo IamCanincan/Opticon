@@ -1348,7 +1348,17 @@ internal object MonochromeMask {
   ): Pass {
     val total = w * h
     val boxArea = box.width().toLong() * box.height()
-
+    // **满幅图（内容框里几乎全是实心）没有"退路"**：那种图上"哪一块是底"本来就该由局部参照说了算，
+    // 没有一块背景可供"退出"。见 [cellFar] 的护栏：把"离家族远的格子"判成墨会把整张插画反过来 ——
+    // 真机实测王者荣耀国际版（`com.levelinfinite.sgameGlobal`，`盒布=100`）`H 3→1`、
+    // `框内 0.51→0.06`，而 H3 正是这一类**该走**的那一支。判据与 [NO_AIR_OPAQUE_PCT] 同一条
+    // （"框内 ≥95% 是不透明的"），只是这里问的是"这一张有没有空气可退"。
+    var opaque = 0
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      for (x in box.left until box.right) if (Color.alpha(pixels[row + x]) >= A_SOLID) opaque++
+    }
+    val fullBleed = opaque.toLong() * 100 >= boxArea * NO_AIR_OPAQUE_PCT
 
     // 「拟合色场 → 重算距离 → 重新洪泛」跑 [FIELD_ITERS] 轮。第一轮只有一个全局候选色，容差
     // 必须给到能容下整道渐变（ΔE [TOL_COARSE]），代价是把与底相近的字形也圈进去；有色场之后
@@ -1546,7 +1556,9 @@ internal object MonochromeMask {
               }
             }
             val solid = if (b >= 128) d - a * (255 - b) / 255 else d
-            s.pass[i] = if (a < A_SOLID || d <= tol || solid <= tol || byRim || rb[i] == 2.toByte()) 1 else 0
+            s.pass[i] = if (a < A_SOLID) 1
+            else if (!fullBleed && cellFar(s, if (s.ref[i] >= 0) s.ref[i] else 0, fams, g * g)) 0
+            else if (d <= tol || solid <= tol || byRim || rb[i] == 2.toByte()) 1 else 0
           }
         }
         flood(s, w, box, seed)
@@ -2602,6 +2614,26 @@ internal object MonochromeMask {
         s.pass[i] = if (ok) 1 else 0
       }
     }
+  }
+
+  /** 这一格的参照色离**每一个**家族色都 ≥ [SEAM_DIVERGE] → 它不是"底"，是另一种料。
+   *
+   *  为什么需要这一条：`pass` 是拿像素比**它自己那一格的中位色**（局部参照，为了吃渐变）。
+   *  一块**够大**的彩色区域会占满整个格子 → 那格的中位色就是它自己 → `d≈0` → 它成了"局部底"、
+   *  一点墨都不上。用户点名的 `com.jingdong.app.mall`（白购物袋 + 彩色渐变图案）就是这样：
+   *  左侧那块青 `#5BDFFF` 占满了 cell 32，而家族色是近白 `#FCF0FD`，两者 ΔE≈40 —— 于是青色
+   *  **整块从掩码里消失**（`框内=0.10`，屏幕上"缺一块"），而同一张图上黄/粉因为没占满格子
+   *  正常成了墨。**同一张图里两种彩色的待遇不一样**，这正是它难看的来源。
+   *
+   *  ⚠ 门槛用已有的 [SEAM_DIVERGE]（"同一种料"那条线），不新造数。`fams == 0`（H3 参照=空气）
+   *  时整条不参与 —— 那时没有"家族"可比，硬套会把整张图判成墨。
+   */
+  private fun cellFar(s: Scratch, k: Int, fams: Int, cells: Int): Boolean {
+    if (fams <= 0 || k < 0 || k >= cells) return false
+    for (c in 0 until fams) {
+      if (deltaE(s.fL[k], s.fA[k], s.fB[k], s.famL[c], s.famA[c], s.famB[c]) < SEAM_DIVERGE shl 6) return false
+    }
+    return true
   }
 
   /**
