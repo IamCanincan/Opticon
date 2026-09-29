@@ -280,17 +280,19 @@ internal object MonochromeSynth {
       // 就对不上"哪一行判据是哪一个带回来的 PNG"。见 [MonoDump.sigOf]。
       val sig = MonoDump.sigOf(pixels, edge, edge)
       val id = noteBranch(edge, sig, label, out)
+      val isWatched = MonoDump.watched(label)
       val dump = {
         // 带上包名：不带回来的话，重放出来的预览图不知道是哪个应用的 —— 而那正是要对的东西。
         // 包名解不出来时（`?`）退而带指纹，重放的文件名里就带着它。
         MonoDump.maybe(id, label, raster, pixels, out.mask, edge, edge,
-          "${label.substringBefore(' ')}_$sig | ${out.report}")
+          "${label.substringBefore(' ')}_$sig | ${out.report}", isWatched)
       }
       // 可疑的那几张把**原像素**带回来（PNG → base64 → 分片进日志），判据台原样重放。
       // 没有这条通道，"不够细致"永远只能靠猜：他报的应用发的是 vector / webp，台子解不出。
       // ⚠ 但只按 `suspicious` 会把他**点名**的那几张漏掉：一块灰框在形状体检里是"规整、连通、
       // 面积合适"的好形状，一个可疑指标都不触发 —— 而它恰恰是要看的东西。所以点名的必带。
-      if (MonoDump.suspicious(out) || MonoDump.watched(label)) dump()
+      // 带不带还得过预算那一关，见 [MonoDump.maybe] 里 `WATCH_RESERVE_KB` 那一段。
+      if (MonoDump.suspicious(out) || isWatched) dump()
       val ramp = out.mask
       if (ramp == null) {
         raster.recycle()

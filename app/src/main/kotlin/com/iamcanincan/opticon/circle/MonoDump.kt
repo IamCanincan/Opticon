@@ -37,7 +37,29 @@ internal object MonoDump {
   private var sent = 0
 
   /** 一次进程允许发多少 KB 的 PNG。logcat 是共享通道，超了就停，别把别的日志挤掉。 */
-  private var budget = 1200
+  private var budget = BUDGET_KB
+
+  /** 停手这件事要报，而且**只报一次**（不然每被拦一张一行，把日志本身挤掉了）。 */
+  private var stopReported = false
+
+  /** 点名的图标被拦下时每个标签报一次：这一条就是"为什么它一张都没回来"的答案。 */
+  private val dropped = HashSet<String>()
+
+  /**
+   * 只留给**点名名单**的那一块预算（KB）。
+   *
+   * 为什么要有这一条：普通可疑图是按渲染先后顺序抢预算的。真机实测（2026-09-29 20:09 那一轮）
+   * 桌面一起来，前 30 张在 **4 秒**里花掉 1249 KB → 预算见底，而 `com.cnspeedtest.globalspeed`
+   * 第一次出现是在 `20:09:51`，**晚了 0.7 秒** → 它被看到了 3 次、一张没带回来，而当时那条
+   * `if (budget <= 0) return` 是**静默**的，于是"点名要抓的应用没被抓"和"这个应用没被渲染过"
+   * 在日志里长得一模一样。这是本仓第三次撞上"静默失效"（前两次：12 处 `if (hooked > 0)` 没有
+   * else、装钩期解析失败不报名字），所以这里两件事一起做：**拦住要报名字** + **给名单留一块**。
+   * 保留额只影响名单之外的图：它们最多花到剩 [WATCH_RESERVE_KB]，够再收七八张点名的。
+   */
+  private const val WATCH_RESERVE_KB = 300
+
+  /** 一次进程的总预算。改这个数之前先想清楚：这条通道抢的是全设备共享的 logd。 */
+  private const val BUDGET_KB = 1200
 
   /**
    * 已经带过的图标签名。⚠ 必须有：桌面一次加载里同一个图标会被问很多次（不同 Drawable 实例、
@@ -130,8 +152,22 @@ internal object MonoDump {
    * 路上，抛出去就是那个图标没了）。失败只打一行原因。
    */
   @Synchronized
-  fun maybe(id: Int, label: String, src: Bitmap, pixels: IntArray, ramp: IntArray?, w: Int, h: Int, why: String) {
-    if (sent >= MAX_ICONS || budget <= 0) return
+  fun maybe(
+    id: Int, label: String, src: Bitmap, pixels: IntArray, ramp: IntArray?, w: Int, h: Int,
+    why: String, watched: Boolean,
+  ) {
+    // 普通可疑图花到剩 [WATCH_RESERVE_KB] 就停；点名的那张可以花到底。
+    if (sent >= MAX_ICONS || budget - (if (watched) 0 else WATCH_RESERVE_KB) <= 0) {
+      // ⚠ 这一条 else 就是这一版要加的东西：静默 return 让"抓不到"看起来像"没渲染过"。
+      if (watched && dropped.add(label))
+        Log.w(TAG, "Mono: dump 不抓 $label —— 抓取已停（发了 $sent 张 / 预算剩 ${budget}KB / 上限 $MAX_ICONS 张）")
+      if (!stopReported && (sent >= MAX_ICONS || budget <= 0)) {
+        stopReported = true
+        Log.d(TAG, "Mono: dump 收工（$sent 张 / 剩 ${budget}KB / 上限 $MAX_ICONS 张）" +
+          "→ 普通图标不再抓，只有点名名单还能花保留的那 ${WATCH_RESERVE_KB}KB")
+      }
+      return
+    }
     if (!seen.add(signature(pixels, w, h))) return
     sent++
     val n = sent
