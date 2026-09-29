@@ -597,9 +597,23 @@ internal object MonochromeMask {
     }
     val noAir = boxOpaque.toLong() * 100 >= boxArea.toLong() * NO_AIR_OPAQUE_PCT
     val cov = if (noAir && spread >= TWO_TONE_SPREAD) 255 else ground.meanCov
+    // ⚠ **swallow 那一项有自己的前提，前提不在就别算它**（2026-09-29 长条形量出来的）。
+    //   它的原话是"底占高到≈1.00 → 参照就是整张图，等于没有参照 → 距离项给不出任何形状"。
+    //   可是"距离项给不出形状"等价于**墨那一侧一格都不剩**（`盘实/墨实` 的后一个数）。
+    //   墨侧还有格子，前提就是假的：距离项明明排出了形状，这时再按占比把权重交给明度轴，
+    //   抬起来的不是形状，是**一整块被判成底的盘子** —— 判据台 `长条快捷方式`：
+    //   `底占=0.98 盘实=273244/6561 端=-42/-42` → 明度两端重合 → 整颗药丸 100% 出墨。
+    //   反过来，墨侧真空的那一类**必须**留着这一项：真机带回来的
+    //   `com.google.android.apps.photos/…view_screenshots_ic`（`底占=1.00 盘实=6424/0`）
+    //   全靠它把图形从"整张都被洪泛吃掉"里捞出来（`框内=0.53 字均净=242`）——
+    //   第一版按"跨度不够就整条关掉"改，正好把这一张改成了全空，所以撤回来换这条判据。
+    //   takeover 那一侧（底占太**低**）与 wisdomgame 那条 noAir 支都不受这里影响：
+    //   它们走的是另两个式子。
+    val swallow =
+      if (ground.iN > 0) 0f else (ground.share - LUM_SWALLOW) / (1f - LUM_SWALLOW)
     val q = (maxOf(
       1f - ground.share / LUM_TAKEOVER,
-      (ground.share - LUM_SWALLOW) / (1f - LUM_SWALLOW)
+      swallow
     ).coerceIn(0f, 1f) * cov / 255f * 100).toInt()
     // 试过并否掉的第三条路（别再走一遍）：饱和段里有 ≥2 块竞争时，把明暗这条轴的
     // ±up/down 拉宽。实测反而更糟：四块从 201/221/227 掉到 143/157/162 —— 整段一起被压淡，
