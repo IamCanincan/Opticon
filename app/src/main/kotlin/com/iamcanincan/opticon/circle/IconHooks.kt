@@ -164,6 +164,12 @@ private fun installHooks(xposed: XposedInterface, classLoader: ClassLoader, pack
     hookSynthesizedMonochrome(xposed)
     hookMaskFallThrough(xposed, classLoader)
     warnStaleIconCache(packageName)
+  } else {
+    // 这条不是兜底、是**射程说明**：单色合成与最近任务只登记了 AOSP / Pixel 两个包名，
+    // 换第三个桌面（Nova / MIUI Home / 三星）时这些通道一个都不挂 —— 而以前这里什么都不打，
+    // 看上去与"挂上了但没人来问"完全一样。README 的「验证」一节按这个口径改写过了。
+    Log.d(TAG, "$packageName 不在已登记桌面的名单里 → 单色合成 / 最近任务通道不挂" +
+      "（换桌面要把包名加进这里，否则功能整体不生效）")
   }
   if (packageName == "com.android.systemui") hookSplashScreenIcon(xposed, classLoader)
   if (packageName == "com.android.settings") {
@@ -523,7 +529,8 @@ private fun hookIconLoader(xposed: XposedInterface, method: Method): Boolean =
 
 /** 归档应用的图标走的是独立的接口，不经过上面那两个出口。 */
 private fun hookArchivedAppIcon(xposed: XposedInterface, classLoader: ClassLoader) {
-  val packageManager = classOf("android.app.ApplicationPackageManager", classLoader) ?: return
+  val packageManager = classOf("android.app.ApplicationPackageManager", classLoader)
+    ?: return missing("ArchivedAppIcon", "ApplicationPackageManager")
   var hooked = 0
   for (method in declaredMethods(packageManager, "getArchivedAppIcon")) {
     runCatching {
@@ -537,7 +544,7 @@ private fun hookArchivedAppIcon(xposed: XposedInterface, classLoader: ClassLoade
       hooked++
     }
   }
-  if (hooked > 0) Log.d(TAG, "ArchivedAppIcon: $hooked hooked")
+  spoken("ArchivedAppIcon", hooked)
 }
 
 /**
@@ -548,7 +555,8 @@ private fun hookArchivedAppIcon(xposed: XposedInterface, classLoader: ClassLoade
  * 系统自己会画圆，不动；其它一律裁圆）。
  */
 private fun hookPackageManagerIconGetters(xposed: XposedInterface, classLoader: ClassLoader) {
-  val packageManager = classOf("android.app.ApplicationPackageManager", classLoader) ?: return
+  val packageManager = classOf("android.app.ApplicationPackageManager", classLoader)
+    ?: return missing("PM IconGetters", "ApplicationPackageManager")
   var hooked = 0
   for (name in listOf("getApplicationIcon", "getActivityIcon", "getDefaultActivityIcon", "loadItemIcon")) {
     for (method in declaredMethods(packageManager, name)) {
@@ -561,7 +569,7 @@ private fun hookPackageManagerIconGetters(xposed: XposedInterface, classLoader: 
       }
     }
   }
-  if (hooked > 0) Log.d(TAG, "PM IconGetters: $hooked hooked")
+  spoken("PM IconGetters", hooked)
 }
 
 /**
@@ -641,6 +649,9 @@ private fun hookParcelWriteRestore(xposed: XposedInterface): Int {
  * settings 里逐个构造出来的 `ApplicationInfo` / `ActivityInfo` / `ResolveInfo`。
  */
 private fun hookMarkedIconIds(xposed: XposedInterface) {
+  // 打标记的**入口**过去完全没有计数：一条都没挂上时，日志与"挂上了但没图标经过"长得一样。
+  // 它现在也是 [installHooks] 那道闸门的产物，装没装必须看得见。
+  var hooked = 0
   val itemClasses =
     listOf(
       ApplicationInfo::class.java,
@@ -657,6 +668,7 @@ private fun hookMarkedIconIds(xposed: XposedInterface) {
           runMarkingIcons { markIcon(info) }
           result
         }
+        hooked++
       }
     }
   }
@@ -668,6 +680,7 @@ private fun hookMarkedIconIds(xposed: XposedInterface) {
         runMarkingIcons { markResolveInfo(chain.thisObject as? ResolveInfo) }
         result
       }
+      hooked++
     }
   }
 
@@ -680,8 +693,10 @@ private fun hookMarkedIconIds(xposed: XposedInterface) {
         markInfo(chain.thisObject as? PackageInfo)
         result
       }
+      hooked++
     }
   }
+  spoken("MarkedIconIds", hooked)
 }
 
 /**
@@ -716,7 +731,7 @@ private fun hookBatchIconIds(xposed: XposedInterface, classLoader: ClassLoader) 
     }
   }
 
-  if (hooked > 0) Log.d(TAG, "Parcel: $hooked hooked")
+  spoken("Parcel", hooked)
 
   hookParceledListSlice(xposed, classLoader)
   hookPackageInfoCommonUtils(xposed, classLoader)
@@ -726,8 +741,9 @@ private fun hookBatchIconIds(xposed: XposedInterface, classLoader: ClassLoader) 
  * 跨进程传大列表用的容器。一次性把整张列表打标记，比逐个处理快得多。
  */
 private fun hookParceledListSlice(xposed: XposedInterface, classLoader: ClassLoader) {
-  val base = classOf("android.content.pm.BaseParceledListSlice", classLoader) ?: return
-  val mList = fieldOf(base, "mList") ?: return
+  val base = classOf("android.content.pm.BaseParceledListSlice", classLoader)
+    ?: return missing("ParceledListSlice", "BaseParceledListSlice")
+  val mList = fieldOf(base, "mList") ?: return missing("ParceledListSlice", "mList")
   var hooked = 0
   for (ctor in declaredConstructors(base)) {
     runCatching {
@@ -739,7 +755,7 @@ private fun hookParceledListSlice(xposed: XposedInterface, classLoader: ClassLoa
       hooked++
     }
   }
-  if (hooked > 0) Log.d(TAG, "ParceledListSlice: $hooked hooked")
+  spoken("ParceledListSlice", hooked)
 }
 
 /**
@@ -748,7 +764,7 @@ private fun hookParceledListSlice(xposed: XposedInterface, classLoader: ClassLoa
  */
 private fun hookPackageInfoCommonUtils(xposed: XposedInterface, classLoader: ClassLoader) {
   val utils = classOf("com.android.internal.pm.parsing.PackageInfoCommonUtils", classLoader)
-    ?: return
+    ?: return missing("PackageInfoCommonUtils", "PMS 侧的 generate* 类")
   val names =
     listOf(
       "generate",
@@ -770,7 +786,7 @@ private fun hookPackageInfoCommonUtils(xposed: XposedInterface, classLoader: Cla
       }
     }
   }
-  if (hooked > 0) Log.d(TAG, "PackageInfoCommonUtils: $hooked hooked")
+  spoken("PackageInfoCommonUtils", hooked)
 }
 
 /**
@@ -778,7 +794,8 @@ private fun hookPackageInfoCommonUtils(xposed: XposedInterface, classLoader: Cla
  * 再包成 `BitmapInfo`；在这个入口上换成裁好的圆形即可。
  */
 private fun hookTaskIcons(xposed: XposedInterface, classLoader: ClassLoader) {
-  val cache = classOf("com.android.quickstep.TaskIconCache", classLoader) ?: return
+  val cache = classOf("com.android.quickstep.TaskIconCache", classLoader)
+    ?: return missing("TaskIconCache", "com.android.quickstep.TaskIconCache")
   var hooked = 0
   for (method in declaredMethods(cache, "getBitmapInfo")) {
     runCatching {
@@ -793,7 +810,7 @@ private fun hookTaskIcons(xposed: XposedInterface, classLoader: ClassLoader) {
       hooked++
     }
   }
-  if (hooked > 0) Log.d(TAG, "TaskIconCache: $hooked hooked")
+  spoken("TaskIconCache", hooked)
 }
 
 /**
@@ -866,7 +883,9 @@ private fun hookPixelLauncher(xposed: XposedInterface, classLoader: ClassLoader)
       hooked++
     }
   }
+  // 这一条不套 spoken：README 的验证一节引的就是这句原文，改了形状等于让文档说谎。
   if (hooked > 0) Log.d(TAG, "PixelLauncher: $hooked createBadgedIconBitmap hooked")
+  else Log.w(TAG, "PixelLauncher: 0 createBadgedIconBitmap hooked —— 桌面侧通道没生效")
 }
 
 /**
@@ -938,7 +957,8 @@ private fun hookSplashScreenIcon(xposed: XposedInterface, classLoader: ClassLoad
  */
 private fun hookSettingsAdaptiveIcon(xposed: XposedInterface, classLoader: ClassLoader) {
   if (Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM) return
-  val utils = classOf("com.android.settings.Utils", classLoader) ?: return
+  val utils = classOf("com.android.settings.Utils", classLoader)
+    ?: return missing("Settings", "com.android.settings.Utils")
   var hooked = 0
   for (method in declaredMethods(utils, "getAdaptiveIcon")) {
     runCatching {
@@ -964,6 +984,7 @@ private fun hookSettingsAdaptiveIcon(xposed: XposedInterface, classLoader: Class
     }
   }
   if (hooked > 0) Log.d(TAG, "Settings: $hooked getAdaptiveIcon hooked (deoptimized)")
+  else Log.w(TAG, "Settings: 0 getAdaptiveIcon hooked —— 这条通道没生效")
 }
 
 /**
@@ -1025,7 +1046,7 @@ private fun hookBatteryIcons(xposed: XposedInterface, classLoader: ClassLoader) 
     }
   }
 
-  if (hooked > 0) Log.d(TAG, "Battery: $hooked hooked")
+  spoken("Battery", hooked)
 }
 
 /**
@@ -1057,7 +1078,7 @@ private fun hookShortcutIcons(xposed: XposedInterface) {
       hooked++
     }
   }
-  if (hooked > 0) Log.d(TAG, "Shortcut: $hooked hooked")
+  spoken("Shortcut", hooked)
 }
 
 private fun markAll(items: Iterable<*>?) {
@@ -1162,6 +1183,23 @@ private fun declaredMethods(clazz: Class<*>, name: String): List<Method> =
 
 private fun declaredConstructors(clazz: Class<*>): List<Constructor<*>> =
   clazz.declaredConstructors.toList().onEach { it.isAccessible = true }
+
+/**
+ * 一条钩子的**注册数**进日志。加这一层只为一件事：**0 必须说话**。
+ *
+ * 原来这十来处写的是 `if (hooked > 0) Log.d(...)` —— 没有 else。于是在一台挂不上的 ROM 上，
+ * 日志里连"这一条没装"的痕迹都没有，而收尾那句 `Hooked $packageName` 照样打出来，
+ * 读起来完全像全部成功。这正是本项目吃过两次亏的那一类（"静默失效最难查"）。
+ */
+private fun spoken(name: String, hooked: Int) {
+  if (hooked > 0) Log.d(TAG, "$name: $hooked hooked")
+  else Log.w(TAG, "$name: 0 hooked —— 这条通道在本进程没生效")
+}
+
+/** [classOf] / [fieldOf] 找不到目标时的留痕，写法是 `?: return missing("名字", "缺什么")`。 */
+private fun missing(name: String, what: String) {
+  Log.w(TAG, "$name: 找不到 $what —— 这条通道在本进程没生效")
+}
 
 /**
  * 桌面自己出遮罩的那条路（`MonochromeIconFactory.generateMono`）—— 纯合成模式下它**一张都
