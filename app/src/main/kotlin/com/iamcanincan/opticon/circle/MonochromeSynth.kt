@@ -40,7 +40,10 @@ import java.util.concurrent.atomic.AtomicInteger
  *
  * 1. **取哪一层**：自适应图标取前景层，非自适应取整张。
  * 2. **别碰已适配的**：见下面那道闸，量的是**整个合成图标**。
- * 3. **按桌面要的尺寸出图**：[MonochromeLayer] 按需重压，不固定尺寸再放大 —— 那是「糊」的根源。
+ * 3. **按桌面要的尺寸出图**：首问时桌面还没 `setBounds`，所以先探一档；[MonochromeLayer.draw]
+ *    量到实际尺寸就报上来（[learnEdge]）并让这张的缓存作废（[demote]），下一次取
+ *    `getMonochrome()` 时在**加载线程**上按新尺寸重压 —— 固定一档再让桌面放大就是「糊」的根源，
+ *    而在 `draw()` 里当场重压则是把几百毫秒挂到桌面的绘制线程上。两头都不取。
  * 4. **放对位置**：非自适应图标的内容满幅，掩码算完**之后**才缩进可见区（[intoVisibleArea]）。
  *
  * ## 坐标系：掩码必须是「整张 108dp 画布」，不是可见区
@@ -85,6 +88,18 @@ internal object MonochromeSynth {
   private const val MIN_EDGE = 192
 
   /**
+   * 合成边长的**上限**。没有上限时，一次超大的请求会把这台机器的质量目标永久抬上去
+   * （[learnEdge] 取单调最大值），而每张图的数组分配与耗时都跟着它走。
+   *
+   * 768 是量出来的，不是猜的：判据台（`_harness/CompatKt`）上 384² 最凶的一档实测 **285ms/张**、
+   * 768² 是 **474ms/张**，而 1024² 已经进入"桌面等不起"的量级；真机日志里出现过的边长只有
+   * 192 与 384 两档（4242 行全是 384）。按图层 bounds = 1.5 × 图标尺寸推，常见密度下
+   * 桌面要的都在 650 以内 —— 768 把所有现实场合都留在上限之下，只有异常大的请求会被压低，
+   * 而**压低看不出来**：交出去的是一条连续 alpha 斜坡，放大是带滤波的（[MonochromeLayer.draw]）。
+   */
+  private const val MAX_EDGE = 768
+
+  /**
    * 掩码缓存的字节上限（见 [store]）。8 MB ≈ 55 张 384² 的掩码。
    *
    * 按字节而不是按条数封顶：一张 ALPHA_8 掩码 = 边长² 字节（384² = 147 KB），桌面一次会话里
@@ -120,7 +135,8 @@ internal object MonochromeSynth {
   @Synchronized
   fun forIcon(source: Drawable): Drawable? {
     cache[source]?.let { return MonochromeLayer(source, it).also { noteSynthesized() } }
-    val mask = render(source, if (knownEdge > 0) knownEdge else MIN_EDGE) ?: return null
+    val mask = render(source, minOf(if (knownEdge > 0) knownEdge else MIN_EDGE, MAX_EDGE))
+      ?: return null
     store(source, mask)
     return MonochromeLayer(source, mask).also { noteSynthesized() }
   }
@@ -136,7 +152,7 @@ internal object MonochromeSynth {
   }
 
   /**
-   * 桌面实际给的图层 bounds，由 [MonochromeLayer.draw] 回报。
+   * 桌面实际给的图层 bounds，由 [MonochromeLayer.draw] 回报，**夹在 [MAX_EDGE] 以下**。
    *
    * 只取见过的**最大值**：搜索框、通知里那种小尺寸场合不该把探测尺寸拉回 192，
    * 宁可多压一次也不交出偏小的掩码。
@@ -145,18 +161,22 @@ internal object MonochromeSynth {
   private var knownEdge = 0
 
   fun learnEdge(edge: Int) {
-    if (edge > knownEdge) knownEdge = edge
+    val capped = minOf(edge, MAX_EDGE)
+    if (capped > knownEdge) knownEdge = capped
   }
 
   /**
-   * [MonochromeLayer] 在按需重压之后回填缓存。
+   * 桌面上一次绘制要的尺寸**比手上这张大**：记下尺寸，并作废这一张的缓存，
+   * 让下一次 `getMonochrome()`（在图标的加载线程上）按新尺寸重压。
    *
-   * 不回填的话，下一次 [forIcon] 又会从 [MIN_EDGE] 的小尺寸重来一遍、然后在 `draw()` 里再重压
-   * 一次 —— 每换一次主题、每个图标白做两次全像素光栅化。掩码只会变大不会变小，直接覆盖没有
-   * 回退风险。
+   * ⚠ 为什么不在 `draw()` 里当场重压：见 [MonochromeLayer.draw]。本机实测那条路一次都没走到
+   * （15 行 `layer bounds=384x384 mask=384`），但它对别的桌面是**主线程上几百毫秒**。
    */
   @Synchronized
-  fun remember(source: Drawable, mask: Bitmap) = store(source, mask)
+  fun demote(source: Drawable) {
+    val previous = cache.remove(source) ?: return
+    cacheBytes -= previous.byteCount.toLong()
+  }
 
   /**
    * 累计交出去多少张单色层。**两条入口都经过 [forIcon]，所以一个计数器就够**。
@@ -687,8 +707,9 @@ private const val TINT_LOG_FIRST = 3
  * ## 为什么掩码是「按需」的
  * 桌面把这张 drawable 当作新 `AdaptiveIconDrawable` 的前景层、`setBounds` 到**图层 bounds**
  * 之后再画（推导见 [MonochromeSynth] 的坐标系那一节）—— 而那个尺寸在取 `getMonochrome()`
- * 的当下还不知道。固定一个尺寸再让桌面放大就是「糊」的根源，所以这里在 [draw] 里看实际的
- * bounds：比手上这张大就**按那个尺寸重压一次**，之后不再变。
+ * 的当下还不知道。固定一个尺寸再让桌面放大就是「糊」的根源，所以 [draw] 里量实际 bounds：
+ * 比手上这张大就**报上去并作废自己这一张的缓存**（[MonochromeSynth.demote]），
+ * 先按放大画（连续 alpha 斜坡，双线性看不出差），重压留给加载线程。
  */
 private class MonochromeLayer(
   private val source: Drawable,
@@ -714,37 +735,47 @@ private class MonochromeLayer(
 
   private var tintMode: PorterDuff.Mode = PorterDuff.Mode.SRC_IN
 
-  /** 当前掩码。只会在 [draw] 里因为尺寸不够而被换掉，换完就稳定。 */
-  @Volatile
-  private var mask: Bitmap = initial
+  /** 手上这一张掩码。取到之后**不再换**：尺寸不够时交给加载线程重压（见 [draw]）。 */
+  private val mask: Bitmap = initial
 
   /** 每个实例只打一次 bounds 日志，见 [draw]。 */
   private var loggedBounds = false
+
+  /** 尺寸不够这件事也只报一次，见 [draw] 里 `demoted` 那条。 */
+  private var demoted = false
 
   override fun draw(canvas: Canvas) {
     val edge = maxOf(bounds.width(), bounds.height())
     // 把桌面实际给的尺寸回报上去：后面的图标就一次按它出图，不再先探 192 再重压。
     MonochromeSynth.learnEdge(edge)
-    if (edge > mask.width) {
-      // 桌面要的比手上这张大 —— 按它重压，别把小的放大糊掉。
-      // 压不出来就继续用旧的（总比空着强）。压出来的顺手回填缓存，见 remember。
-      MonochromeSynth.render(source, edge)?.let {
-        mask = it
-        MonochromeSynth.remember(source, it)
-      }
+    if (edge > mask.width && !demoted) {
+      // 手上这张比桌面要的**小**：先放大画出去，同时让这一张的缓存作废 ——
+      // 重压交给下一次 `getMonochrome()`，那是图标的**加载线程**。
+      //
+      // ⚠ 绝不在这里当场合成。`draw()` 跑在桌面的绘制线程上，而一次全像素合成实测
+      // 8~285ms（384²，判据台量到最凶的那一档），外加 [MonochromeSynth.render] 是
+      // `@Synchronized` 的 —— 首屏一批图标要排队，那就是一次可被 jank 检测抓到的卡顿。
+      // 本机实测这条路一次都没走到（日志里 15 行全是 `layer bounds=384x384 mask=384`，
+      // 且 4182 次合成全在加载线程、主线程 0 次），但**换一台桌面就不一定了**。
+      // 放大看不出差：交出去的是一条连续 alpha 斜坡，双线性滤波（paint 带 FILTER_BITMAP_FLAG）。
+      //
+      // ⚠ `demoted` 不是省一次调用，是**别每帧抢那把锁**：[MonochromeSynth.demote] 与合成共用
+      // 同一把监视器，桌面滚动时这里每帧进来就会排在一张正在压的图标后面 —— 那还是卡顿。
+      demoted = true
+      MonochromeSynth.demote(source)
     }
     // 真机上把「桌面实际给了多大的 bounds」记下来 —— 类文档里那套「图层 bounds = 1.5 ×
     // 图标尺寸」的推导是从字节码和源码推出来的，但推演在这块踩过坑（我判反过一次方向），
     // 所以留一条**实测**出口：前 [BOUNDS_LOG_FIRST] 张打一次。
     //
-    // ⚠ 必须在上面那段**之后**打：重压前 mask 还是 MIN_EDGE，打出来会变成
-    // 「bounds=384 mask=192」，读着像「384 的框里塞 192 的图 = 放大糊了」，正好相反。
+    // `mask` 比 `edge` 小是**合法的当前状态**（这一张就是要被放大画的），不是 bug；
+    // 长期只有小的在打，说明桌面取 monochrome 的次序里 `knownEdge` 一直没机会生效。
     if (!loggedBounds) {
       loggedBounds = true
       val total = boundsLogged.incrementAndGet()
       if (total <= BOUNDS_LOG_FIRST) {
         Log.d(TAG, "Mono: layer bounds=${bounds.width()}x${bounds.height()} mask=${mask.width} " +
-          "alpha=${paint.alpha} filter=${paint.colorFilter?.javaClass?.simpleName ?: "none"}")
+          "edge=$edge alpha=${paint.alpha} filter=${paint.colorFilter?.javaClass?.simpleName ?: "none"}")
       }
     }
     canvas.drawBitmap(mask, null, bounds, paint)
