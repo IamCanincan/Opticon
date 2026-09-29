@@ -25,13 +25,17 @@ object MemberLookup {
     fun findClass(name: String, classLoader: ClassLoader): Class<*>? =
         runCatching { classLoader.loadClass(name) }.getOrNull()
 
-    fun readField(target: Any, name: String): Any? = try {
-        val f: Field = target.javaClass.getDeclaredField(name)
-        f.isAccessible = true
-        f.get(target)
-    } catch (_: Throwable) {
-        null
-    }
+    /**
+     * 按名字读字段 —— 这是**二道兜底**（首选是装钩期 [findField] 解析好、闭包捕获）。
+     *
+     * ⚠ 沿父类链找，与 [findField] 同一口径。原来这一版只查 `target.javaClass` 自己一层，
+     *   于是出现过一种只有兜底会撞上的坏法：ROM 把 `mContext` / `mCurrentSetColor` 这类字段
+     *   挪到父类时，[findField] 那一步**是能找到的**，兜底反而找不到 ——
+     *   两条路对同一个字段给出相反的答案，排查时会误判成"字段不存在"。
+     *   主路径与兜底必须说同一套话；要快就解析一次（见类文档的两套入口）。
+     */
+    fun readField(target: Any, name: String): Any? =
+        findField(target.javaClass, name)?.let { runCatching { it.get(target) }.getOrNull() }
 
     /**
      * 读**已解析好的**字段。
@@ -69,17 +73,8 @@ object MemberLookup {
      *
      * 注意每次调用都要把目标类的字段表扫一遍，热路径上请改用 [findFieldByType] 解析一次。
      */
-    fun readFieldByType(target: Any, type: Class<*>): Any? {
-        return try {
-            for (f in target.javaClass.declaredFields) {
-                f.isAccessible = true
-                if (f.type == type) return f.get(target)
-            }
-            null
-        } catch (_: Throwable) {
-            null
-        }
-    }
+    fun readFieldByType(target: Any, type: Class<*>): Any? =
+        findFieldByType(target.javaClass, type)?.let { runCatching { it.get(target) }.getOrNull() }
 
     /**
      * 写字段，返回是否真的写进去了。
@@ -87,12 +82,8 @@ object MemberLookup {
      * 字段改名或不可访问时**静默失败**是最难查的一类问题（表现为「功能没生效但日志干净」），
      * 所以把结果交回调用方，由它决定要不要打日志。
      */
-    fun writeField(target: Any, name: String, value: Any?): Boolean = runCatching {
-        val f: Field = target.javaClass.getDeclaredField(name)
-        f.isAccessible = true
-        f.set(target, value)
-        true
-    }.getOrDefault(false)
+    fun writeField(target: Any, name: String, value: Any?): Boolean =
+        findField(target.javaClass, name)?.let { runCatching { it.set(target, value) }.isSuccess } == true
 
     /**
      * 写**已解析好的**字段，返回值含义同 [writeField] 的字符串版（是否真的写进去了）。

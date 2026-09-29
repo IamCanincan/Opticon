@@ -90,8 +90,18 @@ object SystemUiHooks {
      * 通知全裸奔，比不缓存糟得多。
      * 解析不出来就返回 null，闭包里的运行时代码自动退回「按名字现查」的老路子 ——
      * 缓存只负责省掉重复查找，永远不负责让一条本来能用的钩子失效。
+     *
+     * ⚠ **每一项都要带个名字**（`what`）：解析失败过去是完全静默的，于是换一台 ROM
+     * 只要 SystemUI 把 `mContext` / `mCurrentSetColor` 挪进父类、或把 `ContrastColorUtil`
+     * 换了类，这几条就整片退回按名现查 —— 而按名那一版过去**只查自己一层类**（已在
+     * `MemberLookup` 统一成沿父类链），于是"保色"这类功能会既失效又没有任何一行日志。
+     * 现在 [install] 收尾会把没解析出来的项一次报完。
      */
-    private fun <T : Any> installOnly(lookup: () -> T?): T? = runCatching(lookup).getOrNull()
+    /** 装钩期**没解析出来**的成员，攒着由 [install] 一次性报出（见 [installOnly]）。 */
+    private val unresolved = java.util.concurrent.ConcurrentLinkedQueue<String>()
+
+    private fun <T : Any> installOnly(what: String, lookup: () -> T?): T? =
+        runCatching(lookup).getOrNull().also { if (it == null) unresolved.add(what) }
 
     /**
      * 只解析一次的 SystemUI 内部资源 id。
@@ -153,9 +163,26 @@ object SystemUiHooks {
      */
     fun install(module: XposedModule, classLoader: ClassLoader, quiet: Boolean = false): Boolean {
         if (!quiet) reportEnvironment(classLoader)
-        if (!installRowInflation(module, classLoader)) return false
-        installColorRetention(module, classLoader)
-        return true
+        val ok = try {
+            installRowInflation(module, classLoader) && run { installColorRetention(module, classLoader); true }
+        } finally {
+            // 早退也要报：`installRowInflation` 返回 false 就是通知整条功能没了，
+            // 那恰恰是最需要知道"哪些成员没解析出来"的一次。
+            if (!quiet) flushUnresolved()
+        }
+        return ok
+    }
+
+    /** 一次装钩里没解析出来的成员，**一行**报完（重试的那 19 次不报，免得刷重复的）。 */
+    private fun flushUnresolved() {
+        val miss = unresolved.toList(); unresolved.clear()
+        if (miss.isEmpty()) {
+            ModuleRuntime.logI("notify 装钩期成员解析：全部命中")
+            return
+        }
+        ModuleRuntime.logW(
+            "notify 装钩期 ${miss.size} 项没解析出来 → 运行期退回按名字现查（可能仍然失效）：${miss.joinToString(", ")}"
+        )
     }
 
     /**
@@ -205,10 +232,12 @@ object SystemUiHooks {
         // 钩子体每条通知都要跑，反射成员在这里一次定下来，闭包捕获。
         // 解析不出来（entryClass 为 null 的兜底路径 / 类还没就绪 / 字段改名）就是 null，
         // 运行时自动退回下面的按名现查 —— 缓存只加速，不会让本来能换图的钩子失效。
-        val sbnField = installOnly {
+        val sbnField = installOnly("NotificationEntry.<StatusBarNotification 字段>") {
             entryClass?.let { MemberLookup.findFieldByType(it, StatusBarNotification::class.java) }
         }
-        val binderContextField = installOnly { MemberLookup.findField(binderClass, "mContext") }
+        val binderContextField = installOnly("NotificationRowBinderImpl.mContext") {
+            MemberLookup.findField(binderClass, "mContext")
+        }
 
         for (method in overloads) {
             method.isAccessible = true
@@ -363,12 +392,16 @@ object SystemUiHooks {
         // 所以装钩期在它上面解析出的 Method，与运行时在 getInstance 返回的实例上现找的是同一个；
         // 反射 invoke 走虚分派，实例真是子类且有 override 也照样调到子类的实现。
         // 任何一项解析不出来就是 null，闭包里退回按名字现查 —— 缓存不改变任何一条判据。
-        val notificationField = installOnly { MemberLookup.findField(iconView, "mNotification") }
-        val setColorField = installOnly { MemberLookup.findField(iconView, "mCurrentSetColor") }
-        val getInstanceMethod = installOnly {
+        val notificationField = installOnly("StatusBarIconView.mNotification") {
+            MemberLookup.findField(iconView, "mNotification")
+        }
+        val setColorField = installOnly("StatusBarIconView.mCurrentSetColor") {
+            MemberLookup.findField(iconView, "mCurrentSetColor")
+        }
+        val getInstanceMethod = installOnly("ContrastColorUtil.getInstance") {
             MemberLookup.findMethod(contrastUtil, "getInstance", Context::class.java)
         }
-        val isGrayscaleMethod = installOnly {
+        val isGrayscaleMethod = installOnly("ContrastColorUtil.isGrayscaleIcon") {
             MemberLookup.findMethod(contrastUtil, "isGrayscaleIcon", Context::class.java, Icon::class.java)
         }
 
@@ -438,9 +471,13 @@ object SystemUiHooks {
         // Builder 里那个 colorUtil 的类型就是框架的 ContrastColorUtil，所以 isGrayscaleIcon
         // 在它上面解析；万一某个 ROM 换成了别的类，反射 invoke 会失败，
         // 失败就落到下面按名现查那条兜底上 —— 结果与今天完全一致，只是那一次多跑一步。
-        val builderContextField = installOnly { MemberLookup.findField(builderClass, "mContext") }
-        val getColorUtilMethod = installOnly { MemberLookup.findMethod(builderClass, "getColorUtil") }
-        val isGrayscaleMethod = installOnly {
+        val builderContextField = installOnly("Notification.Builder.mContext") {
+            MemberLookup.findField(builderClass, "mContext")
+        }
+        val getColorUtilMethod = installOnly("Notification.Builder.getColorUtil") {
+            MemberLookup.findMethod(builderClass, "getColorUtil")
+        }
+        val isGrayscaleMethod = installOnly("ContrastColorUtil#builder.isGrayscaleIcon") {
             MemberLookup.findClass(CONTRAST_UTIL, classLoader)
                 ?.let { MemberLookup.findMethod(it, "isGrayscaleIcon", Context::class.java, Icon::class.java) }
         }
