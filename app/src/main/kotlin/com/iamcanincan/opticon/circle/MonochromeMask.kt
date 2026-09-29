@@ -977,11 +977,13 @@ internal object MonochromeMask {
    *     所以"只对多块的图放开地板"这道闸门免掉的代价是 **0/10**（`_harness/_gate_parts.cjs`）。
    *     ⚠ 读 `分档=` 那列注意它是 **档数/块数**，不是块数/档数：拿第一个数当块数，会得出
    *     "代价都落在 ≤4 块"的相反结论（我自己错过一次）。
-   *   · **更根本的一条：那些档是编出来的。** yiban 那 6 块在**源色**上只铺了 47 个 ΔE
+   *   · **更根本的一条（当时说的）：那些档是编出来的。** yiban 那 6 块在**源色**上只铺了 47 个 ΔE
    *     （8.4 / 19.0 / 22.8 / 28.0 / 44.4 / 55.3 —— `_harness/PartsKt --merge`，按原生尺寸、
    *     与模型同一套 Lab 粗桶、同一道 ≥3% 面积门槛），而 6 档要 ≥25 的间隔得铺 125 以上。
-   *     所以 `6/6(94,135,165,195,225,255)` 里多出来的那 4 档不是"找回来的细节"，是排序键
-   *     **在没有信息的地方现刻的刻度** —— 这就是它数全绿、图却不对的机制（见 [LEVEL_FLOOR]）。
+   *     ⚠ **这条推论 2026-09-30 被图否掉了**：那 47 是"每块到底"的距离，发档要拉开的是"块与块"
+   *     的距离，两者不是一回事；条件下沉上线后 yiban 拿到 `6/6`，图上是**熊的五官回来了**。
+   *     留着的只有前半句 —— **"按块数开闸"不该开**（它同时放过云闪付与 songpal，见 [SEP_SINK_DEP]）。
+   *     数与图见 [LEVEL_FLOOR] 末尾那两条。
    *   · **块数确实虚高，但虚高不在这一族。** 61 张 N≥5 的图里 **28 张按源色 ΔE<15 合并后 ≤3 块**
    *     （中国移动 6→3、Google 5→4、云闪付 6→5、京东 6→6、yiban 6→5）：认对块数救得了中国移动
    *     那一类，**救不了 yiban**。
@@ -1007,14 +1009,51 @@ internal object MonochromeMask {
    *   取消整套明度序 —— 那套设计存在的全部理由就是第三条性质。别再往这个方向试第二次。
    *
    * ⚠ **这根"细腻 ↔ 实心"的 dial 第一次被真正量化（2026-09-29，`_harness/floor_by_parts.patch`
-   *   那版实验，未提交），量完的结论是**不拨**：**
-   *   地板随部分数下沉（硬底 128）→ yiban `2/6` 变 `6/6`、SelfTest 48/48 一条没破，
+   *   那版实验，未提交），量完的结论是**无差别地拨，不**：**
+   *   地板随**部分数**下沉（硬底 128）→ yiban `2/6` 变 `6/6`、SelfTest 48/48 一条没破，
    *   但 113 张真图 `淡(<200) 25→35`、`字均净 升3降51`、`净顶≥50 的张数 52→48`，掉下去那 10 张每张
    *   赔 20~55 个浓度点（中国移动 228→174、Google 搜索框 227→177、云闪付 221→173、京东 203→196）。
    *   取"半档"（硬底 170）则是**白付**：淡只 +5，而 yiban 仍是 `2/6`（它要 5 个间隔，170 只给到 3 档）。
-   *   为什么连 yiban 自己都不该拿到那 6 档，见 [SEP_MIN_GAP] 顶上"那些档是编出来的"那一条。
+   *
+   * ⚠ **但"这一族到此为止"那句当时说重了 —— 2026-09-30 有条件下沉已经上了屏**（见 [SEP_MIN_SRC_DE]
+   *   与 [SEP_SINK_DEP]，[assignLevels] 里那段）：淡 25→29、档数 294→323、SelfTest 48/48、兼容性台不动。
+   *   被否掉的从来不是"让地板沉"，是**"按块数开闸"** —— 块数一多就让，等于让排序键在没有信息的地方
+   *   刻刻度。换成"源色差得开才让 + 已经实心的那块不许动"之后，同一张 yiban 的 `6/6` 在图上是
+   *   **熊的五官回来了**（`_harness/q1_old` vs `q1_new`），而云闪付的黑字保住了（顶占比 7→61）。
+   *   ⚠ 顺带纠正一条我自己拿来当证据的数：那句"yiban 六块源色只铺 47 个 ΔE，所以那 6 档是编的"，
+   *   47 量的是**每块到自己那块底的距离**（`PartsKt --merge`，也就是 `QualKt` 表里那列 ΔE：8..55）；
+   *   而发档要拉开的是**块与块之间**的距离 —— 两块可以都离底 30，却彼此差 40（易班的棕毛与红衣服就是这样）。
+   *   拿前者去否后者是个**推论跳跃**，图已经把它否掉了。**"按块数开闸"照样不该开，但理由不是那 47。**
    */
   private const val LEVEL_FLOOR = 200
+
+  /**
+   * 往下多让一格（[SEP_MIN_GAP]）所需要的**源色**代价：相邻两块在 Lab 上至少差这么多。
+   *
+   * 为什么尺子必须是源色而不是 dep：中位 **dep 跨 119 是 ΔE 跨 53 的 2.2 倍**（`_harness/QualKt`，
+   * 113 张真图标 @384）—— dep 有跨度不等于源图上有看得见的差别。azure 那张就是标本：
+   * 五块墨 dep 只差 **4**（246..250）、源 ΔE 差 **31**，交付却拉开 **76**，那次序不是图给的。
+   * 而"那些档是编出来的"正是上一版无差别下沉（`_harness/floor_by_parts.patch`，地板随**块数**下沉）
+   * 被否掉的理由：块数一多就让，等于让排序键在没有信息的地方刻刻度（yiban 六块源色只铺 47 个 ΔE）。
+   * 所以这一道门要的不是"几块"，是"相邻这两块本身差多少"。
+   *
+   * 15 这个数是这么定的：`_harness/QualKt` 量到按台阶要求 10/15/20/30 分档，撑得起 >3 档的
+   * 分别是 70/67/59/40 张（共 109 张），15 在"有牙"与"不放宽到噪点"之间 —— 它同时也是
+   * [SEP_MIN_GAP] 的一半，即"源色差一个可见台阶的一半，才准借一整格的额度"。
+   * ⚠ 这不是推出来的最优，是**预先写下的候选值**；跑完 A/B 若图不认，就按数收回。
+   */
+  private const val SEP_MIN_SRC_DE = 15
+
+  /** 源色撑得起时，地板最多沉到这儿。128 沿用上一版实验的那个数（再低就进"淡"那一档了）。 */
+  private const val LEVEL_FLOOR_MIN = 128
+
+  /**
+   * dep 高过这个数的块**不许被发档拖下 [LEVEL_FLOOR]** —— "已经实心"的那几块不参与换层次。
+   *
+   * 224 = 满墨的 88%：dep 到这儿，模型自己已经认定这块离底足够远了，再拿它去给别块让位，
+   * 换出来的"层次"是**从字形身上刮的**，不是源图里找回来的。云闪付与 songpal 的数见 [assignLevels]。
+   */
+  private const val SEP_SINK_DEP = 224
 
 
   /**
@@ -1097,6 +1136,12 @@ internal object MonochromeMask {
   private fun assignLevels(out: IntArray, pixels: IntArray, w: Int, box: Rect, s: Scratch) {
     val cnt = IntArray(SEP_BUCKETS)
     val sum = LongArray(SEP_BUCKETS)
+    // 每块的**源色**均值（×64 的 Lab）。发档往下让一格的理由只能是"这两块在源图上真的差得开"，
+    // 而"差得开"必须由源色自己说 —— 不能由 dep 说（见 [SEP_MIN_SRC_DE]）。
+    val sumL = LongArray(SEP_BUCKETS)
+    val sumA = LongArray(SEP_BUCKETS)
+    val sumB = LongArray(SEP_BUCKETS)
+    val sumDep = LongArray(SEP_BUCKETS)
     var ink = 0
     for (y in box.top until box.bottom) {
       val row = y * w
@@ -1107,6 +1152,8 @@ internal object MonochromeMask {
         if (a == 0) continue
         val k = bucketOf(i, s)
         cnt[k]++; sum[k] += a; ink++
+        sumL[k] += s.labL[i].toInt(); sumA[k] += s.labA[i].toInt(); sumB[k] += s.labB[i].toInt()
+        sumDep[k] += s.dist[i].toInt() and 0xffff
       }
     }
     if (ink < 256) return
@@ -1121,16 +1168,41 @@ internal object MonochromeMask {
     }
     if (pick.size < 2) return
     val mean = IntArray(pick.size) { (sum[pick[it]] / cnt[pick[it]]).toInt() }
+    // 每块的源色均值（×64 单位，与 `deltaE` 同一口径）。
+    val colL = IntArray(pick.size) { (sumL[pick[it]] / cnt[pick[it]]).toInt() }
+    val colA = IntArray(pick.size) { (sumA[pick[it]] / cnt[pick[it]]).toInt() }
+    val colB = IntArray(pick.size) { (sumB[pick[it]] / cnt[pick[it]]).toInt() }
+    val depMean = IntArray(pick.size) { (sumDep[pick[it]] / cnt[pick[it]]).toInt() }
     // 从最浓的那块往下发档：第一块满墨，其余"不超过上一块 − 间隔"，也不高于自己原来的位置。
     val order = pick.indices.sortedByDescending { mean[it] }
     val target = IntArray(pick.size) { mean[it] }
     var prev = 255
+    // **地板按"源色撑不撑得起这一格"逐级下沉**（原来是恒定的 [LEVEL_FLOOR]，所以 255→225→200
+    // 之后必然并档 —— 语料平均 4.43 块只发得出 2.60 档，这就是"没细节"的全部机制）。
+    // 往下让一格的条件：相邻这两块在**源色**上至少差 [SEP_MIN_SRC_DE]。够，就多给 30 的额度；
+    // 不够，就照旧并档。恒底 [LEVEL_FLOOR_MIN] 兜住"再淡也不能淡过这条"。
+    var floor = LEVEL_FLOOR
     for ((j, idx) in order.withIndex()) {
-      // 地板：让开可以，但没让到"淡"。低于 [LEVEL_FLOOR] 就不再往下发档 —— 那几块宁可并列。
+      if (j > 0) {
+        val p = order[j - 1]
+        val de = deltaE(
+          colL[p], colA[p], colB[p], colL[idx], colA[idx], colB[idx]
+        ) shr 6
+        if (de >= SEP_MIN_SRC_DE) floor = maxOf(LEVEL_FLOOR_MIN, floor - SEP_MIN_GAP)
+      }
+      // **地板只沉"本来就不实心"的那几块。** 多让一格是拿"这一块的浓度"付的，所以付款的
+      // 必须是"源色真的差得开、而模型自己也没把它当实心墨"的那块 —— 否则就是拿字形换层次。
+      // 云闪付 @384 是第一版（无这条）的标本：dep **254**、占墨 **36%** 的那块（就是"云闪付"
+      // 三个字）被拖到 195，而 dep 只有 223/231 的两块小斜纹坐在它上面；顶占比 61→7，
+      // 屏幕上黑字变灰字。Sony songpal 是另一头：dep 只跨 **40**、交付却跨 **253**（6.3 倍），
+      // 五块里有四块 dep≥248 —— 那一档"层次"整个是现编的。加了这条，两张的实心块都不许动，
+      // 而易班熊那几块（dep 162/183/197/222）远在 224 之下，五官该分还分。
+      val fl = if (depMean[idx] >= SEP_SINK_DEP) LEVEL_FLOOR else floor
+      // 地板：让开可以，但没让到"淡"。低于地板就不再往下发档 —— 那几块宁可并列。
       // 这条是被点名的应用逼出来的：没有地板时中国移动 的实心占比从 76% 掉到 16%（均浓 229→168），
       // 而"偏淡"正是他先报的那一条。细腻与实心冲突时，**这里选的是先不伤人**。
       target[idx] = if (j == 0) 255
-      else minOf(mean[idx], maxOf(prev - SEP_MIN_GAP, LEVEL_FLOOR)).coerceAtLeast(0)
+      else minOf(mean[idx], maxOf(prev - SEP_MIN_GAP, fl)).coerceAtLeast(0)
       prev = target[idx]
     }
     val shift = HashMap<Int, Int>(pick.size)
