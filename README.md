@@ -550,6 +550,18 @@ MIT —— 见 [LICENSE](LICENSE)。
 ## 更新日志
 
 ### 未发布（v1.0.3 之后）
+- 兼容性：**装机期两处"挂不上却不说"的洞**（源于一次"算法是否通用"的静态检查，同批还有下面几条）。
+  ① `hookParcelWriteRestore` 是唯一挡住"伪造 `0x6e` id 泄漏到未注入进程"的闸门，
+  而它过去只在 `hooked > 0` 时打一行日志 —— **挂不上时一声不响**，而打标记照旧装。
+  一台 ROM 只要 hook 不了 `PackageItemInfo#writeToParcel`，本模块就会在**别人的**
+  `Activity.onCreate` 里制造崩溃（真机案例就写在 `IconHooks.kt` 那段注释里：华为应用市场）。
+  现在它返回注册条数，**为 0 就整体跳过"打标记"那两条并 `Log.e` 说清代价**（宁可圆角图标不生效）。
+  ⚠ 本机不受这一条影响：09-24→09-29 每一次进程注入都是 `ParcelWrite: 2 hooked`
+  （`_harness/dev_live.log`、`_harness/dev_now.log`），所以这道闸门在现有设备上是惰性的。
+- 兼容性：**装配阶段的异常不再逃进宿主进程**。`install()` 从 `OpticonModule` 进来全程没有 try，
+  而它每一步都在解析框架成员、往 bootclasspath 上挂钩，并且跑在宿主的
+  `bindApplication` / system_server 启动路径上 —— 抛出去的代价同样是别人的应用起不来。
+  现在整段包在 try 里：抛了就 `Log.e`（断在哪一步看栈），已挂上的钩子保留。
 - 修复：**「一块彩色区域整块从掩码里消失」**（用户点名 `com.jingdong.app.mall` 的 `jd_buy_icon`）。
   那张图是**白色购物袋 + 彩色渐变图案**。`pass`（"这一像素像不像底"）是拿像素比**它自己那一格的
   中位色**（局部参照 —— 这正是这个模型能吃掉渐变的原因）。可一块**够大**的彩色区域会占满整个格子，

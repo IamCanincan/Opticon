@@ -105,11 +105,30 @@ fun hookIcons(xposed: XposedInterface, param: XposedModuleInterface.PackageReady
  * 本模块的进程后，`Resources.getDrawable` 会抛 `Resources$NotFoundException`，而
  * `Activity.initWindowDecorActionBar` 这类调用点就在 `Activity.onCreate` 里 —— **直接崩应用**。
  * 所以 [hookParcelWriteRestore] 会在 Parcel 出口统一还原，把这条泄漏掐断。
+ *
+ * ⚠ **还原挂不上时，本进程一个标记都不打**（下面 `if (!gate)` 那一段）。这是上面那句"两步
+ * 缺一不可"唯一还没被代码执行的部分：原来这条闸门只在 `hooked > 0` 时才打一行日志，
+ * 挂不上就是**一声不响**，而打标记照旧装 —— 于是一台 ROM 只要 hook 不了
+ * `PackageItemInfo#writeToParcel`，这个模块就会在别人的 `Activity.onCreate` 里制造崩溃，
+ * 而日志上完全看不出发生过什么。宁可圆角图标整个功能不生效。
  */
 private fun install(xposed: XposedInterface, classLoader: ClassLoader, packageName: String) {
   if (installed) return
   Log.d(TAG, "install in $packageName, sdk ${Build.VERSION.SDK_INT}")
 
+  // 装配整段包在这里。下面每一步都在解析框架成员、往 bootclasspath 上挂钩，换一台 ROM
+  // 就有一种抛出来的可能；而这条链跑在宿主的 bindApplication / system_server 启动路径上，
+  // 异常逃出去的代价是**别人的应用起不来**，我们这边只是少一个功能。
+  // 断在哪一步看栈就够了，所以这里只包一层，不另设"走到哪了"的状态。
+  try {
+    installHooks(xposed, classLoader, packageName)
+  } catch (t: Throwable) {
+    // 已经挂上的那些仍然生效（`installed` 在上面第一条闸门之后就置位），但功能不完整。
+    Log.e(TAG, "Opticon: install threw in $packageName，其后的钩子没装", t)
+  }
+}
+
+private fun installHooks(xposed: XposedInterface, classLoader: ClassLoader, packageName: String) {
   if (!hookIconLoaders(xposed, classLoader)) {
     Log.w(TAG, "No icon loader is found, nothing is hooked")
     return
@@ -117,9 +136,18 @@ private fun install(xposed: XposedInterface, classLoader: ClassLoader, packageNa
   installed = true
 
   // 出口还原必须先挂：它是唯一能挡住"标记 id 泄漏到没注入的进程"的闸门。
-  hookParcelWriteRestore(xposed)
-  hookMarkedIconIds(xposed)
-  hookBatchIconIds(xposed, classLoader)
+  val gate = hookParcelWriteRestore(xposed) > 0
+  if (!gate) {
+    Log.e(
+      TAG,
+      "ParcelWrite 还原挂不上 → 本进程**不打任何图标标记**（打过的 0x6e id 泄漏到未注入进程" +
+        "会在 Activity.onCreate 崩应用）。代价：裁圆的批量/构造通道在这里不生效。"
+    )
+  } else {
+    hookMarkedIconIds(xposed)
+    hookBatchIconIds(xposed, classLoader)
+  }
+  // 下面三条只把返回的 Drawable 套一层，不产生可跨进程泄漏的 id，所以上面那道闸门不管它们。
   hookShortcutIcons(xposed)
   hookArchivedAppIcon(xposed, classLoader)
   hookPackageManagerIconGetters(xposed, classLoader)
@@ -552,8 +580,11 @@ private fun hookPackageManagerIconGetters(xposed: XposedInterface, classLoader: 
  * 所以写进 Parcel 前必须还原成合法的 `0x7f…`。客户端收到后由 `readTypedList` /
  * `BaseParceledListSlice` / 构造器 hook 重新打标记，已注入进程的裁圆功能不受影响。
  */
-private fun hookParcelWriteRestore(xposed: XposedInterface) {
+private fun hookParcelWriteRestore(xposed: XposedInterface): Int {
   var hooked = 0
+  // 挂不上的**原因**必须一起带进日志（与 SplashScreen 那条同一做法）：0 现在会关掉打标记，
+  // 只报"0"的话下一台机器上还是查不到为什么。
+  var lastError: Throwable? = null
 
   // 所有 PackageItemInfo 子类（ApplicationInfo / ActivityInfo / ServiceInfo /
   // ProviderInfo）的 writeToParcel 都会调到基类这一层，一处覆盖全部。
@@ -572,7 +603,7 @@ private fun hookParcelWriteRestore(xposed: XposedInterface) {
         }
       }
       hooked++
-    }
+    }.onFailure { lastError = it }
   }
 
   // ResolveInfo 不是 PackageItemInfo 的子类，它自己还带一份 icon / iconResourceId。
@@ -596,10 +627,13 @@ private fun hookParcelWriteRestore(xposed: XposedInterface) {
         }
       }
       hooked++
-    }
+    }.onFailure { lastError = it }
   }
 
+  // **0 也说话**：调用方拿这个数决定本进程打不打标记（见 installHooks 里那道闸门）。
   if (hooked > 0) Log.d(TAG, "ParcelWrite: $hooked hooked (unmark before Binder)")
+  else Log.e(TAG, "ParcelWrite: 0 hooked (writeToParcel 挂不上) err=${lastError?.message}")
+  return hooked
 }
 
 /**
