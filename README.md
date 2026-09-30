@@ -691,6 +691,68 @@ MIT —— 见 [LICENSE](LICENSE)。
 ## 更新日志
 
 ### 未发布（v1.0.3 之后）
+- 修正（**三处公式说明写的是 `dep = a×[(1−β) + β×ΔE/EMAX]`，而代码算的是 `max(a−c, 0) + a×β×ΔE/EMAX`
+  —— 改的是**文档**，不是代码**）：这两式只在 `0 < a < c` 那一段分家，而那一段正是**描边抗锯齿**
+  所在。有人按文档把它"化简"成 `a×(1−c/255)` 过，判据台当场把 `abfa161` 修掉的东西还了回来：
+  翻译（`com.google.android.apps.translate`）那张的斜痕在 ASCII 缩略图里整条重新出现，
+  `淡` 260→504、`字均` 238→234；113 张真机图标里 **602 行**判据因此改变。
+  改回后与 HEAD **逐行零差异**（只除掉 `--- <名字> Nms` 的计时后缀）。第一项问的是
+  **「这一像素比参照自己实出来的那份多出多少 α」**，不是"按参照的比例缩小" ——
+  类文档 / `build` / `departure` 三处公式与那一行注释现已逐字对齐，并在 `departure` 里
+  写明了这次踩坑的实录（`c ≥ b` 恒成立，所以 `dep ≤ a` 恒成立）。
+- 修复（**通知侧的分析尺寸没有上界**）：`decode` 只有 `TYPE_RESOURCE` 走 `rasterize`（= 96），
+  而 `TYPE_BITMAP` / `TYPE_DATA` / `TYPE_URI` 三条把**原尺寸**位图直接递进 `monochrome` ——
+  那里的两块 `w×h` 数组、Otsu、两次洪泛全按面积走，**而且四块 grow-only 缓冲会把面积永久留在
+  SystemUI 里**（10 B/像素）：一张 4000×3000 的小图标 ≈ 120MB 常驻 + 两次 ≈48MB 临时分配，
+  还在通知刷新那条线程上。现在先按 `ICON_EDGE` 等比归一（**只有超限才缩**，常规尺寸一个像素不动）。
+- 修复（**`useAlpha` 的前半句是恒真的死条件**）：`transparentCount > total/20` 被后半句
+  `solidRatio < 0.7` 完全蕴含（不到七成 ⟺ 透明多于 30% > 5%），所以真正的闸只有
+  `SOLID_SHAPE_LIMIT` 一个数。删掉死条件，并把 KDoc 里那句"只有透明像素占多数时才走 alpha"
+  改成实际判据（多于三成，不是多数）。
+- 修复（**装钩失败会被记成成功**）：`SystemUiHooks` 里 `hookedMethods.add` 原来跑在
+  `hook(method)…intercept{}` **之前**，而装钩这一步不在框架 `protective` 的兜底范围内
+  （libxposed 的 `HookFailedError` 是 Error）。一次抛出会连锁：方法被记成"已挂上"→ 下一轮
+  回调直接跳过 → 照样打 `inflateViews hooked (N overload(s))` 并把 `rowInflationInstalled`
+  置真，钩子一个都没有。现在**先装成、再登记**，失败如实报数并返回 false 让调用方重试；
+  `OpticonModule` 一侧也把"抛了"折算成"这一轮没装上"（原来抛出会把 `postDelayed` 一起带走，
+  重试一次都排不上）。
+- 修复（**`notify 装钩期成员解析：全部命中` 会谎报**）：它原来挂在 `install()` 的 `finally` 里、
+  且只在 `quiet=false` 那几轮报 —— 而第一次 packageReady 常常早到 ClassLoader 还没就绪
+  （目标类全 missing、直接早退），真正解析成员的是**第 2 轮起**（`quiet=true`）。于是
+  「N 项没解析出来」这条明细在正常流程里永远不会打，而"全部命中"紧跟在 `missing class: …`
+  后面出现。现在报在**解析真的跑过之后**，明细**不再受 `quiet` 影响**。
+- 修复（**`CorpusCapture` 标记删不掉会每秒重跑一轮**）：`marker.delete()` 的返回值原来被丢掉，
+  而 `ConfigProvider.query` 每次都会来看一眼（各被注入进程 1Hz）—— 标记还在就再认领一次。
+  删不掉（属主可能是 `shell:ext_data_rw`）现在当场退出并留一行日志。
+- 修复（**`UpdateChecker` 无上限读响应体**）：第二条端点是第三方加速镜像，那份响应体不受我们
+  控制，`readText()` 等于让对面决定本进程分配多少内存。按 256 KiB 截断（真实响应几 KB）。
+- 修复（**`findField` / `findFieldByType` 会在 `setAccessible` 失败时提前放弃**）：赋值原来落在
+  内层 `runCatching` **外面**，某一层设不进去就穿透到最外层、直接返回 null —— 而 `findMethod`
+  的 KDoc 明写"那一层设不进去就继续往上找"。两处对齐。
+- 修复（**底部悬浮药丸压在系统导航栏下面**）：本 Activity 是 edge-to-edge，而药丸是外层 `Box`
+  的兄弟节点、不经过 `Scaffold` 的 `innerPadding` —— 只给 20dp 底边距时，三键导航（约 48dp）
+  会把药丸下面约 28dp 连同每格的点击区一起盖住（系统导航栏吃掉那些触摸）。药丸与 Snackbar
+  现在都先 `navigationBarsPadding()`（两者相对位置因此不随导航方式变）。
+- 修复（**作用域清单的「必选+推荐 / 全部」切走就弹回**）：`remember` → `rememberSaveable`。
+  这一档没有落盘的地方，而 Pager 会销毁离屏的页，用户刚点过「全部」、切回来就发现又折起来了。
+- 修复（**三个开关没有读屏名字**）：Material3 的 `Switch` 是**自己**的语义节点，旁边的标题是另一个
+  节点、不会自动并进来 —— 不给 `contentDescription`，TalkBack 只念「关闭，开关」。底栏四格同理
+  补上 `selected`（"当前在第几页"原先只靠高亮表达）。
+- 收尾（**死代码**）：`NotifyScreen` 里那份从没被调用过的私有 `SectionLabel`（本页根本没有区块
+  小标题，文件头那句"每个区块的标题走 [SectionLabel]"是反话）、两处没用到的 `SectionLabel`
+  import、`MonochromeMask` 里四个**从没被读过**的常量（`BUCKETS` / `COLOUR_DRIVEN` /
+  `PLATE_THICK_DIV` / `ENCLOSED_MIN` —— 后两个的候选理由保留成散文，常量本身会让
+  「厚到 1/16」「围合 50%」看着像生效中的阈值）。
+- 修复（**两处轮询里重复做反射解析**）：`IconHooks` 的 `ActivityThread.currentApplication()`
+  在两个守护线程里被轮询调用最多 60 / 100 次，每次都重做 `Class.forName` +
+  `getDeclaredMethod` + `setAccessible` —— 那正是开机最忙的那几秒。成员现在只解析一次
+  （解析不出来仍按老样子现查，缓存只省查找、不改结果）。
+- ⚠ 记一条**测出来但没改**的：`MemberLookup` 的 `invoke` / `invokeStatic` / `writeField(Field)` /
+  `findMethod` / `methodWithParams` / `declaredMethod` 在**应用源码与判据台里都没有调用点**
+  （`_harness/ReflectKt` 用的是按名字的 `readField` / `writeField` / `readFieldByType`）。
+  R8 会把它们从 release 里删掉，所以只记一笔，没有动 —— 它们是这个反射薄封装的通用面。
+  ⚠ 查"有没有调用点"时**别从仓库根 grep**：`_harness/` 在 `.gitignore` 里（`/_*/`），
+  根目录的搜索会静默漏掉它，而那正是判据台引用这些 API 的地方。
 - 量死（**「墨都钉在 255」不是病，别再去做"降低饱和"**）：真机语料交付的墨里
   **58% 落在 255**、`顶平% 中位 45`，看着像"层次被压掉了"。按**块**数就不成立：全语料 284 张里
   「≥3 块且**全部**贴到 250+」只有 **3 张**（WPS 的白 W、高德的白纸飞机、fcmpushviewer 的白山），
