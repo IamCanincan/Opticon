@@ -330,12 +330,35 @@ private fun deleteIconCache(packageName: String): Boolean {
 // 清不清、什么时候清一律交给界面上的手动按钮，模块不再自作主张删桌面的数据库。
 // 手动清的实现见 [deleteIconCache] 与广播 [ACTION_CLEAR_ICON_CACHE]。
 
+/**
+ * `ActivityThread.currentApplication()` 这个成员**只解析一次**。
+ *
+ * 为什么要单独拎出来：下面那两个调用点都是**轮询**（起一个守护线程每 100ms 试一次，
+ * 分别最多试 60 / 100 次），而 `Class.forName` + `getDeclaredMethod` + `setAccessible`
+ * 每轮都重做一遍 —— 那两个线程跑的正是 launcher / SystemUI 开机最忙的那几秒。
+ * 轮询本身是必要的（Application 那时还没建好），但"再查一遍方法"从来不是。
+ *
+ * 与 `SystemUiHooks.installOnly` 同一个立场：**缓存只负责省掉重复查找，不改变结果** ——
+ * 解析不出来时 [currentApplication] 仍旧按老样子现查一次（`?:` 那一支），
+ * 所以这里缓存的是**成员**，不是"Application 已就绪"这个状态。
+ */
+private val currentApplicationMethod: Method? by lazy {
+  runCatching {
+      Class.forName("android.app.ActivityThread")
+        .getDeclaredMethod("currentApplication")
+        .apply { isAccessible = true }
+    }
+    .getOrNull()
+}
+
 /** 当前进程的 Application（模块侧拿 Context 的通用办法，反射 ActivityThread）。 */
 private fun currentApplication(): Application? =
   runCatching {
-      val activityThread = Class.forName("android.app.ActivityThread")
-      val method = activityThread.getDeclaredMethod("currentApplication")
-      method.isAccessible = true
+      val method =
+        currentApplicationMethod
+          ?: Class.forName("android.app.ActivityThread")
+            .getDeclaredMethod("currentApplication")
+            .apply { isAccessible = true }
       method.invoke(null) as? Application
     }
     .getOrNull()
