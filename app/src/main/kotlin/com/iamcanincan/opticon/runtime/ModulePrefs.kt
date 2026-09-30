@@ -17,8 +17,6 @@ import android.content.SharedPreferences
  * （[KEY_MONO_INVERT]）管的是 Android 16 强制取色下**主题图标单色遮罩**的整条处理链
  * ——**首选合成、兜底翻转**，关掉就两条一起停（见 [ModuleOptions.monoInvert]）；
  * 它和裁圆没有因果关系，所以不跟着 [KEY_CIRCLE_ENABLED] 走。
- * 通知侧还多一个「模式」选择，由模式推导 [ModuleOptions.keepOriginalColor] ——
- * 替换策略和是否保色必须成对，拆成两个独立开关迟早会被配成互相矛盾的组合。
  *
  * ⚠ 默认值必须和 [ModuleOptions] 的无参默认值逐字段一致：后者是配置通道**全挂**时的
  * 兜底（provider 查不到、文件读不到、远程配置拿不到）。两边不一致就会出现
@@ -43,7 +41,6 @@ object ModulePrefs {
     const val COLUMN_MONO_INVERT = "mono_invert"
     const val COLUMN_MONO_OVERRIDES = "mono_overrides"
     const val COLUMN_NOTIFY_ENABLED = "notify_enabled"
-    const val COLUMN_MODE = "mode"
 
     const val KEY_CIRCLE_ENABLED = "circle_enabled"
     const val KEY_MONO_INVERT = "mono_invert"
@@ -73,13 +70,6 @@ object ModulePrefs {
     fun serializeOverrides(map: Map<String, Boolean>): String =
         map.entries.joinToString(";") { "${it.key}=${it.value}" }
     const val KEY_NOTIFY_ENABLED = "notify_enabled"
-    const val KEY_MODE = "mode"
-
-    /** 彩色桌面图标：换成应用在桌面上的图标，保留原色 */
-    const val MODE_LAUNCHER_ICON = 0
-
-    /** 系统黑白：把应用原始小图标压成单色，交给系统按主题上色 */
-    const val MODE_MONOCHROME = 1
 
     /**
      * 各开关没存过时的默认值。
@@ -92,11 +82,6 @@ object ModulePrefs {
     const val DEFAULT_CIRCLE_ENABLED = true
     const val DEFAULT_MONO_INVERT = true
     const val DEFAULT_NOTIFY_ENABLED = true
-
-    /**
-     * 没存过配置时用的模式（默认单色）。理由同上一组默认值常量。
-     */
-    const val DEFAULT_MODE = MODE_MONOCHROME
 
     /**
      * 「这确实是一份 Opticon 配置」的判据键。
@@ -128,34 +113,31 @@ object ModulePrefs {
             .putBoolean(KEY_MONO_INVERT, DEFAULT_MONO_INVERT)
             .putString(KEY_MONO_OVERRIDES, DEFAULT_MONO_OVERRIDES)
             .putBoolean(KEY_NOTIFY_ENABLED, DEFAULT_NOTIFY_ENABLED)
-            .putInt(KEY_MODE, DEFAULT_MODE)
             .apply()
     }
 
-    /** 把存下来的配置翻译成模块行为。[ModuleOptions.keepOriginalColor] 由模式推导，不单独存 */
-    fun read(prefs: SharedPreferences): ModuleOptions = derive(
+    /** 把存下来的配置翻译成模块行为 */
+    fun read(prefs: SharedPreferences): ModuleOptions = ModuleOptions(
         circleEnabled = prefs.getBoolean(KEY_CIRCLE_ENABLED, DEFAULT_CIRCLE_ENABLED),
         monoInvert = prefs.getBoolean(KEY_MONO_INVERT, DEFAULT_MONO_INVERT),
         monoOverrides = parseOverrides(prefs.getString(KEY_MONO_OVERRIDES, DEFAULT_MONO_OVERRIDES)),
-        notifyEnabled = prefs.getBoolean(KEY_NOTIFY_ENABLED, DEFAULT_NOTIFY_ENABLED),
-        mode = prefs.getInt(KEY_MODE, DEFAULT_MODE)
+        notifyEnabled = prefs.getBoolean(KEY_NOTIFY_ENABLED, DEFAULT_NOTIFY_ENABLED)
     )
 
     /**
      * 从直接解析配置文件得到的键值对构造。
      *
-     * XML 里所有值都是字符串（`<int name="mode" value="1" />`），
+     * XML 里所有值都是字符串（`<boolean name="notify_enabled" value="true" />`），
      * 解析失败或键缺失时一律退回默认值 —— 和 [read] 的兜底行为保持一致。
      */
-    fun fromValues(values: Map<String, String>): ModuleOptions = derive(
+    fun fromValues(values: Map<String, String>): ModuleOptions = ModuleOptions(
         circleEnabled =
             values[KEY_CIRCLE_ENABLED]?.trim()?.toBooleanStrictOrNull() ?: DEFAULT_CIRCLE_ENABLED,
         monoInvert =
             values[KEY_MONO_INVERT]?.trim()?.toBooleanStrictOrNull() ?: DEFAULT_MONO_INVERT,
         monoOverrides = parseOverrides(values[KEY_MONO_OVERRIDES]),
         notifyEnabled =
-            values[KEY_NOTIFY_ENABLED]?.trim()?.toBooleanStrictOrNull() ?: DEFAULT_NOTIFY_ENABLED,
-        mode = values[KEY_MODE]?.trim()?.toIntOrNull() ?: DEFAULT_MODE
+            values[KEY_NOTIFY_ENABLED]?.trim()?.toBooleanStrictOrNull() ?: DEFAULT_NOTIFY_ENABLED
     )
 
     /** 从 provider 查出来的原始值构造。列里存的是整数，调用方已转好类型 */
@@ -163,25 +145,11 @@ object ModulePrefs {
         circleEnabled: Boolean,
         monoInvert: Boolean,
         notifyEnabled: Boolean,
-        mode: Int,
         monoOverridesRaw: String? = DEFAULT_MONO_OVERRIDES,
-    ): ModuleOptions = derive(circleEnabled, monoInvert, notifyEnabled, mode, parseOverrides(monoOverridesRaw))
-
-    private fun derive(
-        circleEnabled: Boolean,
-        monoInvert: Boolean,
-        notifyEnabled: Boolean,
-        mode: Int,
-        monoOverrides: Map<String, Boolean> = emptyMap(),
-    ): ModuleOptions {
-        val monochrome = mode == MODE_MONOCHROME
-        return ModuleOptions(
-            circleEnabled = circleEnabled,
-            monoInvert = monoInvert,
-            monoOverrides = monoOverrides,
-            notifyEnabled = notifyEnabled,
-            replacement = if (monochrome) ModuleOptions.FORCE_MONOCHROME else ModuleOptions.USE_LAUNCHER_ICON,
-            keepOriginalColor = !monochrome
-        )
-    }
+    ): ModuleOptions = ModuleOptions(
+        circleEnabled = circleEnabled,
+        monoInvert = monoInvert,
+        monoOverrides = parseOverrides(monoOverridesRaw),
+        notifyEnabled = notifyEnabled
+    )
 }

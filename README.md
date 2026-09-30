@@ -61,7 +61,7 @@
 | 页面 | 内容 |
 |---|---|
 | **图标** | 裁圆总开关、效果示意、只跟裁圆有关的注意事项、运维按钮（清图标缓存 / 重启进程） |
-| **通知** | 通知总开关、图标模式（系统黑白 / 彩色桌面图标）、怎么确认生效 |
+| **通知** | 通知总开关、怎么确认生效 |
 | **模块** | 两个功能**共用**的东西：作用域清单、启用步骤、验证命令 |
 | **关于** | 检查更新与版本信息 |
 
@@ -106,7 +106,7 @@ adb logcat -s Opticon
 ```
 module loaded in com.android.settings (systemServer=false)
 attach in com.android.settings: framework=... api=102
-options: circle=true notify=true mode=monochrome keepColor=false preserveTinted=true (source=provider)
+options: circle=true notify=true preserveTinted=true (source=provider)
 install in com.android.settings, sdk 36
 Hooked com.android.settings
 ```
@@ -114,8 +114,7 @@ Hooked com.android.settings
 桌面进程还会多一行 `PixelLauncher: 2 createBadgedIconBitmap hooked`（Pixel 上进程名是
 `com.google.android.apps.nexuslauncher`）。
 
-**通知小图标**：出现 `patched <包名> 2->1 via=monochrome` 就是替换成功了
-（图标类型从「资源」变成「位图」，`via=` 后面是本次实际用的模式）。
+**通知小图标**：出现 `patched <包名> 2->1` 就是替换成功了（图标类型从「资源」变成「位图」）。
 
 **桌面主题图标（强制取色）**：每张未适配的图标一行判据，行首带**包名/资源名**，报一个应用名
 就能 grep 到它那一行；每 40 张一行汇总。
@@ -288,14 +287,13 @@ intentresolver / permissioncontroller / wellbeing。
 
 ## 功能二：修复通知小图标
 
-### 两种模式
+### 只做黑白
 
-| 模式 | 做法 | 适合 |
-|---|---|---|
-| **系统黑白通知**（默认） | 把 App 自己给的小图标压成单色剪影，交给系统按主题着色 | 想和其它通知风格统一 |
-| **彩色桌面图标** | 换成 App 在桌面上那个图标，颜色原样保留 | 想让通知一眼认出是谁 |
+把 App 自己给的小图标压成**单色剪影**，交给系统按主题着色 —— 只此一条，没有可选模式。
 
-两个模式的区别只在「未适配的图标怎么处理」；已经是单色 / 灰度的图标，两种模式下都不动。
+⚠ 曾经是两种（另一种「换成桌面彩色图标、原色保留」），2026-09-30 按主人的要求删掉：
+那条要成立得钩进 SystemUI 的着色链里改图标颜色，是整条功能里最依赖系统内部实现的一部分，
+而实际没人用。已经是单色 / 灰度的图标仍然**一律不动**。
 
 ### 它改的是哪个图标
 
@@ -324,7 +322,7 @@ intentresolver / permissioncontroller / wellbeing。
   加零条错误，在这条通道上读不出任何结论（这个坑踩过一次，靠的正是"每一条早退都要留下名字"
   那次修复才分得开"没装上"与"没有东西要修"）。
 
-### 改模式为什么不生效
+### 改完为什么不生效
 
 替换只发生在通知行**首次** `inflateViews` 时，**已经在通知栏里的那条不会变** ——
 要等它重新加载（重新发出，或重启系统界面）。
@@ -415,7 +413,7 @@ intentresolver / permissioncontroller / wellbeing。
   没有后台轮询、没有统计上报；挂钩代码（跑在被注入进程里的部分）完全不联网。
   请求先直连 `api.github.com`，失败时回退到公共加速镜像 `gh-proxy.com`。
 - **`allowBackup="true"` 且没写备份规则** —— 这是**有意识的选择，不是疏漏**：
-  本应用的数据只有 `ModulePrefs` 的两个布尔 + 一个模式枚举，以及「检查更新」的缓存，
+  本应用的数据只有 `ModulePrefs` 里那几个开关，以及「检查更新」的缓存，
   没有凭据、没有用户内容，被备份带上云不构成实际风险。而模块的**作用域**由框架自己的
   管理器保存（不在本应用数据里），所以「跟着设备迁移」也不会带出一份错误的作用域。
   真要收紧就把这一项改成 `false`，功能不受任何影响。

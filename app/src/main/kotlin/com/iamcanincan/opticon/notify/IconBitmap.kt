@@ -7,8 +7,6 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Rect
-import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.Icon
 import android.net.Uri
@@ -20,14 +18,12 @@ import com.iamcanincan.opticon.runtime.MemberLookup
  * 图标位图的取与造 —— **通知那半边**。
  *
  * 这里只做像素层面的事：把各种形态的来源（Drawable / 资源 id / Icon）画成位图，
- * 以及做圆形裁切、转单色、合成底板。是否该替换由上层决定。
+ * 以及把没适配的压成单色剪影。是否该替换由上层决定。
  *
  * ⚠ 桌面的主题图标**不从这里取形状**了：那一套在 `circle/MonochromeMask.kt`。
  * 两边以前共用 `alphaSilhouette` / `binarizeSilhouette` / `plateSilhouette` 三个入口，
  * 但它们的约束根本不是一条 —— 通知交出去的是完整位图（RGB + alpha），桌面交出去的只有一条
- * alpha；通知先 [fill] 把内容放大填满画布，桌面必须对齐 108dp 画布不能放大。共用三个入口
- * 的代价是每条判据都要"对两边都成立"，最后变成两边都不准。现在各自一份，
- * 共用只剩下 [rasterize] / [foregroundOf] 这种没有判据的事。
+ * alpha。共用三个入口的代价是每条判据都要"对两边都成立"，最后变成两边都不准。现在各自一份。
  */
 object IconBitmap {
 
@@ -53,9 +49,8 @@ object IconBitmap {
      * 两者都比原图标更糟。这种情况宁可放弃替换、保持原样。
      *
      * ## 这里是**画布**口径，桌面那一侧是**外接框**口径 —— 不要"统一"掉
-     * 通知这条链在 [monochrome] 之前先 [fill] 过：内容已经放大填满整张画布，外接框 ≈ 画布，
-     * 两种口径是同一个数。桌面那一侧不能 fill（坐标系要对齐 108dp 画布），内容只落在画布中央
-     * 约 47%，所以它必须按外接框量 —— 否则「整个框被填满」这种最坏的掩码按画布只量到 0.47，
+     * 桌面那一侧不能把内容放大填满画布（坐标系要对齐 108dp），内容只落在画布中央约 47%，
+     * 所以它必须按外接框量 —— 否则「整个框被填满」这种最坏的掩码按画布只量到 0.47，
      * 看着完全健康却一路放行（真机那个 `out=0.47 cc=1 top=1.00` 的白块就是这么过的）。
      * 那一条判据现在整个住在 `circle/MonochromeMask.kt` 里，两边各自持有一个数，
      * 改之前先确认自己改的是哪一侧。
@@ -90,91 +85,6 @@ object IconBitmap {
     }
 
     /**
-     * 裁掉四周的空白边，再把内容放大填满。
-     *
-     * 自适应图标光栅化之后，内容只落在画布中间约 61% 的区域（safe zone），
-     * 外面一圈是空的；直接拿去当通知图标，缩到状态栏那点尺寸就又小又糊，
-     * 根本认不出是哪个应用。这里先按非透明像素求出内容边界裁出来，
-     * 再等比放大填满目标尺寸。
-     */
-    fun fill(source: Bitmap, size: Int = ICON_EDGE): Bitmap {
-        val bounds = contentBounds(source) ?: return scaleTo(source, size)
-        val cropped = Bitmap.createBitmap(source, bounds.left, bounds.top, bounds.width(), bounds.height())
-        return scaleTo(cropped, size)
-    }
-
-    private fun scaleTo(source: Bitmap, size: Int): Bitmap {
-        return if (source.width == size && source.height == size) {
-            source
-        } else {
-            Bitmap.createScaledBitmap(source, size, size, true)
-        }
-    }
-
-    /**
-     * 取桌面图标里真正代表图形的那一层。
-     *
-     * 自适应图标分成背景层和前景层：整张光栅化出来是一块不透明的彩色方块，
-     * 拿去压单色就只剩一个白方块，什么信息都不剩。只有前景层是「透明底 + 图形」，
-     * 用它的 alpha 才压得出有用的剪影。普通图标没有分层，直接用整张。
-     */
-    fun foregroundOf(drawable: Drawable, size: Int = ICON_EDGE): Bitmap {
-        val source = if (drawable is AdaptiveIconDrawable) drawable.foreground else drawable
-        return rasterize(source, size)
-    }
-
-    /**
-     * 位图里是否还有可见像素。
-     *
-     * 全透明就等于什么都没画。状态栏只认 alpha，交一张空图出去会变成一个看不见的洞 ——
-     * 比原来的图标更糟，所以生成图之后必须先过这一关。
-     */
-    fun hasContent(bitmap: Bitmap): Boolean {
-        val w = bitmap.width
-        val h = bitmap.height
-        val pixels = IntArray(w * h)
-        bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
-        for (pixel in pixels) {
-            if (Color.alpha(pixel) >= MIN_SHAPE_ALPHA) return true
-        }
-        return false
-    }
-
-    /** 非透明像素的外接矩形；整张都透明时返回 null。位图版只是 [contentBoundsOf] 的薄壳。 */
-    private fun contentBounds(source: Bitmap): Rect? {
-        val w = source.width
-        val h = source.height
-        val pixels = IntArray(w * h)
-        source.getPixels(pixels, 0, w, 0, 0, w, h)
-        return contentBoundsOf(pixels, w, h)
-    }
-
-    /**
-     * 同上，但直接吃已经取好的像素数组。
-     *
-     * 桌面那两支手上本来就有整张 `pixels`，走位图版会白白再来一次 `getPixels`
-     * —— 384² 就是 590 KB 一次的全画布拷贝，而这两支每个图标各跑一遍。
-     */
-    private fun contentBoundsOf(pixels: IntArray, w: Int, h: Int): Rect? {
-        var minX = w
-        var minY = h
-        var maxX = -1
-        var maxY = -1
-        for (y in 0 until h) {
-            val row = y * w
-            for (x in 0 until w) {
-                if (Color.alpha(pixels[row + x]) >= MIN_SHAPE_ALPHA) {
-                    if (x < minX) minX = x
-                    if (x > maxX) maxX = x
-                    if (y < minY) minY = y
-                    if (y > maxY) maxY = y
-                }
-            }
-        }
-        return if (maxX < 0) null else Rect(minX, minY, maxX + 1, maxY + 1)
-    }
-
-    /**
      * 把彩色图标压成系统风格的单色剪影：透明底 + 白色形状。
      *
      * 系统对这种图标的处理，和对「应用自己做好了主题适配」的完全一样 ——
@@ -204,8 +114,7 @@ object IconBitmap {
      * 会并发进来（binarize → keepDarkSide → outsideMask / borderConnectedRatio 一路都在用）。
      * 本函数是它们唯一的入口，锁在这一层就锁住了全部四块缓冲，
      * 与 [ToneCheck.isGrayscale] 用的是同一套做法（详见 [classBufferCache] 的说明）。
-     * 其余函数（[fill] / [grayscale] / [hasContent] / [rasterize]）各自 new 局部数组，
-     * 不共任何状态，不用跟着上锁。
+     * 其余函数（[rasterize] / [decode] / [fromResources]）不共任何状态，不用跟着上锁。
      */
     @Synchronized
     fun monochrome(input: Bitmap, preserveAlpha: Boolean = false): Bitmap? {
@@ -264,41 +173,6 @@ object IconBitmap {
             outputPixels[i] = if (preserveAlpha) Color.argb(alpha, 255, 255, 255) else Color.WHITE
         }
         return count
-    }
-
-    /**
-     * 去掉颜色、只留明暗。
-     *
-     * 灰度图三通道相等，正好命中系统「这个图标做过主题适配」的判据
-     * （ToneCheck 用的是同一套标准），于是系统会按主题给它上色 ——
-     * 深色主题下白、浅色主题下深，和原生适配过的图标一模一样。
-     *
-     * 为什么不压成纯 alpha 剪影：桌面图标是一整块不透明的彩色图形，
-     * 二值化只会得到它的外轮廓（圆形图标就压成一个白圆），细节全丢。
-     * 灰度化保留了明暗层次，缩到状态栏那点尺寸也认得出是哪个应用。
-     *
-     * ⚠ 桌面侧的合成**不能用这一支**：那边只读 alpha，而 alpha 在那里是**不透明度** ——
-     * 把灰度写进 alpha，染出来是同一个颜色的一条深浅带，不是"层次"。桌面要的是按
-     * 「这一像素离它的底多远」给的浓度，那一整套判据在 `circle/MonochromeMask.kt` 里，
-     * 与本文件的 [monochrome] 是两条独立的链：通知交出去的是**完整位图**，RGB 与 alpha
-     * 各司其职；桌面交出去的是**一条 alpha**，所有信息都只能挤在这一个通道里。
-     */
-    fun grayscale(input: Bitmap): Bitmap {
-        val w = input.width
-        val h = input.height
-        val pixels = IntArray(w * h)
-        val output = IntArray(w * h)
-        input.getPixels(pixels, 0, w, 0, 0, w, h)
-        for (i in pixels.indices) {
-            val pixel = pixels[i]
-            val alpha = Color.alpha(pixel)
-            if (alpha < MIN_SHAPE_ALPHA) continue
-            val gray = (Color.red(pixel) * 299 + Color.green(pixel) * 587 + Color.blue(pixel) * 114) / 1000
-            output[i] = Color.argb(alpha, gray, gray, gray)
-        }
-        val result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        result.setPixels(output, 0, w, 0, 0, w, h)
-        return result
     }
 
     /**

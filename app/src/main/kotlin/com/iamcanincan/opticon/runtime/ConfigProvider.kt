@@ -19,7 +19,7 @@ import com.iamcanincan.opticon.debug.CorpusCapture
  * 不依赖任何框架实现，各框架上都能用。
  *
  * 安全：
- * - 只读，能查出来的内容仅是「三个开关 + 图标模式」这类非敏感配置；
+ * - 只读，能查出来的内容仅是「三个开关 + 那张合成旁路表」这类非敏感配置；
  * - **唯一的入口闸是按调用方包名认自家人**（见 [isTrustedCaller]），名单与
  *   `META-INF/xposed/scope.list` 逐条对齐；不在名单里的应用查它，拿到的是一张开游标。
  *
@@ -70,7 +70,6 @@ class ConfigProvider : ContentProvider() {
             add(if (prefs.getBoolean(ModulePrefs.KEY_MONO_INVERT, ModulePrefs.DEFAULT_MONO_INVERT)) 1 else 0)
             add(prefs.getString(ModulePrefs.KEY_MONO_OVERRIDES, ModulePrefs.DEFAULT_MONO_OVERRIDES))
             add(if (prefs.getBoolean(ModulePrefs.KEY_NOTIFY_ENABLED, ModulePrefs.DEFAULT_NOTIFY_ENABLED)) 1 else 0)
-            add(prefs.getInt(ModulePrefs.KEY_MODE, ModulePrefs.DEFAULT_MODE))
         }
         return cursor
     }
@@ -137,8 +136,7 @@ class ConfigProvider : ContentProvider() {
             ModulePrefs.COLUMN_CIRCLE_ENABLED,
             ModulePrefs.COLUMN_MONO_INVERT,
             ModulePrefs.COLUMN_MONO_OVERRIDES,
-            ModulePrefs.COLUMN_NOTIFY_ENABLED,
-            ModulePrefs.COLUMN_MODE
+            ModulePrefs.COLUMN_NOTIFY_ENABLED
         )
     }
 }

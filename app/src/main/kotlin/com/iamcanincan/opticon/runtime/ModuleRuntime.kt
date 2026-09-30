@@ -288,7 +288,6 @@ object ModuleRuntime {
                     notifyEnabled = cursor.getInt(
                         cursor.getColumnIndexOrThrow(ModulePrefs.COLUMN_NOTIFY_ENABLED)
                     ) != 0,
-                    mode = cursor.getInt(cursor.getColumnIndexOrThrow(ModulePrefs.COLUMN_MODE)),
                     monoOverridesRaw = cursor.getString(
                         cursor.getColumnIndexOrThrow(ModulePrefs.COLUMN_MONO_OVERRIDES)
                     )
