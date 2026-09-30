@@ -103,7 +103,13 @@ internal object CorpusCapture {
       },
     )
     // 先删再跑：中途崩了也不会有人下一秒又起一轮（重复认领会把日志和 CPU 都刷屏）。
-    marker.delete()
+    // ⚠ 删不掉必须**当场退出**：`ConfigProvider.query` 每次都会来这一眼看（每个被注入进程 1Hz），
+    //   而 busy 在这轮跑完就归 false —— 标记还在的话下一秒又被认领一次，整台机器被反复全量光栅化。
+    //   删不动不是臆想：标记的属主可能是 `shell:ext_data_rw`（见上面那段）。
+    if (!marker.delete()) {
+      Log.w(TAG, "Corpus: 标记删不掉（${marker.absolutePath}），这一轮不抓 —— 否则每秒都会被重新认领")
+      return
+    }
     val edge = Regex("edge\\s*=\\s*(\\d+)").find(body)?.groupValues?.get(1)?.toIntOrNull()
       ?.coerceIn(MIN_EDGE, MAX_EDGE) ?: DEFAULT_EDGE
     val filter = Regex("pkg\\s*=\\s*(\\S+)").find(body)?.groupValues?.get(1).orEmpty()

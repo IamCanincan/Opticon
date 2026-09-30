@@ -52,7 +52,10 @@ object MemberLookup {
      */
     fun findField(clazz: Class<*>, name: String): Field? = runCatching {
         generateSequence(clazz) { it.superclass }.firstNotNullOfOrNull { c ->
-            runCatching { c.getDeclaredField(name) }.getOrNull()?.also { it.isAccessible = true }
+            // ⚠ setAccessible 必须留在**内层** runCatching 里，与 [findMethod] 一致：
+            //   放到外面的话，某一层设不进去会直接穿透到最外层那个 runCatching、函数返回 null ——
+            //   于是「这一层不行就继续往上找」这条契约只对 findMethod 成立，字段这边会提前放弃。
+            runCatching { c.getDeclaredField(name).also { it.isAccessible = true } }.getOrNull()
         }
     }.getOrNull()
 
@@ -62,8 +65,10 @@ object MemberLookup {
      */
     fun findFieldByType(clazz: Class<*>, type: Class<*>): Field? = runCatching {
         generateSequence(clazz) { it.superclass }.firstNotNullOfOrNull { c ->
-            runCatching { c.declaredFields.firstOrNull { it.type == type } }.getOrNull()
-                ?.also { it.isAccessible = true }
+            // setAccessible 同样留在内层（理由见 [findField]）
+            runCatching {
+                c.declaredFields.firstOrNull { it.type == type }?.also { it.isAccessible = true }
+            }.getOrNull()
         }
     }.getOrNull()
 

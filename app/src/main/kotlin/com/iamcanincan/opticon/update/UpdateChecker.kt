@@ -58,6 +58,16 @@ object UpdateChecker {
   private const val TIMEOUT_MS = 10_000
 
   /**
+   * 响应体读取上限（字符）。
+   *
+   * ⚠ 必须有：`ENDPOINTS` 里第二条是第三方加速镜像，那份响应体**不受我们控制** ——
+   *   无上限的 `readText()` 等于让对面决定本进程要分配多少内存（返回个几 GB 就是 OOM）。
+   *   `releases/latest` 的真实响应只有几 KB，256 KiB 是两个数量级的余量；
+   *   真被截断的话 JSON 解析会失败、归到「检查失败」，比 OOM 好。
+   */
+  private const val MAX_BODY_CHARS = 256 * 1024
+
+  /**
    * 检查结果。
    *
    * 失败也带上原因：用户看到「检查失败」时，得能分清是自己没网、GitHub 限流，
@@ -131,7 +141,17 @@ object UpdateChecker {
   }
 
   private fun evaluate(connection: HttpURLConnection, currentVersion: String): Result {
-    val body = connection.inputStream.bufferedReader().use { it.readText() }
+    // 按 [MAX_BODY_CHARS] 截断读（理由见那个常量）：不读满、也不无限读
+    val body = connection.inputStream.bufferedReader().use { reader ->
+      val buf = CharArray(MAX_BODY_CHARS)
+      var n = 0
+      while (n < buf.size) {
+        val read = reader.read(buf, n, buf.size - n)
+        if (read < 0) break
+        n += read
+      }
+      String(buf, 0, n)
+    }
     val json = JSONObject(body)
     val tag = json.optString("tag_name").trim()
     // 发布页地址优先用响应里的 html_url（自己拼的话，仓库改名就失效）。
