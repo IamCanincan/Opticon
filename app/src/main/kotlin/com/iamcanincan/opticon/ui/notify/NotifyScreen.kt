@@ -35,9 +35,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.runtime.ModulePrefs
 import com.iamcanincan.opticon.ui.FloatingNavSpace
@@ -48,7 +49,9 @@ import com.iamcanincan.opticon.ui.FloatingNavSpace
  * 视觉约定（改样式时照着来，别再各写各的）：
  * - 卡片统一 24dp 圆角 + 1dp outlineVariant 描边，背景 surface；只有「已选中」
  *   和「状态条」这类需要突出的才用 container 色。
- * - 每个区块的标题走 [SectionLabel]；每条可选项左侧都有 44dp 的图标底板。
+ * - **本页不设区块小标题**（状态条 + 开关卡 + 两张说明卡就是全部），所以共享的
+ *   `ui.SectionLabel` 在这里用不上。这里曾经留过一份**私有同名副本**、且从没被调用过
+ *   （2026-09-30 删除）—— 别再造第二份。每条可选项左侧的 44dp 图标底板是 [IconBadge]。
  * - 本页只有一个开关 —— 通知小图标修不修。每次改动立即落盘，
  *   模块侧下次被挂钩时就能读到，不需要点"保存"。
  */
@@ -137,18 +140,6 @@ private fun StatusStrip(enabled: Boolean) {
     }
 }
 
-@Composable
-private fun SectionLabel(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        fontWeight = FontWeight.SemiBold,
-        letterSpacing = 0.6.sp,
-        modifier = Modifier.padding(start = 4.dp, top = 8.dp)
-    )
-}
-
 /** 可选项左侧的图标底板。宽度固定，开关组的分隔线缩进按它算 */
 private val IconBadgeSize = 44.dp
 
@@ -209,7 +200,14 @@ private fun SwitchRow(
             )
         }
         Spacer(Modifier.width(12.dp))
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        // 读屏用户拿到的是**这个开关自己**的语义节点，旁边的 title / description 是两个独立
+        // 节点、不会自动并进来 —— 不给 contentDescription，TalkBack 只念「关闭，开关」，
+        // 不说是哪一项。
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            modifier = Modifier.semantics { contentDescription = title }
+        )
     }
 }
 

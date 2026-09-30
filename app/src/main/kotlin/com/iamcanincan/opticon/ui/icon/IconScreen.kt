@@ -31,13 +31,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.ui.HeroCard
 import com.iamcanincan.opticon.ui.IconTile
 import com.iamcanincan.opticon.ui.ScreenList
 import com.iamcanincan.opticon.ui.Section
-import com.iamcanincan.opticon.ui.SectionLabel
 import com.iamcanincan.opticon.runtime.ModulePrefs
 import android.content.Intent
 import androidx.compose.material.icons.filled.CleaningServices
@@ -104,11 +105,16 @@ private fun MasterSwitchCard() {
     mutableStateOf(prefs.getBoolean(ModulePrefs.KEY_CIRCLE_ENABLED, ModulePrefs.DEFAULT_CIRCLE_ENABLED))
   }
 
+  // 读屏用户拿到的是**开关自己**的语义节点，旁边那行标题是另一个节点、不会自动并进来 ——
+  // 所以标题要显式挂到开关上，否则 TalkBack 只念「关闭，开关」，不说是哪一项。
+  // （本文件里的两个开关同一处理，通知页那个也是。）
+  val title = stringResource(R.string.circle_switch_title)
+
   HeroCard(
     icon = Icons.Default.Circle,
     containerColor = MaterialTheme.colorScheme.primaryContainer,
     contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-    title = stringResource(R.string.circle_switch_title),
+    title = title,
     body = stringResource(R.string.circle_switch_body),
     trailing = {
       Switch(
@@ -117,6 +123,7 @@ private fun MasterSwitchCard() {
           enabled = value
           prefs.edit().putBoolean(ModulePrefs.KEY_CIRCLE_ENABLED, value).apply()
         },
+        modifier = Modifier.semantics { contentDescription = title },
       )
     },
   )
@@ -151,6 +158,9 @@ private fun MonoInvertCard() {
     mutableStateOf(prefs.getBoolean(ModulePrefs.KEY_MONO_INVERT, ModulePrefs.DEFAULT_MONO_INVERT))
   }
 
+  // 同上：标题既当卡上的字，也当开关的读屏名字
+  val title = stringResource(R.string.mono_switch_title)
+
   ElevatedCard(shape = MaterialTheme.shapes.large) {
     Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
       IconTile(
@@ -161,7 +171,7 @@ private fun MonoInvertCard() {
       Spacer(modifier = Modifier.width(14.dp))
       Column(modifier = Modifier.weight(1f)) {
         Text(
-          text = stringResource(R.string.mono_switch_title),
+          text = title,
           style = MaterialTheme.typography.titleSmall,
           color = MaterialTheme.colorScheme.onSurface,
         )
@@ -179,6 +189,7 @@ private fun MonoInvertCard() {
           enabled = value
           prefs.edit().putBoolean(ModulePrefs.KEY_MONO_INVERT, value).apply()
         },
+        modifier = Modifier.semantics { contentDescription = title },
       )
     }
   }

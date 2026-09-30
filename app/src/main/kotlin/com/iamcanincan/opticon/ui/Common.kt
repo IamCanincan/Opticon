@@ -48,7 +48,14 @@ import androidx.compose.ui.unit.dp
  * （滚动时从药丸后面穿过，这才是悬浮感），只在**列表自己的 contentPadding**
  * 里加上这一段，保证滚到底时最后一项不会被药丸压住。
  *
- * = 药丸高度（约 56dp）+ 它距屏幕底部的边距（20dp）+ 一点余量。
+ * ⚠ 药丸自己还要额外让开系统导航栏（见 `OpticonApp` 里那句 `navigationBarsPadding()`）。
+ * 内容区的底边是由 `Scaffold` 的 innerPadding 顶到**导航栏上沿**的，而药丸在那之上
+ * 再抬 20dp，所以它相对内容底边占到 `56 + 20 = 76dp`；下面 [ScreenList] 还多给 24dp，
+ * 合计 120dp —— 96dp 这个数是按"药丸高度 + 20dp 边距 + 余量"留的，别往下砍到 76 以下。
+ *
+ * = 药丸高度（约 56dp）+ 它距**导航栏**的边距（20dp）+ 一点余量。
+ *   （"距屏幕底部"是 [OpticonApp] 加上 `navigationBarsPadding()` 之前的旧口径，
+ *   那个位置上药丸有一半压在系统导航栏底下，已改。）
  */
 internal val FloatingNavSpace = 96.dp
 

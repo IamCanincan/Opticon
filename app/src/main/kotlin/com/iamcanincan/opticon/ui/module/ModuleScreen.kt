@@ -35,8 +35,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,7 +52,6 @@ import com.iamcanincan.opticon.ui.HeroCard
 import com.iamcanincan.opticon.ui.IconTile
 import com.iamcanincan.opticon.ui.ScreenList
 import com.iamcanincan.opticon.ui.Section
-import com.iamcanincan.opticon.ui.SectionLabel
 import kotlinx.coroutines.launch
 
 /**
@@ -163,7 +162,12 @@ private fun ScopeGroup() {
 
   // 10 行铺满整页，真正要看的（必选 + 推荐）反而不显眼。
   // 默认只展开这两档，"可选"折叠成一行按钮——它是"想要更全"时才翻的。
-  var expanded by remember { mutableStateOf(false) }
+  //
+  // ⚠ 用 `rememberSaveable` 而不是 `remember`：这一档**没有落盘的地方**（不像那几个开关能
+  //   回头从 SharedPreferences 读回来），而 Pager 会销毁离屏的页（见 OpticonApp 的说明），
+  //   所以 `remember` 会让"切走再切回来"和转屏把它静默地弹回「必选 + 推荐」——
+  //   用户刚点过「全部」，回来发现又折起来了。
+  var expanded by rememberSaveable { mutableStateOf(false) }
   val visible = if (expanded) scopes else scopes.filter { it.tag != ScopeTag.OPTIONAL }
 
   ElevatedCard(shape = MaterialTheme.shapes.large) {

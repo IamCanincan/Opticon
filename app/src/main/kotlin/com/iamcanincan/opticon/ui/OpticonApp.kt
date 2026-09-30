@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -51,6 +52,8 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.BuildConfig
 import com.iamcanincan.opticon.R
@@ -173,23 +176,35 @@ fun OpticonApp() {
         }
 
         FloatingNavBar(
-            selected = pagerState.currentPage,
+            selectedIndex = pagerState.currentPage,
             onSelect = { index -> scope.launch { pagerState.animateScrollToPage(index) } },
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 20.dp),
+            // ⚠ `navigationBarsPadding()` 不能省：本 Activity 是 edge-to-edge
+            // （`enableEdgeToEdge()` + 系统栏透明），外层 Box 一直铺到屏幕底边，
+            // 而药丸是这个 Box 的**兄弟节点**、不经过 Scaffold 的 innerPadding。
+            // 少了它，三键导航（导航栏约 48dp）会把药丸下面那截连同每格的点击区一起盖住 ——
+            // 系统导航栏吃掉那些触摸，底栏就是"看得见、点不着"；手势导航下那 20dp 也会
+            // 落进手势条里。药丸要悬浮在**内容**之上，但不该钻进系统导航栏下面。
+            modifier = Modifier.align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(bottom = 20.dp),
         )
 
         // ⚠ Snackbar 必须放在悬浮底栏**之上**：这里既靠后绘制（z 序压过药丸），
         // 又把位置抬到药丸上方（药丸顶边约 74dp、阴影到 ~84dp，抬到 92dp 留间隙）。
         // 否则默认贴底的 Snackbar 会被药丸挡住 / 截断（清缓存提示就中过招）。
+        // ⚠ 导航栏那一段同理要先让开：92dp 是**相对药丸**定的，药丸抬多高它就得抬多高，
+        // 否则两者的相对位置会随导航方式（三键 / 手势）变来变去。
         SnackbarHost(
             hostState = snackbarHostState,
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 92.dp),
+            modifier = Modifier.align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(bottom = 92.dp),
         )
     }
 }
 
 /**
- * 悬浮药丸导航：三格，选中那格展开文字。
+ * 悬浮药丸导航：四格，选中那格展开文字。
  *
  * ## 底色为什么用 `surface` 而不是某个 container 色
  * 页面背景本身就是 `background`（很浅的粉白），而 `surfaceContainerHigh` 在同色系里
@@ -201,7 +216,7 @@ fun OpticonApp() {
  */
 @Composable
 private fun FloatingNavBar(
-    selected: Int,
+    selectedIndex: Int,
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -216,10 +231,10 @@ private fun FloatingNavBar(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            NavItem(TAB_ICON, Icons.Default.Circle, R.string.tab_icon, selected, onSelect)
-            NavItem(TAB_NOTIFY, Icons.Default.Notifications, R.string.tab_notify, selected, onSelect)
-            NavItem(TAB_MODULE, Icons.Default.Extension, R.string.tab_module, selected, onSelect)
-            NavItem(TAB_ABOUT, Icons.Default.Info, R.string.tab_about, selected, onSelect)
+            NavItem(TAB_ICON, Icons.Default.Circle, R.string.tab_icon, selectedIndex, onSelect)
+            NavItem(TAB_NOTIFY, Icons.Default.Notifications, R.string.tab_notify, selectedIndex, onSelect)
+            NavItem(TAB_MODULE, Icons.Default.Extension, R.string.tab_module, selectedIndex, onSelect)
+            NavItem(TAB_ABOUT, Icons.Default.Info, R.string.tab_about, selectedIndex, onSelect)
         }
     }
 }
@@ -236,6 +251,9 @@ private fun FloatingNavBar(
  * ⚠ 时长与曲线一律取自 `MaterialTheme.motionScheme`，**不要自己写 tween(300)**：
  * Expressive 的弹簧参数是主题给的，硬编码会在换主题/换设备时和系统动效对不上。
  * 颜色与透明度用 `defaultEffectsSpec`，位置与尺寸用 `defaultSpatialSpec`。
+ *
+ * ⚠ 「当前是第几页」这个参数叫 `selectedIndex` 而不是 `selected`：里面要写
+ *   `Modifier.semantics { selected = … }`，参数同名会把那个语义属性整个遮蔽掉（编不过）。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -243,12 +261,12 @@ private fun NavItem(
     index: Int,
     icon: ImageVector,
     labelRes: Int,
-    selected: Int,
+    selectedIndex: Int,
     onSelect: (Int) -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
     val motion = MaterialTheme.motionScheme
-    val isSelected = selected == index
+    val isSelected = selectedIndex == index
 
     val containerColor by animateColorAsState(
         targetValue = if (isSelected) scheme.secondaryContainer else Color.Transparent,
@@ -262,6 +280,9 @@ private fun NavItem(
     )
 
     Surface(
+        // 「当前在哪一页」只靠高亮是给不了读屏用户的：不加 `selected`，四格在 TalkBack 里
+        // 读起来一模一样（README 那句「当前在哪一页由底栏高亮表示」对视觉成立，对无障碍不成立）。
+        modifier = Modifier.semantics { selected = isSelected },
         onClick = { onSelect(index) },
         shape = RoundedCornerShape(50),
         color = containerColor,
