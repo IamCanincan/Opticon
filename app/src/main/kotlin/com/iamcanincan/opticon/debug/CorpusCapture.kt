@@ -6,6 +6,7 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Rect
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.Drawable
 import android.util.Log
@@ -135,7 +136,8 @@ internal object CorpusCapture {
       return -1
     }
     Log.d(TAG, "Corpus: 开始 ${entries.size} 个包 edge=$edge → ${dir.absolutePath}")
-    val index = StringBuilder("pkg\tlabel\tfile\tedge\tsig\tcls\tfg\tbg\tmono\tkb\n")
+    val index = StringBuilder("pkg\tlabel\tfile\tedge\tsig\tcls\tfg\tbg\tmono\tkb\t" +
+      "fgAlpha\tbgAlpha\tmonoFile\tmonoAlpha\n")
     var written = 0
     var skipped = 0
     for (info in entries) {
@@ -161,11 +163,22 @@ internal object CorpusCapture {
         Log.w(TAG, "Corpus: 写不进 $file —— ${writeError.javaClass.simpleName}: ${writeError.message}")
         continue
       }
+      // **自带单色层的那 61 张，把设计师画的那一层也原样带回来** —— 那是「彩色图标 → 正确遮罩」
+      // 的免费标注对（同一张图、同一个 384 口径，一边彩色一边人画的墨）。模型从来没对着它们量过，
+      // 而这是唯一能把"像不像"从我的口味变成可对表数字的东西。文件名带同一个 `sig`，配对靠它。
+      val mono = dumpMono(dir, drawable, edge, pkg, resName(pm, info), sig)
       index.append(
         listOf(
           pkg, label(pm, info), file, edge, sig, drawable.javaClass.simpleName,
-          layerName(drawable, true), layerName(drawable, false), shipsMono(drawable),
+          // ⚠ 顺序是**前景在前**（表头 `fg bg`）：`layerName(…, true)` 取的是 background，
+          //   第一版把两列写反了 —— 类名列反了不会有人发现，正是这类"看起来有数、其实是错的"。
+          layerName(drawable, false), layerName(drawable, true), shipsMono(drawable),
           bytes.size / 1024,
+          // —— 以下五列一律**加在行尾**：老列的位置一个都不动，按列号读的脚本才不用重算。
+          // 前景层与单色层的 alpha 分布：这一列回答的是"平台其实已经把图形与盘分开给了我们，
+          // 我们为什么要从合成图里把它猜回来"（见 README「更通用的路」那条）。
+          alphaStat(drawable, edge, false), alphaStat(drawable, edge, true),
+          mono.first, mono.second,
         ).joinToString("\t")
       ).append('\n')
       written++
@@ -218,16 +231,75 @@ internal object CorpusCapture {
   }
 
   /**
-   * 光栅化，与 `MonochromeSynth.rasterize` 同一口径（`setBounds(0,0,edge,edge)` 后直接画）。
+   * 光栅化，与 `MonochromeSynth.rasterize` 同一口径（`setBounds` 后直接画）。
    *
    * 那边要还原 bounds 是因为同一个 drawable 会被桌面反复画；这里每次都是 `getApplicationIcon`
-   * 新解出来的一张，画完就扔，所以不需要那套还原。
+   * 新解出来的一张，画完就扔，所以不需要那套还原。`at` 默认整幅（合成图），取单层时传 [layerBounds]。
    */
-  private fun raster(drawable: Drawable, edge: Int): Bitmap {
+  private fun raster(drawable: Drawable, edge: Int, at: Rect = Rect(0, 0, edge, edge)): Bitmap {
     val bmp = Bitmap.createBitmap(edge, edge, Bitmap.Config.ARGB_8888)
-    drawable.setBounds(0, 0, edge, edge)
+    drawable.bounds = at
     drawable.draw(Canvas(bmp))
     return bmp
+  }
+
+  /**
+   * 自适应图标**子层**的画布：AOSP 把背景/前景按 1.5× 铺进去，可见区是中间 2/3。
+   *
+   * 校验：子层跨度 `edge + 2·(edge/4)` = 1.5·edge，于是窗口 `[0,edge]` 两侧各让出 `edge/4` 个
+   * 子层像素 = `edge/6` 个窗口像素 —— 与 `MonochromeSynth.visibleInset`（`edge·f/(1+2f)`，f=1/4）
+   * 算出来的 edge/6 逐位一致。取单层时不给这个 bounds，就会拿到"比屏幕上小一圈、四周留空"的那一层。
+   */
+  private fun layerBounds(edge: Int): Rect {
+    val q = edge / 4
+    return Rect(-q, -q, edge + q, edge + q)
+  }
+
+  /** 一层的 alpha 分布：`空%/实%`。**"整张不透明"等于这一层没有形状信息** —— 那一列就是分它的。 */
+  private fun alphaOf(bmp: Bitmap): String {
+    val px = IntArray(bmp.width * bmp.height)
+    bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
+    var zero = 0
+    var solid = 0
+    for (p in px) {
+      when (p ushr 24) {
+        0 -> zero++
+        255 -> solid++
+        else -> {}
+      }
+    }
+    val n = px.size
+    return "${zero * 100 / n}/${solid * 100 / n}"
+  }
+
+  private fun alphaStat(drawable: Drawable, edge: Int, background: Boolean): String {
+    val adaptive = drawable as? AdaptiveIconDrawable ?: return "-"
+    val layer = runCatching { if (background) adaptive.background else adaptive.foreground }.getOrNull()
+      ?: return "null"
+    return runCatching { alphaOf(raster(layer, edge, layerBounds(edge))) }.getOrDefault("err")
+  }
+
+  /**
+   * 把设计师**自己画的那一层单色**原样存下来，返回（文件名, alpha 分布）。
+   *
+   * 为什么要它：`mono=有` 的那 61 张按硬规则我们一个像素都不碰，但它们是「彩色图标 → 人认为正确的
+   * 遮罩」的**成对样本**，同一张图、同一个 384 口径。判据台从来没对着它们量过一次 —— 那是唯一能把
+   * "像不像"从我的口味变成可对表数字的东西（见 README「更通用的路」）。
+   * ⚠ 只是**取证**，不参与任何判断，也不改变交出去的掩码。
+   */
+  private fun dumpMono(
+    dir: File, drawable: Drawable, edge: Int, pkg: String, res: String, sig: String,
+  ): Pair<String, String> {
+    val adaptive = drawable as? AdaptiveIconDrawable ?: return "-" to "-"
+    val mono = runCatching {
+      AdaptiveIconDrawable::class.java.getMethod("getMonochrome").invoke(adaptive) as? Drawable
+    }.getOrNull() ?: return "-" to "-"
+    val bmp = runCatching { raster(mono, edge, layerBounds(edge)) }.getOrNull() ?: return "err" to "-"
+    val stat = alphaOf(bmp)
+    val bytes = png(bmp)
+    bmp.recycle()
+    val name = "${sanitize(pkg)}_${res}_${sig}_mono.png"
+    return if (runCatching { File(dir, name).writeBytes(bytes) }.isSuccess) name to stat else "写失败" to stat
   }
 
   private fun png(bmp: Bitmap): ByteArray =
