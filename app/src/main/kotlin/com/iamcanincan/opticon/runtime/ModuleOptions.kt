@@ -47,10 +47,6 @@ data class ModuleOptions(
     /** 通知图标的总开关：关掉后通知小图标保持系统原样 */
     val notifyEnabled: Boolean = true,
 
-    /**
-     * 已经做主题适配（单色）的图标原样放过 —— 这是「适配过的不要动」的核心。
-     */
-    val preserveTinted: Boolean = true
 ) {
 
     /**
@@ -60,6 +56,5 @@ data class ModuleOptions(
      * 「读到了但值是默认的」和「根本没读到、退回默认了」。
      */
     fun describe(): String =
-        "circle=$circleEnabled monoInvert=$monoInvert notify=$notifyEnabled" +
-            " preserveTinted=$preserveTinted"
+        "circle=$circleEnabled monoInvert=$monoInvert notify=$notifyEnabled"
 }

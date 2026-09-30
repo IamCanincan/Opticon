@@ -101,14 +101,12 @@ object IconBitmap {
      *
      * 压不出像样的形状时返回 null，由上层保持原样 —— 详见 [MIN_SHAPE_RATIO]。
      *
-     * @param preserveAlpha 保留原始 alpha 的抗锯齿值（只把颜色换成白色），
-     *   而不是二值化成 0 / 255。状态栏图标不需要（96px 下硬边看不出来），
-     *   但桌面主题图标的渲染尺寸大得多，硬边一放大就是一圈锯齿 —— 那边传 true。
-     *   ⚠ 它只决定「写出去的 alpha 是多少」，**不参与「哪些像素算图形」的判定** ——
-     *   判定一律是 `alpha >= MIN_SHAPE_ALPHA`（[binarize] 那边同理，判据是
-     *   `class != CLASS_TRANSPARENT`）。这两件事一旦混在一起，掩码的真实覆盖率
-     *   就会和返回的 `shapeCount` 差一个数量级，而调用方正是拿 `shapeCount`
-     *   在判「压出来的形状合不合理」—— 判据和产物对不上，等于没判。
+     * ⚠ **「哪些像素算图形」的判定与「写出去的是什么」必须是同一口径**：判定一律是
+     *   `alpha >= MIN_SHAPE_ALPHA`（[binarize] 那边同理，判据是 `class != CLASS_TRANSPARENT`）。
+     *   两件事一旦混在一起，掩码的真实覆盖率就会和返回的 `shapeCount` 差一个数量级，
+     *   而调用方正是拿 `shapeCount` 在判「压出来的形状合不合理」—— 判据和产物对不上，等于没判。
+     *   曾经这里有一个 `preserveAlpha` 参数（保留抗锯齿 alpha、不二值化），是给桌面主题图标
+     *   用的；那条路换成 [MonochromeMask] 之后没人传 true 了，参数与它的分支一起删（2026-09-30）。
      *
      * ⚠ 带 @Synchronized：下面那四块复用缓冲区是进程级可变状态，而 SystemUI 的通知处理
      * 会并发进来（binarize → keepDarkSide → outsideMask / borderConnectedRatio 一路都在用）。
@@ -117,7 +115,7 @@ object IconBitmap {
      * 其余函数（[rasterize] / [decode] / [fromResources]）不共任何状态，不用跟着上锁。
      */
     @Synchronized
-    fun monochrome(input: Bitmap, preserveAlpha: Boolean = false): Bitmap? {
+    fun monochrome(input: Bitmap): Bitmap? {
         val w = input.width
         val h = input.height
         val pixels = IntArray(w * h)
@@ -134,10 +132,10 @@ object IconBitmap {
         val useAlpha = transparentCount > total / 20 && solidRatio < SOLID_SHAPE_LIMIT
         val shapeCount = if (useAlpha) {
             // 透明底上的图形：alpha 本身就是最准的轮廓
-            alphaShape(pixels, outputPixels, preserveAlpha)
+            alphaShape(pixels, outputPixels)
         } else {
             // 实心图标：alpha 只描述外轮廓，照搬就是一坨白块，改用二值化挖图形
-            binarize(pixels, outputPixels, w, h, preserveAlpha)
+            binarize(pixels, outputPixels, w, h)
         }
 
         val shapeRatio = shapeCount.toFloat() / total
@@ -157,20 +155,18 @@ object IconBitmap {
      * 掩码的真实覆盖率会是这里数出来的十几倍 —— 上色之后整块图标被一层淡色铺满，
      * 看上去就是一个纯色块。
      *
-     * 之前 preserveAlpha 分支写成 `alpha > 0 && (...)`，判据用的是 128、写出去的却是 1 起步，
-     * 两边口径不一致，就是这么踩进去的。
+     * 曾经这条分支写成 `alpha > 0 && (...)` —— 判据用 128、写出去的从 1 起步，两边口径不一致，
+     * 就是这么踩进去的。
      *
-     * @param preserveAlpha 保留原 alpha 的抗锯齿值（只换颜色），不二值化成 0 / 255。
-     *   状态栏图标（96px）不需要，桌面主题图标渲染尺寸大得多、硬边一放大就是锯齿，那边传 true。
      * @return 涂了多少个像素（调用方拿它在判「压出来的形状合不合理」）
      */
-    private fun alphaShape(pixels: IntArray, outputPixels: IntArray, preserveAlpha: Boolean): Int {
+    private fun alphaShape(pixels: IntArray, outputPixels: IntArray): Int {
         var count = 0
         for (i in pixels.indices) {
             val alpha = Color.alpha(pixels[i])
             if (alpha < MIN_SHAPE_ALPHA) continue
             count++
-            outputPixels[i] = if (preserveAlpha) Color.argb(alpha, 255, 255, 255) else Color.WHITE
+            outputPixels[i] = Color.WHITE
         }
         return count
     }
@@ -190,7 +186,6 @@ object IconBitmap {
         output: IntArray,
         w: Int,
         h: Int,
-        preserveAlpha: Boolean,
     ): Int {
         val threshold = otsuThreshold(pixels)
         val total = pixels.size
@@ -219,12 +214,7 @@ object IconBitmap {
             val cls = classes[i]
             if (cls == CLASS_TRANSPARENT) continue
             if ((cls == CLASS_DARK) == keepDark) {
-                // 同 [monochrome]：preserveAlpha 时保留原 alpha 的抗锯齿边缘
-                output[i] = if (preserveAlpha) {
-                    Color.argb(Color.alpha(pixels[i]), 255, 255, 255)
-                } else {
-                    Color.WHITE
-                }
+                output[i] = Color.WHITE
                 shapeCount++
             }
         }

@@ -28,13 +28,11 @@ object NotificationIconPatch {
             val smallIcon = notification.smallIcon ?: return
             val beforeType = iconType(smallIcon)
 
-            // 2) 已经适配过的单色图标不动
-            if (options.preserveTinted) {
-                val bitmap = IconBitmap.decode(smallIcon, context)
-                if (bitmap != null && ToneCheck.isGrayscale(bitmap)) return
-            }
-
-            // 3) 未适配的：就地压成单色
+            // 2) 未适配的：就地压成单色（已经单色的在 forceMonochrome 里原样放过）
+            // ⚠ 这里原来还有一步「先解码一次、判是不是灰度、是就返回」，由
+            //   `options.preserveTinted` 把闸 —— 而那个字段**没有任何通道会设它**，恒为真，
+            //   且 forceMonochrome 里本来就有同一条 isGrayscale 检查。等于同一件事做两遍、
+            //   还多解一次码。删的是重复，不是行为。
             // 只有真的换了才打日志；跳过的情况不打，免得日志里分不清「换了」和「没动」
             if (forceMonochrome(smallIcon, notification, context)) {
                 ModuleRuntime.logI("patched $pkg $beforeType->${iconType(notification.smallIcon)}")

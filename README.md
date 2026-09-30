@@ -106,7 +106,7 @@ adb logcat -s Opticon
 ```
 module loaded in com.android.settings (systemServer=false)
 attach in com.android.settings: framework=... api=102
-options: circle=true monoInvert=true notify=true preserveTinted=true (source=provider)
+options: circle=true monoInvert=true notify=true (source=provider)
 install in com.android.settings, sdk 36
 Hooked com.android.settings
 ```

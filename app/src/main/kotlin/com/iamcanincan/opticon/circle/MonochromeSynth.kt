@@ -268,7 +268,7 @@ internal object MonochromeSynth {
       //     在浅底上；我们合成给它 底占=0.77、框内=0.18、六边形成墨 —— 极性是对的；
       //     桌面给的是反过来的一块）。它一天里在这条 return 上走了 18 次，
       //     而漏接计数正好爬到 3 —— 屏幕上他看到的「反下色」。
-      //  通知侧仍然认这个选项（`preserveTinted`，那边是系统自己上色，不走这条遮罩路径）。
+      //  通知侧不看这个开关（那边是系统自己上色，不走这条遮罩路径）。
       val total = edge * edge
       val pixels = IntArray(total)
       raster.getPixels(pixels, 0, edge, 0, 0, edge, edge)
