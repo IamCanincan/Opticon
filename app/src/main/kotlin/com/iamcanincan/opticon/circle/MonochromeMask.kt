@@ -635,6 +635,9 @@ internal object MonochromeMask {
     // 而不是像现在这样只降档）。
     val up = SPLIT_UP * (100 - q) / 100
     val down = SPLIT_DOWN * (100 - q) / 100
+    // 2.5) 这一张**根本没有参照可谈**吗（满幅插画那一类）？是的话浓度直接由这张自己的亮度给，
+    //   下面第 3 步的混轴、第 4 步的发档与抬顶全部让路。见 [tonalClass] 那一段的三条判据。
+    val tonal = tonalClass(pixels, w, h, box)?.takeIf { it.on }
 
     // 3) 出图：距离与明暗两条按 q 混成浓度，第二遍降层次。
     //    **第二遍能降多狠，只问一句：被降的那一层交出的墨，有没有比留下来的那层还多？**
@@ -681,7 +684,9 @@ internal object MonochromeMask {
     //   走得到的（kc==2）不刻，走不到的（kc==1）照旧刻。
     //   ⚠ 种子只认**真的空气**（α<A_SOLID），不认底 —— 底上"透过亮块看得见板"正是镂空的定义，
     //   把底也算进去等于在这类图上整条退出。没有空气的图一个种子都没有，行为与改之前逐像素相同。
-    val hollow = if (knockCand > keep) 0 else HOLLOW * body.weight / 255
+    // 满幅插画那一支不做"比主体亮就当镂空压下去"：它的浓度本来就是亮度，压一次等于把
+    // 亮部又掏空一遍（那是参照模型的算法，不是它的）。
+    val hollow = if (tonal != null || knockCand > keep) 0 else HOLLOW * body.weight / 255
     var kc = s.knockReach
     if (kc.size < total) { kc = ByteArray(total); s.knockReach = kc }
     if (hollow > 0) {
@@ -738,7 +743,7 @@ internal object MonochromeMask {
     // 对**现有真图标是惰性的**；它挡的是异常大的那一张：满幅照片 × 超大边长可以开到几十万个
     // 精确色，就是几十 MB 的瞬时分配，而这段跑在桌面的图标加载线程上。
     var cDepOff = false
-    for (y in box.top until box.bottom) {
+    if (tonal == null) for (y in box.top until box.bottom) {
       val row = y * w
       for (x in box.left until box.right) {
         val i = row + x
@@ -788,12 +793,21 @@ internal object MonochromeMask {
         //   按 q 混进去就是**在空气上上墨**。真机抖音量出来：模型上墨的像素里 51.4% 的源 alpha
         //   恰好是 0（最浓 68/255），屏幕上就是他报的那块灰框 —— 而它的形状是矩形，因为那是
         //   内容外接框。判据台新增一条「全透明的像素不许上墨」钉住它。
-        var a = (td * (100 - q) + tl * q) / 100
+        var a = if (tonal != null) {
+          // 这一支的浓度 = 这张图自己的亮度，**暗=墨**，端点是它自己的 p5/p95。
+          // 透明像素照样不给墨（乘上源 alpha，与下面 `tl` 同一条规矩）。
+          val l64 = s.labL[i].toInt() and 0xffff
+          ((tonal.hi - l64) * 255 / maxOf(tonal.hi - tonal.lo, 1 shl 6)).coerceIn(0, 255) *
+            Color.alpha(pixels[i]) / 255
+        } else (td * (100 - q) + tl * q) / 100
         if (a == 0) continue
         // 比参照暗的往上、亮的往下，**按这张图自己的跨度成比例** —— 不是"暗/亮"两档。
         // ⚠ 上限不对称是有理由的：白字在彩色底上是最常见的"亮侧实心"，往下压狠了就是他报过的
         //   「主题色怎么这么浅」。q 上去之后这两侧自动退场：那时明暗已经是浓度本身了。
-        a = (a + a * (u * 100 / amp).coerceIn(-down, up) / 100).coerceIn(0, 255)
+        //   满幅插画那一支整个跳过这一步：它要的**就是**一条按亮度排的斜坡，再叠一次明度序
+        //   等于把同一条轴乘两遍（斜率变陡，中间调全被推到两端 —— 正是他报的「过渡生硬」）。
+        if (tonal == null)
+          a = (a + a * (u * 100 / amp).coerceIn(-down, up) / 100).coerceIn(0, 255)
         // 第二遍只降**比主体亮**的那一侧（镂空、高光、白 logo 上的洞）。比主体暗的那些是图形
         // 自己的暗部，降它等于把细节擦了 —— 与上面那条明度序同一个极性。
         // ⚠ 但**主体自己那一色不许降**。这一层的参照取的是"离这格最近的那块主体"，于是一块
@@ -819,7 +833,7 @@ internal object MonochromeMask {
     }    // 4) 交出去之前把墨量抬到满阶（他要「图标上必须有系统最深和最浅的取色」）。**两层叠加**：
     //    全局那一层管"整张最深都不够"，字形那一层管"只有 1% 到顶、主体停在 140"。
     //    ⚠ 中间夹一步发档（4.5），两层不能并排 —— 理由写在那一段里。
-    val global = stretchGlobal(out, total)
+    val global = if (tonal == null) stretchGlobal(out, total) else null
     global?.let { g ->
       for (i in 0 until total) {
         val a = out[i] ushr 24
@@ -839,18 +853,22 @@ internal object MonochromeMask {
     //     让开档位让出去的那点浓度。两层换过来试过（发档挪到最末尾）：并档 37→28 对是多了，
     //     代价是 `字均净<200` 从 57 涨到 72（弄坏 16 张、修好 1 张）—— 那是他最早点名的
     //     「颜色偏淡」，[LEVEL_FLOOR] 那段已经表过态：细腻与实心冲突时先不伤人。所以不取。
-    assignLevels(out, pixels, w, box, s)
+    if (tonal == null) assignLevels(out, pixels, w, box, s)
     // 4.6) 一条连续的描边被颜色渐变切成几截 —— 按**拓扑**把它接回去（见 [propagateBands]）。
     //   ⚠ **必须放在发档之后**：放之前它会改掉色桶的均值，`assignLevels` 于是重排、整桶平移量跟着变，
     //   结果"接一条线"这件事被放大成"改一整张的台阶"（易班上看跳≥30 的连续像素对 0%→1%、p99 25→52，
     //   而真正被补的只有 20 格 —— 硬边是发档造的，不是那 20 格）。放在发档之后，两者才解耦。
-    val bands = propagateBands(out, pixels, w, h, box, s)
-    val stretch = "${global?.second ?: "已满"}+${stretchMark(out, pixels, w, h, box, s)}"
+    val bands = if (tonal == null) propagateBands(out, pixels, w, h, box, s) else Triple(0, 0, 0)
+    val stretch = "${global?.second ?: "已满"}+${if (tonal == null) stretchMark(out, pixels, w, h, box, s) else "已满"}"
 
     // 5) 形状体检。**修不修形状看浓度是谁给的**：颜色给的（β 高）才可能有"切底切出来的杂点"，
     //    覆盖率给的（β≈0）那些淡值全是设计者自己画的柔光与抗锯齿，擦掉就是一圈锯齿、桥起来
     //    就是给一条笔画凭空加粗。（旧版这里是两支各写死的 `bridge=/despeckle=` 常量。）
-    val colourDriven = ground.meanCov >= 128
+    // 满幅插画那一支**不做形状修补**：`bridge` 填的是"阈值切出来的淡边"（把 1..127 的格子
+    // 按邻居继承成实心），`despeckle` 擦的是"切底切出来的杂点" —— 两样都是**参照那条路**的
+    // 产物。这一支的淡格是这张图自己的中间调，桥一下就是凭空多一块实心、擦一下就是丢一格
+    // 细节，而它压根没有"切底"这一步可言。
+    val colourDriven = ground.meanCov >= 128 && tonal == null
     // 量的是**交出去那一张**：分档 = 几块 / 落在几档，括号里是每块的浓度。
     // ⚠ 这个数现在**只是诊断**，没有配套的修法 —— 曾按它铺过两趟单调重排（dep 轴 + 浓度轴），
     // 平均档数 2.66→2.94、完全分开的 8/32→12/32，看着是进步；但同一改动在真图上画出过
@@ -878,6 +896,13 @@ internal object MonochromeMask {
     var figN = 0; var figSum = 0L; var figTop = 0
     var resN = 0; var resSum = 0L
     var bfN = 0; var bfSum = 0L
+    // 满幅插画那一支"把被叫作底的格子画上了墨"另记一笔，**换名字记，不藏**。
+    // 理由与 `带内残` 那一条一模一样：`残盘` 的定义是"非 plate 且 dep ≤ 零"，它要防的是
+    // **参照那一条路把整片盘子点亮**；而这一支的前提就是"这一张的 plate 标签不可信"
+    // （`tonalClass` 的三条判据就是在说"没有哪一块是盘"）。混在一起量等于把这一支的
+    // **目标物计成损伤** —— 第一次跑就是这么撞上 5787→40685 的，归因之后：
+    // 未走这一支的 105 行合计 3540（比基线还低 2247），涨的 37145 格 100% 落在 fired 的 8 行上。
+    var tonResN = 0; var tonResSum = 0L
     for (i in 0 until total) {
       if (Color.alpha(pixels[i]) < 255) continue
       val a = out[i] ushr 24
@@ -890,7 +915,8 @@ internal object MonochromeMask {
       //   （第一次跑就是这么撞上 5787→12327 的：+6540 格 100% 落在 fired 的 8 张上，
       //   没 fired 的一张没涨）。分开记，`残盘` 回到它原本要防的那件事："底被整片点亮"。
       if (s.plate[i] == 0.toByte() && (s.distT[i].toInt() and 0xffff) <= ground.zero) {
-        if (i < s.bandSeen.size && s.bandSeen[i] == 3.toByte()) { bfN++; bfSum += a } else { resN++; resSum += a }
+        if (tonal != null) { tonResN++; tonResSum += a }
+        else if (i < s.bandSeen.size && s.bandSeen[i] == 3.toByte()) { bfN++; bfSum += a } else { resN++; resSum += a }
       }
       else { figN++; figSum += a; if (a >= 250) figTop++ }
     }
@@ -929,10 +955,147 @@ internal object MonochromeMask {
         // 接回去的细带：几条、补了多少格。放在**整串末尾**，前面列位一个不动（`res.sh` 按列号读）。
         // `带内残` 是这些补上去的格里"颜色本来就离底很近"的那些 —— 它**故意不从 `残盘` 里消失**，
         // 只是换个名字记：这样"这一刀补了多少、其中有多少看着像底"两件事在日志里都看得见。
-        " 带补=${bands.first}/${bands.second}(${bands.third}拒) 带内残=$bfN/${if (bfN == 0) 0 else bfSum / bfN}",
+        " 带补=${bands.first}/${bands.second}(${bands.third}拒) 带内残=$bfN/${if (bfN == 0) 0 else bfSum / bfN}" +
+        // 满幅插画那一支开了就把三个判据数报上；**没开一个字符都不加** —— 这两列在整串末尾，
+        // 前面所有列的列位一个不动（`res.sh` 按列号读，这条规矩上面已经写过两次）。
+        (if (tonal == null) "" else " 调=1 纹理=${tonal.tex} 主色=${tonal.flat} 跨=${tonal.span}" +
+          " 调残=$tonResN/${if (tonResN == 0) 0 else tonResSum / tonResN}"),
       ground.hyp,
       s.h0why,
       s.veto
+    )
+  }
+
+  // ─────────────────── 满幅插画那一支：不要参照 ───────────────────
+  //
+  // 2026-09-30 主人一次点名四张：`com.neowizgames.game.browndust2`、`com.levelinfinite.sgameGlobal`、
+  // `com.tencent.tmgp.sgame`、`com.zyddz.wisdomgame`。它们在模型里落到**四支不同的分支**
+  // （H1 底占 0.86 / H2 底占 0.20 / H3 空气参照 ×2）、`明暗` 权重 0 / 59 / 100 / 1，
+  // 错法也四种：整块实心饼、拼布带方块、几乎全空（框内 0.07）、洗成灰雾（cc 252）。
+  // 而四张的内容类型是同一个：**满幅插画 —— 压根没有"哪一块是盘"这件事**。
+  // 这一族前面五把尺子（占比 / 厚度 / 围合 / 环散 / 轮廓归一）全在问"那块参照长什么样"，
+  // 问得再好也问不出答案，因为**这一类没有参照**。所以这一支换问题：
+  // **这张图自己有没有连续的调子可发** —— 有就直接拿它自己的亮度当浓度，不经过参照。
+  //
+  // 极性固定"暗=墨"，与 [polarity] 那一段真机量出来的方向一致（墨比参照暗才该翻）。
+  // 斜坡端点取这张**自己**亮度的 p5/p95（不是最值）：一条 JPEG 噪点线不该决定标尺 ——
+  // 与上面 `LUM_LOW_PCT/LUM_HIGH_PCT` 同一个口径，只是那条量的是"离参照多远"，
+  // 这一条量的是"这张图自己有多亮"，**这是这一支唯一的新信息**。
+  //
+  // ⚠ **不能对所有图标开**：红盘白字那一类（网易 UU 的深蓝盘 + 青色环、audiofx 的四块扇形）
+  //  拿亮度当浓度会把盘子画满、字掏空 —— 正是主人最早报的「颜色反一下」。所以开火条件是三条
+  //  **同时**成立。阈值由 `_harness/TonalGateKt.kt` **直接调这一个函数**在 122 张真机语料 +
+  //  113 张老语料上量的分布定的（不是另一套自算的量 —— 那两处差一点就是两个判据），
+  //  每一条各挡一类反例，`纹理/主色/跨` 三个数是实测值：
+  //   · [TONAL_TEX_MIN] 纹理：相邻格"差得开但差得少"的占比。平涂 logo 内部几乎恒等、
+  //     只有边界大跳 → 天生低。挡掉 饿了么 26 / 驾考宝典 24 / limelight 23 / UU·audiofx·webapk ≤12。
+  //   · [TONAL_FLAT_MAX] 有没有一整块平涂占到画面大头。挡掉 智慧树（书法字压在白底上，
+  //     纹理 68 比点名的任何一张都高，可它**就是**一块平涂底：主色 28）。
+  //   · [TONAL_SPAN_MIN] 这张自己的亮度跨度。挡掉 京东 35/**2/46** 与 Xbox 53/1/**50**
+  //     （一张有阴影的球：只有一个物体的调子，不是满幅画）。
+  //  走这一支的五张：王者荣耀 54/0/85、国际版 51/0/83、browndust2 47/0/81、智游斗地主 43/8/65、
+  //  feimo 32/13/65。**逐张看过图**，五张都比换支前好（前四张是主人点名的，feimo 是同一类里
+  //  唯一过线的：换支前 88% 是空的，只剩两只眼睛）。
+  //  ⚠ 线不敢再往下挪：没走的那批里纹理最高的是**驾考宝典 24**，而它下面一格就是
+  //  **limelight 23** —— 那一张换支前是一条 crisp 的描边（看图判"现在这样更好"）。
+  //  24 与 23 之间没有能站人的地方，所以"驾考宝典也该修"这条**记成已知边界**，不是没看见。
+  //
+  // ⚠ 三个量全在**固定 96×96 格**上算（与 [POLAR_EDGE] 同一套路）。逐像素版的纹理随边长漂：
+  //  王者荣耀在 96/192/384/768 上是 55/67/73/36（768 是放大出来的，四邻几乎相等 → ΔL=0
+  //  被排除在外），拿它定阈值就是今天下午那条 H2 入场券"按面积不按周长"的同一个病。
+  //  降采样到固定格之后：**开火集合在四个边长上一字不差**（122 张里 96/192/384/768 都是那 5 张），
+  //  这一族第一次有一个"换边长不换人"的入场判据。顺带买到 `框内随边长漂移>0.15` 22→15。
+  //
+  // ⚠ 这一支**跳过**发档 [assignLevels]、接带 [propagateBands]、两层抬顶 [stretchGlobal] /
+  //  [stretchMark]：那四样都是在"参照给出一条斜坡"的前提上排序与抬顶，而这一支的浓度本来就是
+  //  这张图的亮度。特别是发档 —— 它按 13×8×8 的**粗色桶**合并，一张插画会被它压成 ≤6 段灰带，
+  //  正是 `d51d4d0` 修掉的那个"一根线上四道灰"。
+
+  /** 这一支的判据格边长。96 与 [POLAR_EDGE] 同值：判"有没有参照"不需要全分辨率。 */
+  private const val TONAL_GRID = 96
+
+  /** 纹理的那一条带：相邻两格**差得开**（>0）但**差得少**（≤[TONAL_TEX_HI] 个 L\\*）。 */
+  private const val TONAL_TEX_LO = 1
+  private const val TONAL_TEX_HI = 5
+
+  /** 三条开火线。数值来自 `_harness/TonalGateKt` 在 235 张上的分布，见上面那一段。 */
+  private const val TONAL_TEX_MIN = 30
+  private const val TONAL_FLAT_MAX = 14
+  private const val TONAL_SPAN_MIN = 55
+
+  /** 判据产物。[lo]/[hi] 是这张自己亮度的 p5/p95（L\\*×64），[span] = hi−lo。 */
+  internal class Tonal(val tex: Int, val flat: Int, val span: Int, val lo: Int, val hi: Int) {
+    /** 三条同时成立才走这一支。 */
+    val on: Boolean get() = tex >= TONAL_TEX_MIN && flat <= TONAL_FLAT_MAX && span >= TONAL_SPAN_MIN
+  }
+
+  /**
+   * 这张是不是"满幅、连续调、没有平涂大头"。**只读源图**，不碰参照、不碰 plate/dist，
+   * 也不碰 [Scratch]（判据台的 `TonalGateKt` 要能单独调它）。亮度用 [labChannel] 现算 ——
+   * 一张 384² 全框多算一次 Lab 是 1ms 量级，而这一支省下的色表与发档远不止这个数。
+   * 内容框比格还小（低分辨率输入）时返回 null —— 那时纹理量不出来，宁可不走这一支。
+   */
+  internal fun tonalClass(pixels: IntArray, w: Int, h: Int, box: Rect): Tonal? {
+    val bw = box.width()
+    val bh = box.height()
+    if (bw < TONAL_GRID || bh < TONAL_GRID) return null
+    val n = TONAL_GRID
+    val cL = IntArray(n * n); val cR = IntArray(n * n); val cG = IntArray(n * n)
+    val cB = IntArray(n * n); val cN = IntArray(n * n)
+    val hist = IntArray(101)
+    var opq = 0
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      val cy = (y - box.top) * n / bh
+      for (x in box.left until box.right) {
+        val i = row + x
+        val pa = Color.alpha(pixels[i])
+        if (pa < A_SOLID) continue
+        opq++
+        val l = labChannel(pixels[i], 0)
+        hist[(l shr 6).coerceIn(0, 100)]++
+        val k = cy * n + (x - box.left) * n / bw
+        cL[k] += l
+        cR[k] += (pixels[i] shr 16) and 0xff
+        cG[k] += (pixels[i] shr 8) and 0xff
+        cB[k] += pixels[i] and 0xff
+        cN[k]++
+      }
+    }
+    if (opq == 0) return null
+    // 每格的平均亮度与平均色（平涂那一块的所有格会得到同一个色，这就是"主色"的算法）。
+    // ⚠ 三通道**分开累加**：把打包好的 0xRRGGBB 直接相加再除格数，通道之间会进位，
+    //   平涂区的两格会算出两个"不同的"颜色，主色那条判据就恒不成立。
+    val cellL = IntArray(n * n) { -1 }
+    val share = HashMap<Int, Int>()
+    var cells = 0
+    for (k in 0 until n * n) {
+      if (cN[k] == 0) continue
+      cells++
+      cellL[k] = (cL[k] / cN[k]) shr 6
+      val c = ((cR[k] / cN[k]) shl 16) or ((cG[k] / cN[k]) shl 8) or (cB[k] / cN[k])
+      share.merge(c, 1, Int::plus)
+    }
+    var pairs = 0L
+    var mid = 0L
+    for (cy in 0 until n) for (cx in 0 until n) {
+      val k = cy * n + cx
+      val a = cellL[k]
+      if (a < 0) continue
+      for (j in intArrayOf(if (cx + 1 < n) k + 1 else -1, if (cy + 1 < n) k + n else -1)) {
+        if (j < 0 || cellL[j] < 0) continue
+        pairs++
+        val d = maxOf(a - cellL[j], cellL[j] - a)
+        if (d in TONAL_TEX_LO..TONAL_TEX_HI) mid++
+      }
+    }
+    if (pairs == 0L) return null
+    val lo = percentile(hist, opq, LUM_LOW_PCT) shl 6
+    val hi = percentile(hist, opq, LUM_HIGH_PCT) shl 6
+    return Tonal(
+      (mid * 100 / pairs).toInt(),
+      (share.values.maxOrNull() ?: 0) * 100 / cells,
+      (hi - lo) shr 6, lo, hi
     )
   }
 
