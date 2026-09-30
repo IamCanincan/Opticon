@@ -2239,6 +2239,8 @@ internal object MonochromeMask {
       if (vacuous(s, p)) s.veto = s.veto or 1
       h1share = p.share; h1thick = p.thick; h1fams = p.families; h1ink = p.iN
     }
+    // 只被「底比墨小」挡住的那个 H2 候选，留到**最后**再决定要不要用（见下面 air 之前那一段）。
+    var h2ThinOnly: Pass? = null
     val ring = outlineFamilies(pixels, w, box, s, seed)
     // H2 被否决时它的数也要能进日志 —— 用局部变量带，不碰对象上的字段（这是多线程的钩子路径）。
     var h2share = -1f
@@ -2292,6 +2294,10 @@ internal object MonochromeMask {
       if (vac) s.veto = s.veto or 2
       if (thin) s.veto = s.veto or 8
       if (narrow) s.veto = s.veto or 32
+      // **只有**"薄"这一条理由的才留候选：还带着 vacuous / 窗口塌掉的，是别的证据说"这块不能当底"，
+      // 那种不许走最后手段（真机语料上正是这一条把抖音、taptap、钉钉、拼多多挡在门外 —— 它们
+      // `拦=` 里除了 8 还有 2 或 32，改前改后逐位不动）。
+      if (thin && !vac && !narrow) h2ThinOnly = alt
       h2share = alt.share; h2thick = alt.thick; h2enc = alt.enclosed; h2spread = alt.spread
     }
     // H1、H2 都没说出"哪块是底"之后，先问 H0（区域关系），再退到 H3（没有底）。
@@ -2300,6 +2306,20 @@ internal object MonochromeMask {
     regionGround(pixels, w, h, box, g, s, seed)?.let {
       it.h2 = h2share; it.h2thick = h2thick; it.h2enc = h2enc; it.h2spread = h2spread
       it.h1 = h1share; it.h1thick = h1thick; it.h1fams = h1fams; it.h1ink = h1ink
+      return it
+    }
+    // **最后手段：宁可要一块薄底，也不要"根本没有底"。** 走到这里意味着 H1、H2、H0 都没说出
+    // 哪块是底，剩下的选择只有 H3「空气当参照」—— 而对满幅不透明的圆盘图标，那等于宣布
+    // **凡是画了像素的地方全是图形**，交出去就是一块平色饼（真机语料里塌得最狠的那批：
+    // Chrome 0.78 / Spotify 0.79 / Telegram 0.78 / 百度贴吧 0.78 / edge 0.78 / 小米视频 0.75）。
+    // 一块被 `thinPlate` 嫌薄的底，仍然比"没有底"多知道一件事。
+    // ⚠ 这不是把 `thinPlate` 撤了：它照旧否掉一切"还有别的毛病"的候选，这里只接住
+    //   **唯一毛病是薄**、且**退路是整张涂满**的那几个。接手要记 `拦=` 第 64 位 ——
+    //   它不是正常过关的 H2，日志里必须分得出来。
+    h2ThinOnly?.let {
+      it.h1 = h1share; it.h1thick = h1thick; it.h1fams = h1fams; it.h1ink = h1ink
+      it.h2 = h2share; it.h2thick = h2thick; it.h2enc = h2enc; it.h2spread = h2spread
+      s.veto = s.veto or 64
       return it
     }
     bandSeed(s, w, box, band, seed)
