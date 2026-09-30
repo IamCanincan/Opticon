@@ -1014,6 +1014,20 @@ internal object MonochromeMask {
    *   一句话：这一族要的是"一维墨装不下的那一维"（见 [assignLevels] 顶上「墨是一维，颜色是二维」），
    *   不是更长的梯子。
    */
+  /** 一块参照至少要留出多宽的浓度窗口，才**接得住手**。
+   *
+   * 低于它，交付出来的斜坡只剩几十级：dep 上一点点噪声就被放大成「要么实心、要么擦掉」，
+   * 屏幕上就是**碎成几十块**而不是一个图形。真机 wisdomgame（灰发蓝眼、低饱和插画）H2 接手后
+   * `零=53 实=99`（跨 46）、`cc=23`、框内 0.08 —— 主人一句「很奇怪」。
+   * 量在 235 张（122 真机 + 113 老语料）上：**64 这一档只碰到 wisdomgame 两张**，其余一张不动。
+   * ⚠ **只挂在 H2 上，H1 挂不得**：H1 那条路上有钉着的性质「整张纯色 → 交出空掩码」，而纯色图的
+   *  窗口天生 0 宽 —— 一挂上去它就被判成"参照不可信"、退到空气参照、变成**整张涂满**（实测红的就是这条）。
+   * ⚠ 它量的是**交付出来的动态范围**，不是「这块参照长什么样」—— 前五把尺子（占比/厚度/围合/
+   *  环散/轮廓归一）都是后者，都量死过。所以这一条不是第六个阈值挑数，是换了一类证据。
+   * 拒了要**自己报**：见 `拦=` 里的第 32 位。
+   */
+  private const val GROUND_MIN_SPAN = 64
+
   private const val SEP_MIN_GAP = 30
 
   /** [assignLevels] 往下发档的地板：低于这个浓度就不再让开（宁可并列）。
@@ -2270,12 +2284,14 @@ internal object MonochromeMask {
       // 第三件（2026-09-28，抖音「还是缺了一部分」）：它**不比墨那一侧小** —— 见 [thinPlate]。
       val vac = vacuous(s, alt)
       val thin = thinPlate(alt)
-      if (alt.share < PLATE_ALL_SHARE && !vac && !thin) {
+      val narrow = alt.solid - alt.zero < GROUND_MIN_SPAN
+      if (alt.share < PLATE_ALL_SHARE && !vac && !thin && !narrow) {
         alt.h1 = h1share; alt.h1thick = h1thick; alt.h1fams = h1fams; alt.h1ink = h1ink
         return alt
       }
       if (vac) s.veto = s.veto or 2
       if (thin) s.veto = s.veto or 8
+      if (narrow) s.veto = s.veto or 32
       h2share = alt.share; h2thick = alt.thick; h2enc = alt.enclosed; h2spread = alt.spread
     }
     // H1、H2 都没说出"哪块是底"之后，先问 H0（区域关系），再退到 H3（没有底）。
