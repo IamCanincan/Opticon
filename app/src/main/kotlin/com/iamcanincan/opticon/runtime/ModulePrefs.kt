@@ -15,7 +15,7 @@ import android.content.SharedPreferences
  * 应用图标（裁圆）与通知图标（修复）各有自己的总开关 —— 两件事同属「优化图标」，
  * 只是落在不同的位置，开关分开是为了让你按需只开其中一个。第三个开关
  * （[KEY_MONO_INVERT]）管的是 Android 16 强制取色下**主题图标单色遮罩**的整条处理链
- * ——**首选合成、兜底翻转**，关掉就两条一起停（见 [ModuleOptions.monoInvert]）；
+ * ——**未适配的图标由本模块合成一张极性正确的单色层**，关掉就完全不介入（见 [ModuleOptions.monoInvert]）；
  * 它和裁圆没有因果关系，所以不跟着 [KEY_CIRCLE_ENABLED] 走。
  *
  * ⚠ 默认值必须和 [ModuleOptions] 的无参默认值逐字段一致：后者是配置通道**全挂**时的

@@ -106,7 +106,7 @@ adb logcat -s Opticon
 ```
 module loaded in com.android.settings (systemServer=false)
 attach in com.android.settings: framework=... api=102
-options: circle=true notify=true preserveTinted=true (source=provider)
+options: circle=true monoInvert=true notify=true preserveTinted=true (source=provider)
 install in com.android.settings, sdk 36
 Hooked com.android.settings
 ```
@@ -228,40 +228,33 @@ Android 16 的「强制动态取色」会给**没做单色适配**的应用现�
 一句话 —— **它假定「亮的就是墨」**。深色字形 + 浅色底的图标因此变成「字形是洞、底色是形」，
 看着整个反掉，这就是用户报的那句「颜色反一下」。
 
-现在只有一条路：**遮罩仍由桌面出，模块只决定翻不翻**。两道钩子：
+现在只有一条路：**模块自己合成一张极性正确的单色层交上去**，桌面根本不进它自己那套算法。两道钩子（`circle/IconHooks.kt`）：
 
-1. `hookPolarityJudge` 钩 `AdaptiveIconDrawable.getMonochrome()`。应用自带单色层就原样透传
-   （一个像素都不碰）；没有的话，把桌面要用的那一层光栅化，问一句**「这张图的墨，比它的底
-   暗吗」**，把结论存进线程内的格子，然后**照旧交回 null**。
-2. `hookMaskPolarity` 钩 `MonochromeIconFactory.generateMono()`，对它写进 `mAlphaBitmap` 的
-   遮罩**按上一步的结论**决定翻不翻 —— 不再一律翻。
+1. `hookSynthesizedMonochrome` 钩 `AdaptiveIconDrawable.getMonochrome()`。应用自带单色层就原样
+   透传（一个像素都不碰）；没有的话，把这张图光栅化、交给 `MonochromeSynth.forIcon` →
+   `MonochromeMask.build` 压一张**极性正确的剪影**直接返回。桌面只在 getter 返回 null 时才去 new
+   它自己的 `MonochromeIconFactory` —— 合成一接上，那条把亮度当不透明度的路径**根本不进**。
+   代码里对这条的原话是「这是主路径，也是唯一路径」。
+2. `hookMaskFallThrough` 只数一件事：**桌面自己出了多少张遮罩** = 上游合成漏接了多少张。
+   纯合成模式下这个数应该是 0；它非零是「屏幕上有一批图标是反的」唯一的可见信号，
+   日志是 `Mono: N 张走了桌面自己的遮罩…`。
 
-这两个钩子跑在**同一次调用**里（`MonoIconThemeController.createThemedBitmap` 第 76 行取
-monochrome、返回 null 才走到第 84 行 new Factory，同一个方法、同一个线程），所以那个格子里
-只可能是刚才是这张图的判据；取一次即清，进 getter 时先清一遍。
-
-判据本身只有一句：墨的平均 L\* 按浓度（`dep`）加权，与参照的 L\* 比 —— 参照有颜色时用底的
-实际亮度，参照是"没有东西"时退成中灰。墨比参照**暗过 8 个 L\*** 才翻；差得不多、或者压根
-判不出来，就**不动**（不动 = 桌面本来的样子，这才是安全的默认）。真机回传的 16 张上它说
-4 张该翻（王者荣耀、闲鱼、astralparty）、12 张不该翻 —— 一律翻等于把那 12 张翻错，而那正是
-"翻转兜底"那一版的做法。
-
-「已适配的不动」不用判条件：桌面只在 `getMonochrome()` 为 null 时才 new 这个 Factory，
+「已适配的不动」不用判条件：桌面只在 `getMonochrome()` 为 null 时才 new 那个 Factory，
 自带单色层的应用根本走不到这条路径。
 
-开关是**有的**（图标页 →「修正单色图标的极性」）：关掉 = 完全交回桌面自己处理。判不出来时
-不动遮罩本身就是安全默认，所以这个开关不是口味旋钮，而是"这台 ROM 上厂商已经修过极性"时的
-逃生口。一张一张定"这个应用翻不翻"的调试面板已经删掉了（2026-09-30）：它给的是"绕开判据"，
+开关是**有的**（图标页 →「未适配的图标由本模块生成单色层」）：关掉 = 完全交回桌面自己处理。
+它不是口味旋钮，而是"这台 ROM 上厂商已经修过极性、我们整体不该介入"时的逃生口。
+一张一张定"这个应用翻不翻"的调试面板已经删掉了（2026-09-30）：它给的是"绕开判据"，
 而这一路要的是把判据量对。
 
-⚠ 这条路依赖桌面的**私有字段名** `mAlphaBitmap`。换 ROM / 换桌面，第一件事是看
-`Mono: N 张遮罩 → 翻 x 不翻 y 无判据 z` 这行在不在、`无判据` 有没有涨 —— 那是上游那道判据钩
-子没装上的唯一信号，不让它静默发生。
+⚠ 这一路**不读桌面任何私有字段** —— 旧版翻转兜底要读 `mAlphaBitmap`，字段名一变整条静默失效，
+那是它被合成换掉的直接原因之一。极性怎么判、为什么"亮的不一定是墨"，全在下一节的模型里
+（`MonochromeMask` 的 `groundPass` 是全仓唯一一份"哪边是图形"的实现，出现第二份就会各自漂移）。
 
-> 这里曾经有第二条路：**自己合成一个单色层交上去**（`MonochromeSynth.forIcon` +
-> `MonochromeMask.build`），让桌面根本不进 Factory。它**现在不再上屏**，但代码和判据都留着：
-> 极性判据用的就是同一份 `MonochromeMask`（同一个 `groundPass` —— 全仓只允许有一份"哪边是
-> 图形"的实现，出现第二份就会各自漂移），判据台与真机重放也还在跑它。取舍见下一节。
+> 这里曾经的第一条路是**翻转兜底**：让桌面先算出一张极性错误的遮罩、模块再整张翻回来。
+> 换成合成优先之后它只剩兜底，现在整条已删。`MonochromeMask` 里那套极性判据
+> （`Polarity` / `polarity()`）**只剩判据台与性质在用**，业务侧已无调用者 —— 别把它当成
+> "屏幕上那条路还在翻转"的证据。取舍见下一节。
 
 ### 运维按钮（纯 LSP，不 root 不 shell）
 
@@ -301,8 +294,9 @@ intentresolver / permissioncontroller / wellbeing。
 它是通知内容区图标的来源，也是状态栏图标的来源，所以**不要在状态栏那行上找差异**：
 真正直观的变化在通知内容区那个小图标，从灰白色块变回能认出是哪个 App 的样子。
 
-配套还会阻止系统把替换后的图标重新染回单色（挂钩 `IconManager#setIcon`、
-`StatusBarIconView#updateIconColor`、`Notification.Builder#processSmallIconColor`）。
+⚠ 过去这里还有一句「配套还会阻止系统把替换后的图标重新染回单色」（钩 `IconManager#setIcon`、
+`StatusBarIconView#updateIconColor`、`Notification.Builder#processSmallIconColor`）—— 那是
+「保留原色」那一档的配套，2026-09-30 随那一档一起删了（`ca93cba`）。通知侧现在只有黑白一条路。
 
 ### 几个关键约束
 
@@ -310,9 +304,10 @@ intentresolver / permissioncontroller / wellbeing。
   免得把人家本来正确的图标改坏。
 - **状态栏只取 alpha 通道渲染小图标** ⇒ 交出去的位图必须有意义的透明背景；
   不透明彩色图标必然变纯色块。
-- **自适应图标光栅化是「遮罩贴边」的** ⇒ `fill()` 对整张是空操作，只对**前景层**才有意义。
-- **尺寸填满**：自适应图标光栅化后内容只占画布中间约 61%，四周是空的。模块会先裁掉空白
-  再放大填满，否则缩到通知里那点尺寸会又小又糊。
+- **自适应图标光栅化是「遮罩贴边」的** ⇒ 裁空白、放大填满这类操作对**整张**是空操作，只对前景层
+  才有意义。曾经「彩色桌面图标」那一档会先裁掉空白再放大填满（光栅化后内容只占画布中间约 61%，
+  不填满缩到通知里那点尺寸会又小又糊）—— 黑白这一档不做这件事，`fill()` / `scaleTo()` 随那一档
+  一起删了（`ca93cba`）。
 - 仅注入 `com.android.systemui`，不碰其他进程。
 - **活路径已在真机核过（2026-09-30，XQ-DQ72 / Android 16）**：SystemUI 里
   `inflateViews hooked (1 overload(s))`，而 `not resolvable` / `inflateViews not found` /
@@ -647,7 +642,7 @@ com.iamcanincan.opticon
 ├── notify/                    ← 功能二：通知小图标
 │   ├── SystemUiHooks          往 SystemUI 里装挂钩
 │   ├── NotificationIconPatch  要不要替换、换成什么的判定
-│   ├── IconBitmap             位图的取、裁、合成（通知那半边，桌面已不再共用）
+│   ├── IconBitmap             位图的取与压单色（通知那半边，桌面已不再共用）
 │   └── ToneCheck              单色（已适配）判定
 ├── runtime/                   两个功能共用
 │   ├── ModuleRuntime          进程内共享状态：宿主 Context、配置读取（多通道回退 + TTL）

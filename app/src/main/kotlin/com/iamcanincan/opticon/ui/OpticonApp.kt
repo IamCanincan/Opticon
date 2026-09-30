@@ -107,19 +107,15 @@ fun OpticonApp() {
     val uriHandler = LocalUriHandler.current
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
 
-    // 首次打开就把默认配置落盘（含 mode 键）。放在外壳而不是各页面里：
-    // 默认打开的是「图标」页，而模块侧有几条回退通道是**以「配置里有 mode 键」
-    // 作为「这份文件是不是有效配置」的判据**的 —— 只打开过图标页就改开关的话，
-    // 文件里没有 mode，那几条通道会整份配置都不认，用户改的开关读不回来。
-    val context = LocalContext.current
-
-    // 首次打开就把默认配置落盘（含 mode 键）。放在外壳而不是各页面里：
-    // 默认打开的是「图标」页，而模块侧有几条回退通道是**以「配置里有 mode 键」
-    // 作为「这份文件是不是有效配置」的判据**的 —— 只打开过图标页就改开关的话，
-    // 文件里没有 mode，那几条通道会整份配置都不认，用户改的开关读不回来。
+    // 首次打开就把默认配置落盘。放在外壳而不是各页面里：默认打开的是「图标」页，而模块侧有
+    // 几条回退通道要先认「这份文件是不是 Opticon 的配置」—— 判据是
+    // `ModulePrefs.CONFIG_KEYS` 里**任意一个键存在**（见 looksLikeConfig）。从没打开过界面的
+    // 用户文件里一个键都没有，那几条通道就不该拿它当配置，否则空文件会被当成"用户全用默认值"
+    // 把真设置顶掉。所以第一次开界面必须把整组默认值写下去。
     //
     // ⚠ 这是带磁盘读写的副作用，不能放在 remember {} 里：remember 的求值发生在**组合期**，
     //    重组可能重跑它，而且 Compose 不保证它不在 UI 线程的关键路径上。
+    val context = LocalContext.current
     LaunchedEffect(Unit) { ModulePrefs.seedIfAbsent(ModulePrefs.of(context)) }
 
     // 检查更新的**结果**和发起它的那次 launch 都在外壳持有。

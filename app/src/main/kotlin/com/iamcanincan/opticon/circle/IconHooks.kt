@@ -1257,7 +1257,7 @@ private fun hookMaskFallThrough(xposed: XposedInterface, classLoader: ClassLoade
  * 最不可靠的一环（可靠性见 [IconNames]）。
  *
  * ⚠ hook 的是 framework 的类，部分框架对 bootclasspath 上的类挂钩有限制；挂不上 = 桌面
- * 照它自己的路子出遮罩，屏幕上就是反的。所以 [hookMaskPolarity] 保留成**漏接计数器**：
+ * 照它自己的路子出遮罩，屏幕上就是反的。所以 [hookMaskFallThrough] 保留成**漏接计数器**：
  * 那条汇总行非零就是在告诉我们上游没接住。
  */
 private fun hookSynthesizedMonochrome(xposed: XposedInterface) {
