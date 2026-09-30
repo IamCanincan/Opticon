@@ -128,7 +128,20 @@ class OpticonModule : XposedModule() {
      */
     private fun installNotifyHooks(classLoader: ClassLoader, attempt: Int) {
         if (SystemUiHooks.isInstalled()) return
-        if (SystemUiHooks.install(this, classLoader, quiet = attempt > 1)) return
+        // ⚠ 装钩本身也会抛：libxposed 的 `HookFailedError` 是 Error，`intercept` 又不声明受检异常，
+        // 没有哪一层拦得住。不兜住的话它会把下面的 `postDelayed` 一起带走 —— 重试一次都排不上，
+        // 而且异常会穿进框架的 `onPackageReady`（与 `IconHooks.install` 外面那层 try 同一个理由：
+        // 异常逃出去的代价由宿主承担）。所以这里把"抛了"折算成"这一轮没装上"，照常重试。
+        val ok =
+            runCatching { SystemUiHooks.install(this, classLoader, quiet = attempt > 1) }
+                .onFailure {
+                    logW(
+                        "notify hook install threw at attempt $attempt: " +
+                            "${it.javaClass.simpleName}: ${it.message}"
+                    )
+                }
+                .getOrDefault(false)
+        if (ok) return
         if (attempt >= MAX_INSTALL_ATTEMPTS) {
             logE(
                 "notify hook install gave up after $attempt attempts",

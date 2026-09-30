@@ -88,17 +88,28 @@ object SystemUiHooks {
      */
     fun install(module: XposedModule, classLoader: ClassLoader, quiet: Boolean = false): Boolean {
         if (!quiet) reportEnvironment(classLoader)
-        return try {
-            installRowInflation(module, classLoader)
-        } finally {
-            // 早退也要报：`installRowInflation` 返回 false 就是通知整条功能没了，
-            // 那恰恰是最需要知道"哪些成员没解析出来"的一次。
-            if (!quiet) flushUnresolved()
-        }
+        return installRowInflation(module, classLoader)
     }
 
-    /** 一次装钩里没解析出来的成员，**一行**报完（重试的那 19 次不报，免得刷重复的）。 */
-    private fun flushUnresolved() {
+    /** 装钩期成员解析的结果是否已经报过。只报一次：重试的那 19 轮解析的是同一批成员。 */
+    @Volatile
+    private var resolutionReported = false
+
+    /**
+     * 成员解析的结果，在**解析真的跑过之后**报一次（[installRowInflation] 里调的）。
+     *
+     * ⚠ 这里改过两处，两处原本都是"日志在说谎"：
+     * 1. **报的时机**。原来它挂在 [install] 的 `finally` 里、且只在 `quiet=false` 那几轮报 ——
+     *    而第一次 packageReady 常常早到 ClassLoader 还没就绪（目标类全 missing、直接早退），
+     *    真正解析成员、真正把钩子装上的是**第 2 轮起**（`quiet = true`）。于是
+     *    「N 项没解析出来」这条明细在正常流程里**永远不会打**，这条通道等于没有。
+     * 2. **"全部命中"不能张嘴就来**。早退那几次压根没走到解析，队列本来就是空的，原来照样打一句
+     *    `全部命中` —— 而它紧跟在 `missing class: …` 后面，正是查"缺了什么"的人最先看到的那行。
+     *    现在只有解析跑过、且队列为空，才说这句话。
+     */
+    private fun reportResolved() {
+        if (resolutionReported) return
+        resolutionReported = true
         val miss = unresolved.toList(); unresolved.clear()
         if (miss.isEmpty()) {
             ModuleRuntime.logI("notify 装钩期成员解析：全部命中")
@@ -164,60 +175,112 @@ object SystemUiHooks {
             MemberLookup.findField(binderClass, "mContext")
         }
 
+        // 解析到此结束：结果在这里报（见 [reportResolved] —— 报了才说明解析真的跑过）
+        reportResolved()
+
+        var failed = 0
         for (method in overloads) {
-            method.isAccessible = true
             // 框架会对同一个进程多次回调 onPackageReady（实测 Vector 会调 2~3 次），
             // 不判重就会把同一个方法挂多次，导致每条通知被重复处理
-            if (!hookedMethods.add(method)) continue
+            if (hookedMethods.contains(method)) continue
             // id 必须各不相同，多个重载不能共用同一个 hook id
             val hookId = "inflateViews[${method.parameterTypes.joinToString { it.simpleName }}]"
 
-            module.hook(method).setId(hookId).setExceptionMode(EXCEPTION_MODE).intercept { chain ->
-                captureSystemContext(chain.thisObject, binderContextField)
-
-                for (arg in chain.args) {
-                    if (arg == null) continue
-                    // entryClass 为 null 时放行所有参数，靠能否取出 sbn 来判断
-                    if (entryClass != null && !entryClass.isInstance(arg)) continue
-                    runCatching {
-                        val sbn = readEntryField(arg, sbnField) as? StatusBarNotification ?: return@runCatching
-                        val context = ModuleRuntime.hostContext ?: return@runCatching
-                        // TYPE_RESOURCE 的图标必须用目标应用自己的 Resources 解码。
-                        //
-                        // ⚠ 这里**不能**带 CONTEXT_INCLUDE_CODE：
-                        // ActivityThread.getPackageInfo 只在设了这个 flag 时才去
-                        // mPackages 里取/建 LoadedApk，并走 updateApplicationInfo →
-                        // createOrUpdateClassLoaderLocked（本仓 ModuleRuntime 的注释里
-                        // 记着这条路径会再派发一次 packageReady，把自己重入进来）。
-                        // 不带它则走 mResourcePackages 那份「只有资源、没有代码」的缓存，
-                        // 类加载器根本不建。对侧就是纯资源解码：IconBitmap.fromResources
-                        // 只用 context.resources，NotificationIconPatch 也只解手上那个 Icon，
-                        // 两者都不需要从目标 APK 里 loadClass。
-                        // 框架自己也这么判：Icon.java 里 CONTEXT_INCLUDE_CODE 只在
-                        // sameAppWithProcess 时才加，跨应用取图标一律不带。
-                        //
-                        // CONTEXT_IGNORE_SECURITY 留着不花成本：ActivityThread 是先算
-                        // includeCode 再算 securityViolation，标准实现里这里已经用不上它，
-                        // 但 ROM 侧的判断改没改我们说不好，留个保险丝。
-                        val targetContext = runCatching {
-                            context.createPackageContext(
-                                sbn.packageName,
-                                Context.CONTEXT_IGNORE_SECURITY
-                            )
-                        }.getOrDefault(context)
-                        NotificationIconPatch.patch(sbn, targetContext)
-                    }.onFailure { ModuleRuntime.logE("inflateViews patch failed", it) }
-                }
-                chain.proceed()
+            // ⚠ **先装成、再登记**（原来顺序反了：先 `hookedMethods.add` 再装）。装钩这一步一旦
+            // 抛出来（libxposed 的 `HookFailedError` 是 Error、`intercept` 也不声明受检异常，
+            // 没有哪一层拦得住），后果是连锁的：① 这个方法被记成"已挂上"，下一轮回调直接跳过；
+            // ② 那次抛出会把 `installNotifyHooks` 里的 `postDelayed` 一起带走，重试根本排不上；
+            // ③ 框架自己再派发一次 packageReady 时循环空转，却照样打 `inflateViews hooked
+            // (N overload(s))` 并把 `rowInflationInstalled` 置真 —— 钩子一个都没有，日志和
+            // `isInstalled()` 都说成功，而且重试就此收工。框架的 protective 只兜**钩子体**、
+            // 不兜装钩（本文件开头那句"异常一律吞在这里"原本只对成员查找成立），
+            // 所以这里自己兜住，失败如实报数。
+            if (!installInflateHook(module, method, entryClass, sbnField, binderContextField, hookId)) {
+                failed++
+                continue
             }
+            hookedMethods.add(method)
         }
-        ModuleRuntime.logI("inflateViews hooked (${overloads.size} overload(s))")
+        // 一个钩子都没挂上 = 这条通道在本进程没生效，必须让调用方按原样重试（返回 false）。
+        // 绝不能报成功 —— 那正是上面那段说的"日志说成功、功能其实没有"。
+        if (hookedMethods.isEmpty()) {
+            ModuleRuntime.logE(
+                "inflateViews 一个都没装上（${overloads.size} 个重载全失败）",
+                IllegalStateException("all inflateViews overloads failed to hook"),
+            )
+            return false
+        }
+        if (failed == 0) {
+            ModuleRuntime.logI("inflateViews hooked (${overloads.size} overload(s))")
+        } else {
+            ModuleRuntime.logW(
+                "inflateViews hooked (${overloads.size - failed}/${overloads.size} overload(s) 挂上，$failed 个失败)"
+            )
+        }
         // 这一行是给 isInstalled() 用的收工信号：漏了它，OpticonModule 那道
         // 「已经装上了就别再试」的闸门永远不放行，每次 packageReady 都会
         // 重跑一遍 reportEnvironment（3 次 loadClass）和上面的重载扫描。
         rowInflationInstalled = true
         return true
     }
+
+    /**
+     * 装上一条 `inflateViews` 钩子。[hookId] 由调用方按参数表算好（多个重载不能共用一个 id）。
+     *
+     * @return 真的挂上了返回 true。`isAccessible` / `hook` / `intercept` 任何一步抛出来都算失败 ——
+     *   这一整段**不在框架 protective 的兜底范围内**（它只兜钩子体），抛出去会一路穿到
+     *   `onPackageReady`，连重试都排不上，所以这里自己兜住并把失败如实报进日志。
+     */
+    private fun installInflateHook(
+        module: XposedModule,
+        method: java.lang.reflect.Method,
+        entryClass: Class<*>?,
+        sbnField: Field?,
+        binderContextField: Field?,
+        hookId: String,
+    ): Boolean = runCatching {
+        method.isAccessible = true
+        module.hook(method).setId(hookId).setExceptionMode(EXCEPTION_MODE).intercept { chain ->
+            captureSystemContext(chain.thisObject, binderContextField)
+
+            for (arg in chain.args) {
+                if (arg == null) continue
+                // entryClass 为 null 时放行所有参数，靠能否取出 sbn 来判断
+                if (entryClass != null && !entryClass.isInstance(arg)) continue
+                runCatching {
+                    val sbn = readEntryField(arg, sbnField) as? StatusBarNotification ?: return@runCatching
+                    val context = ModuleRuntime.hostContext ?: return@runCatching
+                    // TYPE_RESOURCE 的图标必须用目标应用自己的 Resources 解码。
+                    //
+                    // ⚠ 这里**不能**带 CONTEXT_INCLUDE_CODE：
+                    // ActivityThread.getPackageInfo 只在设了这个 flag 时才去
+                    // mPackages 里取/建 LoadedApk，并走 updateApplicationInfo →
+                    // createOrUpdateClassLoaderLocked（本仓 ModuleRuntime 的注释里
+                    // 记着这条路径会再派发一次 packageReady，把自己重入进来）。
+                    // 不带它则走 mResourcePackages 那份「只有资源、没有代码」的缓存，
+                    // 类加载器根本不建。对侧就是纯资源解码：IconBitmap.fromResources
+                    // 只用 context.resources，NotificationIconPatch 也只解手上那个 Icon，
+                    // 两者都不需要从目标 APK 里 loadClass。
+                    // 框架自己也这么判：Icon.java 里 CONTEXT_INCLUDE_CODE 只在
+                    // sameAppWithProcess 时才加，跨应用取图标一律不带。
+                    //
+                    // CONTEXT_IGNORE_SECURITY 留着不花成本：ActivityThread 是先算
+                    // includeCode 再算 securityViolation，标准实现里这里已经用不上它，
+                    // 但 ROM 侧的判断改没改我们说不好，留个保险丝。
+                    val targetContext = runCatching {
+                        context.createPackageContext(
+                            sbn.packageName,
+                            Context.CONTEXT_IGNORE_SECURITY
+                        )
+                    }.getOrDefault(context)
+                    NotificationIconPatch.patch(sbn, targetContext)
+                }.onFailure { ModuleRuntime.logE("inflateViews patch failed", it) }
+            }
+            chain.proceed()
+        }
+    }.onFailure {
+        ModuleRuntime.logE("inflateViews hook failed: $hookId", it)
+    }.isSuccess
 
     /**
      * 从 inflateViews 的参数里把 sbn 抠出来。

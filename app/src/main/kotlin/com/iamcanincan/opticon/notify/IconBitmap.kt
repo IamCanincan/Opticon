@@ -13,6 +13,7 @@ import android.net.Uri
 import android.os.Build
 import androidx.core.content.res.ResourcesCompat
 import com.iamcanincan.opticon.runtime.MemberLookup
+import kotlin.math.roundToInt
 
 /**
  * 图标位图的取与造 —— **通知那半边**。
@@ -96,8 +97,13 @@ object IconBitmap {
      * 因为前景层常自带柔光 / 投影 / 半透明底板，照收就会把整张画布铺满淡色。
      * 整张都不透明时（自适应图标光栅化后常见）退化成亮度二值化，
      * 再按连通性区分「连到图标外部的背景」与「被包在里面的图形」。
-     * 只有透明像素占多数时才走 alpha —— 透明像素少而图形大时，
-     * alpha 描述的是整块底板的轮廓，照搬会压出一个白方块。详见 [binarize]。
+     * 只有**不透明像素不到七成**时才走 alpha（= 透明像素多于三成）—— 图形大到把画布铺满
+     * 七成以上时，alpha 描述的是整块底板的轮廓，照搬会压出一个白方块。详见 [binarize]。
+     *
+     * ⚠ 这一条以前写的是「透明像素 > 总数/20 **且** 不透明不到七成」—— 前半句是**恒真的死条件**
+     *   （不到七成 ⟺ 透明多于 30%，而 30% 永远大于 5%），留着它只会让「透明下限是 5%」这句话
+     *   看着像真的。真正在管这件事的只有 [SOLID_SHAPE_LIMIT] 一个数（2026-09-30 复核）。
+     *   本 KDoc 那句「透明像素占多数」也是那时候留下的旧口径，一并改成实际判据。
      *
      * 压不出像样的形状时返回 null，由上层保持原样 —— 详见 [MIN_SHAPE_RATIO]。
      *
@@ -116,11 +122,16 @@ object IconBitmap {
      */
     @Synchronized
     fun monochrome(input: Bitmap): Bitmap? {
-        val w = input.width
-        val h = input.height
+        // ⚠ 先按 [ICON_EDGE] 归一，**再**开数组 —— 下面所有按面积走的成本（两块 w×h 的
+        //   IntArray、Otsu、连通性洪泛，以及那四块 grow-only 缓冲）都直接等于这个尺寸。
+        //   不归一的话这里是没有上界的：`decode` 只有 TYPE_RESOURCE 走 rasterize（= 96），
+        //   TYPE_BITMAP / TYPE_DATA / TYPE_URI 三条都把**原尺寸**位图直接递进来。
+        val src = boundToIconEdge(input)
+        val w = src.width
+        val h = src.height
         val pixels = IntArray(w * h)
         val outputPixels = IntArray(w * h)
-        input.getPixels(pixels, 0, w, 0, 0, w, h)
+        src.getPixels(pixels, 0, w, 0, 0, w, h)
 
         var transparentCount = 0
         for (pixel in pixels) {
@@ -129,7 +140,7 @@ object IconBitmap {
 
         val total = pixels.size
         val solidRatio = (total - transparentCount).toFloat() / total
-        val useAlpha = transparentCount > total / 20 && solidRatio < SOLID_SHAPE_LIMIT
+        val useAlpha = solidRatio < SOLID_SHAPE_LIMIT
         val shapeCount = if (useAlpha) {
             // 透明底上的图形：alpha 本身就是最准的轮廓
             alphaShape(pixels, outputPixels)
@@ -147,7 +158,35 @@ object IconBitmap {
     }
 
     /**
-     * [monochrome] 的 **alpha 那一支**，单独抽出来是因为桌面侧也要走同一份。
+     * 把要分析的位图压到 [ICON_EDGE] 以内（长边对齐），已经够小就**原样返回**。
+     *
+     * 为什么需要这一步：`decode` 的几条载体的尺寸**不受我们控制** ——
+     * TYPE_RESOURCE 走 [rasterize]，尺寸由我们定；而 TYPE_BITMAP（应用直接塞进来的位图）、
+     * TYPE_DATA / TYPE_URI（整张 PNG 全尺寸解码）交上来的就是原始尺寸。而这里往下的每一笔
+     * 开销都按面积算：两块 `w×h` 的 IntArray、Otsu 的整张直方图、两次连通性洪泛，**外加
+     * 那四块 grow-only 缓冲会把面积永久留在 SystemUI 里**（10 B/像素，见 [classBufferCache]）。
+     * 一张 4000×3000 的小图标就是 ~120MB 常驻 + 两次 ~48MB 临时分配，而且全发生在通知
+     * 刷新那条线程上 —— 那是 OOM / ANR 的量级，不是"慢一点"。
+     *
+     * ⚠ 等比缩放，不是拉成正方形：状态栏只按 alpha 取形，把非方形图标拉变形等于改了它的形状。
+     * ⚠ **只有超限才缩放**，常规尺寸（含 [rasterize] 出来的 96）一个像素都不动 —— 这条改动
+     *   对既有行为是零影响，它是给那三条没有上界的载体兜底。
+     */
+    private fun boundToIconEdge(input: Bitmap): Bitmap {
+        val longEdge = maxOf(input.width, input.height)
+        if (longEdge <= ICON_EDGE) return input
+        val scale = ICON_EDGE.toFloat() / longEdge
+        val w = maxOf(1, (input.width * scale).roundToInt())
+        val h = maxOf(1, (input.height * scale).roundToInt())
+        return Bitmap.createScaledBitmap(input, w, h, true)
+    }
+
+    /**
+     * [monochrome] 的 **alpha 那一支**：透明底上的图形，轮廓就是它自己的 alpha。
+     *
+     * ⚠ 这里曾经写着「单独抽出来是因为桌面侧也要走同一份」—— 那句话**已经不成立了**：
+     *   桌面主题图标那条路整个搬进了 `circle/MonochromeMask.kt`，它有自己的 `A_SOLID` 与
+     *   自己的形状模型（见本文件头 23-27 行）。两边现在是各自一份，别再按"共用"去改它。
      *
      * 判据只有一条：**够不够实**（`alpha >= MIN_SHAPE_ALPHA`）。绝不能写成「有没有 alpha」——
      * 桌面图标的前景层常常自带一层很淡的柔光 / 投影 / 半透明底板
