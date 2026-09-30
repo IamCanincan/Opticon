@@ -335,6 +335,9 @@ internal object MonochromeMask {
     /** 第二遍降层次的"围住"标记：1 = 比主体亮且够远（降档候选）；2 = 这些候选里能从**空气**
      *  只踩候选格走得到的那些 —— 那是设计者的第二种颜色，不是镂空。用途见 [build] 里 `kc` 那段。 */
     var knockReach = ByteArray(0)
+    /** [propagateBands] 自己那份"这一格属于第几块**粗块**"（0 = 不是粗块）。
+     *  用途见那里：补一条带之前，先看它会不会把两块粗块连起来。自己的数组，不借 [visited]。 */
+    var bridgeLab = ShortArray(0)
     /** [propagateBands] 自己那份"这一格已经归进某条带"的标记。
      *  ⚠ **自己的数组，不借 [visited]** —— 借来的数组留脏数据抓不住，[region] 那条写过两遍了。 */
     var bandSeen = ByteArray(0)
@@ -926,7 +929,7 @@ internal object MonochromeMask {
         // 接回去的细带：几条、补了多少格。放在**整串末尾**，前面列位一个不动（`res.sh` 按列号读）。
         // `带内残` 是这些补上去的格里"颜色本来就离底很近"的那些 —— 它**故意不从 `残盘` 里消失**，
         // 只是换个名字记：这样"这一刀补了多少、其中有多少看着像底"两件事在日志里都看得见。
-        " 带补=${bands.first}/${bands.second} 带内残=$bfN/${if (bfN == 0) 0 else bfSum / bfN}",
+        " 带补=${bands.first}/${bands.second}(${bands.third}拒) 带内残=$bfN/${if (bfN == 0) 0 else bfSum / bfN}",
       ground.hyp,
       s.h0why,
       s.veto
@@ -1176,12 +1179,13 @@ internal object MonochromeMask {
    * 跑在**发档之后**（4.6）—— 原来放在发档之前，结果补几格会改掉色桶均值、让 `assignLevels` 重排，
    * "接一条线"被放大成"改一整张的台阶"。挪过来之后两者解耦（代价：语料档数 317→316，噪声级）。
    */
-  private fun propagateBands(out: IntArray, pixels: IntArray, w: Int, h: Int, box: Rect, s: Scratch): Pair<Int, Int> {
+  private fun propagateBands(out: IntArray, pixels: IntArray, w: Int, h: Int, box: Rect, s: Scratch): Triple<Int, Int, Int> {
     val total = w * h
     if (s.bandSeen.size < total) s.bandSeen = ByteArray(total) else s.bandSeen.fill(0)
     val q = s.queue
     val min = maxOf(64, box.width().toLong() * box.height() * BAND_MIN_SHARE_PERMILLE / 1000).toInt()
-    var bands = 0; var filled = 0
+    var bands = 0; var filled = 0; var bandsSkipped = 0
+    labelThickBlocks(out, w, h, box, s)
     for (y in box.top until box.bottom) {
       val row = y * w
       for (x in box.left until box.right) {
@@ -1216,18 +1220,97 @@ internal object MonochromeMask {
         //   原因是几何的：把一条发虚的渐变边印成一条实心线，**接好的部分与没接的部分之间必然有界**。
         //   所以这是「断线 ↔ 硬边」这对取舍本身，不是第三个常数能消掉的。
         var did = 0
+        // 先把**要补的那几格**列出来（不是整条带）—— 防桥判据只能看它们：一条描边天生沿着好几块
+        // 东西走，"整条带碰了两块粗块"是常态（第一版这么写，结果 5 张图 5 次全拒，接线等于没做）。
+        // 只有"要新填的格子自己同时挨着两块粗块"才是新搭一座桥。
+        val fill = IntArray(tail)
         for (k in 0 until tail) {
           val c = q[k]
-          val a = out[c] ushr 24
-          if (a >= tone) continue
+          if ((out[c] ushr 24) >= tone) continue
+          fill[did++] = c
+        }
+        // ⚠ 宁可留着断线，不搭新桥 —— 断线是"少画"，粘连是"画错"，后者更伤人。
+        //   `_harness/BridgeKt`：`55a45b9` 上线后细桥净增 14 座（sgameGlobal 3→11、王者荣耀 0→5），
+        //   正好落在补带开火最猛的那两张上。
+        if (did == 0) continue
+        if (cellsBridgeBlocks(fill, did, w, h, s)) { bandsSkipped++; continue }
+        for (k in 0 until did) {
+          val c = fill[k]
           out[c] = (tone shl 24) or 0x00FFFFFF
           s.bandSeen[c] = 3.toByte()          // 3 = 这一格是**这一刀补上去的**，体检时要分得出来
-          did++
         }
         if (did > 0) { bands++; filled += did }
       }
     }
-    return Pair(bands, filled)
+    return Triple(bands, filled, bandsSkipped)
+  }
+
+  /**
+   * 给"粗块"编号写进 [Scratch.bridgeLab]：出墨 ≥128，且**左右上下各 3 格都还是墨**
+   * （= 这一处至少 6px 粗，不是抗锯齿的绒毛或一条细线）。同一块给同一个号。
+   * 只做一次，全框 O(n)；不另开距离场数组（那个十字判据本身就够用，省 295 KB/线程）。
+   */
+  private fun labelThickBlocks(out: IntArray, w: Int, h: Int, box: Rect, s: Scratch) {
+    val total = w * h
+    if (s.bridgeLab.size < total) s.bridgeLab = ShortArray(total) else s.bridgeLab.fill(0)
+    val q = s.queue
+    fun thickAt(i: Int): Boolean {
+      if ((out[i] ushr 24) < 128) return false
+      val x = i % w; val y = i / w
+      for (d in 1..3) {
+        if (x - d < 0 || x + d >= w || y - d < 0 || y + d >= h) return false
+        if ((out[i - d] ushr 24) < 128 || (out[i + d] ushr 24) < 128 ||
+          (out[i - d * w] ushr 24) < 128 || (out[i + d * w] ushr 24) < 128
+        ) return false
+      }
+      return true
+    }
+    var lab: Short = 0
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      for (x in box.left until box.right) {
+        val i0 = row + x
+        if (s.bridgeLab[i0] != 0.toShort() || !thickAt(i0)) continue
+        lab++
+        if (lab == Short.MAX_VALUE) return
+        var head = 0; var tail = 0
+        q[tail++] = i0; s.bridgeLab[i0] = lab
+        while (head < tail) {
+          val c = q[head++]; val cx = c % w; val cy = c / w
+          for (oy in -1..1) for (ox in -1..1) {
+            if (ox == 0 && oy == 0) continue
+            val nx = cx + ox; val ny = cy + oy
+            if (nx < box.left || ny < box.top || nx >= box.right || ny >= box.bottom) continue
+            val j = ny * w + nx
+            if (s.bridgeLab[j] == 0.toShort() && thickAt(j)) { s.bridgeLab[j] = lab; q[tail++] = j }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * 这些**要新填的格子**是不是同时挨着两块不同的粗块？是 → 填它们等于搭一座桥（粘连），别填。
+   *
+   * ⚠ 判据必须只看"要填的格"，不能看"整条带"：一条描边本来就沿着好几块东西走，
+   * 第一版按整条带判，5 张图 5 次全拒、接线等于没做（细桥倒是从 146 掉回 130 了 —— 那是把
+   * 孩子和水一起倒掉）。
+   */
+  private fun cellsBridgeBlocks(fill: IntArray, n: Int, w: Int, h: Int, s: Scratch): Boolean {
+    var a = 0; var b = 0                                     // 最多记两个号，见到第三个就够判了
+    val lab = s.bridgeLab
+    for (k in 0 until n) {
+      val c = fill[k]; val cx = c % w; val cy = c / w
+      for (oy in -1..1) for (ox in -1..1) {
+        if (ox == 0 && oy == 0) continue
+        val nx = cx + ox; val ny = cy + oy
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+        val v = lab[ny * w + nx].toInt()
+        if (v == 0 || v == a || v == b) continue
+        if (a == 0) a = v else if (b == 0) b = v else return true
+      }
+    }
+    return a != 0 && b != 0
   }
 
   /**
