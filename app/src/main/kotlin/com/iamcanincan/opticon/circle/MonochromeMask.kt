@@ -770,6 +770,11 @@ internal object MonochromeMask {
     // 跑在桌面的图标加载线程上，多一趟全框遍历是白花的。
     var modalInk = -1; var modalN = 0L
     for ((k, v) in cDep) if (v[0] > ground.zero && v[2] > modalN) { modalN = v[2]; modalInk = k }
+    // 主体那一色的 Lab。下面那道"主体不许被自己挖空"的闸**按这个比**，不按精确 RGB 比 ——
+    // 理由见 [MODAL_INK_DE]。
+    val miL = if (modalInk < 0) 0 else labChannel(modalInk, 0)
+    val miA = if (modalInk < 0) 0 else labChannel(modalInk, 1)
+    val miB = if (modalInk < 0) 0 else labChannel(modalInk, 2)
     val out = IntArray(total)
     var knocked = 0
     for (y in box.top until box.bottom) {
@@ -822,7 +827,8 @@ internal object MonochromeMask {
         //   那两列的 `离体=175`、参照 L 从 100 翻到 49）。加上这一条之后 384/768 回到 100%，
         //   而「镂空刻出来了」那条性质照旧绿 —— 洞本来就是**另一种**颜色，不是主体的颜色。
         if ((s.labL[i].toInt() and 0xffff) - bodyLight(i, s) > 0 && kc[i] != 2.toByte() &&
-          (pixels[i] and 0x00FFFFFF) != modalInk
+          deltaE(s.labL[i].toInt() and 0xffff, s.labA[i].toInt() and 0xffff,
+            s.labB[i].toInt() and 0xffff, miL, miA, miB) > (MODAL_INK_DE shl 6)
         ) {
           val off = s.off[i].toInt() and 0xffff
           val k = CURVE[((off - body.zero) * 255 / body.span).coerceIn(0, 255)]
@@ -3315,6 +3321,21 @@ internal object MonochromeMask {
    *   `MonochromeSynth` 的"居中盘"那一类。**这一族要修，得修归属，不是修这一刀。**
    */
   private const val HOLLOW = 88
+
+  /**
+   * "主体自己那一色不许被当成高光压下去"（[build] 第二遍里那道闸）算不算"同一色"的容差，
+   * 单位 ΔE76 真值。**原来这道闸是按精确 RGB 比的**，Google 翻译
+   * （`com.google.android.apps.translate`）把它否掉了：
+   * 那只白色的 "G" 是 `#F5F5F5`，而右半边的白是 `#EEEEEE`/`#EFEFEF` —— **ΔE 只有 2.5**，
+   * 肉眼分不出的两个白，于是同一张图上拿到**相反**的处理：右半边交 255，G 被压到 **36/255**，
+   * 品牌字标在屏幕上几乎看不见（`_harness/LineDbg --row=192`：G 与右半边的源 L 都是 94~96、
+   * dep 都是 178~181，只有交付差七倍 —— 差别全在这道"是不是主体那一色"上）。
+   *
+   * 6 这个数不是新调的旋钮：它就是 [TOL_MIN] 那条"肉眼分不出"的量级，比它更小的差别本来
+   * 就不该在遮罩上分出两种结果。**不再往上放**：钉着的那条「镂空刻出来了」里洞是**另一种颜色**
+   * （差得远的色，不是差 2.5 的白），容差宽到看得出的差别，就会开始保护真该刻的洞。
+   */
+  private const val MODAL_INK_DE = 6
 
   /**
    * 把每格的底色**传播**到整张画布：每个像素的参照色 = 离它最近的那块底的色。
