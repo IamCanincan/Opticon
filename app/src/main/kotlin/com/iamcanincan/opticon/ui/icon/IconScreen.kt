@@ -61,7 +61,8 @@ private val OTHER_RESTARTABLE =
   )
 
 /**
- * 「图标」页：只管裁圆这件事 —— 总开关，以及会影响它的那些系统行为说明。
+ * 「图标」页：这台手机**桌面图标**上的两件事 —— 裁圆，以及未适配图标的单色层合成 ——
+ * 各自的开关，加上会影响它们的系统行为说明。
  *
  * 作用域清单 / 启用步骤 / 验证都是**模块级**内容（跟「图标」无关，通知那一半也要用），
  * 已经移到「模块」页，见 [com.iamcanincan.opticon.ui.module.ModuleScreen]。
@@ -244,7 +245,7 @@ private fun EffectCard() {
 /** 说明要点：带圆点的列表。 */
 @Composable
 private fun NotesCard() {
-  // 只放**裁圆自己**的注意事项。模块级的那些（框架 daemon 启动时机之类）
+  // 只放**这两个功能自己**的注意事项。模块级的那些（框架 daemon 启动时机之类）
   // 属于「模块」页的启用步骤，别在这里再抄一遍。
   val notes =
     listOf(

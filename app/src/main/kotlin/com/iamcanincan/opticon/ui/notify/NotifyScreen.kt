@@ -73,7 +73,6 @@ fun NotifyScreen() {
     ) {
         StatusStrip(enabled = enabled)
 
-        SectionLabel(stringResource(R.string.notify_section_behavior))
         // 内容卡一律 ElevatedCard —— 与「图标」「模块」两页同一种卡片语言。
         // 之前这里是「白底 + 细边框」的 Surface，三页摆在一起像是两个不同的应用。
         ElevatedCard(shape = MaterialTheme.shapes.large) {

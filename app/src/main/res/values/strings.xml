@@ -168,7 +168,6 @@
 
     <!-- ============ 「通知」页 ============ -->
 
-    <string name="notify_section_behavior">行为</string>
     <string name="notify_switch_title">修复通知小图标</string>
     <string name="notify_switch_desc">关闭后所有通知都不处理</string>
 

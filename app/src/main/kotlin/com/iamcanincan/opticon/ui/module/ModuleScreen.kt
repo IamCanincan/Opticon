@@ -55,8 +55,6 @@ import com.iamcanincan.opticon.ui.Section
 import com.iamcanincan.opticon.ui.SectionLabel
 import kotlinx.coroutines.launch
 
-/** 桌面包名（类原生 / Pixel 两套），发广播点名用。 */
-
 /**
  * 「模块」页：两个功能共用的东西 —— 作用域、启用步骤、验证方式、运维操作。
  *
