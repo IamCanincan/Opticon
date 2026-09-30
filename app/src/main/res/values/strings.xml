@@ -127,8 +127,11 @@
         桌面替「未适配」应用现场生成的那张单色遮罩，和形状无关。
     -->
     <string name="section_mono">单色图标</string>
-    <string name="mono_switch_title">未适配的图标由本模块生成单色层</string>
+    <string name="mono_switch_title">未适配图标：本模块补单色层</string>
     <string name="mono_switch_body">Android 16 强制取色时，没做单色适配的应用由本模块现场压一张剪影交给桌面。关掉 = 完全不介入，桌面会照它自己的算法压（把亮度当不透明度，等于假定「亮的就是墨」），那与主题图标的约定正好相反，屏幕上这批图标就是反的 —— 所以这一条是整体逃生口，不是口味开关。</string>
+    <!-- 效果示意图两块色块下面那行小字：左=系统原样、右=裁完。用短词，别和 effect_title 重复 -->
+    <string name="effect_caption_before">原样</string>
+    <string name="effect_caption_after">裁圆</string>
 
     <!-- 说明 -->
     <string name="section_notes">说明</string>

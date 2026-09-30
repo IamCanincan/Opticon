@@ -1,18 +1,23 @@
 package com.iamcanincan.opticon.ui
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -24,8 +29,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 
@@ -90,26 +98,79 @@ internal fun ScreenList(content: LazyListScope.() -> Unit) {
   )
 }
 
+/**
+ * 全应用统一的卡片：一档底色 + **1dp `outlineVariant` 描边** + 内边距。
+ *
+ * ## 为什么不是 `ElevatedCard`
+ * `ElevatedCard` 的默认底是 `surfaceContainerLow` **加一层阴影** —— 而深色主题下阴影几乎
+ * 看不见，`surfaceContainerLow` 又只比页面背景亮一档，于是整页卡片糊成一坨：真机深色下
+ * 卡片边界基本读不出来（2026-09-30 真机截图复核）。描边不依赖阴影、也不依赖"深色里那一档
+ * 明度差能不能看见"，两套主题下都成立。
+ *
+ * ⚠ 这条约定其实早就写在「通知」页的文件头（"卡片统一 24dp 圆角 + 1dp outlineVariant 描边"），
+ *   只是当时**没有任何一张卡真的实现了它**。现在这里是全应用唯一的卡片构造入口。
+ *
+ * ⚠ 内层元素（[IconTile] 的底板、命令块、缩略色块）用 `surfaceContainerHighest`，
+ *   比卡片再亮一档 —— 改这里的底色就要回去核那几个内层色，别让它们和卡面撞成同一个色。
+ *
+ * @param padding 卡内统一内边距。分隔线要通到卡边的（作用域清单 / 步骤卡）传 `0.dp`，
+ *   由行自己带左右内边距。
+ */
+@Composable
+internal fun OpticonCard(
+  modifier: Modifier = Modifier,
+  containerColor: Color = MaterialTheme.colorScheme.surfaceContainerLow,
+  contentColor: Color = MaterialTheme.colorScheme.onSurface,
+  padding: Dp = 16.dp,
+  content: @Composable ColumnScope.() -> Unit,
+) {
+  Card(
+    modifier = modifier.fillMaxWidth(),
+    shape = MaterialTheme.shapes.large,
+    colors =
+      CardDefaults.cardColors(containerColor = containerColor, contentColor = contentColor),
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+  ) {
+    Column(modifier = Modifier.padding(padding), content = content)
+  }
+}
+
 /** 小标题 + 它领的那张卡。分成一个 item，才能把组内间距压到比组间距小。 */
 @Composable
 internal fun Section(text: String, content: @Composable () -> Unit) {
   Column {
     SectionLabel(text = text)
-    Spacer(modifier = Modifier.height(10.dp))
+    Spacer(modifier = Modifier.height(12.dp))
     content()
   }
 }
 
-
-/** 分组小标题（小字、次要色、带左内边距）。 */
+/**
+ * 分组小标题：主色小竖条 + 标题字。
+ *
+ * 原来只是一行 `labelLarge` + `onSurfaceVariant` —— 和卡里的正文（`bodySmall`、同一个次要色）
+ * 在字号与颜色上几乎同重，于是"这一段讲什么"在屏幕上读不出来，整页看着就是一堆同样大小的
+ * 灰字（2026-09-30 真机复核）。加一条 4dp 主色竖条把层级立起来。
+ */
 @Composable
 internal fun SectionLabel(text: String) {
-  Text(
-    text = text,
-    style = MaterialTheme.typography.labelLarge,
-    color = MaterialTheme.colorScheme.onSurfaceVariant,
+  Row(
+    verticalAlignment = Alignment.CenterVertically,
     modifier = Modifier.padding(start = 4.dp),
-  )
+  ) {
+    Box(
+      modifier =
+        Modifier.size(width = 4.dp, height = 16.dp)
+          .clip(RoundedCornerShape(2.dp))
+          .background(MaterialTheme.colorScheme.primary)
+    )
+    Spacer(modifier = Modifier.width(10.dp))
+    Text(
+      text = text,
+      style = MaterialTheme.typography.titleSmall,
+      color = MaterialTheme.colorScheme.onSurface,
+    )
+  }
 }
 
 /**
@@ -155,6 +216,9 @@ internal fun IconTile(
  *   不传 [trailing] 时连那 8dp 的右侧间隔也不生成 —— 模块页的状态卡右边直接收口。
  *   至于「开关该不该待在这一行」，两页没留过说明，别当成定死的约束。
  *
+ * ⚠ [modifier] 是给**整张卡**的。带开关的那张卡要传 `Modifier.toggleable(role = Role.Switch)`：
+ *   整行可点既是更好的触控目标，也是读屏唯一能拿到名字的形态 —— 详见 `SwitchRow` 那段说明。
+ *
  * @param containerColor 卡片底色，同时当图标的颜色（见上面的反色说明）
  * @param contentColor 卡上的文字色，同时当图标方块的底色
  * @param trailing 右侧控件，为 null 时整行不留右侧间隔
@@ -166,9 +230,11 @@ internal fun HeroCard(
   contentColor: Color,
   title: String,
   body: String,
+  modifier: Modifier = Modifier,
   trailing: (@Composable () -> Unit)? = null,
 ) {
   Card(
+    modifier = modifier.fillMaxWidth(),
     colors = CardDefaults.cardColors(containerColor = containerColor),
     shape = MaterialTheme.shapes.large,
   ) {
@@ -182,13 +248,13 @@ internal fun HeroCard(
       Column(modifier = Modifier.weight(1f)) {
         Text(
           text = title,
-          style = MaterialTheme.typography.titleSmall,
+          style = MaterialTheme.typography.titleMedium,
           color = contentColor,
         )
         Spacer(modifier = Modifier.height(4.dp))
         Text(
           text = body,
-          style = MaterialTheme.typography.bodySmall,
+          style = MaterialTheme.typography.bodyMedium,
           color = contentColor,
         )
       }

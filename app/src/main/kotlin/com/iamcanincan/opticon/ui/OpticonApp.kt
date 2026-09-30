@@ -7,6 +7,7 @@ import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -206,13 +207,17 @@ fun OpticonApp() {
 /**
  * 悬浮药丸导航：四格，选中那格展开文字。
  *
- * ## 底色为什么用 `surface` 而不是某个 container 色
- * 页面背景本身就是 `background`（很浅的粉白），而 `surfaceContainerHigh` 在同色系里
- * 只比它深一点点 —— 药丸和背景糊在一起，看着就像"底部垫了一块背景"而不是一个控件。
- * 用最亮的 `surface`（纯白）拉开明度差，再靠阴影把它托起来，才是「悬浮」的观感。
+ * ## 底色为什么不是 `surface`
+ * 这条原来写的是"用最亮的 `surface`（纯白）拉开明度差"，但两套配色下它都不成立：
+ * 写死的浅色方案里 `surface` 与 `background` **是同一个值**（`0xFFFFF8F8`），
+ * 动态取色下两者也几乎同色；深色下 `surface` 反而比背景更暗。也就是说药丸与背景的区分
+ * 一直只靠 `shadowElevation` —— 而深色里阴影基本看不见（真机截图复核）。
  *
- * ⚠ 改底色时记住这条：**药丸必须在浅色和深色下都和背景有明显明度差**。
- * 深色主题下 `surface` 同样比 `background` 亮，两边都成立。
+ * 现在用 `surfaceContainerHigh` + 1dp `outlineVariant` 描边：前者在两套主题下都与背景有
+ * 一档明确差值，后者把边界钉死，不依赖阴影。**与卡片同一套做法**（见 [OpticonCard]）。
+ *
+ * ⚠ 改底色时记住这条：**药丸必须在浅色和深色下都和背景有明显差值**，
+ * 而"靠阴影"在深色下不算数。
  */
 @Composable
 private fun FloatingNavBar(
@@ -223,8 +228,10 @@ private fun FloatingNavBar(
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(28.dp),
-        color = MaterialTheme.colorScheme.surface,
-        shadowElevation = 10.dp,
+        // 底色与描边的理由见 [FloatingNavBar] 的说明（不能再退回 `surface`）
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shadowElevation = 8.dp,
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),

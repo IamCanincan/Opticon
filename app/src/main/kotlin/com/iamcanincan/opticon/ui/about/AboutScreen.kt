@@ -1,22 +1,26 @@
 package com.iamcanincan.opticon.ui.about
 
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
-import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Update
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
@@ -26,13 +30,18 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.res.colorResource
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.BuildConfig
 import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.ui.IconTile
+import com.iamcanincan.opticon.ui.OpticonCard
 import com.iamcanincan.opticon.ui.RepoUrl
 import com.iamcanincan.opticon.ui.ScreenList
 import com.iamcanincan.opticon.ui.Section
@@ -79,24 +88,26 @@ internal fun AboutScreen(state: UpdateState, onCheck: () -> Unit) {
 @Composable
 private fun PrivacyCard() {
   val scheme = MaterialTheme.colorScheme
-  ElevatedCard(shape = MaterialTheme.shapes.large) {
+  OpticonCard {
     Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.Top) {
       IconTile(
         icon = Icons.Default.Lock,
-        containerColor = scheme.tertiaryContainer,
-        contentColor = scheme.onTertiaryContainer,
+        // 中性底板：琥珀（tertiary）留给"要动手、有代价"的运维操作，
+        // 隐私说明是纯信息，不该抢那个颜色（同一套语言见「图标」页）。
+        containerColor = scheme.surfaceContainerHighest,
+        contentColor = scheme.onSurfaceVariant,
       )
       Spacer(Modifier.width(14.dp))
       Column {
         Text(
           text = stringResource(R.string.privacy_title),
-          style = MaterialTheme.typography.titleSmall,
+          style = MaterialTheme.typography.titleMedium,
           fontWeight = FontWeight.SemiBold,
         )
         Spacer(Modifier.height(5.dp))
         Text(
           text = stringResource(R.string.privacy_body),
-          style = MaterialTheme.typography.bodySmall,
+          style = MaterialTheme.typography.bodyMedium,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
       }
@@ -104,44 +115,61 @@ private fun PrivacyCard() {
   }
 }
 
-/** 关于：版本/许可 + 跳转 GitHub 的按钮。 */
+/**
+ * 关于：版本/许可 + 跳转 GitHub 的按钮。
+ *
+ * ⚠ 这里**不重复 App 名**：顶栏已经有它了，每页再来一遍标记 + 版本是重复
+ *   （README「界面」一节记的就是这条）。所以这块只放**图标本体 + 版本 + 说明 + 入口**，
+ *   内容居中 —— 本页本来就短，居中的一块比左上角一行更能撑住这一页。
+ */
 @Composable
 private fun AboutCard() {
   val uriHandler = LocalUriHandler.current
 
-  ElevatedCard(shape = MaterialTheme.shapes.large) {
-    Column(modifier = Modifier.padding(16.dp)) {
-      Row(verticalAlignment = Alignment.CenterVertically) {
-        IconTile(
-          icon = Icons.Default.Info,
-          containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-          contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+  OpticonCard {
+    Column(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+      // 桌面图标本体（背景 + 前景两个 vector）当品牌标记：与桌面上那个图标同源，
+      // 底色取 `@color/opticon_icon_background`（品牌淡粉，全 Android 版本固定不跟随壁纸）。
+      // ⚠ 必须带描边：那抹淡粉在**浅色**卡面上几乎与卡同色（#FCE4EC on 近白），
+      //   没有这条线就只剩一个悬空的黑字。
+      Box(
+        modifier =
+          Modifier.size(64.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(colorResource(R.color.opticon_icon_background))
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(18.dp))
+      ) {
+        Image(
+          painter = painterResource(R.drawable.ic_launcher_foreground),
+          contentDescription = null,
+          modifier = Modifier.fillMaxSize(),
         )
-        Spacer(modifier = Modifier.width(14.dp))
-        Column(modifier = Modifier.weight(1f)) {
-          Text(
-            text = stringResource(R.string.about_version, BuildConfig.VERSION_NAME),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-          )
-          Spacer(modifier = Modifier.height(2.dp))
-          Text(
-            text = stringResource(R.string.about_body),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
       }
-      Spacer(modifier = Modifier.height(12.dp))
-      Button(
+
+      Spacer(modifier = Modifier.height(14.dp))
+      Text(
+        text = stringResource(R.string.about_version, BuildConfig.VERSION_NAME),
+        style = MaterialTheme.typography.titleMedium,
+        color = MaterialTheme.colorScheme.onSurface,
+      )
+      Spacer(modifier = Modifier.height(6.dp))
+      Text(
+        text = stringResource(R.string.about_body),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+      )
+
+      Spacer(modifier = Modifier.height(18.dp))
+      // 容器色（tonal）而不是实心主色：这一页的主操作是上面「检查更新」那一个，
+      // 两个都用实心主色的话，"哪个是重点"在屏幕上读不出来。
+      FilledTonalButton(
         onClick = { uriHandler.openUri(RepoUrl) },
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
-        colors =
-          ButtonDefaults.buttonColors(
-            containerColor = MaterialTheme.colorScheme.primary,
-            contentColor = MaterialTheme.colorScheme.onPrimary,
-          ),
       ) {
         Icon(
           imageVector = Icons.AutoMirrored.Filled.OpenInNew,
@@ -203,8 +231,8 @@ private fun UpdateCard(
   onCheck: () -> Unit,
   onOpenPage: (String) -> Unit,
 ) {
-  ElevatedCard(shape = MaterialTheme.shapes.large) {
-    Column(modifier = Modifier.padding(16.dp)) {
+  OpticonCard {
+    Column {
       Row(verticalAlignment = Alignment.CenterVertically) {
         IconTile(
           icon = Icons.Default.Update,
@@ -215,13 +243,13 @@ private fun UpdateCard(
         Column {
           Text(
             text = stringResource(R.string.update_title),
-            style = MaterialTheme.typography.titleSmall,
+            style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.onSurface,
           )
           Spacer(modifier = Modifier.height(2.dp))
           Text(
             text = stringResource(R.string.update_current, version),
-            style = MaterialTheme.typography.bodySmall,
+            style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
         }
@@ -230,7 +258,7 @@ private fun UpdateCard(
       Spacer(modifier = Modifier.height(12.dp))
       Text(
         text = stringResource(R.string.update_disclaimer),
-        style = MaterialTheme.typography.bodySmall,
+        style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
 

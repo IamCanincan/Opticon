@@ -1,6 +1,7 @@
 package com.iamcanincan.opticon.ui.module
 
 import android.content.ClipData
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -23,7 +24,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -50,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.ui.HeroCard
 import com.iamcanincan.opticon.ui.IconTile
+import com.iamcanincan.opticon.ui.OpticonCard
 import com.iamcanincan.opticon.ui.ScreenList
 import com.iamcanincan.opticon.ui.Section
 import kotlinx.coroutines.launch
@@ -94,6 +96,7 @@ private fun StatusCard() {
 }
 
 /** 作用域清单：一张卡片里 10 行，每行 = 图标方块 + 标题 + 描述 + 标签。 */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ScopeGroup() {
   val scopes =
@@ -170,13 +173,21 @@ private fun ScopeGroup() {
   var expanded by rememberSaveable { mutableStateOf(false) }
   val visible = if (expanded) scopes else scopes.filter { it.tag != ScopeTag.OPTIONAL }
 
-  ElevatedCard(shape = MaterialTheme.shapes.large) {
-    Column {
+  // ⚠ 展开 / 收起要**跟着主题动**：README「界面」一节把「列表展开」也算在 `motionScheme` 里，
+  //   而这里原来是一帧跳过去的（`visible` 直接换列表）。`animateContentSize` 让卡片高度
+  //   按 Expressive 的弹簧参数长出来 —— 参数取自主题，不写死时长。
+  OpticonCard(padding = 0.dp) {
+    Column(
+      modifier =
+        Modifier.animateContentSize(
+          animationSpec = MaterialTheme.motionScheme.defaultSpatialSpec()
+        )
+    ) {
       Text(
         text = stringResource(R.string.scope_hint),
-        style = MaterialTheme.typography.bodySmall,
+        style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
       )
       HorizontalDivider()
       visible.forEachIndexed { index, item ->
@@ -254,7 +265,7 @@ private fun ScopeRow(item: ScopeItem) {
       Spacer(modifier = Modifier.height(2.dp))
       Text(
         text = stringResource(item.descRes),
-        style = MaterialTheme.typography.bodySmall,
+        style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
     }
@@ -288,12 +299,12 @@ private fun StepsCard() {
       R.string.step_4 to R.string.step_4_hint,
     )
 
-  ElevatedCard(shape = MaterialTheme.shapes.large) {
+  OpticonCard(padding = 0.dp) {
     Column {
       // 「启用步骤」已经在外层 SectionLabel 里写了，卡内不再重复。
       steps.forEachIndexed { index, (titleRes, hintRes) ->
         if (index > 0) HorizontalDivider()
-        Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+        Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
           Surface(
             shape = MaterialTheme.shapes.extraSmall,
             // 步骤是有顺序的：用主色底把它和"并列关系的列表"区分开。
@@ -343,12 +354,12 @@ private fun VerifyCard(onNotify: (String) -> Unit) {
   val clipboard = LocalClipboard.current
   val scope = rememberCoroutineScope()
 
-  ElevatedCard(shape = MaterialTheme.shapes.large) {
-    Column(modifier = Modifier.padding(16.dp)) {
+  OpticonCard {
+    Column {
       // 「验证是否生效」已经在外层 SectionLabel 里写了。
       Text(
         text = stringResource(R.string.verify_body),
-        style = MaterialTheme.typography.bodySmall,
+        style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
       Spacer(modifier = Modifier.height(12.dp))
