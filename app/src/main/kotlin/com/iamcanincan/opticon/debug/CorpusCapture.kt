@@ -192,8 +192,8 @@ internal object CorpusCapture {
   }
 
   /**
-   * 只列桌面上能看见的应用 —— 与「按应用合成」那张调试面板（`ui.icon.MonoOverrideDialog`）
-   * 同一口径（`queries` 已经把这类可见性放开了，见 AndroidManifest）。
+   * 只列桌面上能看见的应用 —— 只有它们会被桌面拿去问单色层，列别的东西没有意义
+   * （`queries` 已经把这类可见性放开了，见 AndroidManifest）。
    */
   private fun launchable(pm: PackageManager, filter: String): List<ApplicationInfo> =
     runCatching {

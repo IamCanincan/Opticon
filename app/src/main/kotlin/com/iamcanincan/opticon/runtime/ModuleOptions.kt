@@ -42,17 +42,6 @@ data class ModuleOptions(
      */
     val monoInvert: Boolean = true,
 
-    /**
-     * **按应用的合成旁路**（调试用）：包名 → 这张归谁画。`true`/没登记 = 我们合成，
-     * `false` = 交回桌面自己压遮罩（屏幕上就是反的）。
-     *
-     * 为什么要有这张表：判据的方向现在还没有可信依据（真机回传的两张遮罩，一张像"亮=墨"、
-     * 一张像"暗=墨"，互相打脸），而他需要在真机上一张一张看到结果。这张表就是"判据先交给人
-     * 定"的临时通道 —— 它必须跟着配置一起跨进程（被注入的桌面读不到本应用的 SharedPreferences
-     * 文件），所以序列化成一段文本走 provider 那一列，见 [ModulePrefs.KEY_MONO_OVERRIDES]。
-     */
-    val monoOverrides: Map<String, Boolean> = emptyMap(),
-
     /** 通知图标的总开关：关掉后通知小图标保持系统原样 */
     val notifyEnabled: Boolean = true,
 
@@ -63,24 +52,6 @@ data class ModuleOptions(
 ) {
 
     /**
-     * 这个应用的单色层要不要由我们合成。
-     *
-     * 纯合成模式下默认全是"合成"；表里只登记例外 —— 标成 `false` 的那个应用**不合成**，
-     * 交回桌面自己出遮罩（在屏幕上就是反的）。留着这条退路的理由：合成在某一张上错了、
-     * 而人不记得它本来长什么样时，这是唯一不改代码就能收回的手段。
-     *
-     * 顺序是硬的：总开关关掉 = 一张都不合成（那是"完全交回桌面"的逃生口，旁路表越过不了它）；
-     * 然后按应用；都没登记才落到默认的"合成"。
-     *
-     * ⚠ 认不出包名的图标（`IconNames` 打成 `?`）旁不了 —— 那张表的键就是这个包名。
-     */
-    fun synthesizeFor(pkg: String?): Boolean {
-        if (!monoInvert) return false
-        if (pkg != null) monoOverrides[pkg]?.let { return it }
-        return true
-    }
-
-    /**
      * 一行日志摘要。
      *
      * 排配置通道的问题全靠它 —— 只打「读到了没有」分不清
@@ -88,12 +59,5 @@ data class ModuleOptions(
      */
     fun describe(): String =
         "circle=$circleEnabled monoInvert=$monoInvert notify=$notifyEnabled" +
-            " preserveTinted=$preserveTinted" +
-            // 旁路表有没有跨进程传过来，全靠这一项：界面上标了、这里却是 0，
-            // 那就是 provider 那一列没读到（而不是"读到了但值为空"）。
-            // 表小（手工标的量级）时把键一起打出来 —— 图标那边打的是它自己认出的包名，
-            // 两个数同屏才能一眼看出"没生效"是**键对不上**还是**那张根本没重新合成**。
-            " 合成表=${monoOverrides.size}" +
-            (if (monoOverrides.isEmpty() || monoOverrides.size > 6) "" else
-                " ${monoOverrides.entries.joinToString(",") { "${it.key}=${it.value}" }}")
+            " preserveTinted=$preserveTinted"
 }

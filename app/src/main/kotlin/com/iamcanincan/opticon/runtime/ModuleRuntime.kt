@@ -287,10 +287,7 @@ object ModuleRuntime {
                     ) != 0,
                     notifyEnabled = cursor.getInt(
                         cursor.getColumnIndexOrThrow(ModulePrefs.COLUMN_NOTIFY_ENABLED)
-                    ) != 0,
-                    monoOverridesRaw = cursor.getString(
-                        cursor.getColumnIndexOrThrow(ModulePrefs.COLUMN_MONO_OVERRIDES)
-                    )
+                    ) != 0
                 )
                 logStateChange("provider ok: ${options.describe()}")
                 options

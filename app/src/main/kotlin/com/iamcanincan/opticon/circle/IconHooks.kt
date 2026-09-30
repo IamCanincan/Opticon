@@ -482,8 +482,8 @@ private fun hookIconLoader(xposed: XposedInterface, method: Method): Boolean =
           // 解析不出应用图标时系统会退回这个默认图标，它同样不是圆的。
           if (args.indexOfFirst { (it as? Int) == DEFAULT_APP_ICON } < 0) {
             // 没打标记的加载（抽屉里那一批、嵌套在内层的）以前直接放行，名字表里就查不到它。
-            // 日志打成 `?` 还只是难看 —— **「按应用合成」用的键就是这个名字**，于是那几张
-            // 表现为"总开关会变、单独那个开关怎么标都不变"（真机 800 张里 73 张是 `?`）。
+            // 日志打成 `?` 就不只是难看了：那几张没法用"报一个应用名"grep 到它那一行，
+            // 判据对不对又只能靠那些行看（真机 800 张里 73 张是 `?`）。
             // 只对结果确实是自适应图标的补登记：那是本功能关心的全集，也免得给每个
             // drawable 都问一次资源名。
             val passed = chain.proceed()
@@ -1253,8 +1253,8 @@ private fun hookMaskFallThrough(xposed: XposedInterface, classLoader: ClassLoade
  * 这是主路径，也是唯一路径：桌面只在 `getMonochrome()` 返回 null 时才去 new 它自己的
  * `MonochromeIconFactory`，而那个算法是「亮度当 alpha」（2026-09-24 在真机上量定，见
  * [MonochromeMask] 的极性一节）—— 与 themed 图标的约定正好相反。上游直接交图，比"让它
- * 算错再翻回来"干净：翻转要事后猜极性，而猜就需要认得这张图是谁（下面那个按应用旁路
- * 就是这条链上唯一不可靠的一环）。
+ * 算错再翻回来"干净：翻转要事后猜极性，而猜就需要认得这张图是谁 —— 而"认得是谁"正是这一路
+ * 最不可靠的一环（可靠性见 [IconNames]）。
  *
  * ⚠ hook 的是 framework 的类，部分框架对 bootclasspath 上的类挂钩有限制；挂不上 = 桌面
  * 照它自己的路子出遮罩，屏幕上就是反的。所以 [hookMaskPolarity] 保留成**漏接计数器**：
@@ -1272,20 +1272,7 @@ private fun hookSynthesizedMonochrome(xposed: XposedInterface) {
       xposed.hook(method).intercept { chain ->
         // 应用自己提供了单色图标：原样透传，一个像素都不碰（他的硬规则）。
         val original = chain.proceed() as? Drawable
-        if (original != null) {
-          // 这一路原本完全静默，于是"它怎么没被合成"分不清是「本来就适配」还是「没重画」。
-          // ⚠ 热路径：探测次数硬上限 400（不是"打满 8 条就停" —— 那样在没人命中的设备上
-          // 会把包名解析挂在每一次 getMonochrome 上），命中最多 8 条。
-          if (!ModuleRuntime.options().monoOverrides.isEmpty() &&
-            adaptProbed.getAndIncrement() < 400
-          ) {
-            val lbl = IconNames.of(chain.thisObject as? Drawable ?: original)
-            if (lbl.substringBefore("/") in ModuleRuntime.options().monoOverrides &&
-              adaptSpoken.getAndIncrement() < 8
-            ) Log.d(TAG, "Mono: $lbl 自带单色层 → 一个像素不碰，旁路对它本来就不生效")
-          }
-          return@intercept original
-        }
+        if (original != null) return@intercept original
         val self = chain.thisObject as? AdaptiveIconDrawable
         if (self == null) {
           Log.w(TAG, "Mono: synth thisObject is null")
@@ -1296,10 +1283,6 @@ private fun hookSynthesizedMonochrome(xposed: XposedInterface) {
         // CircleIconDrawable **自己重写了这个 getter**，本钩拦不到它；就算框架把 override
         // 一起拦了也不能用本对象压剪影 —— 那只会得到一个实心圆饼。它自己会去合成 sourceIcon。
         if (self is CircleIconDrawable) return@intercept null
-        // 按应用旁路：表里标着「交回」的应用不合成，交回桌面自己出遮罩。合成在某张上错了
-        // 又不记得它本来长什么样时，这是唯一不改代码的退路。认不出包名（`?`）的应用旁不了。
-        if (!ModuleRuntime.options().synthesizeFor(IconNames.of(self).substringBefore("/")))
-          return@intercept null
         MonochromeSynth.forIcon(self)
       }
       Log.d(TAG, "Mono: getMonochrome hooked (合成单色层)")
@@ -1312,12 +1295,6 @@ private fun hookSynthesizedMonochrome(xposed: XposedInterface) {
  * 纯合成模式下这个数应该是 0；它非零就是"屏幕上有一批图标是反的"唯一的可见信号。
  */
 private val fellThrough = AtomicInteger(0)
-
-/** 「已适配 → 原样透传」这一路探测过多少个图标（上限 400，见 [hookSynthesizedMonochrome]）。 */
-private val adaptProbed = AtomicInteger(0)
-
-/** 上面那批探测里，包名正好在旁路表里的条数（最多打 8 条）。 */
-private val adaptSpoken = AtomicInteger(0)
 
 private fun classOf(name: String, classLoader: ClassLoader): Class<*>? =
   runCatching { Class.forName(name, true, classLoader) }.getOrNull()
@@ -1359,11 +1336,6 @@ private fun getIntField(obj: Any, name: String): Int? = runCatching {
 
 /**
  * 「这个 Drawable 是哪个应用的图标」对照表。
- *
- * ⚠ **它现在参与一件判断**：「按应用合成」那张表的键就是这里的包名（`IconHooks.hookSynthesizedMonochrome`
- * 取 `IconNames.of(...).substringBefore("/")`）。认不出 = `?` = 那张遮罩**不可能被按应用覆盖**，
- * 只能走默认。所以名字表漏一条不只是日志难看，它会让某个应用的单独开关静默失效 ——
- * 覆盖未命中那行日志就是为了把这个失效摆出来，别把它删掉。
  *
  * 为什么非要它：这一路的反馈全都长这样——「12123 / termux / 闲鱼 不对」。而 `Mono: diag`
  * 行里只有 `AdaptiveIconDrawable fg=VectorDrawable@425x425` 这种 drawable 签名，两边对不上

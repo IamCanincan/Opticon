@@ -39,36 +39,10 @@ object ModulePrefs {
     /** provider 返回的列名，模块侧按这些名字取值 */
     const val COLUMN_CIRCLE_ENABLED = "circle_enabled"
     const val COLUMN_MONO_INVERT = "mono_invert"
-    const val COLUMN_MONO_OVERRIDES = "mono_overrides"
     const val COLUMN_NOTIFY_ENABLED = "notify_enabled"
 
     const val KEY_CIRCLE_ENABLED = "circle_enabled"
     const val KEY_MONO_INVERT = "mono_invert"
-
-    /**
-     * 按应用的**合成旁路**（调试用）。存成一段文本 `pkg=true;pkg=false;…`
-     * （`false` = 这张交回桌面自己压遮罩），因为配置通道的每一列都要能被 provider 一次查出来
-     * —— 为一张表再开一个 provider 不划算，而这段文本的长度天然有限
-     * （一个人手工标几十上百个包就到头了）。
-     */
-    const val KEY_MONO_OVERRIDES = "mono_overrides"
-    const val DEFAULT_MONO_OVERRIDES = ""
-
-    /** 解析 [KEY_MONO_OVERRIDES]；解不动的片段直接跳过，不让一个坏字符把整张表废掉。 */
-    fun parseOverrides(raw: String?): Map<String, Boolean> {
-        if (raw.isNullOrEmpty()) return emptyMap()
-        val out = HashMap<String, Boolean>()
-        for (part in raw.split(';')) {
-            val at = part.lastIndexOf('=')
-            if (at <= 0) continue
-            val v = part.substring(at + 1).trim().toBooleanStrictOrNull() ?: continue
-            out[part.substring(0, at).trim()] = v
-        }
-        return out
-    }
-
-    fun serializeOverrides(map: Map<String, Boolean>): String =
-        map.entries.joinToString(";") { "${it.key}=${it.value}" }
     const val KEY_NOTIFY_ENABLED = "notify_enabled"
 
     /**
@@ -111,7 +85,6 @@ object ModulePrefs {
         prefs.edit()
             .putBoolean(KEY_CIRCLE_ENABLED, DEFAULT_CIRCLE_ENABLED)
             .putBoolean(KEY_MONO_INVERT, DEFAULT_MONO_INVERT)
-            .putString(KEY_MONO_OVERRIDES, DEFAULT_MONO_OVERRIDES)
             .putBoolean(KEY_NOTIFY_ENABLED, DEFAULT_NOTIFY_ENABLED)
             .apply()
     }
@@ -120,7 +93,6 @@ object ModulePrefs {
     fun read(prefs: SharedPreferences): ModuleOptions = ModuleOptions(
         circleEnabled = prefs.getBoolean(KEY_CIRCLE_ENABLED, DEFAULT_CIRCLE_ENABLED),
         monoInvert = prefs.getBoolean(KEY_MONO_INVERT, DEFAULT_MONO_INVERT),
-        monoOverrides = parseOverrides(prefs.getString(KEY_MONO_OVERRIDES, DEFAULT_MONO_OVERRIDES)),
         notifyEnabled = prefs.getBoolean(KEY_NOTIFY_ENABLED, DEFAULT_NOTIFY_ENABLED)
     )
 
@@ -135,7 +107,6 @@ object ModulePrefs {
             values[KEY_CIRCLE_ENABLED]?.trim()?.toBooleanStrictOrNull() ?: DEFAULT_CIRCLE_ENABLED,
         monoInvert =
             values[KEY_MONO_INVERT]?.trim()?.toBooleanStrictOrNull() ?: DEFAULT_MONO_INVERT,
-        monoOverrides = parseOverrides(values[KEY_MONO_OVERRIDES]),
         notifyEnabled =
             values[KEY_NOTIFY_ENABLED]?.trim()?.toBooleanStrictOrNull() ?: DEFAULT_NOTIFY_ENABLED
     )
@@ -145,11 +116,9 @@ object ModulePrefs {
         circleEnabled: Boolean,
         monoInvert: Boolean,
         notifyEnabled: Boolean,
-        monoOverridesRaw: String? = DEFAULT_MONO_OVERRIDES,
     ): ModuleOptions = ModuleOptions(
         circleEnabled = circleEnabled,
         monoInvert = monoInvert,
-        monoOverrides = parseOverrides(monoOverridesRaw),
         notifyEnabled = notifyEnabled
     )
 }

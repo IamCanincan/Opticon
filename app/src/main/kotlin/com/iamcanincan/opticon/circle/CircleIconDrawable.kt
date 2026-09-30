@@ -91,16 +91,13 @@ class CircleIconDrawable(icon: Drawable) :
    * ⚠ 合成用 **`sourceIcon`（原图标）而不是本对象**：本对象的可见外观是「圆内裁好的内容」，
    *   拿它去压剪影只会得到一个实心圆饼。
    *
-   * 返回 null 只发生在两种情况下：总开关关掉（逃生口），或这张图合成不出来 / 被按应用旁路。
+   * 返回 null 只发生在两种情况下：总开关关掉（逃生口），或这张图合成不出来。
    * 那时桌面会去 new 它自己的 `MonochromeIconFactory`，而那条路在 [IconHooks] 里是**漏接计数**
    * —— 屏幕上这批就是反的，所以它绝不静默。
    */
   override fun getMonochrome(): Drawable? {
     sourceMonochrome?.let { return it }
     if (!ModuleRuntime.options().monoInvert) return null
-    // 按应用旁路：表里标着「交回」的应用不合成。认不出包名（`?`）的应用旁不了。
-    val pkg = IconNames.of(sourceIcon).substringBefore("/")
-    if (!ModuleRuntime.options().synthesizeFor(pkg)) return null
     return MonochromeSynth.forIcon(sourceIcon)
   }
 

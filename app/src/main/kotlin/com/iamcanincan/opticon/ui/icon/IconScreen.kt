@@ -149,14 +149,6 @@ private fun MonoInvertCard() {
   var enabled by remember {
     mutableStateOf(prefs.getBoolean(ModulePrefs.KEY_MONO_INVERT, ModulePrefs.DEFAULT_MONO_INVERT))
   }
-  var showOverrides by remember { mutableStateOf(false) }
-  var overrideCount by remember {
-    mutableStateOf(
-      ModulePrefs.parseOverrides(
-        prefs.getString(ModulePrefs.KEY_MONO_OVERRIDES, ModulePrefs.DEFAULT_MONO_OVERRIDES)
-      ).size
-    )
-  }
 
   ElevatedCard(shape = MaterialTheme.shapes.large) {
     Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -188,21 +180,6 @@ private fun MonoInvertCard() {
         },
       )
     }
-    // 调试入口：按应用逐个定"这张翻不翻"。判据拿到可信方向之前，这是唯一能把真机结果和
-    // 原因对上号的办法；而且标出来的那张表本身就是下一轮判据的考卷（见 MonoOverrideDialog）。
-    Row(modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp)) {
-      OutlinedButton(onClick = { showOverrides = true }) {
-        Text(if (overrideCount == 0) "按应用合成（调试）" else "按应用合成：已标 $overrideCount 个")
-      }
-    }
-  }
-  if (showOverrides) {
-    MonoOverrideDialog(onDismiss = {
-      showOverrides = false
-      overrideCount = ModulePrefs.parseOverrides(
-        prefs.getString(ModulePrefs.KEY_MONO_OVERRIDES, ModulePrefs.DEFAULT_MONO_OVERRIDES)
-      ).size
-    })
   }
 }
 
