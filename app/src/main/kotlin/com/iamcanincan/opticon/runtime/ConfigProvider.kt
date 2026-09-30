@@ -7,6 +7,7 @@ import android.database.MatrixCursor
 import android.net.Uri
 import android.os.Binder
 import android.os.Process
+import com.iamcanincan.opticon.debug.CorpusCapture
 
 /**
  * 把界面里选的配置暴露给模块。
@@ -40,7 +41,12 @@ import android.os.Process
  */
 class ConfigProvider : ContentProvider() {
 
-    override fun onCreate(): Boolean = true
+    override fun onCreate(): Boolean {
+        // 语料抓取的认领点之一（另一处见 [query]）：为什么放在这条本来就存在的配置通道上，
+        // 见 CorpusCapture 文件头。runCatching 是必需的 —— 诊断不能把配置通道弄坏。
+        runCatching { context?.let { CorpusCapture.requestIfPresent(it) } }
+        return true
+    }
 
     override fun query(
         uri: Uri,
@@ -49,9 +55,13 @@ class ConfigProvider : ContentProvider() {
         selectionArgs: Array<out String>?,
         sortOrder: String?
     ): Cursor {
+        val ctx = context
+        // 进程**本来就活着**的时候 onCreate 不会再跑，标记就没人认领 —— 而"没抓到"与
+        // "这台机器没装那个应用"在日志里长得一样。所以每个查询都看一眼（一次 exists() 的量级）。
+        if (ctx != null) runCatching { CorpusCapture.requestIfPresent(ctx) }
         val cursor = MatrixCursor(COLUMNS)
         if (!isTrustedCaller()) return cursor
-        val ctx = context ?: return cursor
+        if (ctx == null) return cursor
         val prefs = ModulePrefs.of(ctx)
         // ⚠ 别用 addRow(arrayOf<Any>(...))：Int 与 Boolean 混在一起 Kotlin 推不出公共类型。
         // 用 newRow() 逐项 add。

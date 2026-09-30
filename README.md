@@ -571,6 +571,19 @@ java -cp out;stubs_out;<stdlib> harness.ReplayKt ../_dump.txt captured   # 重�
 - **`Replay`** —— 把 `MonoDump` 从真机带回来的 PNG 拼回去重跑。**这条是必需的，不是便利**：
   他报的那批应用发的是 adaptive **vector** XML 或 **webp**，JVM 这边一张都解不出来，
   没有重放就等于对着代理图调参。抓回来的样本在 `captured/`。
+- **`CorpusCapture`（adb 触发，不需要他的手）** —— 一轮把本机**全部**可启动应用的图标抓成 384² PNG，
+  补上 `MonoDump` 那条路的两个先天限制（只能带回桌面恰好问到的那几张、必须等他重渲染）。跑法三条 adb：
+  ```sh
+  adb shell 'echo "edge=384" > /sdcard/Android/data/com.iamcanincan.opticon/files/corpus_request.txt
+             chmod 666 /sdcard/Android/data/com.iamcanincan.opticon/files/corpus_request.txt'
+  adb shell content query --uri content://com.iamcanincan.opticon.config   # 叫醒进程并认领
+  adb pull /sdcard/Android/data/com.iamcanincan.opticon/files/corpus _harness/corpus_dev
+  ```
+  `chmod 666` 只在**要带参数**（`pkg=<子串>` 筛包）时才需要 —— adb 写进本应用目录的文件属主是 shell，
+  本进程默认 `open` 不动它；不带参数那一轮照样跑，只是拿默认值。`corpus/` 必须让应用自己建
+  （shell 先 `mkdir` 过就先 `rmdir`，否则整轮 EACCES 写不进去）。
+  随货的 `index.tsv` 里 `cls`/`fg`/`bg` 三列是 drawable 类名（vector 还是 bitmap），`mono` 列是
+  **这个应用自带单色层与否** —— 自带的那一半按硬规则根本不进模型，算覆盖率时别混进分母。
 
 ## API 102（libxposed）合规性
 
@@ -641,6 +654,30 @@ MIT —— 见 [LICENSE](LICENSE)。
 ## 更新日志
 
 ### 未发布（v1.0.3 之后）
+- 新增（**判据台的语料从真机自己长出来** —— `debug/CorpusCapture.kt`）：之前"多抓点真机像素"
+  这一步始终卡在**他的手**上 —— 像素只能从桌面渲染时经 `MonoDump` 带回，而那要么等他点运维按钮
+  重渲染，要么等他翻到那一屏。现在多一条完全在我这边的路：**把本机每个可启动应用的图标用手机的
+  渲染器光栅化成 PNG，落到本应用自己的外部目录，`adb pull` 就是语料**（矢量已经画成位图、webp
+  已经解过码 —— 正是 `MonoDump` 文件头那句"JVM 这边一张都解不出来"的解药）。一轮 **122 张 / 10 秒**。
+  - 入口怎么选的（两次都被真机否掉）：① 想加 `exported=false` 的 Activity 用 `am start` 起 ——
+    这台 Xperia（Android 16）的 shell uid **没有** `START_ANY_ACTIVITY`，直接
+    `SecurityException: not exported from uid 10310`；② 改成导出 Activity 或给 `ConfigProvider`
+    加 `call()` 都起得来，但那等于给第三方应用开一个入口（配置通道本来就是谁都能查的），换来的
+    只是省他一次点击。**于是走标记文件**：`Android/data/<本包>/files/corpus_request.txt` 从
+    Android 11 起只有本应用和 adb 写得动，认领点挂在本来就存在的 `ConfigProvider.onCreate/query`
+    上，叫醒进程用 `adb shell content query` —— **APK 里一个导出组件都没多，一行新权限都没加**。
+  - 三个坑都是真机给的，都写进了代码注释：**输出目录不能让 shell 先 `mkdir`**（属主变 shell，
+    本应用写进去 EACCES，那一轮 122 张全跳光，日志报了才看得见）；**标记的内容默认读不到**
+    （adb 写进来的文件属主是 `shell:ext_data_rw`，本进程 `open` 就是 EACCES）—— 所以触发只看
+    **存在性**（stat 与删除只需要父目录权限），带参数才需要 `chmod 666`；**两条配置查询会抢同一次
+    认领**（14:47 那轮同一标记跑了两次），认领这件事必须 `@Synchronized`。
+  - 顺手量到的三件事实（`_harness/corpus_dev/index.tsv`，以后所有覆盖率的基数）：
+    **61/122（50%）应用自带单色层** —— 这一半是硬规则里"已适配，一个像素都不碰"，模型真正作用的
+    只有另一半；前景层 **46/122 是 VectorDrawable**（判据台自己解不出来的一类），32/122 是整张
+    满幅 `BitmapDrawable`；122 个包里 **74 个从没上过台**（老语料 113 张基本是另外一批）。
+  - ⚠ 与 `MonoDump` 那条路的**指纹不通用**：同一个应用两条路各抓一张，8×8 色指纹只有
+    29 张里的 5 张对得上（桌面走 `loadItemIcon`、bounds 与抗锯齿都不同）。所以跨这两条路去重
+    **按包名，不按 `sig=`** —— 按指纹会把"已经在台上"判成"新的"，反过来把同一应用的两张当成两个。
 - 修复（**长按快捷方式的图标在屏幕上整个看不见** —— 真机日志抓到的一整族）：
   `com.android.deskclock/shortcut_new_timer`、`com.android.settings/ic_shortcut_battery`、
   `com.google.android.youtube/ic_shortcut_subscriptions`、`org.lineageos.aperture/ic_shortcut_selfie|_video`
