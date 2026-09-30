@@ -703,6 +703,16 @@ MIT —— 见 [LICENSE](LICENSE)。
 ## 更新日志
 
 ### 未发布（v1.0.3 之后）
+- 修复（**没有浏览器的设备上，点"在 GitHub 上查看"会崩应用**）：Compose 的
+  `AndroidUriHandler.openUri` **只捕 `ActivityNotFoundException`，然后在 catch 块里重新抛一个
+  `IllegalArgumentException`** —— 对着本机解析到的 `ui-android 1.12.1` 字节码核过（异常表的
+  target 里就是 `athrow`）。这个异常从 `onClick` 穿出去就是崩，而去浏览器化的 ROM / 受限的
+  工作资料 / 模拟器上"没有 https 处理者"是常态，装了 Xposed 的机器尤其容易撞上。
+  三处跳转（顶栏那颗源码按钮、「关于」页两块）现在一律走共享的 `openExternalUrl`：
+  兜住异常 + **弹一条 Snackbar 说出来**（按下去什么都不发生比崩溃更难查）。
+  真机两条路径都验了：正常路径点开 GitHub 应用；把地址临时换成一个没有处理者的 scheme
+  （`cmd package resolve-activity` 确认是 `No activity found`）后，界面出现
+  `打不开链接：这台设备上没有能打开网页的应用`、进程存活、logcat 无 `IllegalArgumentException`。
 - 重做（**界面** —— 起因是一句"不够美观"）：按真机截图（四页 × 深浅两主题）逐页核过之后，
   病根不是配色，是**卡片与背景几乎同色 + 全页 12sp 灰字 + 满屏实心主色按钮**：
   - **卡片**：原来一律 `ElevatedCard`（`surfaceContainerLow` + 阴影），深色下阴影等于没有、

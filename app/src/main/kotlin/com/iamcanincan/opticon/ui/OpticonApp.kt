@@ -140,6 +140,9 @@ fun OpticonApp() {
     // 用页面自己的 scope 一切页就被取消，提示当场消失（剪贴板那条同理）。
     val notify: (String) -> Unit = { text -> scope.launch { snackbarHostState.showSnackbar(text) } }
 
+    // 跳转失败的提示语。三条跳转（顶栏、「关于」页两块）共用这一句。
+    val openLinkFailed = stringResource(R.string.open_link_failed)
+
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
             modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
@@ -147,7 +150,14 @@ fun OpticonApp() {
                 TopAppBar(
                     title = { Text(text = stringResource(R.string.app_name)) },
                     actions = {
-                        IconButton(onClick = { uriHandler.openUri(REPO_URL) }) {
+                        // ⚠ 走 openExternalUrl 而不是直接 `uriHandler.openUri`：没有浏览器的
+                        //   设备上后者会抛 IllegalArgumentException 把应用带崩（见该函数说明）。
+                        //   失败必须说出来 —— 按下去什么都不发生比崩溃更难查。
+                        IconButton(
+                            onClick = {
+                                if (!openExternalUrl(uriHandler, REPO_URL)) notify(openLinkFailed)
+                            }
+                        ) {
                             Icon(
                                 imageVector = Icons.Default.Code,
                                 contentDescription = stringResource(R.string.action_open_repo),
@@ -170,7 +180,7 @@ fun OpticonApp() {
                         TAB_ICON -> IconScreen(onNotify = notify)
                         TAB_NOTIFY -> NotifyScreen()
                         TAB_MODULE -> ModuleScreen(onNotify = notify)
-                        else -> AboutScreen(state = updateState, onCheck = checkUpdate)
+                        else -> AboutScreen(state = updateState, onCheck = checkUpdate, onNotify = notify)
                     }
                 }
             }

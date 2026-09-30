@@ -45,6 +45,7 @@ import com.iamcanincan.opticon.ui.OpticonCard
 import com.iamcanincan.opticon.ui.RepoUrl
 import com.iamcanincan.opticon.ui.ScreenList
 import com.iamcanincan.opticon.ui.Section
+import com.iamcanincan.opticon.ui.openExternalUrl
 import com.iamcanincan.opticon.update.UpdateChecker
 
 /**
@@ -55,11 +56,18 @@ import com.iamcanincan.opticon.update.UpdateChecker
  * 更新与版本这类"看看就好"的信息独立成页。
  *
  * ⚠ 更新状态与检查动作都由外壳传进来（见 [UpdateState] 上的说明）—— 这页会被销毁。
+ *   [onNotify] 同理：Snackbar 的作用域在外壳，这页只负责在跳转失败时把话递上去。
  */
 @Composable
-internal fun AboutScreen(state: UpdateState, onCheck: () -> Unit) {
+internal fun AboutScreen(state: UpdateState, onCheck: () -> Unit, onNotify: (String) -> Unit) {
   val uriHandler = LocalUriHandler.current
   val version = BuildConfig.VERSION_NAME
+  val openFailed = stringResource(R.string.open_link_failed)
+  // ⚠ 跳转一律走共享的 [openExternalUrl]：Compose 的 `openUri` 在没有浏览器的设备上会抛
+  //   `IllegalArgumentException`（理由见那个函数的说明）—— 直接调就是崩应用。
+  val open: (String) -> Unit = { url ->
+    if (!openExternalUrl(uriHandler, url)) onNotify(openFailed)
+  }
 
   ScreenList {
     item { Section(text = stringResource(R.string.section_update)) {
@@ -67,13 +75,13 @@ internal fun AboutScreen(state: UpdateState, onCheck: () -> Unit) {
         version = version,
         state = state,
         onCheck = onCheck,
-        onOpenPage = { url -> uriHandler.openUri(url) },
+        onOpenPage = open,
       )
     } }
 
     item { Section(text = stringResource(R.string.section_privacy)) { PrivacyCard() } }
 
-    item { Section(text = stringResource(R.string.tab_about)) { AboutCard() } }
+    item { Section(text = stringResource(R.string.tab_about)) { AboutCard(onOpen = open) } }
   }
 }
 
@@ -121,11 +129,12 @@ private fun PrivacyCard() {
  * ⚠ 这里**不重复 App 名**：顶栏已经有它了，每页再来一遍标记 + 版本是重复
  *   （README「界面」一节记的就是这条）。所以这块只放**图标本体 + 版本 + 说明 + 入口**，
  *   内容居中 —— 本页本来就短，居中的一块比左上角一行更能撑住这一页。
+ *
+ * ⚠ [onOpen] 由页面传进来（内部走 [openExternalUrl]），不在这里直接拿 `LocalUriHandler`：
+ *   失败要能弹提示，而这页自己没有 Snackbar 的作用域（那是外壳的）。
  */
 @Composable
-private fun AboutCard() {
-  val uriHandler = LocalUriHandler.current
-
+private fun AboutCard(onOpen: (String) -> Unit) {
   OpticonCard {
     Column(
       modifier = Modifier.fillMaxWidth(),
@@ -167,7 +176,7 @@ private fun AboutCard() {
       // 容器色（tonal）而不是实心主色：这一页的主操作是上面「检查更新」那一个，
       // 两个都用实心主色的话，"哪个是重点"在屏幕上读不出来。
       FilledTonalButton(
-        onClick = { uriHandler.openUri(RepoUrl) },
+        onClick = { onOpen(RepoUrl) },
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
       ) {

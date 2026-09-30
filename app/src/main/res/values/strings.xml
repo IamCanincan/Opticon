@@ -158,6 +158,12 @@
     <string name="update_result_no_release">仓库还没有发布过 Release</string>
     <string name="update_result_failed">检查失败：%1$s</string>
 
+    <!-- 跳转 GitHub 失败（设备上没有能处理 https 的应用）。为什么要有这一条：
+         Compose 的 openUri 捕到 ActivityNotFoundException 后会**再抛一个
+         IllegalArgumentException**（见 Common.kt 的 openExternalUrl），
+         不兜住就是崩应用；兜住了也必须说出来，不能静默什么都不发生。 -->
+    <string name="open_link_failed">打不开链接：这台设备上没有能打开网页的应用</string>
+
 
     <!-- 隐私：这块信息之前只写在 README 里，界面上也该有一份 -->
     <string name="section_privacy">隐私</string>

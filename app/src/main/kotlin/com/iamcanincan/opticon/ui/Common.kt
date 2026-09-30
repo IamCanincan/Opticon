@@ -32,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -265,6 +266,24 @@ internal fun HeroCard(
     }
   }
 }
+
+/**
+ * 打开外部链接，**打不开也不崩**。
+ *
+ * ⚠ 为什么必须包这一层：[androidx.compose.ui.platform.AndroidUriHandler.openUri] 只捕
+ * `ActivityNotFoundException`，而且捕到之后**在 catch 块里重新抛一个 `IllegalArgumentException`**
+ * —— 本机对着 `ui-android 1.12.1` 的字节码核过（`athrow` 就在异常表 target 里）。
+ * 于是"这台设备上没有能打开 https 的应用"（去浏览器化的 ROM、受限的工作资料、模拟器）
+ * 会从 `onClick` 一路穿出去**把应用带崩**。对一台装了 Xposed 的机器来说，
+ * 为了精简而删掉浏览器的配置并不罕见 —— 本模块的用户画像正好撞在这条上。
+ *
+ * ⚠ 三个调用点（顶栏那颗源码按钮、「关于」页两块里的按钮）全都得走这里；
+ * 新增跳转也一律走这里，别直接调 `uriHandler.openUri`。
+ *
+ * @return 真的交出去了返回 true；调用方据此决定要不要提示（别静默失败）。
+ */
+internal fun openExternalUrl(uriHandler: UriHandler, url: String): Boolean =
+  runCatching { uriHandler.openUri(url) }.isSuccess
 
 /**
  * 仓库地址：「关于」页的跳转用它。顶栏那颗源码按钮用的是 `OpticonApp` 里另存的一份，
