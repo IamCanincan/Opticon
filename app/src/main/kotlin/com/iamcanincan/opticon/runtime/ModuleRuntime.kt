@@ -367,13 +367,13 @@ object ModuleRuntime {
         val values = runCatching { file.inputStream().use { parsePrefsXml(it) } }
             .onFailure { logW("direct read '$file' failed: ${it::class.java.simpleName}: ${it.message}") }
             .getOrNull() ?: return null
-        return values.takeIf { it.containsKey(ModulePrefs.KEY_MODE) }?.let { ModulePrefs.fromValues(it) }
+        return values.takeIf { ModulePrefs.looksLikeConfig(it.keys) }?.let { ModulePrefs.fromValues(it) }
     }
 
     /**
      * 走框架的远程文件通道。
      *
-     * 只认「解析出来的键里有 KEY_MODE」的候选文件 —— 否则名字试错时
+     * 只认「解析出来的键里有我们任何一个配置键」的候选文件 —— 否则名字试错时
      * 一个空文件也会被当成有效配置，把用户的设置悄悄重置成默认值。
      */
     private fun readFromRemoteFile(m: XposedInterface): ModuleOptions? {
@@ -383,8 +383,8 @@ object ModuleRuntime {
             }.onFailure {
                 logW("openRemoteFile('$name') failed: ${it::class.java.simpleName}: ${it.message}")
             }.getOrNull() ?: continue
-            if (!values.containsKey(ModulePrefs.KEY_MODE)) {
-                logW("remote file '$name' has no ${ModulePrefs.KEY_MODE}, skipping (parsed=$values)")
+            if (!ModulePrefs.looksLikeConfig(values.keys)) {
+                logW("remote file '$name' 里没有任何已知配置键 ${ModulePrefs.CONFIG_KEYS}，跳过（解析到 $values）")
                 continue
             }
             return ModulePrefs.fromValues(values)
@@ -403,12 +403,12 @@ object ModuleRuntime {
         // ⚠ 某些框架的 getRemotePreferences 返回的是「空但非 null」的实例（实证）。
         // 空实例经 ModulePrefs.read 会得到一份**默认值**，看起来跟真配置一模一样 ——
         // 于是 provider 还没回应时，模块会拿默认值当用户设置用，把真实设置顶掉。
-        // 只认「里面真有 mode 键」的对象，和 readFromRemoteFile 用同一把尺子。
-        val hasMode = runCatching { prefs.contains(ModulePrefs.KEY_MODE) }
-            .onFailure { logW("remote preferences unreadable: ${it::class.java.simpleName}: ${it.message}") }
-            .getOrDefault(false)
-        if (!hasMode) {
-            logW("getRemotePreferences has no '${ModulePrefs.KEY_MODE}', treating as unavailable")
+        // 只认「里面真有我们某个配置键」的对象，和 readFromRemoteFile 用同一把尺子。
+        val looksLikeConfig = ModulePrefs.CONFIG_KEYS.any { k ->
+            runCatching { prefs.contains(k) }.getOrDefault(false)
+        }
+        if (!looksLikeConfig) {
+            logW("getRemotePreferences 里没有任何已知配置键 ${ModulePrefs.CONFIG_KEYS}，当成不可用")
             return null
         }
         return runCatching { ModulePrefs.read(prefs) }

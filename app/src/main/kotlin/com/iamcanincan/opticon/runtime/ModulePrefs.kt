@@ -98,13 +98,31 @@ object ModulePrefs {
      */
     const val DEFAULT_MODE = MODE_MONOCHROME
 
+    /**
+     * 「这确实是一份 Opticon 配置」的判据键。
+     *
+     * ⚠ 这条判据存在的理由只有一个：**空的东西长得和默认配置一模一样**。
+     * 某些框架的 `getRemotePreferences` 返回"空但非 null"的实例、名字试错时也可能撞上一个空文件，
+     * 直接拿去 [read] / [fromValues] 会得到一份全默认值，看起来完全合法，于是把用户真设置顶掉
+     * （见 `ModuleRuntime.readFromPreferences` 那段实证）。所以三条备用通道都先问一句：
+     * **里面到底有没有我们的键？**
+     *
+     * 以前这个判据是「有没有 `mode` 键」，那是**一个魔法键扛四件事**：删掉任何一键就得同时改四处，
+     * 漏一处就是静默失效。改成「任意一个已知键」——[seedIfAbsent] 从来是整组一起写的，
+     * 所以两种问法在今天**逐文件等价**，但不再依赖某一个键还活着。
+     */
+    val CONFIG_KEYS = setOf(KEY_CIRCLE_ENABLED, KEY_MONO_INVERT, KEY_NOTIFY_ENABLED)
+
+    /** 这批键里有没有一个是我们的？（备用通道共用的那一道判据） */
+    fun looksLikeConfig(keys: Collection<String>): Boolean = keys.any { it in CONFIG_KEYS }
+
     /** 界面侧入口 */
     fun of(context: Context): SharedPreferences =
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 
     /** 首次打开界面时把默认值写下去，让配置文件存在（模块读不到文件时会退回同样的默认值） */
     fun seedIfAbsent(prefs: SharedPreferences) {
-        if (prefs.contains(KEY_MODE)) return
+        if (looksLikeConfig(prefs.all.keys)) return
         prefs.edit()
             .putBoolean(KEY_CIRCLE_ENABLED, DEFAULT_CIRCLE_ENABLED)
             .putBoolean(KEY_MONO_INVERT, DEFAULT_MONO_INVERT)
