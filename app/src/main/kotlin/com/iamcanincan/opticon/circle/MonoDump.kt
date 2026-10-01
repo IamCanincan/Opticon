@@ -110,6 +110,15 @@ internal object MonoDump {
     // globalspeed **一张都没回来过** —— 它 `字均=179` 却不触发任何旧的可疑判据，
     // 于是只能看着数字猜。加进来：下次清缓存重渲染时把原图带回来。
     "com.yiban.app", "com.cnspeedtest.globalspeed",
+    // ⚠ **2026-10-01：主人点名的 12 张里有 8 张从来不在名单上** —— 这一条是那一整晚走错语料的
+    // 直接原因。不在名单 = 它的像素一张都没回来过，于是只能拿 `CorpusCapture`（capture 通道，
+    // 让应用自己画一遍）那批去判"屏幕上是什么样"。事后对过：**同一个图标两条通道给的像素不是一套**
+    // —— 点名的 7 张里 7/7 数不同、4/7 连分支（H）都换；而 dump 通道这张能逐字对上真机 logcat
+    // 的 `底占/框内`。所以"我判的到底是不是屏幕上那张"这个问题，唯一的答案就是把这张带回来。
+    // 补齐 12 张（`com.sina.weibo` 到这一轮为止**两条通道都没有过一张像素**，它报的「底部奇怪」
+    // 从来没被判过）。**这一条只改诊断通道，不改任何掩码**：加完 8 个包之后六段回归台逐位不变。
+    "cn.com.zjol", "com.jingdong.app.mall", "com.xunmeng.pinduoduo", "com.sony.songpal.mdr",
+    "me.ele", "com.sina.weibo", "com.tencent.hunyuan.app.chat", "com.able.wisdomtree",
   )
 
   fun watched(label: String): Boolean = WATCH.any { label.contains(it) }
