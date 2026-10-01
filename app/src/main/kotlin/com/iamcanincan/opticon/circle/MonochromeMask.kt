@@ -385,15 +385,6 @@ internal object MonochromeMask {
     var off = ShortArray(0)
     /** 第二遍的参照集：墨里压在底上的那一块 = 图形的外壳。 */
     var body = ByteArray(0)
-    /** 「图标自己那一圈轮廓」= 实心↔透明那一圈外扩几步。见 [secondPlate]。 */
-    var rim = ByteArray(0)
-    /** 被判成"第二块盘"的格子。**单独一张表，不写进 `plate`** —— 后者还有标定 / `cDep` /
-     *  判据列三处读者，动它等于一次改四件事，这一刀只想改出墨。 */
-    var plate2 = ByteArray(0)
-    /** [secondPlate] 跑到哪一步：0=轮廓种子数、1=外扩后的轮廓格数、2=区域数、3=最大那块占轮廓%。
-     *  **没有这四个数，"这张图一个都没擦"和"整条闸根本没跑起来"在日志里是同一个 0** ——
-     *  第一版就因此把一道恒关着的门读成"这一刀很安全"。 */
-    var p2d = IntArray(4)
 
     var grid = 0
     /** H0（[regionGround]）这一支走到哪一步了：0=没走到、1=接手、2=被画布门槛（④ `盒布`）拦、
@@ -431,7 +422,6 @@ internal object MonochromeMask {
         body = ByteArray(total)
         beta = ShortArray(total); gRefL = ShortArray(total); off = ShortArray(total)
         distT = ShortArray(total)
-        rim = ByteArray(total); plate2 = ByteArray(total)
       }
       if (cellR.size < cells) {
         cellR = ShortArray(cells); cellG = ShortArray(cells); cellB = ShortArray(cells)
@@ -796,10 +786,6 @@ internal object MonochromeMask {
     val miL = if (modalInk < 0) 0 else labChannel(modalInk, 0)
     val miA = if (modalInk < 0) 0 else labChannel(modalInk, 1)
     val miB = if (modalInk < 0) 0 else labChannel(modalInk, 2)
-    // 3.5) 「第二块盘」：占着自己那一圈轮廓、身上坐着高对比小图形、**而且自己是一大片不是一圈壳**
-    //   的那块墨 —— 它是第二层背景。只减不加。判据、数与正反例样本全在 [secondPlate] 与 README。
-    val p2N = if (tonal == null) secondPlate(pixels, w, h, box, s)
-      else { s.plate2.fill(0, 0, total); s.p2d.fill(0); 0 }
     val out = IntArray(total)
     var knocked = 0
     for (y in box.top until box.bottom) {
@@ -810,8 +796,6 @@ internal object MonochromeMask {
         //   让它借用同色另一格的浓度，等于把盘子画回去 —— `f2196b7` 落地时没量这一列，
         //   判据台 113 张真图标的 `残盘=` 从 4923 涨到 26440（40 行涨、0 行跌，9 行 >1000，
         //   最狠浙江在线 0→5334），正是他报过两次的那圈"看得见的灰盘"。
-        // 这一格是"第二块盘"——不给墨，字留给上面那层。见 3.5 / [secondPlate]。
-        if (s.plate2[i] != 0.toByte()) continue
         val own = s.distT[i].toInt() and 0xffff
         val v = if (own > ground.zero && s.plate[i] == 0.toByte() && Color.alpha(pixels[i]) == 255)
           cDep[pixels[i] and 0x00FFFFFF] else null
@@ -996,9 +980,6 @@ internal object MonochromeMask {
         // `带内残` 是这些补上去的格里"颜色本来就离底很近"的那些 —— 它**故意不从 `残盘` 里消失**，
         // 只是换个名字记：这样"这一刀补了多少、其中有多少看着像底"两件事在日志里都看得见。
         " 带补=${bands.first}/${bands.second}(${bands.third}拒) 带内残=$bfN/${if (bfN == 0) 0 else bfSum / bfN}" +
-        // 「第二块盘」：擦掉的格数 / 轮廓种子数 / 轮廓格数 / 区域数 / 最大那块占轮廓%。
-        //   后四个必须有：只报第一个，"没擦"与"闸没跑"是同一个数。列名别撞 `围=`（H0 的围合度）。
-        " 盘2=$p2N/${s.p2d[0]}/${s.p2d[1]}/${s.p2d[2]}/${s.p2d[3]}" +
         // 满幅插画那一支开了就把三个判据数报上；**没开一个字符都不加** —— 这两列在整串末尾，
         // 前面所有列的列位一个不动（`res.sh` 按列号读，这条规矩上面已经写过两次）。
         (if (tonal == null) "" else " 调=1 纹理=${tonal.tex} 主色=${tonal.flat} 跨=${tonal.span}" +
@@ -3522,258 +3503,6 @@ internal object MonochromeMask {
    *
    * 洪泛从底像素出发四邻域扩散（与 [flood] 同一个道理：八邻域会顺着对角线钻过笔画之间的缝）。
    */
-  /** 四邻偏移（几趟共用一张表，别处再抄一份 0/-1/1 就是下一个 bug）。 */
-  private val ENC_DX = intArrayOf(-1, 1, 0, 0)
-  private val ENC_DY = intArrayOf(0, 0, -1, 1)
-
-  /** [secondPlate] 的四道门。来历、数与正反例样本都在 README「未发布」那几条里。 */
-  private const val P2_RIM = 3
-  private const val P2_MERGE = 25
-  private const val P2_MIN_PCT = 6
-  /** ⚠ 这一档从 30 降到 **25** 是为了把饿了么放进来 —— 但**不是**为它一个人挑数：
-   *  174 张上把每道门的通过者全列出来排过序（`_harness/Plate3Kt` 扫 + `bench/gate_sweep.txt`），
-   *  25 与 20 的结果**一模一样**（都只有翻译 + 饿了么两张），30 是 1 张、35 是 0 张 ——
-   *  线落在 25.3%（饿了么）与下一档之间的**空档**里，不是悬崖边上。
-   *  驾考宝典也在 25.3%，但它**厚度只有 24 轮**，被下一道门挡住 —— 那就不追了：
-   *  同时降两道门才是"为一张图挑数"。 */
-  private const val P2_RIM_PCT = 25
-  private const val P2_CARRY = 300
-  private const val P2_CARRY_DE = 40
-  private const val P2_THICK = 25
-
-  /**
-   * **「第二块盘」**：一块大的墨，如果 ①占着图标自己那一圈轮廓、②身上坐着高对比的小图形、
-   * ③**自己是一大片而不是一个圈**，那它是这个图标的第二层背景 —— 把它的墨擦掉，字留在墨里。
-   *
-   * 正例：Google 翻译右半那一整块灰盘，「文」糊在里面看不见（主人：「半边没有」）。
-   * 反例：B 站那枚粉色电视机 —— 它是 logo 自己，白色的 "bilibili" 坐在**洞里**不是坐在壳上。
-   *
-   * 三道门各挡一类误伤，数都是 174 张上量出来的（`_harness/Plate3Kt`）：
-   *   · **占整圈轮廓 ≥30%**：61 张真机图标里只有 6 张有一块 ≥6% 框的墨挨着轮廓，其余 **55 张
-   *     逐张 0.0%**（圆徽坐在盘子中间，一格轮廓都不占）。⚠ 不能用"挨不挨内容框" —— 圆形图标的
-   *     框是圆的**外接方**，圆只碰四个切点，那个量恒 0。
-   *   · **身上坐着 ≥300 格远色**：挡掉满幅插画与 kazumi（它们 0）。
-   *   · **撑过 ≥25 轮腐蚀**：分开翻译与 B 站的那一条。翻译 **40**（撞上限，一整片）、
-   *     抖音 22、B 站 **14**（那圈电视机壳就是一圈带）。
-   * ⚠ 为什么用腐蚀而不是"填洞数它围住了多少"：**真图标上按颜色挑出的掩码从来不闭合** ——
-   *   抗锯齿 / 投影 / 渐变每条都留缝，洪泛顺着缝把"洞"全走完，三张候选实测 1.00/0.99/1.00。
-   *   "围住 / 洞 / 闭合"这一族在这批像素上都不成立。厚度不需要闭合，所以它量得出来。
-   * ⚠ 区域代表色取**最多数那一峰**（联合桶的均值），不是算术均值 —— 后者把"粉壳+白底+黑字"
-   *   平均成一个图上不存在的颜色。**跨峰的均值不是一个颜色**，这条今天栽了三次。
-   * ⚠ 区域长在模型自己的 8×8 拟合色场上（每格中位色 `fL/fA/fB`）。不用像素级色桶或精确色：
-   *   渐变带在桶连通下切成几千片，在精确色下没有任何一种颜色拿得下整条带。
-   * ⚠ **只擦"离这一峰颜色够近"的像素**，不擦整格 —— 带子与字混在同一格，按格擦会把字一起擦掉。
-   * ⚠ **`字均净` 会往下掉，那不是回归**：那块盘原本按"字"算 255，拿走它均值当然降。
-   *   验收看图与 `空洞`/`淡`/`cc`，别拿这一列当红绿灯。
-   *
-   * @return 擦掉的格数（0 = 这张图一个都没碰到）。
-   */
-  private fun secondPlate(pixels: IntArray, w: Int, h: Int, box: Rect, s: Scratch): Int {
-    val total = w * h
-    val g = s.grid
-    val cells = g * g
-    val rim = s.rim; val p2 = s.plate2
-    rim.fill(0, 0, total); p2.fill(0, 0, total); s.p2d.fill(0)
-    val q = s.queue
-    // 1) 轮廓 = 实心↔透明那一圈（横断点 + 纵断点各扫一遍），再外扩 P2_RIM 步
-    var tail = 0
-    for (y in box.top until box.bottom) {
-      val row = y * w
-      for (x in box.left + 1 until box.right - 1) {
-        val i = row + x
-        if (Color.alpha(pixels[i]) < A_SOLID) continue
-        if (Color.alpha(pixels[i - 1]) >= A_SOLID && Color.alpha(pixels[i + 1]) >= A_SOLID) continue
-        rim[i] = 1; q[tail++] = i
-      }
-    }
-    for (y in box.top + 1 until box.bottom - 1) {
-      val row = y * w
-      for (x in box.left until box.right) {
-        val i = row + x
-        if (Color.alpha(pixels[i]) < A_SOLID || rim[i] != 0.toByte()) continue
-        if (Color.alpha(pixels[i - w]) >= A_SOLID && Color.alpha(pixels[i + w]) >= A_SOLID) continue
-        rim[i] = 1; q[tail++] = i
-      }
-    }
-    val seeds = tail
-    // ⚠ 门槛别按"框的 1/20"定：384 的圆横竖各 ~770 个断点 ≈ 1500，而框的 1/20 = 7373 ——
-    //   那样这道门在唯一的正例上永远关着，十二张全部报 0，看着像"这一刀很安全"。
-    s.p2d[0] = seeds
-    if (seeds < 64) return 0
-    var from = 0
-    for (step in 0 until P2_RIM) {
-      val to = tail
-      for (u in from until to) {
-        val i = q[u]
-        val cy = i / w; val cx = i - cy * w
-        for (d in 0 until 4) {
-          val nx = cx + ENC_DX[d]; val ny = cy + ENC_DY[d]
-          if (nx < box.left || ny < box.top || nx >= box.right || ny >= box.bottom) continue
-          val j = ny * w + nx
-          if (rim[j] != 0.toByte() || Color.alpha(pixels[j]) < A_SOLID) continue
-          rim[j] = 1; q[tail++] = j
-        }
-      }
-      from = to
-      if (from >= tail) break
-    }
-    val rimAll = tail
-    s.p2d[1] = rimAll
-    // 2) 每格有多少"非底实心"、其中多少在轮廓上、多少是底
-    val cInk = IntArray(cells); val cPl = IntArray(cells); val cRim = IntArray(cells)
-    val cellOf = IntArray(total) { -1 }
-    for (y in box.top until box.bottom) {
-      val row = y * w
-      val cy = ((y - box.top) * g / box.height()).coerceAtMost(g - 1)
-      for (x in box.left until box.right) {
-        val i = row + x
-        val cx = ((x - box.left) * g / box.width()).coerceAtMost(g - 1)
-        val k = cy * g + cx
-        cellOf[i] = k
-        if (Color.alpha(pixels[i]) != 255) continue
-        if (s.plate[i] != 0.toByte()) { cPl[k]++; continue }
-        cInk[k]++
-        if (rim[i] != 0.toByte()) cRim[k]++
-      }
-    }
-    val inkCell = BooleanArray(cells) { cInk[it] > 0 && cPl[it] * 2 < cInk[it] + cPl[it] }
-    // 3) 区域：4 连通、相邻格中位色 ΔE ≤ P2_MERGE
-    val reg = IntArray(cells) { -1 }
-    var nr = 0
-    val cq = IntArray(cells)
-    for (k in 0 until cells) {
-      if (!inkCell[k] || reg[k] >= 0) continue
-      val id = nr++
-      var hd = 0; var tl = 0
-      reg[k] = id; cq[tl++] = k
-      while (hd < tl) {
-        val c = cq[hd++]; val cy = c / g; val cx = c - cy * g
-        for (d in 0 until 4) {
-          val nx = cx + ENC_DX[d]; val ny = cy + ENC_DY[d]
-          if (nx < 0 || ny < 0 || nx >= g || ny >= g) continue
-          val j = ny * g + nx
-          if (reg[j] >= 0 || !inkCell[j]) continue
-          if (deltaE(s.fL[c], s.fA[c], s.fB[c], s.fL[j], s.fA[j], s.fB[j]) > (P2_MERGE shl 6)) continue
-          reg[j] = id; cq[tl++] = j
-        }
-      }
-    }
-    if (nr == 0) return 0
-    s.p2d[2] = nr
-    val rArea = LongArray(nr); val rRim = LongArray(nr)
-    for (k in 0 until cells) {
-      val id = reg[k]; if (id < 0) continue
-      rArea[id] += cInk[k]; rRim[id] += cRim[k]
-    }
-    // 4) 每块的代表色 = 它自己最多数那一峰（联合桶 L/8、a//b 每 32，与 [bucketOf] 同一口径）
-    val NB = 832
-    val rCnt = Array(nr) { IntArray(NB) }
-    val rSL = Array(nr) { LongArray(NB) }; val rSA = Array(nr) { LongArray(NB) }
-    val rSB = Array(nr) { LongArray(NB) }
-    for (y in box.top until box.bottom) {
-      val row = y * w
-      for (x in box.left until box.right) {
-        val i = row + x
-        val k = cellOf[i]
-        if (k < 0) continue
-        val id = reg[k]
-        if (id < 0 || s.plate[i] != 0.toByte() || Color.alpha(pixels[i]) != 255) continue
-        val li = ((s.labL[i].toInt() and 0xffff) shr 6) / 8
-        val ai = (((s.labA[i].toInt() and 0xffff) shr 6) + 128).coerceIn(0, 255) / 32
-        val bi = (((s.labB[i].toInt() and 0xffff) shr 6) + 128).coerceIn(0, 255) / 32
-        val b = (li * 8 + ai) * 8 + bi
-        rCnt[id][b]++
-        rSL[id][b] += s.labL[i].toInt() and 0xffff
-        rSA[id][b] += s.labA[i].toInt() and 0xffff
-        rSB[id][b] += s.labB[i].toInt() and 0xffff
-      }
-    }
-    fun peak(id: Int): IntArray? {
-      var best = -1; var bestN = 0
-      for (b in 0 until NB) if (rCnt[id][b] > bestN) { bestN = rCnt[id][b]; best = b }
-      if (best < 0 || bestN == 0) return null
-      return intArrayOf(
-        (rSL[id][best] / bestN).toInt(), (rSA[id][best] / bestN).toInt(),
-        (rSB[id][best] / bestN).toInt())
-    }
-    fun onPeak(i: Int, pk: IntArray) = deltaE(
-      s.labL[i].toInt() and 0xffff, s.labA[i].toInt() and 0xffff, s.labB[i].toInt() and 0xffff,
-      pk[0], pk[1], pk[2]) <= (P2_MERGE shl 6)
-    // 5) 身上坐着多少远色格（粗筛，按格数）
-    val rCarry = LongArray(nr)
-    for (k in 0 until cells) {
-      val id = reg[k]; if (id < 0) continue
-      val cy = k / g; val cx = k - cy * g
-      for (d in 0 until 4) {
-        val nx = cx + ENC_DX[d]; val ny = cy + ENC_DY[d]
-        if (nx < 0 || ny < 0 || nx >= g || ny >= g) continue
-        val j = ny * g + nx
-        if (!inkCell[j] || reg[j] == id) continue
-        if (deltaE(s.fL[k], s.fA[k], s.fB[k], s.fL[j], s.fA[j], s.fB[j]) < (P2_CARRY_DE shl 6)) continue
-        rCarry[id] += cInk[j]
-      }
-    }
-    val boxArea = box.width().toLong() * box.height()
-    var cut = 0
-    for (id in 0 until nr) {
-      if (rArea[id] * 100 < boxArea * P2_MIN_PCT) continue
-      if (rRim[id] * 100 < rimAll.toLong() * P2_RIM_PCT) continue
-      if (rCarry[id] < P2_CARRY) continue
-      // ⚠ **被坐着的那批必须明显比这块小。** 钉着的性质「两半都留着」（红蓝两半的圆，两半都贴边）
-      //   第一版就是把两半都擦成 0：每一半都占着半圈轮廓、都把对方当"身上的远色"，两道门一起通过。
-      //   分开"第二层背景上坐着字"与"一块东西的两半"的，就是**大小不对称**：
-      //   翻译的「文」约占那块盘的 1~2 成，而红蓝两半各占对方的一半。
-      if (rCarry[id] * 4 > rArea[id]) continue
-      val pk = peak(id) ?: continue
-      // **厚度**：这块区域的掩码反复腐蚀，撑过几轮。一片大实心撑几十轮，一圈壳撑几轮。
-      var cur = BooleanArray(total)
-      var nCur = 0
-      for (y in box.top until box.bottom) {
-        val row = y * w
-        for (x in box.left until box.right) {
-          val i = row + x
-          val k = cellOf[i]
-          if (k < 0 || reg[k] != id || s.plate[i] != 0.toByte()) continue
-          if (Color.alpha(pixels[i]) != 255 || !onPeak(i, pk)) continue
-          cur[i] = true; nCur++
-        }
-      }
-      if (nCur == 0) continue
-      var rounds = 0
-      while (nCur > 0 && rounds < P2_THICK) {
-        val nxt = BooleanArray(total)
-        var n2 = 0
-        for (y in box.top until box.bottom) {
-          val row = y * w
-          for (x in box.left until box.right) {
-            val i = row + x
-            if (!cur[i]) continue
-            var full = true
-            for (d in 0 until 4) {
-              val nx = x + ENC_DX[d]; val ny = y + ENC_DY[d]
-              if (nx < 0 || ny < 0 || nx >= w || ny >= h || !cur[ny * w + nx]) { full = false; break }
-            }
-            if (full) { nxt[i] = true; n2++ }
-          }
-        }
-        rounds++; cur = nxt; nCur = n2
-      }
-      if (rounds < P2_THICK) continue
-      s.p2d[3] = rounds
-      for (y in box.top until box.bottom) {
-        val row = y * w
-        for (x in box.left until box.right) {
-          val i = row + x
-          val k = cellOf[i]
-          if (k < 0 || reg[k] != id || s.plate[i] != 0.toByte()) continue
-          if (Color.alpha(pixels[i]) != 255 || !onPeak(i, pk)) continue
-          p2[i] = 1; cut++
-        }
-      }
-    }
-    return cut
-  }
-
   private fun propagateField(
     w: Int, h: Int, total: Int, box: Rect, s: Scratch, seed: ByteArray,
   ) {
