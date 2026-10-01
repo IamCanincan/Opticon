@@ -3530,7 +3530,13 @@ internal object MonochromeMask {
   private const val P2_RIM = 3
   private const val P2_MERGE = 25
   private const val P2_MIN_PCT = 6
-  private const val P2_RIM_PCT = 30
+  /** ⚠ 这一档从 30 降到 **25** 是为了把饿了么放进来 —— 但**不是**为它一个人挑数：
+   *  174 张上把每道门的通过者全列出来排过序（`_harness/Plate3Kt` 扫 + `bench/gate_sweep.txt`），
+   *  25 与 20 的结果**一模一样**（都只有翻译 + 饿了么两张），30 是 1 张、35 是 0 张 ——
+   *  线落在 25.3%（饿了么）与下一档之间的**空档**里，不是悬崖边上。
+   *  驾考宝典也在 25.3%，但它**厚度只有 24 轮**，被下一道门挡住 —— 那就不追了：
+   *  同时降两道门才是"为一张图挑数"。 */
+  private const val P2_RIM_PCT = 25
   private const val P2_CARRY = 300
   private const val P2_CARRY_DE = 40
   private const val P2_THICK = 25
