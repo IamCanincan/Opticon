@@ -562,6 +562,28 @@ intentresolver / permissioncontroller / wellbeing。
 - 依赖版本集中在 `gradle/libs.versions.toml`。⚠ `material3` 必须显式写版本，
   不能用 BOM 托管：MD3E 的公开 API（`MaterialExpressiveTheme`）在稳定版里还是 internal。
 
+### 换机器 / 新环境：先点齐这七样再谈判据
+
+判据台与构建链**一大半不在 git 里**（`_harness/` 被 `.gitignore` 的 `/_*/` 挡着，`~/.gradle`、
+Android SDK、发布 keystore 更在仓库外），所以**"仓库拷过来了"不等于"这台机器能干活"**。
+2026-10-02 换机当天就是踩在这上面：`~/.gradle` 与整个 Android SDK 目录不存在、PATH 上的 `java`
+是 1.8，`regress.sh` 从第 0 行取 `$M` 就断了 —— 而 `_harness/out/` 里还躺着昨天的 class。
+断得不响的那一次才危险：本仓为"跑不起来的检查报通过"翻过不止一次车。
+
+| 要什么 | 落在哪 | 一句话验它 |
+|---|---|---|
+| JDK 17+ | 本机 `JAVA_HOME=D:\Java\jdk-21` | `"$JAVA_HOME/bin/java" -version`。**⚠ PATH 上排第一的是 Oracle 的 1.8**，凡是裸写 `java` 的地方都会拿到它（`-Dstdout.encoding=UTF-8` 在 1.8 上不认，中文键名直接成问号） |
+| Android SDK 37 | `local.properties` 里那个 `sdk.dir` | `ls $SDK/platforms` 要有 `android-37.0`（`AndroidVersion.ApiLevel=37.0`；这一档**没有** `android-37` 这个包名，`sdkmanager` 里它叫 `platforms;android-37.0`）。`--licenses` 必须先接受，否则 AGP 缺组件时不会自动补 |
+| Gradle 9.7.1 分发 | `~/.gradle/wrapper/dists/gradle-9.7.1-bin/<hash>/` | `sh gradlew --version`。**⚠ 这台机器上 Java 直连 `services.gradle.org` 的 TLS 被掐**（curl 直连却通），所以 wrapper 自己下不动；走镜像取 zip，按 `<hash>/` 下 `gradle-9.7.1/` + 一个同名 `.zip.ok` 摆好即可。** sha256 一定要对 `downloads.gradle.org` 上的官方值**，别对镜像的 |
+| kotlinc 2.4.20 四件 | `~/.gradle/caches/modules-2/files-2.1/`（判据台按 glob 找它） | `sh _harness/build.sh` 要 `0 error`。手工补 jar 时**目录名用文件的 sha1**（就是 gradle 自己的摆法），并对 Maven Central 的 `.sha1` 逐个核 |
+| 发布 keystore | `C:/Users/20653/.opticon/opticon-release.jks` | `keytool -list -v` 的 SHA256 必须是 `9757…5e64` —— 与 `app-release.apk` 用 `apksigner verify --print-certs` 打出来的**逐位相同**才算同一把钥匙。对不上就是签名冲突，设备上那张只能卸载重装（本应用配置会丢） |
+| 判据台语料 | `_harness/{rec3,corpus_dev2,dev1001,captured}` | `rec3 113 / corpus_dev2 183 / dev1001 35 / captured 32`。这些**不入库**，只靠整目录拷；少了任何一档，六段回归就少一项可比 |
+| Node | `node -v` | 判据台的 `.cjs` 脚本（`_regress.cjs` / `_abdiff.cjs` / `_undump.cjs`）都要它 |
+
+点齐之后**第一件事是跑 `cd _harness && sh regress.sh`，逐位对上 `bench/baseline.json` 再动代码** ——
+对不上就是量具换了，这一轮测的所有数都不能要（这一台 2026-10-02 复现的是淡 31 / 字均净 229 /
+残盘 3540 / 档数 304 / ρ色 0.935 / 兼容性 59-0-9 / 对表 61·8.4·1.9 / 平色饼 10-174，全对得上）。
+
 ## 开发：离线判据台与真图标重放
 
 取色这条链的判据全是数字，而数字**不能靠推演定**。仓库里 `_harness/`（被 `.gitignore` 的
@@ -585,6 +607,16 @@ java -cp out;stubs_out;<stdlib> harness.ReplayKt ../_dump.txt captured   # 重�
   "两份字节码一样=这一轮没在比东西"的闸门**永远不会响**：它把同一份内容写成
   `MonochromeMask.old.kt` / `.new.kt` 两个文件名，class 里带 `Compiled from <文件名>`，md5 必然不同。
   现在两份同名分目录，实测内容相同就当场拒跑。**防假 A/B 的那道闸也得有人防它。**
+  ⚠ **它先要"能跑"这件事也得有人防**：2026-10-02 换机后它从取依赖那一步就断了，而 `out/` 里
+  还躺着昨天的 class。七个脚本（`build/ab/ab_pair/abrun/cand/prun/regress`）现在一律
+  `. jdk.sh` 自己钉住 JDK 17+（`JAVA_HOME` → 本机已知的 JDK 目录 → 找不到就**硬失败，并写明
+  "这一轮一张都没测"**），不再指望 PATH 上那个 `java`（这台机器上它是 1.8）。
+  ⚠ **`框内随边长漂移` 那一栏现在会写"未测"**：只跑 384 一档时没有一张图被量过两次，`driftN`
+  恒为 0，而 0 在判定表里长得和"一格都没漂"一模一样，基线却是全扫记的 14 —— 于是它每轮都以
+  "持平/更好"放行（**基线里那个 0 就是这么被写进去过一次的**）。未测就印未测：不计退步、
+  也不冒充更好，`--update` 时**沿用旧基线的数**，要更新它必须
+  `EDGES=96,192,384,768 sh regress.sh --update`。阳性对照做过：临时补一份第二档边长的输出，
+  这一栏立刻变回一个真数。
   这台子对着 `bench/baseline.json` 比 12 项（113 张真图的 `淡/字均净中位/残盘/档数`、`MonoKt`
   三条单调性审计、兼容性台 PASS/GAP/FAIL、`框内` 随边长的漂移张数）。拿已知退步的那一轮喂它：
   `淡 35 vs 基线 25`、`字均净 216 vs 224` —— **当场红，退出码 1**。
@@ -747,6 +779,31 @@ MIT —— 见 [LICENSE](LICENSE)。
 ## 更新日志
 
 ### 未发布（v1.0.3 之后）
+- **2026-10-02：这台是刚换的机器，构建链一整条都是断的，而判据台差一点没发现自己瞎了。**
+  `~/.gradle`、Android SDK、发布 keystore 全都不在（它们在仓库外，git 里没有任何记录），
+  PATH 上的 `java` 还是 1.8。`regress.sh` 从第 0 行取依赖就退出 —— **它退出得干脆，危险的是
+  下一次断得不干脆**：`_harness/out/` 里躺着昨天的 class，`build.sh` 那句"编译 0 error"读的
+  `_kt.log` 一旦是过期的，表上就会是一片绿。这一条本仓写过三次，今天是第四次撞上。
+  - **点齐了七样**（清单与新机上手在「构建 → 换机器 / 新环境」）：JDK 21（`JAVA_HOME`，
+    ⚠ PATH 里排第一的是 Oracle 的 1.8）、SDK 37（`platforms;android-37.0` 这个包名反直觉，
+    没有 `android-37`）、Gradle 9.7.1（⚠ Java 直连 `services.gradle.org` 的 TLS 被掐，curl 却通，
+    走镜像取 zip、sha256 对官方 `downloads.gradle.org` 的值）、kotlinc 2.4.20 四件（手工补进
+    gradle 的缓存布局，目录名用文件 sha1，逐个对 Maven Central 的 `.sha1`）、发布 keystore、
+    四档语料（`rec3 113 / corpus_dev2 183 / dev1001 35 / captured 32`，**都不入库，只靠整目录拷**）、Node。
+  - **keystore 是主人从旧机器拷来的，先验身份再装机**：`keytool -list -v` 的 SHA256
+    `9757…5e64` 与 `app-release.apk` 上 `apksigner verify --print-certs` 打的**逐位相同** →
+    同一把钥匙，**不必卸载、本应用配置不丢**。（若对不上就是签名冲突，代价是设备上重装。）
+  - **补完之后先复现基线，再谈别的**：六段回归全绿，12 项逐位对上 10-01 那份基线
+    （淡 31 / 字均净 229 / 残盘 3540 / 档数 304 / ρ色 0.935 / 兼容性 59-0-9 / 对表 61·8.4·1.9 /
+    平色饼 10-174）—— 对不上就意味着量具换了，这一轮所有数都不能用。`assembleRelease` 也通了。
+  - **两处量具修补**（都在 `_harness/`，不入库，所以账写在这里）：
+    ① 七个脚本一律 `. jdk.sh` 自己钉 JDK 17+，找不到就**硬失败并写明"这一轮一张都没测"**；
+    ② `框内随边长漂移` 只跑一档边长时恒为 0 却被判"持平/更好"，现在印**未测**、不计退步也不
+    冒充更好，`--update` 沿用旧基线的数 —— 基线里那一栏曾经就是这个 0。阳性对照：补一份
+    第二档边长的输出，这一栏立刻变回真数。
+  - **设备侧一格没动**：桌面进程连着跑了 19h13m（还是昨天 17:31 那次重载之后的同一份渲染），
+    模块仍在 system_server / wellbeing / permissioncontroller 里，本轮没有重装、没有杀进程。
+    要新像素得手把桌面重载一次。
 - **微博「底部奇怪」第一次被看见**（`1024f79` 把它补进 `MonoDump.WATCH` → 主人 17:31 重载 →
   **35 张真机像素落地** `_harness/dev1001/`，重组成文有脚本 `_undump.cjs`）。
   **可信性先证过**：`dev1001/icon21_com.sina.weibo…` 跑判据台得到
