@@ -311,6 +311,135 @@ internal object MonochromeMask {
   )
 
   /** 一次 [build] 的全部可复用数组。放在 [ThreadLocal] 里，所以整条链不需要锁。 */
+
+  /** 「同一块平色」的界：同色 = 真 ΔE<2（⚠ `deltaE` 返回**真值 ×64**，写常数先 `shl 6`）；
+   *  块至少占画布 3‰（⚠ 必须是**比例**，见 [VOTE_MIN_PERMILLE] 那条）；
+   *  少数侧要占够 10% 才算"真给了两个答案"。数与扫档见 README。 */
+  private const val VOTE_DE = 2 shl 6
+  // ⚠ **块的最小尺寸按画布的千分数，不按绝对格数**：第一版写死 500 格，全扫四档边长当场
+  //   露馅 —— 开火 1 行(96) → 2(192) → 9(384) → 19(768)，抹的格 216 → 27296。边长翻倍面积×4，
+  //   过线的块自然变多，这就是一条"会随边长换人的闸门"（与 `outlineFamilies` 那条
+  //   「轮廓按周长长、面积×4」是同一族错配）。500/384² = 3.4‰，按这个数换成千分数。
+  private const val VOTE_MIN_PERMILLE = 3
+  private const val VOTE_SHARE = 10
+  /** 第二遍传播只接这么淡的格（0..255 浓度口径）。理由见 [flatVote] 第二遍那段。 */
+  private const val VOTE_PROP_HI = 40
+
+  /**
+   * **「同一块平色被给了两个答案」—— 按这块自己的多数定调，少数侧统一过去。**
+   *
+   * 与已死的八把的差别：那八把全在问"这一格是不是底"（离底多远、几族、多纯、贴不贴边、
+   * 边界在源图里有没有），这一把**不问参照**，只问"这一块自己是不是被交付成了两套浓度"，
+   * 而修的方向由**这块的多数**定 —— 多数是底就抹，多数是墨就**抬**。
+   *
+   * 为什么必须允许抬：合成用例「三段距离」里那块"偏一点的红"，模型把贴着边界的 12 格判成了
+   * 0、其余 4896 格交 43。只抹的那一版（`plateLeak`）把 4896 格收走，打红了钉着的
+   * 「最近那段是淡的（不是整块底）」；按多数定调它算出的是**抬那 12 格**，性质原样绿。
+   * 数与扫档：`_harness/VoteKt.kt`（README「多数定调这一刀报过价了」那条）。
+   *
+   * ⚠ **破"只减不加"**：这是这一族第一次往上动浓度，代价写在这里，不藏。
+   * ⚠ 块的代表色取**起点那一格的源 Lab**（与报价那台同一个口径）。按均值取会撞
+   *   `跨峰的均值不是一个颜色` 那条老坑 —— 渐变盘会被均值劈成两半。
+   *
+   * @return 动了的格数（抹 + 抬）。0 = 这张图一个都没碰到。
+   */
+  private fun flatVote(out: IntArray, pixels: IntArray, w: Int, h: Int, box: Rect, s: Scratch): Int {
+    val total = w * h
+    if (s.vote.size < total) s.vote = ByteArray(total)
+    val comp = s.vote
+    for (i in 0 until total) comp[i] = 0
+    if (s.queue.size < total) return 0
+    val q = s.queue
+    var erase = 0; var raise = 0; var hits = 0
+    val tgt = IntArray(total) { -1 }          // 第一遍给这一格定下的目标浓度（-1 = 没定过）
+    for (y0 in box.top until box.bottom) for (x0 in box.left until box.right) {
+      val start = y0 * w + x0
+      if (Color.alpha(pixels[start]) != 255 || comp[start] != 0.toByte()) continue
+      // 走一块：4 连通，边条件是"与起点同色"
+      var head = 0; var tail = 0
+      // ⚠ **1 = 走过，不是组件号**：第一版往这张 ByteArray 里存 `mark++`，过了 255 块绕回 0，
+      //   而 0 在这张数组里的意思正是"没走过" —— 于是同一片格子被反复入队，队列越界
+      //   （`ArrayIndexOutOfBoundsException: Index 147456`，SelfTest 当场炸）。byte 装不下组件号。
+      q[tail++] = start; comp[start] = 1
+      val sl = s.labL[start].toInt() and 0xffff; val sa = s.labA[start].toInt() and 0xffff
+      val sb = s.labB[start].toInt() and 0xffff
+      while (head < tail) {
+        val c = q[head++]
+        val cy = c / w; val cx = c - cy * w
+        for (j in intArrayOf(if (cx > box.left) c - 1 else -1, if (cx < box.right - 1) c + 1 else -1,
+          if (cy > box.top) c - w else -1, if (cy < box.bottom - 1) c + w else -1)) {
+          if (j < 0 || !solidPx(pixels, j) || comp[j] != 0.toByte()) continue
+          if (deltaE(s.labL[j].toInt() and 0xffff, s.labA[j].toInt() and 0xffff, s.labB[j].toInt() and 0xffff,
+                     sl, sa, sb) >= VOTE_DE) continue
+          comp[j] = 1; q[tail++] = j
+        }
+      }
+      val n = tail
+      if (n * 1000 < total * VOTE_MIN_PERMILLE) continue      // 千分数：与边长无关
+      // 三套浓度：底 / 地板带 / 实墨
+      var n0 = 0; var nf = 0; var ns = 0; var sumF = 0L; var sumS = 0L
+      for (u in 0 until n) {
+        val a = out[q[u]] ushr 24
+        if (a <= 4) n0++ else if (a < 80) { nf++; sumF += a } else { ns++; sumS += a }
+      }
+      val side = intArrayOf(n0, nf, ns)
+      if (side.count { it * 100 >= n * VOTE_SHARE } < 2) continue      // 少数侧不够材料性 → 不动
+      val maxSide = side.max()!!
+      val maj = if (maxSide == ns) 2 else if (maxSide == nf) 1 else 0
+      val target = when (maj) { 0 -> 0; 1 -> (sumF / maxOf(nf, 1)).toInt(); else -> (sumS / maxOf(ns, 1)).toInt() }
+      hits++
+      for (u in 0 until n) {
+        val c = q[u]
+        val a = out[c] ushr 24
+        val inMaj = if (maj == 0) a <= 4 else if (maj == 1) a > 4 && a < 80 else a >= 80
+        if (inMaj || a == target) continue
+        out[c] = (target shl 24) or 0x00FFFFFF
+        tgt[c] = target
+        if (target < a) erase++ else raise++
+      }
+    }
+    // 第二遍：**已定的决策沿"相邻两格局部同色"再传一次**。
+    //   为什么需要：分块的条件是"与块**起点**同色"，一道渐变盘会被它劈成好几块 —— 微博底部
+    //   那两条薄条就是这样自成一块、少数侧只占 2.3% / 5.9%，被 10% 材料性门故意放掉，
+    //   于是"抹了大半、还剩痕迹"（主人 2026-10-03 装机后报的就是这个）。
+    //   起点色只是**分块的工具**，不该拦住决策本身往同一块颜色里传。
+    //   传的条件收紧两处：只踩**地板带**的格（不碰实墨、不碰已经交成 0 的），且必须贴着
+    //   上一遍**改过**的格（`chg`）—— 没开火的图一格都不动。
+    if (hits > 0) {
+      val chg = ByteArray(total)
+      val q2 = IntArray(total)
+      var n2 = 0
+      var head2 = 0
+      // ⚠ 传播**继承种子那一块定下的目标**：第一版把这里写死成 0，于是"抬"出来的块
+      //   转头把自己的邻居抹成 0 —— 决策自相矛盾，且只在开抬的图上犯（azure / appui）。
+      for (i in 0 until total) if (tgt[i] >= 0) { chg[i] = 1; q2[n2++] = i }
+      while (head2 < n2) {
+        val c = q2[head2++]
+        val cy = c / w; val cx = c - cy * w
+        for (j in intArrayOf(if (cx > box.left) c - 1 else -1, if (cx < box.right - 1) c + 1 else -1,
+          if (cy > box.top) c - w else -1, if (cy < box.bottom - 1) c + w else -1)) {
+          if (j < 0 || chg[j] != 0.toByte() || !solidPx(pixels, j)) continue
+          val a = out[j] ushr 24
+          // 只接**淡到地板**的格：传播要收的是「没被分块规则接到的薄条」，而薄条按定义就是最淡
+          // 那批（微博底部 α≈20）。中间调不在目标物里 —— 放它们跟着传，小步点盘的中间调会被
+          // 整片收走，ρ色 从 1.000 掉到 0.670。
+          if (a <= 4 || a >= VOTE_PROP_HI) continue
+          if (deltaE(s.labL[j].toInt() and 0xffff, s.labA[j].toInt() and 0xffff, s.labB[j].toInt() and 0xffff,
+                     s.labL[c].toInt() and 0xffff, s.labA[c].toInt() and 0xffff, s.labB[c].toInt() and 0xffff) >= VOTE_DE) continue
+          chg[j] = 1; tgt[j] = tgt[c]
+          out[j] = (tgt[c] shl 24) or 0x00FFFFFF
+          if (tgt[c] < a) erase++ else raise++
+          q2[n2++] = j
+        }
+      }
+    }
+    s.voteErase = erase; s.voteRaise = raise; s.voteHits = hits
+    return erase + raise
+  }
+
+  /** 源像素是不是全不透明（[flatVote] 只在实心格里走块）。 */
+  private fun solidPx(pixels: IntArray, i: Int): Boolean = (pixels[i] ushr 24) == 255
+
   private class Scratch {
     var labL = ShortArray(0)
     var labA = ShortArray(0)
@@ -346,6 +475,10 @@ internal object MonochromeMask {
     /** [propagateBands] 自己那份"这一格已经归进某条带"的标记。
      *  ⚠ **自己的数组，不借 [visited]** —— 借来的数组留脏数据抓不住，[region] 那条写过两遍了。 */
     var bandSeen = ByteArray(0)
+    /** [flatVote] 自己的分块号（0 = 还没走到）。自己的数组，不借 `visited`。 */
+    var vote = ByteArray(0)
+    /** [flatVote] 的三笔账：抹了多少格、抬了多少格、动了几块（只为进日志）。 */
+    var voteErase = 0; var voteRaise = 0; var voteHits = 0
     /** H2 那一圈轮廓到自己中位色的 p97 ΔE —— 「这一圈是不是一种颜色」（见 [outlineFamilies]）。 */
     var ringSpread = 0
     var hist = IntArray(DBUCKETS)
@@ -894,6 +1027,11 @@ internal object MonochromeMask {
     //   结果"接一条线"这件事被放大成"改一整张的台阶"（易班上看跳≥30 的连续像素对 0%→1%、p99 25→52，
     //   而真正被补的只有 20 格 —— 硬边是发档造的，不是那 20 格）。放在发档之后，两者才解耦。
     val bands = if (tonal == null) propagateBands(out, pixels, w, h, box, s) else Triple(0, 0, 0)
+
+    // 4.7) **同一块平色被给了两套浓度的，按这块自己的多数定调统一**（可抬，见 [flatVote]）。
+    //   放在接带之后：`propagateBands` 补的是"一条连续描边被渐变切成几截"，它先跑完，
+    //   这一块才拿到最终浓度 —— 在它之前统一会被它再改一遍。
+    val voteN = if (tonal == null) flatVote(out, pixels, w, h, box, s) else 0
     val stretch = "${global?.second ?: "已满"}+${if (tonal == null) stretchMark(out, pixels, w, h, box, s) else "已满"}"
 
     // 5) 形状体检。**修不修形状看浓度是谁给的**：颜色给的（β 高）才可能有"切底切出来的杂点"，
@@ -960,7 +1098,7 @@ internal object MonochromeMask {
     val fill = st.kept.toFloat() / boxArea
     return Output(
       out, fill, st.hole, st.largest, st.components, st.smallShare, softShare(st, box),
-      "带占=${s.bandSolid * 100 / 255} 底占=${pct(ground.share)} H=${ground.hyp} 族=${ground.families} 底厚=${ground.thick}" +
+      "票=${s.voteErase}抹/${s.voteRaise}抬/${s.voteHits}块 带占=${s.bandSolid * 100 / 255} 底占=${pct(ground.share)} H=${ground.hyp} 族=${ground.families} 底厚=${ground.thick}" +
       " 同色=${ground.inkSame}/${s.vetoSame} 拦=${s.veto}" +
       // 实心两半各多少格：`盘实<墨实` 就是"这块底比它承载的东西还小"，见 [thinPlate]。
       // 判据台上量过一次就够、日志上要能当场看见 —— 抖音那一张退掉之前是 6294/9614。
