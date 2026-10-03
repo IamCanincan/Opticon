@@ -1031,6 +1031,10 @@ internal object MonochromeMask {
     // 4.7) **同一块平色被给了两套浓度的，按这块自己的多数定调统一**（可抬，见 [flatVote]）。
     //   放在接带之后：`propagateBands` 补的是"一条连续描边被渐变切成几截"，它先跑完，
     //   这一块才拿到最终浓度 —— 在它之前统一会被它再改一遍。
+    // ⚠ **三笔账每次先归零**：它们是 Scratch 上的共享字段，而满幅那一支（`tonal != null`）
+    //   压根不跑这一刀 —— 不归零的话那张日志会把**上一张图**的 `票=` 印在自己行里
+    //   （第一次跑 12 张点名表时，智慧树就顶着浙江在线的 4126 抹，看着像它也开火了）。
+    s.voteErase = 0; s.voteRaise = 0; s.voteHits = 0
     val voteN = if (tonal == null) flatVote(out, pixels, w, h, box, s) else 0
     val stretch = "${global?.second ?: "已满"}+${if (tonal == null) stretchMark(out, pixels, w, h, box, s) else "已满"}"
 
