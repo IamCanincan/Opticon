@@ -324,6 +324,11 @@ internal object MonochromeMask {
   private const val VOTE_SHARE = 10
   /** 第二遍传播只接这么淡的格（0..255 浓度口径）。理由见 [flatVote] 第二遍那段。 */
   private const val VOTE_PROP_HI = 40
+  /**
+   * 地板带的均值低于这个数，这块就判成"底 + 膜"而不是"一块真浓度"，只收带、不抬底。
+   * 取的是实测两族（5..24 与 35..63）中间那段空档的下沿，理由见 [flatVote] 里 `leak` 那段。
+   */
+  private const val VOTE_BAND_INK = 25
 
   /**
    * **「同一块平色被给了两个答案」—— 按这块自己的多数定调，少数侧统一过去。**
@@ -385,14 +390,25 @@ internal object MonochromeMask {
       val side = intArrayOf(n0, nf, ns)
       if (side.count { it * 100 >= n * VOTE_SHARE } < 2) continue      // 少数侧不够材料性 → 不动
       val maxSide = side.max()!!
+      val bandMean = if (nf > 0) (sumF / nf).toInt() else 0
+      // **地板带自己当多数，不等于它是答案。** 带跨 4..80，均值落在带的最下一截时，这块
+      // 不是"平色被给了两套浓度"，而是"底 + 一层漏出来的膜" —— 按均值统一会把干净地板
+      // (α≤4) 一起抬成膜。icbc 实测：788 格从 α=0..7 抬到 9..11，同时 510 格从 13..33 抹到
+      // 同一档，两边都往"一层 4% 的灰"收 —— 那正是主人说的「还是有痕迹」的成因。
+      // 判它是不是膜，只看带自己的均值：全量 183 张里 maj=1 的 11 块，均值分成两族
+      // 5..24 与 35..63，中间 25..34 是空的，取空档下沿。见 README「地板带当多数」。
+      val leak = maxSide == nf && bandMean < VOTE_BAND_INK
       val maj = if (maxSide == ns) 2 else if (maxSide == nf) 1 else 0
-      val target = when (maj) { 0 -> 0; 1 -> (sumF / maxOf(nf, 1)).toInt(); else -> (sumS / maxOf(ns, 1)).toInt() }
+      val target = when { leak -> 0; maj == 0 -> 0; maj == 1 -> bandMean; else -> (sumS / maxOf(ns, 1)).toInt() }
       hits++
       for (u in 0 until n) {
         val c = q[u]
         val a = out[c] ushr 24
-        val inMaj = if (maj == 0) a <= 4 else if (maj == 1) a > 4 && a < 80 else a >= 80
-        if (inMaj || a == target) continue
+        // `keep` = 这一侧本来就是答案，不动它。判成膜时反过来：要收的正是**带里那些格**，
+        // 地板（本来就干净）与实墨（`ns`，chrome 那块有 1686 格）两侧一律留着 ——
+        // 一句"多数偏淡"没有权力抹掉真墨。
+        val keep = if (leak) a <= 4 || a >= 80 else if (maj == 0) a <= 4 else if (maj == 1) a > 4 && a < 80 else a >= 80
+        if (keep || a == target) continue
         out[c] = (target shl 24) or 0x00FFFFFF
         tgt[c] = target
         if (target < a) erase++ else raise++
