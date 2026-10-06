@@ -143,7 +143,7 @@ internal object CorpusCapture {
     }
     Log.d(TAG, "Corpus: 开始 ${entries.size} 个包 edge=$edge → ${dir.absolutePath}")
     val index = StringBuilder("pkg\tlabel\tfile\tedge\tsig\tcls\tfg\tbg\tmono\tkb\t" +
-      "fgAlpha\tbgAlpha\tmonoFile\tmonoAlpha\tbgColor\n")
+      "fgAlpha\tbgAlpha\tmonoFile\tmonoAlpha\tbgColor\tfgFile\n")
     var written = 0
     var skipped = 0
     for (info in entries) {
@@ -173,6 +173,13 @@ internal object CorpusCapture {
       // 的免费标注对（同一张图、同一个 384 口径，一边彩色一边人画的墨）。模型从来没对着它们量过，
       // 而这是唯一能把"像不像"从我的口味变成可对表数字的东西。文件名带同一个 `sig`，配对靠它。
       val mono = dumpMono(dir, drawable, edge, pkg, resName(pm, info), sig)
+      // ⚠ **上面那张 `file` 是合成图，不是模型看到的图。** 自适应图标在运行时只把
+      //   **前景层**交给模型（`MonochromeSynth` 取 `source.foreground`），而盘在背景层里 ——
+      //   真机 91 个自适应图标的前景层**中位 74% 是透明**，也就是说合成图里那一大块实心的盘，
+      //   模型从来没见过。审计线一直对着合成图打分，等于给一个运行时不存在的输入挑毛病
+      //   （2026-10-06 发现；`MonoDump` 那条通道没这个问题，它带的就是模型吃进去的那一张）。
+      //   所以这里**另存一张 `_fg.png` = 前景层**，文件名与合成图同 `sig`，配对靠它。
+      val fgFile = dumpForeground(dir, drawable, edge, file)
       index.append(
         listOf(
           pkg, label(pm, info), file, edge, sig, drawable.javaClass.simpleName,
@@ -184,7 +191,7 @@ internal object CorpusCapture {
           // 前景层与单色层的 alpha 分布：这一列回答的是"平台其实已经把图形与盘分开给了我们，
           // 我们为什么要从合成图里把它猜回来"（见 README「更通用的路」那条）。
           alphaStat(drawable, edge, false), alphaStat(drawable, edge, true),
-          mono.first, mono.second, bgColor(drawable, edge),
+          mono.first, mono.second, bgColor(drawable, edge), fgFile,
         ).joinToString("\t")
       ).append('\n')
       written++
@@ -301,6 +308,17 @@ internal object CorpusCapture {
       if (op.isEmpty()) return "empty"
       val mid = pick@{ sh: Int -> op.map { (it shr sh) and 0xff }.sorted()[op.size / 2] }
       "med%02X%02X%02X/%d".format(mid(16), mid(8), mid(0), op.size * 100 / px.size)
+    }.getOrDefault("err")
+  }
+
+  /** 把**前景层**单独存成 `<合成图名去掉.png>_fg.png` —— 那才是运行时交给模型的一张。 */
+  private fun dumpForeground(dir: File, drawable: Drawable, edge: Int, composite: String): String {
+    val adaptive = drawable as? AdaptiveIconDrawable ?: return "-"
+    val layer = runCatching { adaptive.foreground }.getOrNull() ?: return "null"
+    val name = composite.removeSuffix(".png") + "_fg.png"
+    return runCatching {
+      if (!File(dir, name).exists()) File(dir, name).writeBytes(png(raster(layer, edge, layerBounds(edge))))
+      name
     }.getOrDefault("err")
   }
 
