@@ -577,7 +577,7 @@ Android SDK、发布 keystore 更在仓库外），所以**"仓库拷过来了"�
 | Gradle 9.7.1 分发 | `~/.gradle/wrapper/dists/gradle-9.7.1-bin/<hash>/` | `sh gradlew --version`。**⚠ 这台机器上 Java 直连 `services.gradle.org` 的 TLS 被掐**（curl 直连却通），所以 wrapper 自己下不动；走镜像取 zip，按 `<hash>/` 下 `gradle-9.7.1/` + 一个同名 `.zip.ok` 摆好即可。** sha256 一定要对 `downloads.gradle.org` 上的官方值**，别对镜像的 |
 | kotlinc 2.4.20 四件 | `~/.gradle/caches/modules-2/files-2.1/`（判据台按 glob 找它） | `sh _harness/build.sh` 要 `0 error`。手工补 jar 时**目录名用文件的 sha1**（就是 gradle 自己的摆法），并对 Maven Central 的 `.sha1` 逐个核 |
 | 发布 keystore | `C:/Users/20653/.opticon/opticon-release.jks` | `keytool -list -v` 的 SHA256 必须是 `9757…5e64` —— 与 `app-release.apk` 用 `apksigner verify --print-certs` 打出来的**逐位相同**才算同一把钥匙。对不上就是签名冲突，设备上那张只能卸载重装（本应用配置会丢） |
-| 判据台语料 | `_harness/{rec3,corpus_dev2,dev1001,captured}` | `rec3 113 / corpus_dev2 183 / dev1001 35 / captured 32`。这些**不入库**，只靠整目录拷；少了任何一档，六段回归就少一项可比 |
+| 判据台语料 | `_harness/{rec3u,rec3,corpus_dev2,dev1001,captured}` | `rec3u 62 / rec3 113 / corpus_dev2 183 / dev1001 35 / captured 32`。这些**不入库**，只靠整目录拷；少了任何一档，六段回归就少一项可比。**`rec3u` 才是回归台现在默认吃的那份**（= `rec3` 按像素去重，`node _dedupe.cjs rec3 rec3u`）：`rec3` 里 51 个文件与别人逐字节相同，拿它当分母读数会偏（详见更新日志「45% 是重复行」那条）。要复现旧基线：`CORPUS=rec3 sh regress.sh` |
 | Node | `node -v` | 判据台的 `.cjs` 脚本（`_regress.cjs` / `_abdiff.cjs` / `_undump.cjs`）都要它 |
 
 点齐之后**第一件事是跑 `cd _harness && sh regress.sh`，逐位对上 `bench/baseline.json` 再动代码** ——
@@ -831,8 +831,16 @@ MIT —— 见 [LICENSE](LICENSE)。
     淡率 27% vs 26%（稳）、字均净中位 229 vs 232（微）、**框内中位 0.27 vs 0.35（差 0.08）**、
     顶占比中位 63 vs 68、**残盘合计 3540 vs 1180（纯行求和，被放大近 3 倍）**。
   - 现在每次全扫会在表头印 `⚠ 语料 113 行里只有 62 张是不同的像素`，点名表标头同时给行数与
-    不同像素数。**没有动分母**：`语料张数（分母）` 那道闸存在的意义就是"不许悄悄改分母"，
-    去重是一次**要点头的重新立基线**，不是顺手清理。探针：`_harness/_dupweight.cjs`。
+    不同像素数。探针：`_harness/_dupweight.cjs`。
+  - ✅ **当天定了：分母换成去重那份。** `rec3u` = `rec3` 按像素去重（`node _dedupe.cjs rec3 rec3u`，
+    留 62 去 51），`regress.sh` 的 3/4/5 三段改吃 `$CORPUS`（默认 `rec3u`，`CORPUS=rec3` 可复现旧基线），
+    基线已 `--update` 重立。重立后同一份代码的读数：**淡 30→16、漂移 14 行→6 张、
+    ρ色中位 0.935→0.984、ρ色<0.95 从 57→28、字均净中位 229→232**。
+    - ⚠ **ρ色那两格是往"更好"的方向变的，而这不是算法变好了** —— 是被重复抓的那批图标恰好
+      单调性更差，113 行的中位数被它们拖着。这正说明**旧那块板从来不是逐图标的读数**。
+      只有 `顶平% 45→46.6` 是去掉权重后真变差的一点，记在这儿，不藏。
+    - 同一轮 `兼容性台 PASS=60 GAP=0 FAIL=8`、`对表 n=61 med=1.9 mean=8.4`、SelfTest 全过 ——
+      这三段不吃 `rec3`，所以它们逐位不动本身就是"只换了分母、没换代码"的证据。
 - ✅ **收了：`flatVote` 不再往干净地板上刷膜（`VOTE_BAND_INK = 25`）**。这条账从 icbc 那张来的，
   而 icbc 正是上一条说"像素没捞回来"的那一张 —— 它一直在 `corpus_dev2/` 里，是我没去找。
   - **数**：edge=384 离线复现真机报的 `抹510/抬788`，**逐格对上**（所以那不是我后来否掉的那批回声）。
