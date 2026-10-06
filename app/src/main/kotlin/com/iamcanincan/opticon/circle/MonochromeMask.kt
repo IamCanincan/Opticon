@@ -261,7 +261,7 @@ internal object MonochromeMask {
   }
 
   /** 两组 Lab（×64）之间的 ΔE76，返回真值 ×64。sRGB 全域上界约 130，Short 装得下。 */
-  private fun deltaE(l1: Int, a1: Int, b1: Int, l2: Int, a2: Int, b2: Int): Int {
+  internal fun deltaE(l1: Int, a1: Int, b1: Int, l2: Int, a2: Int, b2: Int): Int {
     val dl = (l1 - l2).toLong()
     val da = (a1 - a2).toLong()
     val db = (b1 - b2).toLong()

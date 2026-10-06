@@ -143,7 +143,7 @@ internal object CorpusCapture {
     }
     Log.d(TAG, "Corpus: 开始 ${entries.size} 个包 edge=$edge → ${dir.absolutePath}")
     val index = StringBuilder("pkg\tlabel\tfile\tedge\tsig\tcls\tfg\tbg\tmono\tkb\t" +
-      "fgAlpha\tbgAlpha\tmonoFile\tmonoAlpha\n")
+      "fgAlpha\tbgAlpha\tmonoFile\tmonoAlpha\tbgColor\n")
     var written = 0
     var skipped = 0
     for (info in entries) {
@@ -184,7 +184,7 @@ internal object CorpusCapture {
           // 前景层与单色层的 alpha 分布：这一列回答的是"平台其实已经把图形与盘分开给了我们，
           // 我们为什么要从合成图里把它猜回来"（见 README「更通用的路」那条）。
           alphaStat(drawable, edge, false), alphaStat(drawable, edge, true),
-          mono.first, mono.second,
+          mono.first, mono.second, bgColor(drawable, edge),
         ).joinToString("\t")
       ).append('\n')
       written++
@@ -276,6 +276,32 @@ internal object CorpusCapture {
     }
     val n = px.size
     return "${zero * 100 / n}/${solid * 100 / n}"
+  }
+
+  /**
+   * 背景层**自己声明的盘色** —— `flat/med` 前缀 + `#RRGGBB`，渐变或半透明再跟 `/实心%`。
+   *
+   * 为什么要单独取这一列：判据台六把尺子（占比 / 厚度 / 围合 / 环散 / 轮廓归一 / 调子闸门三条）
+   * 全在**从合成图的像素里猜"哪块是盘"**，而自适应图标的背景层就是设计者**写下来的那块盘**。
+   * 这不是第七个阈值，是换一种证据：`ColorDrawable` 直接给一个整数；Vector/Bitmap 渲染后取中位色。
+   * 对满幅插画它匹配不到任何像素（画里没有那个颜色），所以它**只在真有盘时起作用**，
+   * 不像阈值那样必须把两类图分开。
+   * ⚠ 只是**取证**：不参与任何判断，也不改变交出去的掩码。
+   */
+  private fun bgColor(drawable: Drawable, edge: Int): String {
+    val adaptive = drawable as? AdaptiveIconDrawable ?: return "-"
+    val layer = runCatching { adaptive.background }.getOrNull() ?: return "null"
+    return runCatching {
+      (layer as? android.graphics.drawable.ColorDrawable)?.color?.let { return "flat%06X".format(it and 0xFFFFFF) }
+      val n = 96
+      val bmp = raster(layer, n, layerBounds(n))
+      val px = IntArray(n * n)
+      bmp.getPixels(px, 0, n, 0, 0, n, n)
+      val op = px.filter { (it ushr 24) >= 128 }
+      if (op.isEmpty()) return "empty"
+      val mid = pick@{ sh: Int -> op.map { (it shr sh) and 0xff }.sorted()[op.size / 2] }
+      "med%02X%02X%02X/%d".format(mid(16), mid(8), mid(0), op.size * 100 / px.size)
+    }.getOrDefault("err")
   }
 
   private fun alphaStat(drawable: Drawable, edge: Int, background: Boolean): String {
