@@ -2656,9 +2656,9 @@ internal object MonochromeMask {
       //   四周全是空气 —— "什么都是底"不可能是对的，**岛本身就是图形**。所以豁免加一条前提。
       val island = box.width().toLong() * box.height() * 100L <=
         w.toLong() * h * GROUND_ISLAND_PCT.toLong()
-      if ((p.share < PLATE_ALL_SHARE || (p.families <= 1 && !island)) && !vacuous(s, p)) return p
+      if ((p.share < PLATE_ALL_SHARE || (p.families <= 1 && !island)) && !vacuous(s, p, box)) return p
       if (p.share >= PLATE_ALL_SHARE && p.families > 1) s.veto = s.veto or 16
-      if (vacuous(s, p)) s.veto = s.veto or 1
+      if (vacuous(s, p, box)) s.veto = s.veto or 1
       h1share = p.share; h1thick = p.thick; h1fams = p.families; h1ink = p.iN
     }
     // 只被「底比墨小」挡住的那个 H2 候选，留到**最后**再决定要不要用（见下面 air 之前那一段）。
@@ -2787,7 +2787,7 @@ internal object MonochromeMask {
       // 验收两件事：这块底**没吃掉整框**，而且它**与剩下的墨不是一个颜色**。后者是
       // [GROUND_INK_SAME_PCT] 那一段：真机钉钉那一批（判据台 23 行）全靠它。
       // 第三件（2026-09-28，抖音「还是缺了一部分」）：它**不比墨那一侧小** —— 见 [thinPlate]。
-      val vac = vacuous(s, alt)
+      val vac = vacuous(s, alt, box)
       val thin = thinPlate(alt)
       val narrow = alt.solid - alt.zero < GROUND_MIN_SPAN
       if (alt.share < PLATE_ALL_SHARE && !vac && !thin && !narrow) {
@@ -3024,7 +3024,7 @@ internal object MonochromeMask {
     p.thick = plateThickness(w, box, s)
     p.holed = (holeInk * 100 / boxArea).toInt()
     // 区域关系说"这块大区域是底"，最后一问仍然是它切开了没有：一块与画同色的"底"不是底。
-    if (vacuous(s, p)) { s.h0why = 4; s.veto = s.veto or 4; return null }
+    if (vacuous(s, p, box)) { s.h0why = 4; s.veto = s.veto or 4; return null }
     s.h0why = 1     // 接手了：这一张的底是"区域关系"给的，不是颜色位置给的
     return p
   }
@@ -3038,12 +3038,21 @@ internal object MonochromeMask {
    *   openlist 被 H2 以 `底占=0.89 β=18` 接手，cc 从 2 碎成 14，就是因为它的 `inkSame` 掉到 13
    *   而不再被退。与 `残盘=` 那条用同一个 `colourDriven` 的门槛（128），不另立数。
    */
-  private fun vacuous(s: Scratch, p: Pass): Boolean {
+  private fun vacuous(s: Scratch, p: Pass, box: Rect): Boolean {
     // `inkSame < 0` = 有一侧是空的（整张都是底，或整张都不是），**量不出来**：不赞成也不推翻。
     // 这条不只是保守：`meanCov` 是在墨那一侧上量的，墨侧为空时它退化成 0 —— 没有下面那个
     // `inkSame >= 0` 的短路，「整张纯色」（正确答案是一张空掩码）会被误判成"底是空气"而退到
     // H3，整张涂成实心饼。2026-09-28 就是这么红了一次。
-    if (p.inkSame < 0) return false
+    // ⚠ 但"墨侧为空"有**两种**，上面那句只说中了其中一种（2026-10-07 逐张量出来的）：
+    //   · 整框每一格都是这层实心漆（`gN == 框面积`）—— 这才真是「整张纯色」：没有图形，
+    //     空掩码是对的；
+    //   · 框里**还有空气**（`gN < 框面积`）—— 这块"底"只是坐在空气里的一个形状，而形状
+    //     本身就是图形（兼容性台 `空气+白剪影` 那条契约说的是同一件事）。在这里弃权，交出去
+    //     的就是一张空掩码 = 屏幕上整个看不见。真机四张全死在这条上：documentsui
+    //     `盘实=98971/0`、glimpse `103809/0`、kernelsu `30276/0`、pixez `22496/0`。
+    //   分的不是颜色，是**这块"底"里有多少格真是实心漆** —— 一个 α 几何量。刻意没有百分比：
+    //   「整张纯色」那一张 `gN` 与框面积**恰好相等**，四张坏图差的都是几万格，没有可调的空间。
+    if (p.inkSame < 0) return p.iN == 0 && p.gN.toLong() < box.width().toLong() * box.height()
     if (p.inkSame < GROUND_INK_SAME_PCT && p.meanCov >= 128) return false
     s.vetoSame = if (p.meanCov < 128) -p.meanCov else p.inkSame
     return true
