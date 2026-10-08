@@ -848,7 +848,19 @@ MIT —— 见 [LICENSE](LICENSE)。
     同一件东西（它是 `mResources.getDrawable(mResID)` —— **`mResID` 从哪个主题属性解析出来还没查完**，
     这是接手时要先钉的第一件事）；② 或者只在**取色模式**下把背景层交给主题，别动普通模式 ——
     因为"背景留空、不叠加任何装饰"是这个类的既有契约（类文档明写着），改了就不只影响取色图标。
-  - 📍 **接手时省一步**：`mResID` 不是硬编码的 drawable id，是 `TypedArray.getResourceId(...)`
+  - ⚠ **"镜像桌面那块底盘"这条路当场量窄了**（2026-10-08 追到底）：
+    · `aapt2 dump resources Launcher3QuickStep.apk` 共 3.79 MB，里面 **`monochrome` 出现 0 次** ——
+      它不是桌面自己定义的 styleable；
+    · `android.jar`（API 37）的 `R\$attr` 里也**没有任何 `monochrome*` 公开属性**。
+    所以 `ThemeData.mResID` 读的是**框架隐藏属性**（`com.android.internal.R\$attr` 那一类）。
+    **反射它等于本仓明令避开的那种赌注**（当年 `mAlphaBitmap` 就是"把对不对押在别人私有字段名上"，
+    为这个退过一整版）。所以剩下的形状只有两种：
+    ① **自己交出底盘**：在 `getMonochrome()` 里返回 `AdaptiveIconDrawable(一层底盘, 我们的剪影)` ——
+    与桌面那个 wrap 同构，但底盘颜色得我们自己定（主题中性色？取色板？），**这是个口味决定，要主人拍**；
+    ② **换钩点**：不劫持 `getMonochrome()`，改在 `IconProvider.getDrawable` 之后把剪影塞进去、
+    让桌面自己补底盘 —— 代价是钩子从"框架类"挪到"桌面私有类"，**换桌面/换版本就更脆**。
+    两条都比"再猜一个属性名"诚实。**先别动代码**：这条要主人选路。
+：`mResID` 不是硬编码的 drawable id，是 `TypedArray.getResourceId(...)`
     从某个 **styleable 属性**里读出来的（同一处还能看到 `Resources$Theme.resolveAttribute` 若干次）——
     所以要镜像这块底盘，找的是**那个属性**，不是某个资源名。这条查完就可以动修法①了。
   - **别用"让它返回 null"绕**：那等于放弃合成，桌面会去 new 它自己那张「亮度当 alpha」的工厂，
