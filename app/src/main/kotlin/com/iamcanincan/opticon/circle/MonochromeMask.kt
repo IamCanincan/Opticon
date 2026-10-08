@@ -801,17 +801,26 @@ internal object MonochromeMask {
     //   要再碰这条，缺的还是那个"这两块是不是两个物体"的证据，不是把 50 调成 30。
     val up = SPLIT_UP * (100 - q) / 100
     val down = SPLIT_DOWN * (100 - q) / 100
-    // 2.5) 这一张**根本没有参照可谈**吗（满幅插画那一类）？是的话浓度直接由这张自己的亮度给，
-    //   下面第 3 步的混轴、第 4 步的发档与抬顶全部让路。见 [tonalClass] 那一段的三条判据。
-    //   ⚠ 第二条路 = **[TONAL_PLATE_L_MIN] 那条豁免**：三条判据里只有「平涂占大头」挡住它时，
-    //     若**参照那一支自己找到了一块白的底**，两条路线在"谁该消失"上是一致的，才许换支。
-    //     智慧树（「线条不全」）就是这一种：`盘实=118575/28881`、底是白；换支之后底部那条波浪
-    //     与「Jreenity」整条回来了，"知"字照旧实心。而 Kimi 的自带单色层 `盘实=0/13127`
-    //     —— 参照那一支**一块底都没找到**，没有"同意"可言，不豁免（它换支后 `实255` 归 0）。
-    val agree = ground.gN * 5 >= (ground.gN + ground.iN) && (ground.gL shr 6) >= TONAL_PLATE_L_MIN
-    val tonal = tonalClass(pixels, w, h, box)?.takeIf {
-      it.on || (agree && it.tex >= TONAL_TEX_MIN && it.span >= TONAL_SPAN_MIN)
-    }
+    // 2.5) 这一张能不能**拿自己的调子当浓度**（满幅插画那一类，没有参照可谈）？
+    //   是的话下面第 3 步的混轴、第 4 步的发档与抬顶全部让路。判据与方向各一条：
+    //
+    //   ① **开火只看跨度**（[TONAL_SPAN_MIN]）。纹理与平涂那两道 2026-10-08 拆掉 —— 它们挡住的
+    //     正是逐张看图判"变好"的那批（驾考 纹理 17、azure 18、易班 13、微博 8）。
+    //     跨度这道是**结构性**守卫而非阈值：真机上被"全开"弄空的那 6 张，跨度全是 0~7
+    //     （支付宝 1、钉钉 0、翻译 7）—— 一块白剪影坐在空气上本来就没有调子可言，
+    //     而下面那条斜坡会把最亮的白**直接归零 = 屏幕上整个不画**。
+    //     ⚠ 那 6 张的像素就是回归台第八闸的语料（`_harness/rec_blank/`，底线 0 张），
+    //     它是 2026-10-08 那次真机事故自己捞回来的，不是挑出来的。
+    //   ② **方向不写死「暗=墨」**：底暗 → 墨在亮侧（翻），底亮 → 墨在暗侧（与旧行为一致）。
+    //     用的**不是新尺子**，就是 [groundPass] 交回来的 `gL`（它找到的那块底有多亮）；
+    //     前提沿用"这块底得真的存在"那一道（`gN` 至少占实心两成）—— 满幅插画那类 `ground`
+    //     不可信，那时**不翻**，而那一类正是这一支存在的原因。
+    //     为什么必须翻：`全开`（暗=墨写死）把饿了么/全球网测/Google 翻译三张**画成反色**，
+    //     而钉着的性质里 `字形实心`/`白方块还是实心` 那族全报 `方块=0.0`（白字被掏空）。
+    //     加上这一条之后 `SelfTest` 从红 23 条降到红 3 条、兼容性台 30→57。
+    val tonal = tonalClass(pixels, w, h, box)?.takeIf { it.span >= TONAL_SPAN_MIN }
+    val tonalBright = tonal != null && ground.gN * 5 >= (ground.gN + ground.iN) &&
+      (ground.gL shr 6) < TONAL_PLATE_L_MIN
 
     // 3) 出图：距离与明暗两条按 q 混成浓度，第二遍降层次。
     //    **第二遍能降多狠，只问一句：被降的那一层交出的墨，有没有比留下来的那层还多？**
@@ -980,7 +989,8 @@ internal object MonochromeMask {
           // 这一支的浓度 = 这张图自己的亮度，**暗=墨**，端点是它自己的 p5/p95。
           // 透明像素照样不给墨（乘上源 alpha，与下面 `tl` 同一条规矩）。
           val l64 = s.labL[i].toInt() and 0xffff
-          ((tonal.hi - l64) * 255 / maxOf(tonal.hi - tonal.lo, 1 shl 6)).coerceIn(0, 255) *
+          val ramp = if (tonalBright) l64 - tonal.lo else tonal.hi - l64
+          (ramp * 255 / maxOf(tonal.hi - tonal.lo, 1 shl 6)).coerceIn(0, 255) *
             Color.alpha(pixels[i]) / 255
         } else (td * (100 - q) + tl * q) / 100
         if (a == 0) continue
@@ -1222,10 +1232,15 @@ internal object MonochromeMask {
   private const val TONAL_TEX_LO = 1
   private const val TONAL_TEX_HI = 5
 
-  /** 三条开火线。数值来自 `_harness/TonalGateKt` 在 235 张上的分布，见上面那一段。 */
+  /** 三条开火线的**原始**数值，来自 `_harness/TonalGateKt` 在 235 张上的分布。
+   *  ⚠ **2026-10-08 起只有 [TONAL_SPAN_MIN] 还在开火判断里**（见 `build` 第 2.5 步）——
+   *    纹理与平涂这两道拆掉了，但 `tonalClass` 仍然算它们，因为 `TonalGateKt` 那台定线台
+   *    要靠这两个数继续盯"下一张是谁会被放进来"。**别把它们当死常量删掉。**
+   *  [TONAL_SPAN_MIN] 从 55 降到 40 是**极性修好之后**才重量的（之前挪阈值等于同时挪两件事）：
+   *    55→40 只多红 1 条性质、第八闸仍 0 张空白，而多放进 20 张（含主人点名的京东「头顶没了」）。 */
   private const val TONAL_TEX_MIN = 30
   private const val TONAL_FLAT_MAX = 16
-  private const val TONAL_SPAN_MIN = 55
+  private const val TONAL_SPAN_MIN = 40
 
   /**
    * 「主色」那条门的**唯一一条豁免**：不是"这块平涂亮不亮"，而是**两条独立的路线在这一件事上同意**。
