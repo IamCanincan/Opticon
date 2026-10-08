@@ -818,7 +818,7 @@ internal object MonochromeMask {
     //     为什么必须翻：`全开`（暗=墨写死）把饿了么/全球网测/Google 翻译三张**画成反色**，
     //     而钉着的性质里 `字形实心`/`白方块还是实心` 那族全报 `方块=0.0`（白字被掏空）。
     //     加上这一条之后 `SelfTest` 从红 23 条降到红 3 条、兼容性台 30→57。
-    val tonal = tonalClass(pixels, w, h, box)?.takeIf { it.span >= TONAL_SPAN_MIN }
+    val tonal = tonalClass(pixels, w, h, box)?.takeIf { it.on }
     val tonalBright = tonal != null && ground.gN * 5 >= (ground.gN + ground.iN) &&
       (ground.gL shr 6) < TONAL_PLATE_L_MIN
 
@@ -1270,8 +1270,13 @@ internal object MonochromeMask {
 
   /** 判据产物。[lo]/[hi] 是这张自己亮度的 p5/p95（L\\*×64），[span] = hi−lo。 */
   internal class Tonal(val tex: Int, val flat: Int, val span: Int, val lo: Int, val hi: Int) {
-    /** 三条同时成立才走这一支。**只看源图** —— 与参照那条路线是否同意，由 [build] 那一步判。 */
-    val on: Boolean get() = tex >= TONAL_TEX_MIN && flat <= TONAL_FLAT_MAX && span >= TONAL_SPAN_MIN
+    /** **开火判据只有一处定义**，就在这里 —— 2026-10-08 起只剩跨度那道（结构性守卫：
+     *  一块白剪影坐在空气上没有调子可言，而这一支的斜坡会把最亮的白直接归零 = 屏幕上整个不画）。
+     *  ⚠ [tex] 与 [flat] **仍然照算**，但只给 `_harness/TonalGateKt` 那台定线台看"下一张是谁会被放进来"；
+     *    它们不再是判据。**别把这条 getter 改回三条 AND** —— 那会让定线台重新和模型脱节
+     *    （2026-10-08 就脱过一次：台子报 `c.on`、模型用 `span >=`，于是"走这一支的 N 张"
+     *    数的是已经不存在的规则）。规则要挪，就挪这一行。 */
+    val on: Boolean get() = span >= TONAL_SPAN_MIN
   }
 
   /**
