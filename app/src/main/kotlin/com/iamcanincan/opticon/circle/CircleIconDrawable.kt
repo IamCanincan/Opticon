@@ -55,8 +55,17 @@ private val VIEW_PORT_SCALE = 1f / (1f + 2f * EXTRA_INSET_FRACTION)
  */
 class CircleIconDrawable(icon: Drawable) :
   AdaptiveIconDrawable(
-    // 背景：透明 —— 图标包的 back 层留空
-    ColorDrawable(Color.TRANSPARENT),
+    // 背景：**不透明的白**（2026-10-08）。原来这里是 `Color.TRANSPARENT`，理由是"不叠加任何装饰" ——
+    // 但那一手在取色模式下变成了缺陷：桌面只在 `getMonochrome() == null` 时才替图标补主题底盘
+    // （`IconProvider.getDrawable`，见 README「底盘」那条），而我们的合成钩子把这一层从 null
+    // 变成非 null，等于替图标宣布"我自己适配过了"，于是**没人画盘**：已适配的图标有盘、我们没有。
+    //
+    // 为什么换成白底是安全的：本类自己的 `draw()` **从不画背景层**（只画前景，见下面那段），
+    // 所以普通图标上这块白一个像素都看不见；只有**去取背景层的消费方**（取色合成器）会拿到它，
+    // 而它会给背景与单色层**分别染色** —— 不然已适配的图标也只会是一整块实心饼。
+    // ⚠ 万一有别的消费方也去画背景，就会多出一块白盘 —— 这一条是本次改动唯一的真实风险，
+    //   回滚 = 把这一行改回 `Color.TRANSPARENT`。
+    ColorDrawable(Color.WHITE),
     // 前景：原图标套上圆形遮罩，再缩到可见区
     ViewportDrawable(MaskedDrawable(icon)),
   ) {
