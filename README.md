@@ -572,7 +572,7 @@ Android SDK、发布 keystore 更在仓库外），所以**"仓库拷过来了"�
 
 | 要什么 | 落在哪 | 一句话验它 |
 |---|---|---|
-| JDK 17+ | 本机 `JAVA_HOME=D:\Java\jdk-21` | `"$JAVA_HOME/bin/java" -version`。**⚠ PATH 上排第一的是 Oracle 的 1.8**，凡是裸写 `java` 的地方都会拿到它（`-Dstdout.encoding=UTF-8` 在 1.8 上不认，中文键名直接成问号） |
+| JDK 17+ | 本机 `D:\Java\jdk-*`（**目录名带补丁号，会随升级改名**） | `cd _harness && sh build.sh` 第一行会印 `[jdk] <路径> (<版本>)` —— **每一轮的 JDK 是当场量出来的，不是写死的**。⚠ 2026-10-08：这台机器把 `D:\Java\jdk-21` 原地改成了 `jdk-21.0.11`，而 `jdk.sh` 里那五条候选是**写死版本号**的，于是一套判据台当场断、`JAVA_HOME` 也是空的。现在改成"列根目录 → 通配展开 → 版本从高到低试 → 最后才 PATH（仍验主版本号）"。历史坑仍在：PATH 上曾经排第一的是 Oracle 的 1.8，裸写 `java` 拿到它时 `-Dstdout.encoding=UTF-8` 不认，中文键名直接成问号 |
 | Android SDK 37 | `local.properties` 里那个 `sdk.dir` | `ls $SDK/platforms` 要有 `android-37.0`（`AndroidVersion.ApiLevel=37.0`；这一档**没有** `android-37` 这个包名，`sdkmanager` 里它叫 `platforms;android-37.0`）。`--licenses` 必须先接受，否则 AGP 缺组件时不会自动补 |
 | Gradle 9.7.1 分发 | `~/.gradle/wrapper/dists/gradle-9.7.1-bin/<hash>/` | `sh gradlew --version`。**⚠ 这台机器上 Java 直连 `services.gradle.org` 的 TLS 被掐**（curl 直连却通），所以 wrapper 自己下不动；走镜像取 zip，按 `<hash>/` 下 `gradle-9.7.1/` + 一个同名 `.zip.ok` 摆好即可。** sha256 一定要对 `downloads.gradle.org` 上的官方值**，别对镜像的 |
 | kotlinc 2.4.20 四件 | `~/.gradle/caches/modules-2/files-2.1/`（判据台按 glob 找它） | `sh _harness/build.sh` 要 `0 error`。手工补 jar 时**目录名用文件的 sha1**（就是 gradle 自己的摆法），并对 Maven Central 的 `.sha1` 逐个核 |
