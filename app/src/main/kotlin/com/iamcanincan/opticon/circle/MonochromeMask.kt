@@ -990,9 +990,7 @@ internal object MonochromeMask {
           // 透明像素照样不给墨（乘上源 alpha，与下面 `tl` 同一条规矩）。
           val l64 = s.labL[i].toInt() and 0xffff
           val ramp = if (tonalBright) l64 - tonal.lo else tonal.hi - l64
-          // 分母**不跟着这张自己的跨度缩**：比 feimo 还扁的图少拉一点，才不把中间调推到两头
-          // （为什么是 67、代价哪几笔，见 [TONAL_REF_SPAN]）。
-          (ramp * 255 / maxOf(tonal.hi - tonal.lo, TONAL_REF_SPAN)).coerceIn(0, 255) *
+          (ramp * 255 / maxOf(tonal.hi - tonal.lo, 1 shl 6)).coerceIn(0, 255) *
             Color.alpha(pixels[i]) / 255
         } else (td * (100 - q) + tl * q) / 100
         if (a == 0) continue
@@ -1243,26 +1241,6 @@ internal object MonochromeMask {
   private const val TONAL_TEX_MIN = 30
   private const val TONAL_FLAT_MAX = 16
   private const val TONAL_SPAN_MIN = 35
-
-  /**
-   * 满幅那一支的斜坡**最多拉到多宽**：`L*` 单位（下面用时是 ×64）。
-   *
-   * 原来这一支把"这张自己的 p5..p95"线性铺满整条 α 量程 —— 跨度小的那张因此被**过度拉伸**：
-   * azure 自己的亮度只跨 38 个 L\*，铺满量程后它的墨全被推到两头（交付中间调只剩源图的 25%），
-   * 屏幕上就是"只有黑和白、没有中间那层"。主人 2026-10-08 点名的正是这一句：
-   * 「有些图标还是色度不广，和 com.feimo.astralparty 的色度不一样」。
-   *
-   * **67 = feimo 自己的跨度**（`跨=67`，量在 `rec3u` 原生尺寸）。拿金标准当参照宽度，
-   * 于是这张**逐位不变**，只有比它更扁的图会被收着拉 —— 不是一根新调出来的阈值。
-   *
-   * ⚠ **代价是明说过的，而且他付了**（`_harness/DeliverKt.kt` 的 `保留率` 那一列，62 张真机图）：
-   *   保留率中位 **41% → 82%**（azure 25% → 39%），换来
-   *   `字均净` 中位 **194 → 147**、`淡(<200)` **33 → 37** —— 整张会暗一档。
-   *   这条线今天连着三次"一把尺子变好、另一把变坏"，所以**没有按表收，是按他的选择收的**。
-   *   对照图：`_harness/bench/ab3_montage/montage_01.png`。
-   * ⚠ SelfTest 那 3 条红的**逐位不变**（本来就红，这一处不动它们量的东西），第八闸空白 **0 张**。
-   */
-  private const val TONAL_REF_SPAN = 67 shl 6
 
   /**
    * 「主色」那条门的**唯一一条豁免**：不是"这块平涂亮不亮"，而是**两条独立的路线在这一件事上同意**。
