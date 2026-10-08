@@ -1240,7 +1240,7 @@ internal object MonochromeMask {
    *    55→40 只多红 1 条性质、第八闸仍 0 张空白，而多放进 20 张（含主人点名的京东「头顶没了」）。 */
   private const val TONAL_TEX_MIN = 30
   private const val TONAL_FLAT_MAX = 16
-  private const val TONAL_SPAN_MIN = 40
+  private const val TONAL_SPAN_MIN = 35
 
   /**
    * 「主色」那条门的**唯一一条豁免**：不是"这块平涂亮不亮"，而是**两条独立的路线在这一件事上同意**。
