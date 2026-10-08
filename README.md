@@ -827,6 +827,29 @@ MIT —— 见 [LICENSE](LICENSE)。
 ## 更新日志
 
 ### 未发布（v1.0.3 之后）
+- 🔴 **查出一条底盘缺陷，它同时解释主人报的「背景颜色不对」：我们交出单色层，桌面就**不再补主题底盘**了。**
+  字节码为证（`_l3dex/l3.txt`，`IconProvider.getDrawable`，行号 143-148）：
+  ```
+  if (ATLEAST_T && d instanceof AdaptiveIconDrawable && themeData != null) {
+      if (a.getMonochrome() == null)                      // ← 只有应用**没**给单色层时才补
+          d = new AdaptiveIconDrawable(a.getBackground(), a.getForeground(),
+                                       themeData.loadPaddedDrawable());   // ← 主题底盘在这里
+  }
+  ```
+  而本模块的合成钩子恰恰**把 `getMonochrome()` 从 null 变成非 null** —— 于是桌面认定"这个应用自己适配过了"，
+  **跳过补底盘那一步**。可我们自己的背景层是故意留空的：
+  `CircleIconDrawable` = `AdaptiveIconDrawable(ColorDrawable(TRANSPARENT), ViewportDrawable(MaskedDrawable(icon)))`
+  （`CircleIconDrawable.kt:56-61`），`draw()` 也只画前景、从不画底盘（`:104-108`）。
+  **两头一接：已适配的图标有主题底盘，我们"看起来像已适配"的图标没有底盘** —— 与算法、极性、广色度都无关，
+  是一条**包装侧**的缺陷，影响**所有**未适配的取色图标。
+  - ⚠ 这条也回头修正了 16:36 那次"背景颜色不对"的归因：我当时全算给了极性反色。极性那一刀是真的
+    （修好了三张反色），但**"背景颜色不对"这一半很可能是本条**，不是极性。
+  - **修法两条，都还没做**：① 在 `CircleIconDrawable` 里交出与 `ThemeData.loadPaddedDrawable()`
+    同一件东西（它是 `mResources.getDrawable(mResID)` —— **`mResID` 从哪个主题属性解析出来还没查完**，
+    这是接手时要先钉的第一件事）；② 或者只在**取色模式**下把背景层交给主题，别动普通模式 ——
+    因为"背景留空、不叠加任何装饰"是这个类的既有契约（类文档明写着），改了就不只影响取色图标。
+  - **别用"让它返回 null"绕**：那等于放弃合成，桌面会去 new 它自己那张「亮度当 alpha」的工厂，
+    极性正是主人最早报的「颜色反一下」——那条路在本仓是**漏接计数器**，不是兜底。
 - ❌ **广色度这条线上两条"看起来该做"的路，各量一次、都不做**（2026-10-08 装机之后）。
   - **①「把两条路的浓度标定对齐」买不到东西，而且仓里那句解释是错的。** 参照那条路的归一化距离过
     [CURVE]（`t^0.75` 抬实），广色度这一支一直是**纯线性** —— README 原文写着
