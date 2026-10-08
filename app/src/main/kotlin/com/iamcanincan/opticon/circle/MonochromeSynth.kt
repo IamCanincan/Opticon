@@ -11,6 +11,7 @@ import android.graphics.PorterDuff
 import android.graphics.PorterDuffColorFilter
 import android.graphics.Rect
 import android.graphics.drawable.AdaptiveIconDrawable
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.util.Log
 
@@ -139,12 +140,36 @@ internal object MonochromeSynth {
    */
   @Synchronized
   fun forIcon(source: Drawable): Drawable? {
-    cache[source]?.let { return MonochromeLayer(source, it).also { noteSynthesized() } }
-    val mask = render(source, minOf(if (knownEdge > 0) knownEdge else MIN_EDGE, MAX_EDGE))
-      ?: return null
-    store(source, mask)
-    return MonochromeLayer(source, mask).also { noteSynthesized() }
+    val layer = cache[source]?.let { MonochromeLayer(source, it) }
+      ?: run {
+        val mask = render(source, minOf(if (knownEdge > 0) knownEdge else MIN_EDGE, MAX_EDGE))
+          ?: return null
+        store(source, mask)
+        MonochromeLayer(source, mask)
+      }
+    noteSynthesized()
+    return withPlate(layer)
   }
+
+  /**
+   * 【试验 · 底盘】交出去的单色层**自带一块不透明白底**。
+   *
+   * 为什么要试：桌面 `IconProvider.getDrawable` 只在 `getMonochrome() == null` 时才给图标补主题底盘，
+   * 而我们把这一层从 null 变成非 null，等于替图标宣布"我自己适配过了"，于是**没人给它画底盘** ——
+   * 已适配的图标有盘、我们没有（主人 2026-10-08 报的「背景颜色不对」很可能是这一条，不是极性）。
+   * 而这台机器的 framework 与桌面 APK 的资源里**都没有任何 `monochrome*` 属性**
+   * （`aapt2 dump resources` 两个转储各 0 命中），所以"去读那个主题属性"这条路根本不存在。
+   *
+   * 赌的是：底色由桌面**统一染色**决定，那我只需要给一块**不透明**的底，染色会把它染成
+   * 和已适配图标同一个颜色。白色是中性起点（染成什么都不偏）。
+   *
+   * ⚠ 只在取色路径上生效（`getMonochrome()` 只有要单色层时才被调），普通图标一个像素都不受影响。
+   * ⚠ 这是一次**可证伪的实验**，不是结论：屏幕上若底盘是白的/不对，说明染色不经过这一层，
+   *   整条 revert 即可。
+   */
+  private fun withPlate(layer: Drawable): Drawable = runCatching {
+    AdaptiveIconDrawable(ColorDrawable(Color.WHITE), layer)
+  }.getOrDefault(layer)   // 构造不出来就退回交单层，绝不能因为这一步把图标弄没
 
   private fun store(source: Drawable, mask: Bitmap) {
     val size = mask.byteCount.toLong()
