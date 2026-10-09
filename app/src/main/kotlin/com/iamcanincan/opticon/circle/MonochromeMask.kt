@@ -819,7 +819,6 @@ internal object MonochromeMask {
     //     而钉着的性质里 `字形实心`/`白方块还是实心` 那族全报 `方块=0.0`（白字被掏空）。
     //     加上这一条之后 `SelfTest` 从红 23 条降到红 3 条、兼容性台 30→57。
     val tonal = tonalClass(pixels, w, h, box)?.takeIf { it.on }
-    val tbuf = IntArray(total)
     val tonalBright = tonal != null && ground.gN * 5 >= (ground.gN + ground.iN) &&
       (ground.gL shr 6) < TONAL_PLATE_L_MIN
 
@@ -870,7 +869,7 @@ internal object MonochromeMask {
     //   把底也算进去等于在这类图上整条退出。没有空气的图一个种子都没有，行为与改之前逐像素相同。
     // 满幅插画那一支不做"比主体亮就当镂空压下去"：它的浓度本来就是亮度，压一次等于把
     // 亮部又掏空一遍（那是参照模型的算法，不是它的）。
-    val hollow = if (knockCand > keep) 0 else HOLLOW * body.weight / 255
+    val hollow = if (tonal != null || knockCand > keep) 0 else HOLLOW * body.weight / 255
     var kc = s.knockReach
     if (kc.size < total) { kc = ByteArray(total); s.knockReach = kc }
     if (hollow > 0) {
@@ -931,7 +930,7 @@ internal object MonochromeMask {
     //   没过那三条判据，就会又落回这里。它挡的是异常大的那一张：满幅照片 × 超大边长可以开到
     //   几十万个精确色，就是几十 MB 的瞬时分配，而这段跑在桌面的图标加载线程上。
     var cDepOff = false
-    for (y in box.top until box.bottom) {
+    if (tonal == null) for (y in box.top until box.bottom) {
       val row = y * w
       for (x in box.left until box.right) {
         val i = row + x
@@ -986,20 +985,22 @@ internal object MonochromeMask {
         //   按 q 混进去就是**在空气上上墨**。真机抖音量出来：模型上墨的像素里 51.4% 的源 alpha
         //   恰好是 0（最浓 68/255），屏幕上就是他报的那块灰框 —— 而它的形状是矩形，因为那是
         //   内容外接框。判据台新增一条「全透明的像素不许上墨」钉住它。
-        if (tonal != null) {
+        var a = if (tonal != null) {
+          // 这一支的浓度 = 这张图自己的亮度，**暗=墨**，端点是它自己的 p5/p95。
+          // 透明像素照样不给墨（乘上源 alpha，与下面 `tl` 同一条规矩）。
           val l64 = s.labL[i].toInt() and 0xffff
           val ramp = if (tonalBright) l64 - tonal.lo else tonal.hi - l64
-          tbuf[i] = (ramp * 255 / maxOf(tonal.hi - tonal.lo, 67 shl 6)).coerceIn(0, 255) *
+          (ramp * 255 / maxOf(tonal.hi - tonal.lo, 1 shl 6)).coerceIn(0, 255) *
             Color.alpha(pixels[i]) / 255
-        }
-        var a = (td * (100 - q) + tl * q) / 100
+        } else (td * (100 - q) + tl * q) / 100
         if (a == 0) continue
         // 比参照暗的往上、亮的往下，**按这张图自己的跨度成比例** —— 不是"暗/亮"两档。
         // ⚠ 上限不对称是有理由的：白字在彩色底上是最常见的"亮侧实心"，往下压狠了就是他报过的
         //   「主题色怎么这么浅」。q 上去之后这两侧自动退场：那时明暗已经是浓度本身了。
         //   满幅插画那一支整个跳过这一步：它要的**就是**一条按亮度排的斜坡，再叠一次明度序
         //   等于把同一条轴乘两遍（斜率变陡，中间调全被推到两端 —— 正是他报的「过渡生硬」）。
-        a = (a + a * (u * 100 / amp).coerceIn(-down, up) / 100).coerceIn(0, 255)
+        if (tonal == null)
+          a = (a + a * (u * 100 / amp).coerceIn(-down, up) / 100).coerceIn(0, 255)
         // 第二遍只降**比主体亮**的那一侧（镂空、高光、白 logo 上的洞）。比主体暗的那些是图形
         // 自己的暗部，降它等于把细节擦了 —— 与上面那条明度序同一个极性。
         // ⚠ 但**主体自己那一色不许降**。这一层的参照取的是"离这格最近的那块主体"，于是一块
@@ -1026,7 +1027,7 @@ internal object MonochromeMask {
     }    // 4) 交出去之前把墨量抬到满阶（他要「图标上必须有系统最深和最浅的取色」）。**两层叠加**：
     //    全局那一层管"整张最深都不够"，字形那一层管"只有 1% 到顶、主体停在 140"。
     //    ⚠ 中间夹一步发档（4.5），两层不能并排 —— 理由写在那一段里。
-    val global = stretchGlobal(out, total)
+    val global = if (tonal == null) stretchGlobal(out, total) else null
     global?.let { g ->
       for (i in 0 until total) {
         val a = out[i] ushr 24
@@ -1046,12 +1047,12 @@ internal object MonochromeMask {
     //     让开档位让出去的那点浓度。两层换过来试过（发档挪到最末尾）：并档 37→28 对是多了，
     //     代价是 `字均净<200` 从 57 涨到 72（弄坏 16 张、修好 1 张）—— 那是他最早点名的
     //     「颜色偏淡」，[LEVEL_FLOOR] 那段已经表过态：细腻与实心冲突时先不伤人。所以不取。
-    assignLevels(out, pixels, w, box, s)
+    if (tonal == null) assignLevels(out, pixels, w, box, s)
     // 4.6) 一条连续的描边被颜色渐变切成几截 —— 按**拓扑**把它接回去（见 [propagateBands]）。
     //   ⚠ **必须放在发档之后**：放之前它会改掉色桶的均值，`assignLevels` 于是重排、整桶平移量跟着变，
     //   结果"接一条线"这件事被放大成"改一整张的台阶"（易班上看跳≥30 的连续像素对 0%→1%、p99 25→52，
     //   而真正被补的只有 20 格 —— 硬边是发档造的，不是那 20 格）。放在发档之后，两者才解耦。
-    val bands = propagateBands(out, pixels, w, h, box, s)
+    val bands = if (tonal == null) propagateBands(out, pixels, w, h, box, s) else Triple(0, 0, 0)
 
     // 4.7) **同一块平色被给了两套浓度的，按这块自己的多数定调统一**（可抬，见 [flatVote]）。
     //   放在接带之后：`propagateBands` 补的是"一条连续描边被渐变切成几截"，它先跑完，
@@ -1060,42 +1061,8 @@ internal object MonochromeMask {
     //   压根不跑这一刀 —— 不归零的话那张日志会把**上一张图**的 `票=` 印在自己行里
     //   （第一次跑 12 张点名表时，智慧树就顶着浙江在线的 4126 抹，看着像它也开火了）。
     s.voteErase = 0; s.voteRaise = 0; s.voteHits = 0
-    val voteN = flatVote(out, pixels, w, h, box, s)
-    val stretch = "${global?.second ?: "已满"}+${stretchMark(out, pixels, w, h, box, s)}"
-    // 4.8) **混轴：把"转录这张自己的亮度"混进参照那条路，而且要混在饱和链之后。**
-    //
-    // 主人 2026-10-08 的要求是「先按 com.feimo.astralparty 那套来，再优化」。这句话的硬版本
-    // （门槛归零、纯转录）量出来是**性质台红 15、真机肇事语料 6 张整个看不见、字均净中位 194→104**
-    // —— 因为一块纯色画出来的图自己跨度是 0，`hi−L` 处处归零 = 屏幕上没有图标。
-    // 所以"再优化"必须回答的问题是：**素材没有调子的时候，那条腿该由谁给。**
-    // 这一格的答案是：由参照那条给，而且按这张自己的跨度**连续**让位（`ww = 跨 / 35`），
-    // 不再用一道硬闸门把图分成两族。
-    //
-    // ⚠ **两个位置都是挣出来的，不能挪**：
-    //  · **必须在饱和链之后**。挪在逐像素那一格（`cand_blendSpan`）时，参照那条腿拿到的是
-    //    **没经过发档与抬顶的裸值** —— translate 的 `字均净` 从 238 掉到 24。
-    //  · **必须带 `ra == 0` 那道墨门**。转录那条腿**没有"底"的概念**：它会把整张背景也铺成
-    //    α≈51 的灰膜（translate 实测 `淡 0.00 → 0.65`），混进去等于把参照辛苦切掉的底
-    //    又刷回来。加了墨门之后**转录只能调制参照已经上墨的地方** —— 形状与切底归参照，
-    //    层次归转录。这一步顺带把甲挂了两天的 `渐变的两端都归零`、`板子内部仍然归零` **跑绿了**。
-    //
-    // 账（`rec3u` 62 张 + `rec_blank` 34 张，`_harness/DeliverKt.kt` 的 `保留率` 那一列）：
-    //   azure 的中间调保留 **25% → 98%**（主人点名的那一张），全体保留率中位 41% → 110%；
-    //   第八闸空白 **0 张**；性质台红 3 → **4**（甲那两条转绿，新红是"间距差一口气"那族：
-    //   `两半都留着 148/253`、`三段 85/189/204`、`最远那段 204`，**没有一条是图标消失**）。
-    // ⚠ **代价是他认过的那一笔**：`字均净` 中位 **194 → 147**、`淡(<200)` 33 → 43 ——
-    //   与被他装机否决的乙**同一档墨**。区别在乙没有墨门（会把底洗成灰膜），这一版形状不动。
-    //   如果装机还是"闷"，退路不是调 67 或 35，是退到 `_harness/cand/MonochromeMask.inkGate.kt`
-    //   那一版（同一套结构、拉满量程不收着拉：`字均净` **213**、`淡` **23**，但 azure 只有 7%）。
-    if (tonal != null) {
-      val ww = (tonal.span * 100 / 35).coerceAtMost(100)
-      for (i in 0 until total) {
-        val ta = tbuf[i]
-        val ra = (out[i] ushr 24) and 0xff
-        val m = if (ra == 0) 0 else if (ww >= 100) ta else (ta * ww + ra * (100 - ww)) / 100
-        out[i] = if (m == 0) 0 else (m shl 24) or 0x00FFFFFF
-      }
-    }
+    val voteN = if (tonal == null) flatVote(out, pixels, w, h, box, s) else 0
+    val stretch = "${global?.second ?: "已满"}+${if (tonal == null) stretchMark(out, pixels, w, h, box, s) else "已满"}"
 
     // 5) 形状体检。**修不修形状看浓度是谁给的**：颜色给的（β 高）才可能有"切底切出来的杂点"，
     //    覆盖率给的（β≈0）那些淡值全是设计者自己画的柔光与抗锯齿，擦掉就是一圈锯齿、桥起来
@@ -1104,7 +1071,7 @@ internal object MonochromeMask {
     // 按邻居继承成实心），`despeckle` 擦的是"切底切出来的杂点" —— 两样都是**参照那条路**的
     // 产物。这一支的淡格是这张图自己的中间调，桥一下就是凭空多一块实心、擦一下就是丢一格
     // 细节，而它压根没有"切底"这一步可言。
-    val colourDriven = ground.meanCov >= 128 && (tonal == null || tonal.span < 35)
+    val colourDriven = ground.meanCov >= 128 && tonal == null
     // 量的是**交出去那一张**：分档 = 几块 / 落在几档，括号里是每块的浓度。
     // ⚠ 这个数现在**只是诊断**，没有配套的修法 —— 曾按它铺过两趟单调重排（dep 轴 + 浓度轴），
     // 平均档数 2.66→2.94、完全分开的 8/32→12/32，看着是进步；但同一改动在真图上画出过
@@ -1273,7 +1240,7 @@ internal object MonochromeMask {
    *    55→40 只多红 1 条性质、第八闸仍 0 张空白，而多放进 20 张（含主人点名的京东「头顶没了」）。 */
   private const val TONAL_TEX_MIN = 30
   private const val TONAL_FLAT_MAX = 16
-  private const val TONAL_SPAN_MIN = 0   // 2026-10-09：不再当闸门用 —— 见 `build` 第 4.8 步的混轴
+  private const val TONAL_SPAN_MIN = 35
 
   /**
    * 「主色」那条门的**唯一一条豁免**：不是"这块平涂亮不亮"，而是**两条独立的路线在这一件事上同意**。
