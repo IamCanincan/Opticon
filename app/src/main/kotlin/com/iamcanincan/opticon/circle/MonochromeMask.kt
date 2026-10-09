@@ -1136,7 +1136,7 @@ internal object MonochromeMask {
     // 和已适配图标那种干净的盘对不上。这里把参照**已经判成底**的那些格直接归零。
     // ⚠ 只在这块底**一直顶到画布边缘**时才这么做 —— 那是「整张画布就是一张盘」的形状证据。
     //   azure 的「底」是盾牌、四周是空气、不顶边：刚修好的锁梁不会被这一刀带倒。
-    if (tonal != null && plateTouchesBorder(pixels, w, h, s))
+    if (tonal != null && tonal.flat >= PLATE_FLAT_MIN && plateTouchesBorder(pixels, w, h, s))
       for (i in 0 until total) if (s.plate[i] != 0.toByte()) out[i] = 0
     val sep = separation(out, w, h, box, s)
     val st = measure(out, w, h, box, s, bridge = colourDriven, despeckle = colourDriven)
@@ -1283,6 +1283,7 @@ internal object MonochromeMask {
    */
   private const val TONAL_PLATE_L_MIN = 80
   private const val TONAL_AIR_MIN = 25
+  private const val PLATE_FLAT_MIN = 40
 
   /** 判据产物。[lo]/[hi] 是这张自己亮度的 p5/p95（L\\*×64），[span] = hi−lo。 */
   internal class Tonal(val tex: Int, val flat: Int, val span: Int, val lo: Int, val hi: Int) {
