@@ -729,6 +729,11 @@ internal object MonochromeMask {
     //   中间空 43 个点 —— 与今天否掉的那几条"在人群里画线"不是一回事。
     //   门槛沿用已有的 `TONAL_AIR_MIN`（25%），**不新造常数**。
     val plateLayer = plateIsLayer && airCanvasPct >= TONAL_AIR_MIN
+    // 🔑 但**这一层自己带不带底**，是另一件事（2026-10-10，主人报「com.baidu.tieba 取色有问题」）：
+    //  贴吧那张前景层里**自带一块铺满整层的白底**，地板把那块白压到 α=128 = **屏幕上多出一整块灰板**
+    //  （`框内 1.00`、实心格里没有一个低于 128）。地板要保护的是"标记最亮那一面"，不是"这一层自己的底"。
+    val ownPct = if (plateLayer) ownBrightPlate(pixels, w, h, box, s) else 0
+    val ownPlate = ownPct >= PLATE_OWN_MIN
     // 1) 两遍参照。顺序固定：第二遍要用第一遍剩下的那一半当工作集。
     val ground = groundPass(pixels, w, h, box, band, g, s, plateLayer)
     val body = bodyPass(pixels, w, h, box, g, s)
@@ -1047,7 +1052,8 @@ internal object MonochromeMask {
           // ⚠ **顺序是全部重点**：地板压在 `× 源α / 255` **之前**，空气还是 0。上一版
           //   （`cand/MonochromeMask.ghostFloor.kt`）把它压在乘法之后、又拿 `ground.gN==0` 猜这一位，
           //   13 张变实心方块 —— 那个方块是**空气被抬起来了**，不是标记变实了（第九闸 0/219 钉住这件事）。
-          if (plateLayer) ta = PLATE_FLOOR_MIN + (255 - PLATE_FLOOR_MIN) * ta / 255
+          // ⚠ 而**这一层自己带底的那张不压**（[ownBrightPlate]）：贴吧那块白底一压就是一整块灰板。
+          if (plateLayer && !ownPlate) ta = PLATE_FLOOR_MIN + (255 - PLATE_FLOOR_MIN) * ta / 255
           ta * Color.alpha(pixels[i]) / 255
         } else (td * (100 - q) + tl * q) / 100
         if (a == 0) continue
@@ -1229,7 +1235,10 @@ internal object MonochromeMask {
         // 满幅插画那一支开了就把三个判据数报上；**没开一个字符都不加** —— 这两列在整串末尾，
         // 前面所有列的列位一个不动（`res.sh` 按列号读，这条规矩上面已经写过两次）。
         (if (tonal == null) "" else " 调=1 纹理=${tonal.tex} 主色=${tonal.flat} 跨=${tonal.span}" +
-          " 调残=$tonResN/${if (tonResN == 0) 0 else tonResSum / tonResN}"),
+          " 调残=$tonResN/${if (tonResN == 0) 0 else tonResSum / tonResN}" +
+          // 又一列**加在整串最末尾**：`自带底=N` = 从这一层自己的边上、按"同一个部分"走到的最亮那一片
+          // 占实心的百分比；≥ [PLATE_OWN_MIN] 就不压地板（贴吧那块白底一压就是一整块灰板）。
+          " 自带底=$ownPct"),
       ground.hyp,
       s.h0why,
       s.veto
@@ -1343,6 +1352,9 @@ internal object MonochromeMask {
   /** 甲类（盘在另一层）时满幅那条斜坡的**下界**：零端留给空气，标记最亮那一面不许归零。
    *  128 = 一半浓度，不是挑出来的数 —— 内部对比仍然占满 128..255 这一整段。 */
   private const val PLATE_FLOOR_MIN = 128
+  /** [ownBrightPlate] 里"从这一层自己的边上走到的亮端"至少要占实心百分之几，才算那块亮端是**这层的底**。
+   *  25 沿用本仓另一条"两成五"的口径；实测的两侧是 `{0, 6, 15}` 与 `{49, 53}`，中间空 34 个点。 */
+  private const val PLATE_OWN_MIN = 25
 
   /** 判据产物。[lo]/[hi] 是这张自己亮度的 p5/p95（L\\*×64），[span] = hi−lo。 */
   internal class Tonal(val tex: Int, val flat: Int, val span: Int, val lo: Int, val hi: Int) {
@@ -4577,6 +4589,105 @@ internal object MonochromeMask {
   private val NB_DY = intArrayOf(-1, -1, -1, 0, 0, 1, 1, 1)
 
   // ─────────────────────────── 几何与小工具 ───────────────────────────
+
+  /**
+   * **这一层自己带不带底**：从内容框**自己的四条边**上那些"这张里最亮的那个色"出发，
+   * 只踩**同一个量化色**走一圈；走得到的那一块如果占实心 ≥ [PLATE_OWN_MIN]%，那它就不是某个标记
+   * 最亮的那一面，**是这张图自己铺的一层底** —— 承载面在这一层里，`plateIsLayer` 那句"盘在另一层"
+   * 对它只是不成立的一半。
+   *
+   * 为什么用"从边上出发"而不是"找最大连通块"（两种都量过）：
+   *  · 拼多多的心是**许多块小白三角拼的**，最大单色连通块只占实心 6% —— 靠"连通块够大"能分开；
+   *  · 混元铺满四边的是**绿盘**（L 72），它上面压着更亮的白（L 100）—— 靠"最亮那个色"能分开；
+   *  · 两条一起用就不必再问"这块平色散得开不开"（贴吧/拼多多的白**都**散满 100×100 的外接框，
+   *    那条分不开，2026-10-10 量过）。
+   * 🔴 **走的时候必须按"同一个色"走，不能按"亮度 ≥ 某个分位"走** —— 第一版就是那么写的，
+   *  结果 pdd 在 192 档从 `自带底=0` 翻成 1（`框内 0.47→0.11`，心又没了）、quicksearch 在 96/192
+   *  翻成 1（`框内 0.10` vs 384 的 0.75）。p95 是一条**尾部**，它自己随边长漂，漂过去之后洪泛
+   *  就从抗锯齿的拼缝里漏过去、把整颗心连成一块。**分位数不能当连通性的门。**
+   *  换成"同一个量化色"之后拼缝挡住的是**颜色本身**，与边长无关。
+   *
+   * 实测（`_harness/PlateBgKt.kt` + 四档边长）：贴吧四档全 `自带底=1`（`框内 0.30~0.31` 不漂）；
+   *  拼多多 / 混元 / UU / azure / Xbox 全 `=0`。
+   *
+   * ⚠ 只给 [PLATE_FLOOR_MIN] 那一刀用。**不动 [groundPass] 的"实心格不许当底"** —— 那一刀是
+   *  混元/UU 在用的，动它等于把两张一起掀开（这一位今天已经付过一次"顺手多改一处"的账）。
+   */
+  private fun ownBrightPlate(pixels: IntArray, w: Int, h: Int, box: Rect, s: Scratch): Int {
+    var solid = 0
+    var maxL = -1
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      for (x in box.left until box.right) {
+        if (Color.alpha(pixels[row + x]) < A_SOLID) continue
+        solid++
+        val l = (s.labL[row + x].toInt() and 0xffff) shr 6
+        if (l > maxL) maxL = l
+      }
+    }
+    if (solid == 0 || maxL < 0) return 0
+    val seen = ByteArray(w * h)
+    val q = IntArray(solid)
+    // 一块"这层自己带的底"要同时满足三件：**它贴着这层自己的边**、**它是这张里最亮的那一片**
+    // （按**整片的平均 L** 判 —— 按起点那一格判会被一个噪声像素顶掉，2026-10-10 量过）、**它够大**。
+    var best = 0
+    for (y0 in intArrayOf(box.top, box.bottom - 1)) for (x in box.left until box.right)
+      best = maxOf(best, floodSamePart(pixels, w, box, y0 * w + x, maxL, s, seen, q))
+    for (x0 in intArrayOf(box.left, box.right - 1)) for (y in box.top until box.bottom)
+      best = maxOf(best, floodSamePart(pixels, w, box, x0 * w + y, maxL, s, seen, q))
+    return best * 100 / solid     // 报**数**不报 0/1：线要钉在四档边长都量得到的分布上
+  }
+
+  /**
+   * 从 [i0] 出发、只踩"**同一个部分**"能走到多少格。"同一个部分"用的就是本仓发档那三个数
+   * （[SEP_L]/[SEP_AB]，见 [bucketOf]）—— **不新造阈值**，也不按"逐位相同的色"走：
+   *  按色走会被高分辨率的 JPEG 噪声切成碎片（quicksearch 那块白底在 384 档就是这么断的），
+   *  而按亮度分位走会顺着抗锯齿的拼缝漏过去（pdd 那颗心在 192 档就是这么连成一块的）。
+   *  平均 L 那一条挡的是混元：贴满它四边的是**绿盘**（L 72），上面还压着更亮的白（L 100）——
+   *  那一块是图形不是底。它顺带也挡住"顺着渐变一路渗满整张"那种走法：渗满之后平均 L 就掉回中位。
+   */
+  private fun floodSamePart(
+    pixels: IntArray, w: Int, box: Rect, i0: Int, maxL: Int,
+    s: Scratch, seen: ByteArray, q: IntArray,
+  ): Int {
+    if (seen[i0] != 0.toByte()) return 0
+    if (Color.alpha(pixels[i0]) < A_SOLID) return 0
+    val l0 = (s.labL[i0].toInt() and 0xffff) shr 6
+    val a0 = (s.labA[i0].toInt() shr 6)
+    val b0 = (s.labB[i0].toInt() shr 6)
+    var head = 0
+    var tail = 0
+    var lsum = 0L
+    seen[i0] = 1
+    q[tail++] = i0
+    lsum += l0
+    while (head < tail) {
+      val i = q[head++]
+      val cy = i / w
+      val cx = i - cy * w
+      for (d in intArrayOf(-1, 1, -w, w)) {
+        val ny = cy + (if (d == -w) -1 else if (d == w) 1 else 0)
+        val nx = cx + (if (d == -1) -1 else if (d == 1) 1 else 0)
+        if (ny < box.top || ny >= box.bottom || nx < box.left || nx >= box.right) continue
+        val j = ny * w + nx
+        if (seen[j] != 0.toByte()) continue
+        if (Color.alpha(pixels[j]) < A_SOLID) continue
+        val lj = (s.labL[j].toInt() and 0xffff) shr 6
+        // ⚠ 比的是**起点那一格**，不是"上一格"。改成逐格相连（transitive）之后 384 档全灭：
+        //   顺着渐变一路渗到暗处，整片的平均 L 掉回中位，被下面那条平均 L 的门拒掉
+        //   （贴吧从 54 掉到 0）。2026-10-10 两种都量过，这一种更糟。
+        if (maxOf(lj, l0) - minOf(lj, l0) > SEP_L) continue
+        val aj = (s.labA[j].toInt() shr 6)
+        if (maxOf(aj, a0) - minOf(aj, a0) > SEP_AB) continue
+        val bj = (s.labB[j].toInt() shr 6)
+        if (maxOf(bj, b0) - minOf(bj, b0) > SEP_AB) continue
+        seen[j] = 1
+        q[tail++] = j
+        lsum += lj
+      }
+    }
+    return if (lsum / tail >= maxL - SEP_L) tail else 0
+  }
 
   /** 非透明像素的外接矩形（阈值 [A_BOX]，比「算不算图形」的 [A_SOLID] 宽）。 */
   private fun contentBounds(pixels: IntArray, w: Int, h: Int): Rect? {
