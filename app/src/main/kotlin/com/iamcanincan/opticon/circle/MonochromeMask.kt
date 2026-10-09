@@ -1077,18 +1077,11 @@ internal object MonochromeMask {
     // 4.9) **前景层这一路：实心格一律上墨，明度只在地板之上调制。**
     //   放在所有切底/发档/抬顶**之后**，是因为它要盖的是"这些步骤最后决定不上的那些墨" ——
     //   放前面的话每一层都会再把它擦一遍。透明的格子照样不给墨（乘源 alpha，与出图同一条规矩）。
-    // ⚠ **但整块铺满的前景层不配这条**：那一类里面**确实有一张盘**（63 对参考答案里唯一那张
-    //   实心≥95% 的，设计师只保留 13%）。装机第一版没加这道闸，把 淘宝 / 微博 / 饿了么 / kazumi /
-    //   vending / browndust 涂成了**一整个色块**（`框内=1.00`）—— 主人那句「算法还是不够通用」的现场。
-    //   ⚠ 这条闸的根据只有 n=1 对参考 + 那 8 张涂满的实拍，**不是被证明的**；
-    //   运行时输入里有 42/122 张是铺满型的，它们都没有参考答案。
-    if (foregroundLayer) {
-      var solid = 0
-      for (i in 0 until total) if (Color.alpha(pixels[i]) == 255) solid++
-      if (solid * 100 < FG_FULL_BOX * total) for (i in 0 until total) {
-        if (Color.alpha(pixels[i]) != 255) continue
-        if (((out[i] ushr 24) and 0xff) < FG_INK_FLOOR) out[i] = (FG_INK_FLOOR shl 24) or 0x00FFFFFF
-      }
+    if (foregroundLayer) for (i in 0 until total) {
+      val sa = Color.alpha(pixels[i])
+      if (sa != 255) continue
+      val a = (out[i] ushr 24) and 0xff
+      if (a < FG_INK_FLOOR) out[i] = (FG_INK_FLOOR shl 24) or 0x00FFFFFF
     }
 
     // 5) 形状体检。**修不修形状看浓度是谁给的**：颜色给的（β 高）才可能有"切底切出来的杂点"，
@@ -1271,9 +1264,6 @@ internal object MonochromeMask {
 
   /** 见 `build` 第 4.9 步：前景层里全不透明的格最低给多少墨。200 沿用 [LEVEL_FLOOR] 那个数。 */
   private const val FG_INK_FLOOR = 200
-
-  /** 前景层实心占到这个比例以上 = 整块铺满，里面有一张盘，地板不生效（见 `build` 第 4.9 步）。 */
-  private const val FG_FULL_BOX = 95
 
   /**
    * 「主色」那条门的**唯一一条豁免**：不是"这块平涂亮不亮"，而是**两条独立的路线在这一件事上同意**。
