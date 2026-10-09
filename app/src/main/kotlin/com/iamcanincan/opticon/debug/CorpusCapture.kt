@@ -143,7 +143,7 @@ internal object CorpusCapture {
     }
     Log.d(TAG, "Corpus: 开始 ${entries.size} 个包 edge=$edge → ${dir.absolutePath}")
     val index = StringBuilder("pkg\tlabel\tfile\tedge\tsig\tcls\tfg\tbg\tmono\tkb\t" +
-      "fgAlpha\tbgAlpha\tmonoFile\tmonoAlpha\tbgColor\tfgFile\n")
+      "fgAlpha\tbgAlpha\tmonoFile\tmonoAlpha\tbgColor\tfgFile\tbgFile\n")
     var written = 0
     var skipped = 0
     for (info in entries) {
@@ -180,6 +180,10 @@ internal object CorpusCapture {
       //   （2026-10-06 发现；`MonoDump` 那条通道没这个问题，它带的就是模型吃进去的那一张）。
       //   所以这里**另存一张 `_fg.png` = 前景层**，文件名与合成图同 `sig`，配对靠它。
       val fgFile = dumpForeground(dir, drawable, edge, file)
+    // **新列一律加在行尾**（`bgFile` 是第 17 列）：老列的位置一个都不动，
+    // 按列号读的脚本（`_chan3.cjs`、`_screen2.cjs`、`YardKt`）才不用重算 —— 这条规矩
+    // 与 `ConfigProvider` 那处"写侧按位置、读侧按列名"的教训同一个来源。
+    val bgFile = dumpBackground(dir, drawable, edge, file)
       index.append(
         listOf(
           pkg, label(pm, info), file, edge, sig, drawable.javaClass.simpleName,
@@ -191,7 +195,7 @@ internal object CorpusCapture {
           // 前景层与单色层的 alpha 分布：这一列回答的是"平台其实已经把图形与盘分开给了我们，
           // 我们为什么要从合成图里把它猜回来"（见 README「更通用的路」那条）。
           alphaStat(drawable, edge, false), alphaStat(drawable, edge, true),
-          mono.first, mono.second, bgColor(drawable, edge), fgFile,
+          mono.first, mono.second, bgColor(drawable, edge), fgFile, bgFile,
         ).joinToString("\t")
       ).append('\n')
       written++
@@ -316,6 +320,27 @@ internal object CorpusCapture {
     val adaptive = drawable as? AdaptiveIconDrawable ?: return "-"
     val layer = runCatching { adaptive.foreground }.getOrNull() ?: return "null"
     val name = composite.removeSuffix(".png") + "_fg.png"
+    return runCatching {
+      if (!File(dir, name).exists()) File(dir, name).writeBytes(png(raster(layer, edge, layerBounds(edge))))
+      name
+    }.getOrDefault("err")
+  }
+
+  /** 把**背景层**也单独存成 `<合成图名去掉.png>_bg.png`。
+   *
+   * 为什么现在要补这一张（2026-10-09）：乙类（自适应 + 背景层是图片/矢量）在真机上走
+   * `rasterizeLayers`，**两层合并**才是模型吃的那一张，而"哪一格是盘"这件事平台其实是知道的 ——
+   * 就是背景层本身。但**"背景层是纯色盘"与"图形整个画在背景层里"分不开**就会切错：
+   * 把"前景层为空 ⇒ 是盘"喂进模型，`deskclock / audiofx / telegram` 三张修好了，
+   * 而 `chrome`（`51.7%→0.0%`）、`jelly`（本来 12.1% 与人画完全一致）被整个切光 ——
+   * 因为它们的图形本来就画在背景层里。`bgAlpha=0/100` 这一列分不开这两种（19 张乙类全是 `0/100`）。
+   * 有了这一张才能问："背景层自己是不是**一块均匀色**"——那是盘，否则是图形。
+   * ⚠ 与 `_fg` 同一套 `layerBounds` 几何（视口），所以它能与合成图逐格对齐。
+   */
+  private fun dumpBackground(dir: File, drawable: Drawable, edge: Int, composite: String): String {
+    val adaptive = drawable as? AdaptiveIconDrawable ?: return "-"
+    val layer = runCatching { adaptive.background }.getOrNull() ?: return "null"
+    val name = composite.removeSuffix(".png") + "_bg.png"
     return runCatching {
       if (!File(dir, name).exists()) File(dir, name).writeBytes(png(raster(layer, edge, layerBounds(edge))))
       name
