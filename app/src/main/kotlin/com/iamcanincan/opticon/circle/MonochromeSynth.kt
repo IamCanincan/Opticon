@@ -272,7 +272,7 @@ internal object MonochromeSynth {
       val total = edge * edge
       val pixels = IntArray(total)
       raster.getPixels(pixels, 0, edge, 0, 0, edge, edge)
-      val out = MonochromeMask.build(pixels, edge, edge, adaptive)
+      val out = MonochromeMask.build(pixels, edge, edge)
       // H0 的射程跟着记：见 [noteSynthesized] 那条汇总为什么带它。
       noteH0(out.h0why)
       noteVeto(out.veto)
