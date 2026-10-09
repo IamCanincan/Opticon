@@ -11,6 +11,7 @@ import android.graphics.PorterDuff
 import android.graphics.PorterDuffColorFilter
 import android.graphics.Rect
 import android.graphics.drawable.AdaptiveIconDrawable
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.util.Log
 
@@ -38,7 +39,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * 怎么从一张图标里算出掩码，全部在 [MonochromeMask]（纯数组进出的模型，判据台跑的就是它）。
  * 这一层只剩四件事，每一件都是因为**只有这里看得到 Drawable 和桌面**才留在这里：
  *
- * 1. **取哪一层**：自适应图标取前景层，非自适应取整张。
+ * 1. **取哪一层**：自适应图标**只有背景层是纯色盘时**才取前景层，其余（非自适应、
+ *    或背景层里带东西的自适应）取整张 —— 见 [render] 里那条 2026-10-09 的注释（translate 的"文"）。
  * 2. **别碰已适配的**：见下面那道闸，量的是**整个合成图标**。
  * 3. **按桌面要的尺寸出图**：首问时桌面还没 `setBounds`，所以先探一档；[MonochromeLayer.draw]
  *    量到实际尺寸就报上来（[learnEdge]）并让这张的缓存作废（[demote]），下一次取
@@ -249,7 +251,20 @@ internal object MonochromeSynth {
     return runCatching {
       val adaptive = source is AdaptiveIconDrawable
       val label = describe(source, adaptive)
-      val target = if (adaptive) source.foreground else source
+      // **只取前景层，前提是背景层真的是一张盘。** 主人 2026-10-09 连着两次点
+      // `com.google.android.apps.translate`：「"文"这个字也没有」。查的结论不是模型判错 ——
+      // 那张的 `fg=BitmapDrawable` 里**只有左半的 G 与那道斜切**，"文"在**背景层**；
+      // 旧规则无条件取 `source.foreground`，**模型从来没收到过那个字**。
+      // 判据 = 背景层是不是 `ColorDrawable`：是，则图形确实只在前景层（桌面自己会补一张盘）；
+      // 不是（矢量/位图/渐变/层），背景里带着东西，就得把整张交给模型。
+      // ⚠ 波及面先量过：`corpus_runtime` 91 张自适应里背景是 `ColorDrawable` 的只有 **34** 张，
+      //   另外 **57** 张（矢量 29 + 位图 25 + 渐变 2 + 层 1）会换输入。
+      //   对表台按"整张输入"重跑过一遍（`YardKt --input=composite`）：
+      //   `med 1.9→0.4`、`mean 7.1→6.7`、`iouMed 0.812→0.876` 三项变好，
+      //   `dAlphaMed 8.1→16.7` 一项变差（整张的面积大，逐格 Δα 的分母跟着大）。
+      // ⚠ 这一改同时把"盘在图里"的那批交给了**切底**那条路 —— 那正是本仓量过三次的墙。
+      //   所以装机必须看：换输入之后**背景层是纯色但画成位图**的那批会不会被涂满。
+      val target = if (adaptive && source.background is ColorDrawable) source.foreground else source
       if (target == null) {
         noteGiveUp(edge, label, "取不到前景层")
         return@runCatching null
