@@ -1018,8 +1018,17 @@ internal object MonochromeMask {
           // 透明像素照样不给墨（乘上源 alpha，与下面 `tl` 同一条规矩）。
           val l64 = s.labL[i].toInt() and 0xffff
           val ramp = if (tonalBright) l64 - tonal.lo else tonal.hi - l64
-          (ramp * 255 / maxOf(tonal.hi - tonal.lo, 1 shl 6)).coerceIn(0, 255) *
-            Color.alpha(pixels[i]) / 255
+          var ta = (ramp * 255 / maxOf(tonal.hi - tonal.lo, 1 shl 6)).coerceIn(0, 255)
+          // **盘在另一层的这一张：斜坡的零端不许发给标记自己的面。**
+          // 零端本来给的是"离墨最远的那一块"，也就是**承载面**；而 [plateIsLayer] 为真时这张里
+          // 根本没有承载面（只有前景层，盘是背景层里那张 `ColorDrawable`，桌面自己会补）。
+          // 于是最亮那个刻面被推到 α=0 —— 真机上 `com.netease.uuremote` 四个面丢两个、
+          // `com.xunmeng.pinduoduo` 整片是灰，都是这一条。压回 128..255 之后内部对比仍占满一整段。
+          // ⚠ **顺序是全部重点**：地板压在 `× 源α / 255` **之前**，空气还是 0。上一版
+          //   （`cand/MonochromeMask.ghostFloor.kt`）把它压在乘法之后、又拿 `ground.gN==0` 猜这一位，
+          //   13 张变实心方块 —— 那个方块是**空气被抬起来了**，不是标记变实了（第九闸 0/219 钉住这件事）。
+          if (plateIsLayer) ta = PLATE_FLOOR_MIN + (255 - PLATE_FLOOR_MIN) * ta / 255
+          ta * Color.alpha(pixels[i]) / 255
         } else (td * (100 - q) + tl * q) / 100
         if (a == 0) continue
         // 比参照暗的往上、亮的往下，**按这张图自己的跨度成比例** —— 不是"暗/亮"两档。
@@ -1307,6 +1316,9 @@ internal object MonochromeMask {
    */
   private const val TONAL_AIR_MIN = 25
   private const val PLATE_FLAT_MIN = 40
+  /** 甲类（盘在另一层）时满幅那条斜坡的**下界**：零端留给空气，标记最亮那一面不许归零。
+   *  128 = 一半浓度，不是挑出来的数 —— 内部对比仍然占满 128..255 这一整段。 */
+  private const val PLATE_FLOOR_MIN = 128
 
   /** 判据产物。[lo]/[hi] 是这张自己亮度的 p5/p95（L\\*×64），[span] = hi−lo。 */
   internal class Tonal(val tex: Int, val flat: Int, val span: Int, val lo: Int, val hi: Int) {
