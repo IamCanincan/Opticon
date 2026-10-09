@@ -819,7 +819,15 @@ internal object MonochromeMask {
     //     而钉着的性质里 `字形实心`/`白方块还是实心` 那族全报 `方块=0.0`（白字被掏空）。
     //     加上这一条之后 `SelfTest` 从红 23 条降到红 3 条、兼容性台 30→57。
     val tonal = tonalClass(pixels, w, h, box)?.takeIf { it.on }
-    val tonalBright = tonal != null && ground.gN * 5 >= (ground.gN + ground.iN) &&
+    // 候选：盘子是**空气**时不许翻极性。"亮=墨"这条启发式存在的理由是"深盘上的白字"，
+    // 而那需要一个**不透明的盘**；四周本来就是透明的时候，翻极性等于把最暗的笔画擦掉
+    // （azure 的锁梁 L=35.8，比它自己那块被当成底的盾牌还暗 4.3 —— 一翻就归零）。
+    var airN = 0
+    if (tonal != null) for (y in box.top until box.bottom) for (x in box.left until box.right)
+      if (Color.alpha(pixels[y * w + x]) < A_SOLID) airN++
+    val airShare = airN * 100 / maxOf(box.width() * box.height(), 1)
+    val groundIsAir = airShare >= TONAL_AIR_MIN
+    val tonalBright = tonal != null && !groundIsAir && ground.gN * 5 >= (ground.gN + ground.iN) &&
       (ground.gL shr 6) < TONAL_PLATE_L_MIN
 
     // 3) 出图：距离与明暗两条按 q 混成浓度，第二遍降层次。
@@ -1267,6 +1275,7 @@ internal object MonochromeMask {
    * 20% 那一半是不许"几乎没找到底"的图蒙进来：`gN` 至少要占实心的两成，才谈得上"它有一块底"。
    */
   private const val TONAL_PLATE_L_MIN = 80
+  private const val TONAL_AIR_MIN = 25
 
   /** 判据产物。[lo]/[hi] 是这张自己亮度的 p5/p95（L\\*×64），[span] = hi−lo。 */
   internal class Tonal(val tex: Int, val flat: Int, val span: Int, val lo: Int, val hi: Int) {
