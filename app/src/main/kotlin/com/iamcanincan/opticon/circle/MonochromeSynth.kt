@@ -290,7 +290,9 @@ internal object MonochromeSynth {
       val total = edge * edge
       val pixels = IntArray(total)
       raster.getPixels(pixels, 0, edge, 0, 0, edge, edge)
-      val out = MonochromeMask.build(pixels, edge, edge)
+      // `!flatten` 且是自适应 = 交给这里的**只有前景层**，那张盘在背景层里（桌面自己补）。
+      // 把这件事告诉模型：这一张里不许有"实心的一块当底" —— 混元那半个太极就是这么丢的。
+      val out = MonochromeMask.build(pixels, edge, edge, adaptive && !flatten)
       // H0 的射程跟着记：见 [noteSynthesized] 那条汇总为什么带它。
       noteH0(out.h0why)
       noteVeto(out.veto)

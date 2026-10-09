@@ -685,7 +685,14 @@ internal object MonochromeMask {
    *   错误，是事实，那种图的正确答案就是它自己该有的样子：一块平色上屏本来就是一块平色。
    *   所以这里没有"够不够格被合成"这种闸，只有**量出来是多少就是多少**。
    */
-  fun build(pixels: IntArray, w: Int, h: Int): Output {
+  /**
+   * @param plateIsLayer **这一张的承载面在图层里，不在像素里**。`true` 只有一种来路：
+   *  自适应图标 + 背景层是 `ColorDrawable`，于是 `MonochromeSynth` 把**前景层单独**取了交给这里
+   *  （桌面自己会补那张盘）。这一张里每一块实心都是设计师画的图形，
+   *  所以底**只许是空气**（H3）—— 见 [groundPass] 里那条注释。默认 `false` = 整张位图那一路，
+   *  盘有没有、是哪一块，只能从像素里判。
+   */
+  fun build(pixels: IntArray, w: Int, h: Int, plateIsLayer: Boolean = false): Output {
     val total = w * h
     if (total <= 0) return Output(IntArray(0), 0f, 0f, 0f, 0, 0f, 0f, "尺寸非法 → 空层")
     val box = contentBounds(pixels, w, h)
@@ -706,7 +713,7 @@ internal object MonochromeMask {
     }
 
     // 1) 两遍参照。顺序固定：第二遍要用第一遍剩下的那一半当工作集。
-    val ground = groundPass(pixels, w, h, box, band, g, s)
+    val ground = groundPass(pixels, w, h, box, band, g, s, plateIsLayer)
     val body = bodyPass(pixels, w, h, box, g, s)
 
     // 2) 明度序的两个刻度，都从这张图自己的分布量：
@@ -2675,6 +2682,7 @@ internal object MonochromeMask {
    */
   private fun groundPass(
     pixels: IntArray, w: Int, h: Int, box: Rect, band: Int, g: Int, s: Scratch,
+    plateIsLayer: Boolean = false,
   ): Pass {
     val seed = s.mark      // 洪泛的种子掩码（measure 之前没人用这块）
     s.h0why = 0            // 这一张走到 H0 没有、被哪道拦下，逐张归零（见 [Scratch.h0why]）
@@ -2688,7 +2696,19 @@ internal object MonochromeMask {
     var h1fams = -1
     var h1ink = -1
     val fams = cornerFamilies(pixels, w, box, band, s)
-    if (fams > 0) {
+    // ⚠ **这一张的盘在另一层的时候，实心区里不许有底**（H1 角上那一色 / H2 轮廓那一色 都不许）。
+    // 依据不是统计量，是**输入是怎么来的**：`MonochromeSynth` 只有在"自适应图标 + 背景层是
+    // `ColorDrawable`"时才把**前景层单独**交进来（桌面自己会补那张盘）。也就是说这一张里
+    // 每一块实心都是设计师画在前景层里的东西，**唯一的承载面是空气** —— 那正是 H3。
+    // 为什么今天才立这一条：它唯一真正改到的那一张是 `com.tencent.hunyuan.app.chat`（混元）——
+    // H2 把太极**自己的白色那一瓣**当成了底，屏幕上就是主人那句「我这只有半个太极」。
+    // 干净对照（`cand/MonochromeMask.noSolid2.kt` + `NoSolidKt.kt`，16 张甲类 dump）：
+    // **12 张逐位相同**（含 azure / 拼多多 / 贴吧 / xbox —— 它们走的是满幅那一支，
+    // 那一条路的浓度不看 `plate`，所以换了底也换不出画面），只有混元补全（`框内 0.27→0.53`）
+    // 与 kazumi 挪了 0.02。
+    // ⚠ 第一版量出来的是"这条规则会把 azure 等涂成实心方块"，**那是错的**：那份候选里还留着
+    //   另一刀（`GHOST_FLOOR=128`）的地板，方块是地板画的。规则本身无罪，被叠在身上的那一刀冤枉了。
+    if (fams > 0 && !plateIsLayer) {
       bandSeed(s, w, box, band, seed)
       val p = fitGround(pixels, w, h, box, g, s, fams, seed)
       p.ring = fams
@@ -2724,7 +2744,7 @@ internal object MonochromeMask {
     var h2thick = -1
     var h2spread = -1
     var h2enc = -1
-    if (ring > 0) {
+    if (ring > 0 && !plateIsLayer) {
       val alt = fitGround(pixels, w, h, box, g, s, ring, seed)
       alt.ring = ring
       alt.thick = plateThickness(w, box, s)
