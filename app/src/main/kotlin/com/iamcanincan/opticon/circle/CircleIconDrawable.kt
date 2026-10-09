@@ -53,19 +53,50 @@ private val VIEW_PORT_SCALE = 1f / (1f + 2f * EXTRA_INSET_FRACTION)
  * 靠反射 `mLayersBitmap` / `mLayersShader` / `mCanvas` / `mPaint` 实现。
  * 我们不反射（版本一变就断），直接把前景层画出来即可 —— 圆已经在遮罩那一步裁好了。
  */
+/**
+ * 桌面自己给主题图标用的那块盘是什么颜色。
+ *
+ * 为什么不是常数（2026-10-09）：已适配图标的盘色来自桌面资源 `themed_icon_background_color`，
+ * 本机 `aapt2 dump` 量出来它白天是 `system_accent1_100`、夜里是 `system_accent2_800` ——
+ * **是 Material You 动态色，跟着壁纸变**。我们写死白，就等于把别人的主题猜成一个值，
+ * 主人报的「背景和适配取色的背景颜色不一样了」就是这么来的。
+ *
+ * 三个取值口径：
+ *  · 用**宿主的** `Resources` + `theme`，所以日夜模式与动态色由系统自己解析；
+ *  · 名字取不到（换桌面、被 R8 改名、非桌面进程）→ 退回白，与改前一模一样；
+ *  · 一次进程解析一次（`by lazy`）：图标是热路径，而换主题本来就要清图标缓存才重画。
+ */
+internal fun themedPlateColor(): Int = themedPlateCache.getOrPut("plate") {
+  runCatching {
+    val app = currentApplication() ?: return@runCatching Color.WHITE
+    val res = app.resources
+    val id = res.getIdentifier("themed_icon_background_color", "color", app.packageName)
+    // **取没取到必须说话**（本仓"0 与没走到长得一样"这一族吃过多次亏）：
+    // 这一行也顺手回答了那个只有装机能判的问题 —— 合成器到底是照我们给的颜色画，还是自己再染一次。
+    android.util.Log.i(TAG, "Plate: ${app.packageName} themed_icon_background_color id=$id " +
+      (if (id == 0) "取不到 → 用白" else "= #%06X".format(res.getColor(id, app.theme) and 0xFFFFFF)))
+    if (id == 0) Color.WHITE else res.getColor(id, app.theme)
+  }.getOrDefault(Color.WHITE)
+}
+
+/** 缓存放在这里而不是 object 里：`getIdentifier` 的口径是"当前进程"，一个进程只有一个答案。 */
+private val themedPlateCache = HashMap<String, Int>()
+
 class CircleIconDrawable(icon: Drawable) :
   AdaptiveIconDrawable(
-    // 背景：**不透明的白**（2026-10-08）。原来这里是 `Color.TRANSPARENT`，理由是"不叠加任何装饰" ——
-    // 但那一手在取色模式下变成了缺陷：桌面只在 `getMonochrome() == null` 时才替图标补主题底盘
-    // （`IconProvider.getDrawable`，见 README「底盘」那条），而我们的合成钩子把这一层从 null
-    // 变成非 null，等于替图标宣布"我自己适配过了"，于是**没人画盘**：已适配的图标有盘、我们没有。
+    // 背景：**桌面自己给主题图标用的那块盘**（2026-10-09），取不到时退回白。
+    // 原来这里是写死的 `Color.WHITE`（2026-10-08）。为什么那一手不够：桌面上"已适配"图标的盘
+    // 不是白的，是**桌面资源 `themed_icon_background_color`** —— 本机量出来它白天是
+    // `system_accent1_100`、夜里是 `system_accent2_800`（Material You 动态色）。
+    // 于是主人报的那句「背景和适配取色的背景颜色不一样了」有了来源：**我们的盘是一个猜出来的常数。**
+    // 现在改成问宿主：同一个资源名、同一套日夜与动态色解析，**由桌面自己决定那块盘是什么颜色**。
     //
-    // 为什么换成白底是安全的：本类自己的 `draw()` **从不画背景层**（只画前景，见下面那段），
-    // 所以普通图标上这块白一个像素都看不见；只有**去取背景层的消费方**（取色合成器）会拿到它，
-    // 而它会给背景与单色层**分别染色** —— 不然已适配的图标也只会是一整块实心饼。
-    // ⚠ 万一有别的消费方也去画背景，就会多出一块白盘 —— 这一条是本次改动唯一的真实风险，
-    //   回滚 = 把这一行改回 `Color.TRANSPARENT`。
-    ColorDrawable(Color.WHITE),
+    // 为什么安全：本类自己的 `draw()` **从不画背景层**（只画前景，见下面那段），
+    // 普通图标上这块颜色一个像素都看不见；只有**去取背景层的消费方**（取色合成器）会拿到它。
+    // ⚠ 两种可能的结局，只有装机能判：(a) 合成器照我们给的颜色画 → 从此与已适配图标一致；
+    //   (b) 合成器自己再染一次 → 这一改是**空转**，那条投诉的根不在这里。
+    //   回滚 = 把这一行改回 `Color.WHITE`（或 `Color.TRANSPARENT`）。
+    ColorDrawable(themedPlateColor()),
     // 前景：原图标套上圆形遮罩，再缩到可见区
     ViewportDrawable(MaskedDrawable(icon)),
   ) {

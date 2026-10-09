@@ -838,6 +838,40 @@ MIT —— 见 [LICENSE](LICENSE)。
 ## 更新日志
 
 ### 未发布（v1.0.3 之后）
+- 🔵 **看别人项目看出来的：那块盘的颜色一直是可以问的，我们却一直在猜**（2026-10-09 深夜第五刀，
+  装机 `22:18:28`；来源是主人指的 `D:\下载\PixelLauncherEnhanced`）。
+  - 那个模块的「强制主题色」不是自己算色，是**改写桌面那两个资源**：
+    `ThemedIconsColor.replaceResources()` 对 `color/themed_icon_background_color` 与
+    `color/themed_icon_color`（外加 badge 那一对、folder 那四个）做 `XResources.setReplacement(id, color)`。
+    **它反证了这两条就是桌面上"主题图标"的盘色与墨色的正门。**
+  - 本机 `aapt2 dump` 验过（`_harness/L3.apk` = `Launcher3QuickStep.apk`）：
+    | 桌面资源 | 日间 | 夜间 |
+    |---|---|---|
+    | `themed_icon_background_color` | `system_accent1_100` | `system_accent2_800` |
+    | `themed_icon_color` | `system_accent1_700` | `system_accent1_200` |
+    | `themed_icon_adaptive_background_color` | `system_accent1_500` | `system_accent1_800` |
+    **全是 Material You 动态色**（`@android:color/...` 别名，跟壁纸走）。所以"已适配图标的背景"
+    从来不是白的 —— 而我们 `CircleIconDrawable` 的背景层从 2026-10-08 起**写死 `Color.WHITE`**。
+    主人那句「背景和适配取色的背景颜色不一样了」第一次有了一个不是算法的解释：**那是一个猜出来的常数。**
+  - 🔧 **改法**：`themedPlateColor()` 用**宿主的** `Resources` + `theme` 按名字取那个 color
+    （日夜与动态色由系统自己解析），取不到（换桌面 / 被改名 / 非桌面进程）退回白 —— 与改前一模一样。
+    一次进程一次，并打一行 `Plate: <pkg> themed_icon_background_color id=… #RRGGBB`，
+    **取没取到必须说话**。
+  - ⚠ **这一改有两种结局，表上没有裁决权，只有装机能判**：
+    (a) 取色合成器照我们给的颜色画 → 从此与已适配图标一致，那条投诉就地了结；
+    (b) 合成器自己再染一次（`CircleIconDrawable` 的类文档当时正是用这句为白底辩护的）→
+    **这一改是空转**，投诉的根不在这里。两种都写进代码注释了，回滚 = 那一行改回 `Color.WHITE`。
+  - 🔴 **同时订正 2026-10-08 那条「镜像桌面底盘这条路量窄了」**：当时的证据是
+    「桌面 APK 里 `monochrome` 出现 0 次、`android.jar` 的 `R$attr` 里没有 `monochrome*`」——
+    两句都成立，但**问错了对象**：盘色不在 `attr`/`styleable` 上，在 **`color/`** 上，
+    而它一直都在桌面资源表里。**"搜了一个关键词没有"不等于"这条路没有"。**
+  - 📌 顺手读到的两件，免得再翻那个仓库：
+    · 它的 `MonochromeIconFactory` 就是 AOSP 那份（灰度→平均当 α + min/max 拉对比），
+      极性判据是**"上下边缘两条的平均浓度映射后 >0.5 就翻"** —— 与我们 2026-09-24 量定的同一条，没有新东西；
+    · 它 hook `AdaptiveIconDrawable.getMonochrome` 时**也踩过我们那个坑**：桌面从
+      `IconProvider.getIcon / getIconWithOverrides` 那条栈来的要跳过（它靠读调用栈判断），
+      我们用 `CircleIconDrawable` 自己重写 getter 绕开 —— 两种口径都记一笔，换 ROM 时谁先坏可对照。
+
 - 🔴 **对表台一直在给乙类喂错的图：38/63 对喂的是前景层，而真机上那一路吃的是两层合并图**
   （2026-10-09 深夜第四刀，**改的是量具不是模型**；修完之后 `iouMed 0.816→0.966`、`med 1.9→0.3`）。
   - 起因是要回答"对表剩下的差距压在谁身上"。把最差 12 张按通道一分：**10 张是乙类**

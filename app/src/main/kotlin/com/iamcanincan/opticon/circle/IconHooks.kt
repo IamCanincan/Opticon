@@ -351,8 +351,13 @@ private val currentApplicationMethod: Method? by lazy {
     .getOrNull()
 }
 
-/** 当前进程的 Application（模块侧拿 Context 的通用办法，反射 ActivityThread）。 */
-private fun currentApplication(): Application? =
+/**
+ * 当前进程的 Application（模块侧拿 Context 的通用办法，反射 ActivityThread）。
+ *
+ * `internal` 而不只是本文件可用：`CircleIconDrawable` 要拿它读**桌面自己的主题色**
+ * （`themed_icon_background_color`），那块盘以前是写死的白。
+ */
+internal fun currentApplication(): Application? =
   runCatching {
       val method =
         currentApplicationMethod
