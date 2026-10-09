@@ -645,9 +645,6 @@ internal object MonochromeMask {
     var gA: Int = 0,
     var gB: Int = 0,
     var gN: Int = 0,
-    /** 同一趟里被判成墨的那一半的平均亮度（L ×64）。极性该问「墨比底亮吗」，
-     *  不是问「底够不够亮」—— 绝对阈值把橙色盘（L=75）当成深盘，PH 那张就被涂反了。 */
-    var iL: Int = 0,
     /** **实心**像素里被判成"墨"的那一半有多少格（与 [gN] 同一趟、同一口径：α=255）。
      *  两个数一起回答的是"这一刀把画面分成两半之后，哪一半才是主体" —— 见 [thinPlate]。 */
     var iN: Int = 0,
@@ -831,7 +828,7 @@ internal object MonochromeMask {
     val airShare = airN * 100 / maxOf(box.width() * box.height(), 1)
     val groundIsAir = airShare >= TONAL_AIR_MIN
     val tonalBright = tonal != null && !groundIsAir && ground.gN * 5 >= (ground.gN + ground.iN) &&
-      ground.iL > ground.gL + TONAL_POL_MARGIN
+      (ground.gL shr 6) < TONAL_PLATE_L_MIN
 
     // 3) 出图：距离与明暗两条按 q 混成浓度，第二遍降层次。
     //    **第二遍能降多狠，只问一句：被降的那一层交出的墨，有没有比留下来的那层还多？**
@@ -1286,8 +1283,6 @@ internal object MonochromeMask {
    */
   private const val TONAL_PLATE_L_MIN = 80
   private const val TONAL_AIR_MIN = 25
-  /** 「墨比底亮多少」才允许翻极性（L* 单位）。 */
-  private const val TONAL_POL_MARGIN = 10 shl 6
   private const val PLATE_FLAT_MIN = 40
 
   /** 判据产物。[lo]/[hi] 是这张自己亮度的 p5/p95（L\\*×64），[span] = hi−lo。 */
@@ -2537,7 +2532,6 @@ internal object MonochromeMask {
     // 底与墨各自的平均色（只数本来就实心的格子：抗锯齿边在两半里都有，算进去就是拿一条边
     // 去比一条边，量出来的 ΔE 与"这一刀切没切开东西"无关）。
     var gl = 0L; var ga = 0L; var gb = 0L; var gn = 0
-    var il = 0L
     var inn = 0
     for (y in box.top until box.bottom) {
       val row = y * w
@@ -2547,7 +2541,7 @@ internal object MonochromeMask {
           if (s.plate[i] != 0.toByte()) {
             gl += s.labL[i].toInt() and 0xffff; ga += s.labA[i].toInt() and 0xffff
             gb += s.labB[i].toInt() and 0xffff; gn++
-          } else { inn++; il += s.labL[i].toInt() and 0xffff }
+          } else inn++
         }
         if (s.plate[i] != 0.toByte()) {
           // 底格子这一条用 [fTop] 问"这一格有没有实参照"，不是"平均有多实"：跨在
@@ -2584,7 +2578,6 @@ internal object MonochromeMask {
     p.gA = if (gn > 0) (ga / gn).toInt() else 0
     p.gB = if (gn > 0) (gb / gn).toInt() else 0
     p.gN = gn.toInt()
-    p.iL = if (inn > 0) (il / inn).toInt() else 0
     p.iN = inn.toInt()
     // 两半的平均色之差。写成"交叉相乘再除"是为了不出现两次除法带来的漂移；Lab 是 ×64 的，
     // 所以最后除 64 回到 ΔE 单位，再 ×10 存成整数（日志里读 0..255 的人不需要那半位）。
