@@ -648,6 +648,9 @@ internal object MonochromeMask {
     /** **实心**像素里被判成"墨"的那一半有多少格（与 [gN] 同一趟、同一口径：α=255）。
      *  两个数一起回答的是"这一刀把画面分成两半之后，哪一半才是主体" —— 见 [thinPlate]。 */
     var iN: Int = 0,
+    /** 同一趟里被判成**墨**的那一半的平均亮度（Lab 的 L ×64，与 [gL] 同一口径）。
+     *  极性要问的是「墨比底亮吗」，不是「底够不够亮」—— 见 [tonalBright] 那一段。 */
+    var iL: Int = 0,
   )
 
   /**
@@ -827,8 +830,18 @@ internal object MonochromeMask {
       if (Color.alpha(pixels[y * w + x]) < A_SOLID) airN++
     val airShare = airN * 100 / maxOf(box.width() * box.height(), 1)
     val groundIsAir = airShare >= TONAL_AIR_MIN
+    // **极性问的是关系，不是绝对值**：「墨那一半比底亮吗」。
+    // 原来那条 `底 L* < 80 就翻` 是一条绝对阈值，而 2026-10-09 把全语料的底 L 摊开之后
+    // 它站不住（`_harness/InkSpanKt.kt`，只数"底占 ≥20%"的 50 张）：
+    //   该翻的挤在 58~79（翻译 58、淘宝 60、饿了么 65、云闪付 68、小米智能家居 72、xbud 79），
+    //   不该翻的 PH 是 **75** —— 就踩在这一堆中间。**这条线上没有第二个切点**，
+    //   往左挪一格就要赔掉上面那几张。所以换成同一趟里已经攒着的 `iL`（墨那一半的平均亮度）：
+    //   PH 的墨是 L=4 的黑三角 < 底 75 → 不翻（三角成墨、橙底归零）；
+    //   云闪付的墨是 L=74 的白字 > 底 68 → 翻。**一个常数都不需要。**
+    // ⚠ 上一版这里写的是 `iL > gL + 10`（留 10 的余量）。那 10 就是云闪付：它的墨只比底亮 6，
+    //   加了余量之后整块蓝底被当成墨（`框内 0.35→0.61`）。余量不是保守，是把边界上的真答案切错。
     val tonalBright = tonal != null && !groundIsAir && ground.gN * 5 >= (ground.gN + ground.iN) &&
-      (ground.gL shr 6) < TONAL_PLATE_L_MIN
+      ground.iL > ground.gL
 
     // 3) 出图：距离与明暗两条按 q 混成浓度，第二遍降层次。
     //    **第二遍能降多狠，只问一句：被降的那一层交出的墨，有没有比留下来的那层还多？**
@@ -1277,11 +1290,14 @@ internal object MonochromeMask {
    * 根本没找到任何一块底**（`底占=0.82` 全是画布外的空气）。没有底，就没有"同意"可言，
    * 这一支一开就等于宣布"黑盘是图形、白 K 是背景"。
    *
-   * 80 这个数：白/近白的底 L\\* 在 95~100，中间调的盘（红、蓝、橙）在 40~60。取 80 是让这条豁免
-   * **只认白底**，不认任何有色调的盘 —— 因为极性会反的恰恰是"有色调的盘 + 亮字"那一类。
    * 20% 那一半是不许"几乎没找到底"的图蒙进来：`gN` 至少要占实心的两成，才谈得上"它有一块底"。
+   *
+   * ⚠ 这里原来还挂着第三个条件 `底 L* < TONAL_PLATE_L_MIN(80)`，**2026-10-09 删掉了**：
+   *  把全语料的底 L 摊开看，该翻的挤在 58~79、不该翻的 PH 是 75，这条线上没有第二个切点
+   *  （分布与逐张名单见 [build] 里 `tonalBright` 那段）。它换成的是「墨比底亮吗」这一条**关系**。
+   *  留这段不是为了记那个数，是为了记**它为什么不够**：上面那两种"拿平均亮度当豁免"的死法，
+   *  和 80 这一条的死法是同一个 —— 绝对阈值在一堆中间调里没有落脚的地方。
    */
-  private const val TONAL_PLATE_L_MIN = 80
   private const val TONAL_AIR_MIN = 25
   private const val PLATE_FLAT_MIN = 40
 
@@ -2532,6 +2548,7 @@ internal object MonochromeMask {
     // 底与墨各自的平均色（只数本来就实心的格子：抗锯齿边在两半里都有，算进去就是拿一条边
     // 去比一条边，量出来的 ΔE 与"这一刀切没切开东西"无关）。
     var gl = 0L; var ga = 0L; var gb = 0L; var gn = 0
+    var il = 0L
     var inn = 0
     for (y in box.top until box.bottom) {
       val row = y * w
@@ -2541,7 +2558,7 @@ internal object MonochromeMask {
           if (s.plate[i] != 0.toByte()) {
             gl += s.labL[i].toInt() and 0xffff; ga += s.labA[i].toInt() and 0xffff
             gb += s.labB[i].toInt() and 0xffff; gn++
-          } else inn++
+          } else { inn++; il += s.labL[i].toInt() and 0xffff }
         }
         if (s.plate[i] != 0.toByte()) {
           // 底格子这一条用 [fTop] 问"这一格有没有实参照"，不是"平均有多实"：跨在
@@ -2578,6 +2595,7 @@ internal object MonochromeMask {
     p.gA = if (gn > 0) (ga / gn).toInt() else 0
     p.gB = if (gn > 0) (gb / gn).toInt() else 0
     p.gN = gn.toInt()
+    p.iL = if (inn > 0) (il / inn).toInt() else 0
     p.iN = inn.toInt()
     // 两半的平均色之差。写成"交叉相乘再除"是为了不出现两次除法带来的漂移；Lab 是 ×64 的，
     // 所以最后除 64 回到 ΔE 单位，再 ×10 存成整数（日志里读 0..255 的人不需要那半位）。
