@@ -1131,6 +1131,13 @@ internal object MonochromeMask {
       }
       else { figN++; figSum += a; if (a >= 250) figTop++ }
     }
+    // 满幅那一支把「图标自己的底色」也当成一个调子转录了 —— cainiao 那块蓝方底 L*≈50
+    // 被映射成 α≈126（分档=3/4(0,126,237,254) 里那个 126 就是它），屏幕上是一层半透明灰，
+    // 和已适配图标那种干净的盘对不上。这里把参照**已经判成底**的那些格直接归零。
+    // ⚠ 只在这块底**一直顶到画布边缘**时才这么做 —— 那是「整张画布就是一张盘」的形状证据。
+    //   azure 的「底」是盾牌、四周是空气、不顶边：刚修好的锁梁不会被这一刀带倒。
+    if (tonal != null && plateTouchesBorder(pixels, w, h, s))
+      for (i in 0 until total) if (s.plate[i] != 0.toByte()) out[i] = 0
     val sep = separation(out, w, h, box, s)
     val st = measure(out, w, h, box, s, bridge = colourDriven, despeckle = colourDriven)
     val fill = st.kept.toFloat() / boxArea
@@ -4012,6 +4019,14 @@ internal object MonochromeMask {
    *   而 2px 是判据台认的下限，1px 在 108dp 的画布上是 0.28dp，屏幕上本来就分辨不出来。
    *   取 4 会开始啃 2px 斜线的两端（斜线的 3×3 里线自己只有 4~5 格）。
    */
+  /** 参照判出来的底有没有一直顶到画布四条边（= 整张画布就是一张盘）。 */
+  private fun plateTouchesBorder(pixels: IntArray, w: Int, h: Int, s: Scratch): Boolean {
+    fun on(i: Int) = s.plate[i] != 0.toByte() && Color.alpha(pixels[i]) >= A_SOLID
+    for (x in 0 until w) if (on(x) || on((h - 1) * w + x)) return true
+    for (y in 0 until h) if (on(y * w) || on(y * w + w - 1)) return true
+    return false
+  }
+
   private fun thinInk(plate: ByteArray, w: Int, box: Rect, x: Int, y: Int): Boolean {
     if (x <= box.left || x >= box.right - 1 || y <= box.top || y >= box.bottom - 1) return false
     val i = y * w + x
