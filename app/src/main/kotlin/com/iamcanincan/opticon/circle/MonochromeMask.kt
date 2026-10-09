@@ -712,8 +712,25 @@ internal object MonochromeMask {
       s.labB[i] = labChannel(p, 2).toShort()
     }
 
+    // **这张里到底有没有空气露出来** —— 按**整张画布**数，不按内容框。
+    // 为什么必须是画布：这一位问的是"背景层那张盘有没有从前景层的空处透出来"，
+    // 而盘是**铺满整个视口**的。按内容框数会把一个实心圆判成"没露空气"：
+    // 混元那张圆盘在框内只露 21% 的角（圆占框 ≈78%，算术上就这样），卡在 25% 线下，
+    // 于是"另外半个太极"又回来了 —— 而它前景层按画布数是 **61% 空**。
+    var airN0 = 0
+    for (i in 0 until total) if (Color.alpha(pixels[i]) < A_SOLID) airN0++
+    val airCanvasPct = airN0 * 100 / total
+    // ⚠ **这一位要自己带前提**：`plateIsLayer` 说"承载面在另一层"，而这句话只有**这张真的露出空气**
+    //   时才成立。对表台量出来的反例 `com.limelight.qiin`：背景层是纯色，可前景层自己
+    //   **92% 是实心的**（设计师在前景层里画了一整块场），于是"这张没有承载面"把整块场都判成墨 ——
+    //   `11.7% → 92.8%`，而人画的是 `16.6%`。同一位管住的两张（kimichat 空 50%、frontpage 空 65%）
+    //   都是**修好**的，所以问题不在这一位，在它没问"空气到底有没有"。
+    // 🔑 **这条线不用挑**：整张画布口径下真机 + 对表这 11 张分成 **{0, 7} 与 {50…81}**，
+    //   中间空 43 个点 —— 与今天否掉的那几条"在人群里画线"不是一回事。
+    //   门槛沿用已有的 `TONAL_AIR_MIN`（25%），**不新造常数**。
+    val plateLayer = plateIsLayer && airCanvasPct >= TONAL_AIR_MIN
     // 1) 两遍参照。顺序固定：第二遍要用第一遍剩下的那一半当工作集。
-    val ground = groundPass(pixels, w, h, box, band, g, s, plateIsLayer)
+    val ground = groundPass(pixels, w, h, box, band, g, s, plateLayer)
     val body = bodyPass(pixels, w, h, box, g, s)
 
     // 2) 明度序的两个刻度，都从这张图自己的分布量：
@@ -832,6 +849,9 @@ internal object MonochromeMask {
     // 候选：盘子是**空气**时不许翻极性。"亮=墨"这条启发式存在的理由是"深盘上的白字"，
     // 而那需要一个**不透明的盘**；四周本来就是透明的时候，翻极性等于把最暗的笔画擦掉
     // （azure 的锁梁 L=35.8，比它自己那块被当成底的盾牌还暗 4.3 —— 一翻就归零）。
+    // 盘是**空气**的时候不许翻极性（azure 锁梁那一条）—— 这里按**内容框**数，
+    // 与上面 `airCanvasPct` 是两个问题：那一条问"盘有没有透出来"（画布），这一条问
+    // "这张有没有一块不透明的盘"（内容框）。**别把它们并成一个。**
     var airN = 0
     if (tonal != null) for (y in box.top until box.bottom) for (x in box.left until box.right)
       if (Color.alpha(pixels[y * w + x]) < A_SOLID) airN++
@@ -1027,7 +1047,7 @@ internal object MonochromeMask {
           // ⚠ **顺序是全部重点**：地板压在 `× 源α / 255` **之前**，空气还是 0。上一版
           //   （`cand/MonochromeMask.ghostFloor.kt`）把它压在乘法之后、又拿 `ground.gN==0` 猜这一位，
           //   13 张变实心方块 —— 那个方块是**空气被抬起来了**，不是标记变实了（第九闸 0/219 钉住这件事）。
-          if (plateIsLayer) ta = PLATE_FLOOR_MIN + (255 - PLATE_FLOOR_MIN) * ta / 255
+          if (plateLayer) ta = PLATE_FLOOR_MIN + (255 - PLATE_FLOOR_MIN) * ta / 255
           ta * Color.alpha(pixels[i]) / 255
         } else (td * (100 - q) + tl * q) / 100
         if (a == 0) continue
