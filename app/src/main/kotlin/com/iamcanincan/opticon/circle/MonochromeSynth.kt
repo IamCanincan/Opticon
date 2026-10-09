@@ -264,12 +264,15 @@ internal object MonochromeSynth {
       //   `dAlphaMed 8.1→16.7` 一项变差（整张的面积大，逐格 Δα 的分母跟着大）。
       // ⚠ 这一改同时把"盘在图里"的那批交给了**切底**那条路 —— 那正是本仓量过三次的墙。
       //   所以装机必须看：换输入之后**背景层是纯色但画成位图**的那批会不会被涂满。
-      val target = if (adaptive && source.background is ColorDrawable) source.foreground else source
+      val flatten = adaptive && source.background !is ColorDrawable
+      val target = if (adaptive && !flatten) source.foreground else source
       if (target == null) {
         noteGiveUp(edge, label, "取不到前景层")
         return@runCatching null
       }
-      val raster = rasterize(target, edge)
+      // ⚠ 整张那一路**不能**用 `rasterize(source)`：`AdaptiveIconDrawable.draw()` 按视口画，
+      //   会把图标放大 1.5 倍再裁掉四边（主人 2026-10-09「不少图标被裁切放大了」）。
+      val raster = if (flatten) rasterizeLayers(source, edge) else rasterize(target, edge)
       if (raster == null) {
         noteGiveUp(edge, label, "光栅化失败")
         return@runCatching null
@@ -596,6 +599,41 @@ internal object MonochromeSynth {
       if (background != null && savedBackground != null) background.bounds = savedBackground
       if (foreground != null && savedForeground != null) foreground.bounds = savedForeground
       target.bounds = saved
+    }
+  }
+
+  /**
+   * **按图层空间**把自适应图标的两层压平成一张（不走 [AdaptiveIconDrawable.draw]）。
+   *
+   * ⚠ 为什么不能直接栅格化父 drawable（这一条是我 2026-10-09 亲手撞的）：
+   *   `AdaptiveIconDrawable.draw()` 画的不是图层，是**视口** —— 图层 bounds = 1.5 × 图标尺寸
+   *   （`updateLayerBoundsInternal` 按 `VIEW_PORT_SCALE` 算），而 `draw()` 只把中央那 2/3
+   *   铺满它自己的 bounds。所以 `setBounds(0,0,edge,edge); draw()` 得到的是一张
+   *   **放大 1.5 倍、四边被裁掉**的图。主人当天那句「不少图标被裁切放大了」就是这么来的 ——
+   *   我为了让 translate 的背景层进画面，把整张 drawable 直接画了。
+   *
+   * 这里把两层各自 `setBounds` 到**整张 108dp 画布**再依次画，与"只取前景层"那条口径同一坐标系，
+   * 交出去的掩码仍然是桌面要的「整张 108dp 画布」。bounds 的还原理由与 [rasterize] 里那条一样
+   * （子层必须自己还原，不能指望父层那次 setBounds 带回去）。
+   */
+  private fun rasterizeLayers(source: AdaptiveIconDrawable, edge: Int): Bitmap? {
+    val bg = source.background
+    val fg = source.foreground ?: return null
+    val savedBg = bg?.let { Rect(it.bounds) }
+    val savedFg = Rect(fg.bounds)
+    return try {
+      val bmp = Bitmap.createBitmap(edge, edge, Bitmap.Config.ARGB_8888)
+      val canvas = Canvas(bmp)
+      if (bg != null && savedBg != null) {
+        bg.setBounds(0, 0, edge, edge)
+        bg.draw(canvas)
+      }
+      fg.setBounds(0, 0, edge, edge)
+      fg.draw(canvas)
+      bmp
+    } finally {
+      if (bg != null && savedBg != null) bg.bounds = savedBg
+      fg.bounds = savedFg
     }
   }
 

@@ -838,6 +838,18 @@ MIT —— 见 [LICENSE](LICENSE)。
 ## 更新日志
 
 ### 未发布（v1.0.3 之后）
+- ⚠ **上一条第一次装机被点「不少图标被裁切放大了」—— 因为我把整张 `AdaptiveIconDrawable` 直接画了。**
+  （2026-10-09，修在 `rasterizeLayers`，装机版本 `15:53:45`）
+  - **成因**：`AdaptiveIconDrawable.draw()` 画的不是图层，是**视口** —— 图层 bounds = 1.5 × 图标尺寸
+    （`updateLayerBoundsInternal` 按 `VIEW_PORT_SCALE` 算），`draw()` 只把中央那 2/3 铺满自己的 bounds。
+    所以 `setBounds(0,0,edge,edge); draw()` 出来的是一张**放大 1.5 倍、四边被裁掉**的图。
+  - **修法**：整张那一路改走 `rasterizeLayers(adaptive, edge)` —— 背景层与前景层**各自**
+    `setBounds` 到整张 108dp 画布、依次画进同一张位图，与"只取前景层"那条口径同一坐标系。
+    子层的 bounds 还原理由与 [rasterize] 里那条一样（不能指望父层那次 setBounds 带回去）。
+  - 📌 **这条值得留在更新日志里的理由**：我改的是"喂给模型什么内容"，却顺带换了**坐标系**，
+    而判据台**看不见这件事** —— 它吃的是按层抓回来的 PNG，缩放发生在真机的 drawable 上。
+    **凡是动 `MonochromeSynth` 取层/画层的改动，验收必须包含"尺寸与位置对不对"这一条，
+    而对表台、性质台、第八闸没有一把看得见它。**
 - 🔧 **translate 的"文"修好了：不再无条件取前景层 —— 只有背景层真是纯色盘时才取。**
   （2026-10-09，主人连着两次点同一张；第二次我没再解释成因，直接去改输入通道。装机版本 `15:40:29`）
   - **旧规则**：`MonochromeSynth` 对自适应图标无条件取 `source.foreground`。translate 的
