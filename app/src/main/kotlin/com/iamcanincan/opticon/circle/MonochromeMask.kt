@@ -681,8 +681,19 @@ internal object MonochromeMask {
    *   遮罩（`MonochromeIconFactory`，极性还会算反的那条路）—— 而"这张图本来就只有一层"不是
    *   错误，是事实，那种图的正确答案就是它自己该有的样子：一块平色上屏本来就是一块平色。
    *   所以这里没有"够不够格被合成"这种闸，只有**量出来是多少就是多少**。
+   *
+   * ⚠ **`foregroundLayer` = 这张是自适应图标的**前景层**（桌面自己配盘），不是整张画布。**
+   *   为什么要有这个入参：拿"已适配图标自己画的那层单色"当参考答案量过之后数出来的 ——
+   *   63 对配对样本**全部是自适应图标**，设计师那层对前景实心格的保留率**中位 100%**
+   *   （`_harness/ChanKt.kt`）。也就是说**前景层里本来就没有"底"要切**：底由桌面另外画，
+   *   我们那套切底机器在这条通道上是在解一个不存在的问题，而且解错的方向是把图形剥掉
+   *   （youtube 只剩那个白色播放三角，`框内=0.05`，而设计师保留 94%）。
+   *   所以这一位为真时：**实心格一律上墨，明度只在地板之上做调制**（层次留着，图形不再被剥）。
+   *   ⚠ 它**不作用于非自适应那一批**（`BitmapDrawable`，32 张，底就在整张画布里）——
+   *   那一批没有配对答案可对照，切底照旧。验收也因此不能只看对表分：
+   *   对表那批全是自适应，**风险全落在没有参考答案的那一批上**（见 README 2026-10-09 那三格）。
    */
-  fun build(pixels: IntArray, w: Int, h: Int): Output {
+  fun build(pixels: IntArray, w: Int, h: Int, foregroundLayer: Boolean = false): Output {
     val total = w * h
     if (total <= 0) return Output(IntArray(0), 0f, 0f, 0f, 0, 0f, 0f, "尺寸非法 → 空层")
     val box = contentBounds(pixels, w, h)
@@ -1063,6 +1074,15 @@ internal object MonochromeMask {
     s.voteErase = 0; s.voteRaise = 0; s.voteHits = 0
     val voteN = if (tonal == null) flatVote(out, pixels, w, h, box, s) else 0
     val stretch = "${global?.second ?: "已满"}+${if (tonal == null) stretchMark(out, pixels, w, h, box, s) else "已满"}"
+    // 4.9) **前景层这一路：实心格一律上墨，明度只在地板之上调制。**
+    //   放在所有切底/发档/抬顶**之后**，是因为它要盖的是"这些步骤最后决定不上的那些墨" ——
+    //   放前面的话每一层都会再把它擦一遍。透明的格子照样不给墨（乘源 alpha，与出图同一条规矩）。
+    if (foregroundLayer) for (i in 0 until total) {
+      val sa = Color.alpha(pixels[i])
+      if (sa != 255) continue
+      val a = (out[i] ushr 24) and 0xff
+      if (a < FG_INK_FLOOR) out[i] = (FG_INK_FLOOR shl 24) or 0x00FFFFFF
+    }
 
     // 5) 形状体检。**修不修形状看浓度是谁给的**：颜色给的（β 高）才可能有"切底切出来的杂点"，
     //    覆盖率给的（β≈0）那些淡值全是设计者自己画的柔光与抗锯齿，擦掉就是一圈锯齿、桥起来
@@ -1241,6 +1261,9 @@ internal object MonochromeMask {
   private const val TONAL_TEX_MIN = 30
   private const val TONAL_FLAT_MAX = 16
   private const val TONAL_SPAN_MIN = 35
+
+  /** 见 `build` 第 4.9 步：前景层里全不透明的格最低给多少墨。200 沿用 [LEVEL_FLOOR] 那个数。 */
+  private const val FG_INK_FLOOR = 200
 
   /**
    * 「主色」那条门的**唯一一条豁免**：不是"这块平涂亮不亮"，而是**两条独立的路线在这一件事上同意**。
