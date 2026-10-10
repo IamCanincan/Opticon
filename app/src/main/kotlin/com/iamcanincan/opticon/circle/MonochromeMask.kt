@@ -1196,6 +1196,24 @@ internal object MonochromeMask {
     // 和已适配图标那种干净的盘对不上。这里把参照**已经判成底**的那些格直接归零。
     // ⚠ 只在这块底**一直顶到画布边缘**时才这么做 —— 那是「整张画布就是一张盘」的形状证据。
     //   azure 的「底」是盾牌、四周是空气、不顶边：刚修好的锁梁不会被这一刀带倒。
+    // 满幅那一支上「参照说是底」的格子分**两堆**各摊一张浓度直方图（8 档 × 32）：
+    //   `hp` = 参照打上 `plate` 标签的那堆；`hd` = 没标签、但 dep ≤ 零（颜色离底很近）的那堆。
+    // **为什么必须分开摊**：云闪付的膜在 `hd` 里（它的尾巴 0.1%），而它的 `hp` 尾巴是 78.8%
+    //（那块真 logo）。合成一堆就互相稀释成 31%，一刀都下不去 —— 这是"覆盖不全"的第二种死法：
+    //  不是阈值不对，是**分母**把两堆不同的东西混成了一个数。
+    // **为什么是 8 档**：判"这块底自己有没有暗部"的那条浓度线不能拍。摊开、离线扫每一个 cut，
+    // 只有 α≥128 这一条线上两堆**各自**出现空档：`hp` 0.00~4.09% 对 7.33~45.56%、
+    // `hd` 0.00~6.90% 对 20.1% 以上；α≥96 与 α≥160 两条线上都分不开。
+    // 所以"128"不是挑出来的数，是唯一能把"一层灰"与"底下压着真东西"分开的线 ——
+    // 也正好是"半不半透明"那把现成的尺。**必须在任何归零刀之前摊**，摊的是交付原样。
+    val hp = IntArray(8); val hd = IntArray(8)
+    if (tonal != null) for (i in 0 until total) {
+      if (Color.alpha(pixels[i]) < A_SOLID) continue
+      val a0 = out[i] ushr 24
+      if (a0 == 0) continue
+      if (s.plate[i] != 0.toByte()) hp[(a0 / 32).coerceAtMost(7)]++
+      else if ((s.distT[i].toInt() and 0xffff) <= ground.zero) hd[(a0 / 32).coerceAtMost(7)]++
+    }
     var rimGrew = 0
     if (tonal != null && tonal.flat >= PLATE_FLAT_MIN && plateTouchesBorder(pixels, w, h, s)) {
       // ⚠ **只归零"亮的那一半底"，不按 `plate` 一刀切**（2026-10-10，主人报「转转 "不"字没了」）：
@@ -1257,6 +1275,73 @@ internal object MonochromeMask {
         for (i in 0 until total) if (seen[i] != 0.toByte() && s.plate[i] == 0.toByte()) out[i] = 0
       }
     }
+    // **第二把刀：同一批格子里那层"谁都不像"的灰**（2026-10-10，主人要"完全覆盖 + 风格统一"）。
+    // 上一把只在 `主色≥40`（一整片平色饼）时才开门 —— 那是 sgame 整幅插画被啃光换来的条件（492f4e4）。
+    // 可主人点名的那批膜（浙江在线 / 滴滴 / 智慧树 / 易班 / 掌鱼打印 / 云闪付 …）**主色全在 40 以下**，
+    // 于是上一把永远不响，灰就一直铺着：这就是"覆盖不全"。
+    // 换一根**相对**的尺：这一堆格子自己有没有 α≥128 的尾巴（"底下压没压着真东西"）。
+    // 两堆各判各的（`hp` = plate 标签、`hd` = dep≤零）：云闪付的膜在 `hd`（尾巴 0.1%），
+    // 而它的 `hp` 尾巴 78.8% 是真 logo —— 混一堆就互相稀释成 31%，一刀下不去。
+    // 线画在 5%：`hp` 的分布是 0.00~4.09% 对 7.33~45.56%（**4.09 与 7.33 之间是空的**），
+    // `hd` 的是 0.00~6.90% 对 20.1%以上。α≥96 与 α≥160 两条线上都没有这种空档，
+    // 所以"128"不是挑出来的数，是唯一分得开的那条。
+    // ⚠ 这一把**只清 α<128 的那一半**，α≥128 的格子一个都不碰 —— "把真东西啃掉"这个失败模式
+    //   由构造排除，不靠判据拦（上一把的教训正是它啃过 sgame）。
+    var cutP = 0; var cutD = 0
+    val pN = hp.fold(0) { x, y -> x + y }; val dN = hd.fold(0) { x, y -> x + y }
+    val pDeep = if (pN == 0) -1 else (hp[4] + hp[5] + hp[6] + hp[7]) * 100 / pN
+    val dDeep = if (dN == 0) -1 else (hd[4] + hd[5] + hd[6] + hd[7]) * 100 / dN
+    // ⚠ 尾巴率**单独不够**：A/B 拼图量过 —— 转转/浙江在线那种"一整片灰"清干净了，
+    //  但 kazumi 差16770、sgameGlobal 差4190 这两张**整幅插画**同样开门（尾 3% / 1%），
+    //  屏幕上被清成一张褪色的画。它们和膜的区别不在颜色、在**形状**：
+    //  插画的浅调是**和暗部咬在一起**的（哪儿都挨着墨），膜是**一大片中间没有墨**。
+    //  所以再加一把尺：浅底格子离最近的真墨（α≥128）有多远，只清"离墨 > 一圈带宽"的那些。
+    val bd0 = (minOf(box.width(), box.height()) / RING_BAND_DIV).coerceIn(2, 8)
+    val dist = IntArray(total) { 9999 }
+    val qd = IntArray(total); var qh = 0; var qt = 0
+    for (i in 0 until total) if (Color.alpha(pixels[i]) >= A_SOLID && (out[i] ushr 24) >= 128) {
+      dist[i] = 0; qd[qt++] = i
+    }
+    while (qh < qt) {
+      val i = qd[qh++]; val cy = i / w; val cx = i - cy * w; val d0 = dist[i]
+      if (d0 >= bd0 + 2) continue
+      for (dy in -1..1) for (dx in -1..1) {
+        if (dx == 0 && dy == 0) continue
+        val ny = cy + dy; val nx = cx + dx
+        if (ny < 0 || ny >= h || nx < 0 || nx >= w) continue
+        val j = ny * w + nx
+        if (Color.alpha(pixels[j]) < A_SOLID || dist[j] <= d0 + 1) continue
+        dist[j] = d0 + 1; qd[qt++] = j
+      }
+    }
+    fun filmCutOf(plateSet: Boolean): Int {
+      var n = 0
+      for (i in 0 until total) {
+        if (Color.alpha(pixels[i]) < A_SOLID) continue
+        val on = if (plateSet) s.plate[i] != 0.toByte()
+          else s.plate[i] == 0.toByte() && (s.distT[i].toInt() and 0xffff) <= ground.zero
+        if (!on) continue
+        val a1 = out[i] ushr 24
+        if (a1 == 0 || a1 >= 128 || dist[i] <= bd0) continue
+        out[i] = 0; n++
+      }
+      return n
+    }
+    // ⚠ **两堆必须一起过关**，不是各自过关。A/B 拼图量到的两次误伤都出在"只看一堆"上：
+    //  sgameGlobal 的 plate 堆尾巴 1%（看着像膜），可它 dep 堆的尾巴是 36% —— 那是整幅插画，
+    //  清完 plate 堆浅底，屏幕上就是一张褪色的画（kazumi 同理：3% 对 13%）。
+    //  而真膜那些两堆都是 0~5%（浙江在线 0/0、转转 5/2、易班 0/2、京东 2/0、滴滴 0/0 …）。
+    //  一句话：**这张图的"底"在两种口径下都不含暗部**，才敢说它整张就是一层灰。
+    // ⚠ "另一堆"的暗部**哪怕只有几百格也算数**（kazumi 的 dep 堆只有 1254 格，第一版当它不存在，
+    //  于是那张插画又被误伤了一次）—— 门槛只管"要不要下刀"，不管"有没有反证"。
+    fun ok(h: IntArray, n: Int, deep: Int) = n >= PLATE_FILM_MIN && deep in 0..PLATE_FILM_DEEP
+    val filmP = ok(hp, pN, pDeep); val filmD = ok(hd, dN, dDeep)
+    val noDark = (pN < PLATE_FILM_EVID || pDeep in 0..PLATE_FILM_DEEP) &&
+      (dN < PLATE_FILM_EVID || dDeep in 0..PLATE_FILM_DEEP)
+    if (tonal != null && (filmP || filmD) && noDark) {
+      if (filmP) cutP = filmCutOf(true)
+      if (filmD) cutD = filmCutOf(false)
+    }
     val sep = separation(out, w, h, box, s)
     val st = measure(out, w, h, box, s, bridge = colourDriven, despeckle = colourDriven)
     val fill = st.kept.toFloat() / boxArea
@@ -1302,7 +1387,11 @@ internal object MonochromeMask {
           " 调残=$tonResN/${if (tonResN == 0) 0 else tonResSum / tonResN}" +
           // 又一列**加在整串最末尾**：`自带底=N` = 从这一层自己的边上、按"同一个部分"走到的最亮那一片
           // 占实心的百分比；≥ [PLATE_OWN_MIN] 就不压地板（贴吧那块白底一压就是一整块灰板）。
-          " 自带底=$ownPct 长边=$rimGrew"),
+          " 自带底=$ownPct 长边=$rimGrew") +
+          // 第二把刀的两列，**只在这一支上加、加在整串最末尾**（前面所有列的列位一个不动）：
+          // `膜刀=底堆/残堆` = 这一刀各清掉的格数；`膜尾=底堆/残堆` = 两堆各自的 α≥128 尾巴率
+          //（-1 = 那一堆根本没格）。开门条件的四个数全在日志里，事后不用回头猜它为什么响、为什么不响。
+          (if (tonal == null) "" else " 膜刀=$cutP+$cutD 膜尾=$pDeep/$dDeep 膜格=$pN/$dN"),
       ground.hyp,
       s.h0why,
       s.veto
@@ -1413,6 +1502,9 @@ internal object MonochromeMask {
    */
   private const val TONAL_AIR_MIN = 25
   private const val PLATE_FLAT_MIN = 40
+  private const val PLATE_FILM_MIN = 3000
+  private const val PLATE_FILM_EVID = 200
+  private const val PLATE_FILM_DEEP = 5
   /** 甲类（盘在另一层）时满幅那条斜坡的**下界**：零端留给空气，标记最亮那一面不许归零。
    *  128 = 一半浓度，不是挑出来的数 —— 内部对比仍然占满 128..255 这一整段。 */
   private const val PLATE_FLOOR_MIN = 128
