@@ -1338,8 +1338,15 @@ internal object MonochromeMask {
     //  一句话：**这张图的"底"在两种口径下都不含暗部**，才敢说它整张就是一层灰。
     // ⚠ "另一堆"的暗部**哪怕只有几百格也算数**（kazumi 的 dep 堆只有 1254 格，第一版当它不存在，
     //  于是那张插画又被误伤了一次）—— 门槛只管"要不要下刀"，不管"有没有反证"。
-    fun ok(h: IntArray, n: Int, deep: Int) = n >= PLATE_FILM_MIN && deep in 0..PLATE_FILM_DEEP
-    val filmP = ok(hp, pN, pDeep); val filmD = ok(hd, dN, dDeep)
+    // ⚠ **门槛是"占整张画布的分数"，不是绝对格数**（2026-10-11 量出来的潜伏 bug）：原来写 `n >= 3000`，
+    //  而 96 档整张才 9216 格 —— 易班的底集 2810 格、京东 1401 格，**同一把刀在低分辨率上不开火**
+    //  （384 档它们分别是 43532 / 21397 格，所以装机那份一直是好的：桌面按**图层 bounds** 出图
+    //   = 1.5 × 图标 = 384）。可出图尺寸是桌面定的、不是我们能挑的，绝对数等于把修法绑在某一档
+    //   边长上 —— 与 [tonalClass] 那句「框比格小就不算」是同一类错（6a2c318 已经为它修过一次）。
+    //  实测：换成分数后 96 档多开 3 张、192 档多开 2 张；384 档只多一张（中国移动 10086 的
+    //  2966 格，正好卡在旧的 3000 下面一点点）。
+    fun ok(n: Int, deep: Int) = n * 100 >= total * PLATE_FILM_MIN_PCT && deep in 0..PLATE_FILM_DEEP
+    val filmP = ok(pN, pDeep); val filmD = ok(dN, dDeep)
     val noDark = (pN < PLATE_FILM_EVID || pDeep in 0..PLATE_FILM_DEEP) &&
       (dN < PLATE_FILM_EVID || dDeep in 0..PLATE_FILM_DEEP)
     if (tonal != null && (filmP || filmD) && noDark) {
@@ -1506,7 +1513,14 @@ internal object MonochromeMask {
    */
   private const val TONAL_AIR_MIN = 25
   private const val PLATE_FLAT_MIN = 40
-  private const val PLATE_FILM_MIN = 3000
+  /** 这一堆至少占**整张画布**的这么多%，才算一块「铺开的膜」（分数，不是绝对格数，见 `ok()`）。 */
+  private const val PLATE_FILM_MIN_PCT = 2
+  /**
+   * 反证那一堆"小到尾巴率不可信"的地板 —— **这一道故意留成绝对格数**，与上面那道不是一回事：
+   * 上面问"这片膜铺得够不够大"（跟画布比才有意义），这里问"这 147 格的尾巴率能不能当证据"
+   * （那是**统计**问题，只跟样本量有关）。实测：把它也换成分数会在 96 档反过来挡住饿了么
+   * （147 格 = 画布的 1.6%，按分数就不算"太小"了，可它 78% 的尾巴率正是从 147 格里数出来的）。
+   */
   private const val PLATE_FILM_EVID = 200
   private const val PLATE_FILM_DEEP = 5
   /** 甲类（盘在另一层）时满幅那条斜坡的**下界**：零端留给空气，标记最亮那一面不许归零。
