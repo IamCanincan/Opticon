@@ -1191,6 +1191,7 @@ internal object MonochromeMask {
     // 和已适配图标那种干净的盘对不上。这里把参照**已经判成底**的那些格直接归零。
     // ⚠ 只在这块底**一直顶到画布边缘**时才这么做 —— 那是「整张画布就是一张盘」的形状证据。
     //   azure 的「底」是盾牌、四周是空气、不顶边：刚修好的锁梁不会被这一刀带倒。
+    var rimGrew = 0
     if (tonal != null && tonal.flat >= PLATE_FLAT_MIN && plateTouchesBorder(pixels, w, h, s)) {
       // ⚠ **只归零"亮的那一半底"，不按 `plate` 一刀切**（2026-10-10，主人报「转转 "不"字没了」）：
       //  转转的标语是一条**蓝→桃渐变带**压着的暗色字，参照那一遍把最左边那个"不"也标成了 `plate`
@@ -1205,6 +1206,51 @@ internal object MonochromeMask {
       val mid = percentile(ph, pn, 50)
       for (i in 0 until total) if (s.plate[i] != 0.toByte() &&
         ((s.labL[i].toInt() and 0xffff) shr 6) >= mid) out[i] = 0
+      // ⚠ **底的标签在它自己的边上会漏**（2026-10-10，主人报「菜鸟 左方和上方不够圆，像缺了一块」）：
+      //  菜鸟那块蓝底是**渐变**的（左上 `#0E77FC` L 52 / 其余 `#006EFF` L 49），格子级参照按整格族色判，
+      //  把顶边与左边那一条**漏成了非底** —— 满幅那一支照亮度给它 `α=133`，屏幕上就是
+      //  "顶上一条直墨、左边一条直墨"，圆角方看着缺了一块（实测：`格(190,0) 源#0E77FC 交付133`）。
+      //  补法：从**画布边界带里已经认成底**的格子出发，沿"相邻两格同色"（三轴各 ≤ [SEP_L]）往里长，
+      //  **长度封顶在带宽以内**。封顶是关键，不是保险丝：不封顶的整张连通会顺着字边缘的抗锯齿
+      //  一路爬进字里 —— 转转那个"不"就是这么又被吃掉的（`格(70,330)` 交付回到 0），量过两种走法：
+      //  整张连通与逐格相连都会漏，只有"从边里长 bd 步"这一种同时留住两张。
+      run {
+        val bd = (minOf(box.width(), box.height()) / RING_BAND_DIV).coerceIn(2, 8)
+        val seen = ByteArray(total)
+        val qw = IntArray(total)
+        var head = 0
+        var tail = 0
+        for (y in box.top until box.bottom) for (x in box.left until box.right) {
+          val i = y * w + x
+          if (s.plate[i] == 0.toByte() || Color.alpha(pixels[i]) < A_SOLID) continue
+          if (!(x < bd || y < bd || x >= w - bd || y >= h - bd)) continue
+          seen[i] = 1; qw[tail++] = i
+        }
+        while (head < tail) {
+          val i = qw[head++]
+          val cy = i / w
+          val cx = i - cy * w
+          val l0 = (s.labL[i].toInt() and 0xffff) shr 6
+          val a0 = (s.labA[i].toInt() shr 6)
+          val b0 = (s.labB[i].toInt() shr 6)
+          for (d in intArrayOf(-1, 1, -w, w)) {
+            val ny = cy + (if (d == -w) -1 else if (d == w) 1 else 0)
+            val nx = cx + (if (d == -1) -1 else if (d == 1) 1 else 0)
+            if (ny < 0 || ny >= h || nx < 0 || nx >= w) continue
+            val j0 = ny * w + nx
+            if (seen[j0] != 0.toByte() || Color.alpha(pixels[j0]) < A_SOLID) continue
+            if (minOf(nx, ny, w - 1 - nx, h - 1 - ny) > bd) continue   // **只往里长 bd 步**
+            val lj = (s.labL[j0].toInt() and 0xffff) shr 6
+            if (maxOf(lj, l0) - minOf(lj, l0) > SEP_L) continue
+            val aj = (s.labA[j0].toInt() shr 6)
+            if (maxOf(aj, a0) - minOf(aj, a0) > SEP_L) continue
+            val bj = (s.labB[j0].toInt() shr 6)
+            if (maxOf(bj, b0) - minOf(bj, b0) > SEP_L) continue
+            seen[j0] = 1; qw[tail++] = j0; rimGrew++
+          }
+        }
+        for (i in 0 until total) if (seen[i] != 0.toByte() && s.plate[i] == 0.toByte()) out[i] = 0
+      }
     }
     val sep = separation(out, w, h, box, s)
     val st = measure(out, w, h, box, s, bridge = colourDriven, despeckle = colourDriven)
@@ -1251,7 +1297,7 @@ internal object MonochromeMask {
           " 调残=$tonResN/${if (tonResN == 0) 0 else tonResSum / tonResN}" +
           // 又一列**加在整串最末尾**：`自带底=N` = 从这一层自己的边上、按"同一个部分"走到的最亮那一片
           // 占实心的百分比；≥ [PLATE_OWN_MIN] 就不压地板（贴吧那块白底一压就是一整块灰板）。
-          " 自带底=$ownPct"),
+          " 自带底=$ownPct 长边=$rimGrew"),
       ground.hyp,
       s.h0why,
       s.veto
