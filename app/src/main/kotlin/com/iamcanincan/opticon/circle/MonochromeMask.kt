@@ -653,6 +653,57 @@ internal object MonochromeMask {
     var iL: Int = 0,
   )
 
+  /** **两条都算、按结果选一支交出去**（主人要「非适配取色应用全覆盖，和已适配的一样美观」）。
+   *
+   * 为什么不是第七根颜色尺子：入场那三条（纹理/主色/跨度）已经量死过好几轮，分不开
+   * 「一块被读成斜坡的平涂」和「一张真的有连续调子的画」—— 见 README 里 2026-10-10 那节
+   * 「五条判据逐条摊过全语料，都把京东和已修好的那批混在一起」。这一条改问**结果**：
+   * 两条各交付一遍，量两个成品，谁更像设计师那批就交谁的。三条判据全部量自成品本身：
+   *   ① 参照那一支交出去的淡膜占内切框 ≤ [PICK_SOFT_MAX]%（设计师自己中位 1.0、p90 3.5）；
+   *   ② 它交出去的墨 ≥ 满幅那一支的 [PICK_INK_MIN]%（防「被擦成碎墨」—— 光看淡膜，
+   *      把整张擦空也算「干净」）；
+   *   ③ 它交出去的墨 ≤ [PICK_INK_MAX]%（防**反过来那一半**：一张满幅的画交给只认「盘 + 字」
+   *      的这一支，会被整张涂成墨 = 「渐变被做成色块」那条老 bug 换了个方向回来）。
+   * ③ 不是拍的：真机 36 张里被搬的 20 张，参照那一支的墨最多 57%；两张**看图明显搬坏了**的
+   *   （一张动漫插画糊成黑块、一张白加号被涂没）分别是 93% 与 99%，`SelfTest` 那张连续调
+   *   fixture 是 99% —— 58~92 之间取哪个数，这一批的结论都一样。设计师那批的墨最大 50.3%。
+   * ⚠ 代价一：走满幅那一支的图要算两遍。真机 62 张成对量过：中位 **+30ms**（109 → 114 那一档里），
+   *   最狠的一张 云闪付 216 → 671ms。这是**一次合成**的账（桌面按图标签名缓存，不上滚动路径），
+   *   但它不是零 —— 记在这里，别让它以后被当成"免费的两遍"。
+   * ⚠ 代价二：选支决定**随出图尺寸翻** —— 四档边长实测 5/36 张（第十闸的底线因此从 1 抬到 5）。
+   *   真机 logcat 里 237 次合成**全部**是 384 档，所以这一条现在不上屏；但 `learnEdge`
+   *   学到更大尺寸会重压，那时它就成了。 */
+  fun build(pixels: IntArray, w: Int, h: Int, plateIsLayer: Boolean = false): Output {
+    val ramp = buildOnce(pixels, w, h, plateIsLayer, false)
+    if (!ramp.report.contains("调=1")) return ramp          // 本来就走参照那一支，不必算第二遍
+    val ref = buildOnce(pixels, w, h, plateIsLayer, true)
+    return if (picksRef(w, h, ramp, ref)) ref else ramp
+  }
+
+  /** 淡膜占内切框%、交出去的墨占内切框% —— 与判据台 FilmAreaKt **同一把尺**（同一个分母）。 */
+  private fun softAndInk(out: IntArray?, w: Int, h: Int): Pair<Int, Int> {
+    if (out == null || out.size < w * h) return Pair(0, 0)
+    // ⚠ **内切方框按短边取、居中在长边上**。第一版写成 `b = w*3/4` 且 x、y 同用一个 `o` ——
+    //   正方形时看不出来，兼容性台喂进来一张 192×120 就冲出画布（`Index 23070 out of bounds
+    //   for length 23040`，直接把那一闸整个打断）。判据台 `FilmAreaKt` 先把图裁成正方形才喂，
+    //   所以它量到的口径一直比模型宽 —— 这一张就是两边不同口径的差。
+    val b = minOf(w, h) * 3 / 4
+    val ox = (w - b) / 2; val oy = (h - b) / 2
+    var soft = 0; var ink = 0
+    for (y in oy until oy + b) for (x in ox until ox + b) {
+      val a = (out[y * w + x] ushr 24) and 0xff
+      if (a > 0) { ink++; if (a < 128) soft++ }
+    }
+    val n = b.toLong() * b
+    return if (n == 0L) Pair(0, 0) else Pair((soft * 100 / n).toInt(), (ink * 100 / n).toInt())
+  }
+
+  private fun picksRef(w: Int, h: Int, ramp: Output, ref: Output): Boolean {
+    val r = softAndInk(ref.mask, w, h); val s = softAndInk(ramp.mask, w, h)
+    return r.first <= PICK_SOFT_MAX && r.second * 100 >= s.second * PICK_INK_MIN &&
+      r.second <= PICK_INK_MAX
+  }
+
   /**
    * 把一张光栅化的图标**合成**成单色层。
    *
@@ -691,8 +742,12 @@ internal object MonochromeMask {
    *  （桌面自己会补那张盘）。这一张里每一块实心都是设计师画的图形，
    *  所以底**只许是空气**（H3）—— 见 [groundPass] 里那条注释。默认 `false` = 整张位图那一路，
    *  盘有没有、是哪一块，只能从像素里判。
+   * @param forceRef `true` = 这一遍**不许**走满幅那一支。只有选支那一段（[build]）用得到，
+   *  它要把同一张图按两条支各交付一遍再比成品。
    */
-  fun build(pixels: IntArray, w: Int, h: Int, plateIsLayer: Boolean = false): Output {
+  private fun buildOnce(pixels: IntArray, w: Int, h: Int, plateIsLayer: Boolean,
+    forceRef: Boolean
+  ): Output {
     val total = w * h
     if (total <= 0) return Output(IntArray(0), 0f, 0f, 0f, 0, 0f, 0f, "尺寸非法 → 空层")
     val box = contentBounds(pixels, w, h)
@@ -850,7 +905,7 @@ internal object MonochromeMask {
     //     为什么必须翻：`全开`（暗=墨写死）把饿了么/全球网测/Google 翻译三张**画成反色**，
     //     而钉着的性质里 `字形实心`/`白方块还是实心` 那族全报 `方块=0.0`（白字被掏空）。
     //     加上这一条之后 `SelfTest` 从红 23 条降到红 3 条、兼容性台 30→57。
-    val tonal = tonalClass(pixels, w, h, box)?.takeIf { it.on }
+    val tonal = if (forceRef) null else tonalClass(pixels, w, h, box)?.takeIf { it.on }
     // 候选：盘子是**空气**时不许翻极性。"亮=墨"这条启发式存在的理由是"深盘上的白字"，
     // 而那需要一个**不透明的盘**；四周本来就是透明的时候，翻极性等于把最暗的笔画擦掉
     // （azure 的锁梁 L=35.8，比它自己那块被当成底的盾牌还暗 4.3 —— 一翻就归零）。
@@ -1513,6 +1568,14 @@ internal object MonochromeMask {
    */
   private const val TONAL_AIR_MIN = 25
   private const val PLATE_FLAT_MIN = 40
+  /** 选参照那一支的条件①：淡膜占内切框 ≤ 这个数（已适配那批自己 p90 = 3.5%）。 */
+  private const val PICK_SOFT_MAX = 4
+  /** 选参照那一支的条件②：墨量至少是满幅那一支的这么多%（防「被擦成碎墨」）。 */
+  private const val PICK_INK_MIN = 60
+  /** 选参照那一支的条件③：墨量占内切框最多这么多%（防「整张涂成墨」）。
+   *  这一批 36 张里搬得对的最高 57、搬坏的两张 93/99、`SelfTest` 的连续调 fixture 99 ——
+   *  所以 58~92 之间取谁结论都一样；钉在 60 是压着"设计师那批最大 50.3%"那一头留一点余量。 */
+  private const val PICK_INK_MAX = 60
   /** 这一堆至少占**整张画布**的这么多%，才算一块「铺开的膜」（分数，不是绝对格数，见 `ok()`）。 */
   private const val PLATE_FILM_MIN_PCT = 2
   /**
