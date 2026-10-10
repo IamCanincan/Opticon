@@ -1053,7 +1053,12 @@ internal object MonochromeMask {
           //   （`cand/MonochromeMask.ghostFloor.kt`）把它压在乘法之后、又拿 `ground.gN==0` 猜这一位，
           //   13 张变实心方块 —— 那个方块是**空气被抬起来了**，不是标记变实了（第九闸 0/219 钉住这件事）。
           // ⚠ 而**这一层自己带底的那张不压**（[ownBrightPlate]）：贴吧那块白底一压就是一整块灰板。
-          if (plateLayer && !ownPlate) ta = PLATE_FLOOR_MIN + (255 - PLATE_FLOOR_MIN) * ta / 255
+          // ⚠ 也**不压参照自己已经认成底的那些格**（2026-10-10，量 Google 听歌识曲时撞出来的）：
+          //   地板要保的是"标记最亮那一面"，而 `plate[i]!=0` 的格子按模型自己的判词就是底 ——
+          //   给底压一个下限，等于把判词推翻再画一遍。听歌识曲那张白圆盘就是这么变成灰盘的：
+          //   `盘实=78967` 全被抬到 α≥128，交付里 **90081 格落在 128..254**（整张画布的 61%）。
+          if (plateLayer && !ownPlate && s.plate[i] == 0.toByte())
+            ta = PLATE_FLOOR_MIN + (255 - PLATE_FLOOR_MIN) * ta / 255
           ta * Color.alpha(pixels[i]) / 255
         } else (td * (100 - q) + tl * q) / 100
         if (a == 0) continue
