@@ -1191,8 +1191,21 @@ internal object MonochromeMask {
     // 和已适配图标那种干净的盘对不上。这里把参照**已经判成底**的那些格直接归零。
     // ⚠ 只在这块底**一直顶到画布边缘**时才这么做 —— 那是「整张画布就是一张盘」的形状证据。
     //   azure 的「底」是盾牌、四周是空气、不顶边：刚修好的锁梁不会被这一刀带倒。
-    if (tonal != null && tonal.flat >= PLATE_FLAT_MIN && plateTouchesBorder(pixels, w, h, s))
-      for (i in 0 until total) if (s.plate[i] != 0.toByte()) out[i] = 0
+    if (tonal != null && tonal.flat >= PLATE_FLAT_MIN && plateTouchesBorder(pixels, w, h, s)) {
+      // ⚠ **只归零"亮的那一半底"，不按 `plate` 一刀切**（2026-10-10，主人报「转转 "不"字没了」）：
+      //  转转的标语是一条**蓝→桃渐变带**压着的暗色字，参照那一遍把最左边那个"不"也标成了 `plate`
+      //  —— 一刀切就把它整字擦掉（实测同一格 `#76212A`：左边交付 0、右边交付 255）。
+      //  换法：**底自己的 L 分布取中位**，比中位暗的格子不动 —— 这是"它像不像这块底"的相对问法，
+      //  不是又一根绝对色尺。cainiao 那块蓝方底仍然被清（它就在自己那批底的中位上），
+      //  平色饼 `flat=5/3` 一格不变、`残盘 1180` 一格不涨。
+      val ph = IntArray(101); var pn = 0
+      for (i in 0 until total) if (s.plate[i] != 0.toByte() && Color.alpha(pixels[i]) >= A_SOLID) {
+        pn++; ph[((s.labL[i].toInt() and 0xffff) shr 6).coerceIn(0, 100)]++
+      }
+      val mid = percentile(ph, pn, 50)
+      for (i in 0 until total) if (s.plate[i] != 0.toByte() &&
+        ((s.labL[i].toInt() and 0xffff) shr 6) >= mid) out[i] = 0
+    }
     val sep = separation(out, w, h, box, s)
     val st = measure(out, w, h, box, s, bridge = colourDriven, despeckle = colourDriven)
     val fill = st.kept.toFloat() / boxArea
