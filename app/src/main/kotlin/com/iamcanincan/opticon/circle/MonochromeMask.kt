@@ -1130,7 +1130,11 @@ internal object MonochromeMask {
     //   （第一次跑 12 张点名表时，智慧树就顶着浙江在线的 4126 抹，看着像它也开火了）。
     s.voteErase = 0; s.voteRaise = 0; s.voteHits = 0
     val voteN = if (tonal == null) flatVote(out, pixels, w, h, box, s) else 0
-    val stretch = "${global?.second ?: "已满"}+${if (tonal == null) stretchMark(out, pixels, w, h, box, s) else "已满"}"
+    // ⚠ 满幅那一支跳过两层抬顶，**日志以前把"跳过"印成"已满"** —— 和"量过了、本来就满"同一个词。
+    //  这一轮为了找"哪里不干净"把 `色阶=已满+已满` 当成了"浓度已经抬到位"，白绕一圈；
+    //  一个不跑的步骤不许报"通过"，这条规矩在判据台上立过，今天轮到日志。
+    val stretch = "${global?.second ?: if (tonal == null) "已满" else "跳过"}+" +
+      (if (tonal == null) stretchMark(out, pixels, w, h, box, s) else "跳过")
 
     // 5) 形状体检。**修不修形状看浓度是谁给的**：颜色给的（β 高）才可能有"切底切出来的杂点"，
     //    覆盖率给的（β≈0）那些淡值全是设计者自己画的柔光与抗锯齿，擦掉就是一圈锯齿、桥起来
