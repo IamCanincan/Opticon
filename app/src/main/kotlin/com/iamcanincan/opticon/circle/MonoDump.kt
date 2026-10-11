@@ -186,6 +186,22 @@ internal object MonoDump {
       // 超了就停（宁可少带几个，也不要带回来的全是截断的半张）。
       budget -= png.size / 1024
       emit(n, id, "src", why, png)
+      // ⚠ **原来这里就停了：只发输入，不发交出去的那一张。** 于是"设备上到底画成什么样"
+      //   从日志里拿不回来，只能亮屏截屏 —— 而桌面在休眠时就什么都不知道（2026-10-11 主人报
+      //   translate「半边黑」，我修完只能看到 `框内 0.47→0.06` 这一格数，看不到那张墨）。
+      //   掩码是**纯 alpha**，压出来比彩色那张小得多，同一份预算装得下。
+      //   解码侧只取 alpha 通道：PNG 的 RGBA 是直通 alpha，Android 内部转预乘再转回来时
+      //   RGB 会有舍入误差，**alpha 不会** —— 而这一张只有 alpha 有意义。
+      val mask = ramp
+      if (mask != null && mask.size >= w * h && budget > WATCH_RESERVE_KB / 2) {
+        val mb = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val mp = IntArray(mask.size) { i -> (mask[i] and -0x1000000) or 0x00FFFFFF }
+        mb.setPixels(mp, 0, w, 0, 0, w, h)
+        val op = pngOf(mb)
+        mb.recycle()
+        budget -= op.size / 1024
+        emit(n, id, "out", why, op)
+      }
     }.onFailure {
       Log.w(TAG, "Mono: dump#$n failed: ${it.javaClass.simpleName}: ${it.message}")
     }
