@@ -149,7 +149,7 @@ internal object CorpusCapture {
     for (info in entries) {
       val pkg = info.packageName
       val drawable = runCatching { pm.getApplicationIcon(info) }.getOrNull()
-      val bmp = drawable?.let { runCatching { raster(it, edge) }.getOrNull() }
+      val bmp = drawable?.let { runCatching { rasterModel(it, edge) }.getOrNull() }
       if (drawable == null || bmp == null) {
         skipped++
         Log.w(TAG, "Corpus: 跳过 $pkg（取不到图标或画不出）")
@@ -245,6 +245,31 @@ internal object CorpusCapture {
     return runCatching {
       if (AdaptiveIconDrawable::class.java.getMethod("getMonochrome").invoke(adaptive) != null) "有" else "无"
     }.getOrDefault("?")
+  }
+
+  /**
+   * **自适应图标要按装机那条路画：分别画两个子层，不经过父层。**
+   *
+   * 为什么（2026-10-11，主人问"全覆盖"的账时才发现整批语料的构图都是错的）：
+   * `AdaptiveIconDrawable.draw()` **自己会按图标遮罩裁一刀** —— 所以 `raster(父, edge)` 画出来的
+   * 是"屏幕上那块圆角牌"（translate 实心 78%、四角透明）。而 `MonochromeSynth.rasterizeLayers`
+   * 是把 `background`、`foreground` **各自 `setBounds(0,0,edge,edge)` 后分别画**，从不走父层 →
+   * 模型吃的是**满幅未裁**的那一张（同一张 translate 实心 100%、四角不透明）。
+   * 两边差 1.5 倍构图，于是**所有拿 `corpus_runtime` 量的覆盖率账量的都不是装机那张**。
+   * 这里改成与那边同一笔法：先画背景层、再画前景层，都不裁。
+   */
+  private fun rasterModel(drawable: Drawable, edge: Int): Bitmap {
+    val adaptive = drawable as? AdaptiveIconDrawable
+    val bmp = Bitmap.createBitmap(edge, edge, Bitmap.Config.ARGB_8888)
+    if (adaptive == null) return raster(drawable, edge).also { }
+    val canvas = Canvas(bmp)
+    runCatching { adaptive.background }.getOrNull()?.let { bg ->
+      bg.setBounds(0, 0, edge, edge); bg.draw(canvas)
+    }
+    runCatching { adaptive.foreground }.getOrNull()?.let { fg ->
+      fg.setBounds(0, 0, edge, edge); fg.draw(canvas)
+    } ?: run { bmp.recycle(); throw IllegalStateException("没有前景层") }
+    return bmp
   }
 
   /**
