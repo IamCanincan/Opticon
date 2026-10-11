@@ -682,65 +682,7 @@ internal object MonochromeMask {
     val ramp = buildOnce(pixels, w, h, plateIsLayer, false, under)
     if (!ramp.report.contains("调=1")) return ramp          // 本来就走参照那一支，不必算第二遍
     val ref = buildOnce(pixels, w, h, plateIsLayer, true, under)
-    val chosen = if (picksRef(w, h, ramp, ref)) ref else ramp
-    // ⚠ **这一刀必须排在选支之后**：它只负责"把投在盘上的那道影子从交出去那张上擦掉"，
-    //   不许参与"哪一支更像设计师"的比较 —— 第一版写在 `buildOnce` 里，切掉 165 格就把
-    //   translate 翻到了满幅那一支，「文」变成空心描边（比原缺陷更坏）。
-    cutShadowOnDelivery(chosen, pixels, under, w, h)
-    return chosen
-  }
-
-  /**
-   * 把「物体投在那块盘上的影子」从**已经交出去的那张掩码**上擦掉。
-   * 判据与 `盘刀` 同源（背景层单独那张 = 事实），但多两道闸，为的是只认"一条薄影"、
-   * 不碰"画在背景层里的图形"（chrome / jelly / browndust2 那些整块都在背景层）：
-   *   ① 背景层里非主色的格合计 ≤ [SHADOW_MAX_PCT]% 画布；
-   *   ② 这些格每一块的估算半宽（面积 / 边界 ≈ 半宽）≤ 边长的 [SHADOW_MAX_HALF]。
-   * 两个数都是动手前摊过分布才画的（`_harness/BandThickKt`，57 张带背景层的图）：
-   * translate 2.40% / 2.5px，下一个 contacts 6.37% / 7.1px —— 面积上 2.6 倍空档。
-   * 半宽按**边长比例**表达（绝对格数 = 尺寸依赖，这条烧过一次）。
-   */
-  private fun cutShadowOnDelivery(out0: Output, pixels: IntArray, under: IntArray?, w: Int, h: Int) {
-    val out = out0.mask ?: return
-    if (under == null || under.size < out.size) return
-    val total = out.size
-    val fam = HashMap<Int, Int>(); var solid = 0
-    for (i in 0 until total) {
-      if (Color.alpha(under[i]) < A_SOLID) continue
-      solid++; val k = plateKey(under[i]); fam[k] = (fam[k] ?: 0) + 1
-    }
-    val top = fam.maxByOrNull { it.value } ?: return
-    if (solid <= 0 || top.value * 100 < solid * PLATE_ALT_MIN) return
-    var nonPlate = 0
-    for (i in 0 until total)
-      if (Color.alpha(under[i]) >= A_SOLID && plateKey(under[i]) != top.key) nonPlate++
-    if (nonPlate <= 0 || nonPlate * 100 > total * SHADOW_MAX_PCT) return
-    val seen = BooleanArray(total); val stack = IntArray(total); var thinAll = true
-    for (i in 0 until total) {
-      if (seen[i] || Color.alpha(under[i]) < A_SOLID || plateKey(under[i]) == top.key) continue
-      var sp = 0; var area = 0; var boundary = 0
-      stack[sp++] = i; seen[i] = true
-      while (sp > 0) {
-        val c = stack[--sp]; area++
-        val cx = c % w; val cy = c / w
-        for (k in 0..3) {
-          val nx = cx + intArrayOf(1, -1, 0, 0)[k]; val ny = cy + intArrayOf(0, 0, 1, -1)[k]
-          if (nx < 0 || ny < 0 || nx >= w || ny >= h) { boundary++; continue }
-          val j = ny * w + nx
-          if (Color.alpha(under[j]) < A_SOLID || plateKey(under[j]) == top.key) { boundary++; continue }
-          if (!seen[j]) { seen[j] = true; stack[sp++] = j }
-        }
-      }
-      if (area >= SHADOW_MIN_AREA &&
-        area / 2.0 / boundary.coerceAtLeast(1) > w * SHADOW_MAX_HALF) { thinAll = false; break }
-    }
-    if (!thinAll) return
-    for (i in 0 until total) {
-      if (Color.alpha(out[i]) == 0) continue
-      // 只擦"屏幕上看到的就是背景层那块颜色"的格：前景在那儿画了东西（合成色 ≠ 背景色）就不许碰。
-      if (Color.alpha(under[i]) >= A_SOLID && plateKey(under[i]) != top.key &&
-        plateKey(pixels[i]) == plateKey(under[i])) out[i] = 0
-    }
+    return if (picksRef(w, h, ramp, ref)) ref else ramp
   }
 
   /** 淡膜占内切框%、交出去的墨占内切框% —— 与判据台 FilmAreaKt **同一把尺**（同一个分母）。 */
@@ -1721,12 +1663,6 @@ internal object MonochromeMask {
 
   /** 背景层那块盘要占这一层实心格的这么多%，才算"这一层就是一块盘"（`盘刀` 那一刀用）。 */
   private const val PLATE_ALT_MIN = 85
-  /** 背景层里非主色的格合计最多占画布这么多%，才可能被判成「一条投影」。 */
-  private const val SHADOW_MAX_PCT = 4
-  /** 小于这么多格的块不参与薄度判定。 */
-  private const val SHADOW_MIN_AREA = 400
-  /** 每块估算半宽最多到边长的这个比例。 */
-  private const val SHADOW_MAX_HALF = 0.01
 
   /** 擦完剩下的墨至少要占**整张画布**的这么多%，这一刀才落。
    *  拦的是"擦成空"（deskclock：盘=墨、字=空气，擦完是 0），**不是**"擦掉一大片" ——
