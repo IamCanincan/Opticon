@@ -8,6 +8,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Rect
 import android.graphics.drawable.AdaptiveIconDrawable
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.util.Log
 import com.iamcanincan.opticon.circle.MonoDump
@@ -143,7 +144,7 @@ internal object CorpusCapture {
     }
     Log.d(TAG, "Corpus: 开始 ${entries.size} 个包 edge=$edge → ${dir.absolutePath}")
     val index = StringBuilder("pkg\tlabel\tfile\tedge\tsig\tcls\tfg\tbg\tmono\tkb\t" +
-      "fgAlpha\tbgAlpha\tmonoFile\tmonoAlpha\tbgColor\tfgFile\tbgFile\n")
+      "fgAlpha\tbgAlpha\tmonoFile\tmonoAlpha\tbgColor\tfgFile\tbgFile\tmodelFile\tmodelBgFile\n")
     var written = 0
     var skipped = 0
     for (info in entries) {
@@ -184,6 +185,9 @@ internal object CorpusCapture {
     // 按列号读的脚本（`_chan3.cjs`、`_screen2.cjs`、`YardKt`）才不用重算 —— 这条规矩
     // 与 `ConfigProvider` 那处"写侧按位置、读侧按列名"的教训同一个来源。
     val bgFile = dumpBackground(dir, drawable, edge, file)
+      // ⚠ **新列一律加在行尾**（这里是第 18、19 列）：老列的位置一个都不动，
+      //   按列号读的脚本才不用重算 —— 与 `ConfigProvider` 那条"写侧按位置、读侧按列名"同一来源。
+      val model = dumpModelInput(dir, drawable, edge, file)
       index.append(
         listOf(
           pkg, label(pm, info), file, edge, sig, drawable.javaClass.simpleName,
@@ -195,7 +199,7 @@ internal object CorpusCapture {
           // 前景层与单色层的 alpha 分布：这一列回答的是"平台其实已经把图形与盘分开给了我们，
           // 我们为什么要从合成图里把它猜回来"（见 README「更通用的路」那条）。
           alphaStat(drawable, edge, false), alphaStat(drawable, edge, true),
-          mono.first, mono.second, bgColor(drawable, edge), fgFile, bgFile,
+          mono.first, mono.second, bgColor(drawable, edge), fgFile, bgFile, model.first, model.second,
         ).joinToString("\t")
       ).append('\n')
       written++
@@ -370,6 +374,52 @@ internal object CorpusCapture {
       if (!File(dir, name).exists()) File(dir, name).writeBytes(png(raster(layer, edge, layerBounds(edge))))
       name
     }.getOrDefault("err")
+  }
+
+  /**
+   * **模型实际吃进去的那一张**存成 `<合成图名>_model.png`，走合成那一路时另存
+   * `<合成图名>_modelbg.png` = 那一条分支交给 `MonochromeMask.build(…, under=…)` 的背景层。
+   *
+   * 为什么现有三张里**没有一张**是装机那一张（2026-10-11 深夜，量"全覆盖"的账时撞出来的）：
+   * · `file` 是**两层满幅叠加**的合成图，可装机在「背景层是 `ColorDrawable`」那一路**只把前景层**
+   *   交给模型（盘由桌面自己补，见 `MonochromeSynth` 的 `flatten` 那句）—— 真机 91 张自适应里 34 张走这条；
+   * · `_fg.png` / `_bg.png` 是**可见区**那一张（按 1.5× 铺进去之后取中间 2/3，见 [layerBounds]），
+   *   而模型吃的是那一层**自己 `setBounds(0,0,edge,edge)` 画满**的版本 —— **差整整 1.5 倍构图**。
+   * 于是任何拿 `_bg.png` 当 `under` 喂 `盘刀` 的台子，比的是**错位 1.5 倍的两张**；任何拿合成图
+   * 当输入的台子，对那 34 张量的是模型从没见过的输入（盘被当成图形的一部分）。
+   * 这一张不做判断、不裁、不缩 —— 它唯一的责任是「与 `MonochromeMask.build()` 收到的像素逐位相同」。
+   *
+   * 分支与 `MonochromeSynth` 逐句对齐：`flatten = adaptive && background !is ColorDrawable`；
+   * `flatten` → 两层各自满幅叠加，且 `under` = 背景层满幅那一张；否则输入 = 前景层满幅，无 `under`。
+   * 非自适应图标没有这个分叉，返回 `same,-` = 与 `file` 同一张，不重复存。
+   */
+  private fun dumpModelInput(dir: File, drawable: Drawable, edge: Int, composite: String): Pair<String, String> {
+    val adaptive = drawable as? AdaptiveIconDrawable ?: return Pair("same", "-")
+    val bg = runCatching { adaptive.background }.getOrNull() ?: return Pair("null", "-")
+    val fg = runCatching { adaptive.foreground }.getOrNull() ?: return Pair("null", "-")
+    val stem = composite.removeSuffix(".png")
+    val flatten = bg !is ColorDrawable
+    val name = "${stem}_model.png"
+    // 索引里写不写 `under` 只由**分支**决定，不由"这张这次重没重画"决定 —— 否则同一张图在
+    // 两轮抓取里会一个是 `-` 一个有文件名，按列名 join 的台子就查不到它（`if (!exists)` 那一支）。
+    val underName = if (flatten) "${stem}_modelbg.png" else "-"
+    return runCatching {
+      if (!File(dir, name).exists()) {
+        // 与 `rasterizeLayers` / `rasterize(foreground)` 同一笔法：满幅、不经父层。这里每次都是
+        // `getApplicationIcon` 新解出来的一张，画完就扔，所以不需要那边那套还原 bounds。
+        val input = if (flatten) {
+          val bmp = Bitmap.createBitmap(edge, edge, Bitmap.Config.ARGB_8888)
+          val c = Canvas(bmp)
+          bg.setBounds(0, 0, edge, edge); bg.draw(c)
+          fg.setBounds(0, 0, edge, edge); fg.draw(c)
+          val u = raster(bg, edge)
+          File(dir, underName).writeBytes(png(u)); u.recycle()
+          bmp
+        } else raster(fg, edge)
+        File(dir, name).writeBytes(png(input)); input.recycle()
+      }
+      Pair(name, underName)
+    }.getOrDefault(Pair("err", underName))
   }
 
   private fun alphaStat(drawable: Drawable, edge: Int, background: Boolean): String {
