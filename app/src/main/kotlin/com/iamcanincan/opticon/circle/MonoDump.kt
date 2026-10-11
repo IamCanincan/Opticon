@@ -189,11 +189,14 @@ internal object MonoDump {
       // ⚠ **原来这里就停了：只发输入，不发交出去的那一张。** 于是"设备上到底画成什么样"
       //   从日志里拿不回来，只能亮屏截屏 —— 而桌面在休眠时就什么都不知道（2026-10-11 主人报
       //   translate「半边黑」，我修完只能看到 `框内 0.47→0.06` 这一格数，看不到那张墨）。
-      //   掩码是**纯 alpha**，压出来比彩色那张小得多，同一份预算装得下。
+      //   掩码是**纯 alpha**，压出来比彩色那张小（实测一轮：src 平均 42KB、out 平均 24KB）。
       //   解码侧只取 alpha 通道：PNG 的 RGBA 是直通 alpha，Android 内部转预乘再转回来时
       //   RGB 会有舍入误差，**alpha 不会** —— 而这一张只有 alpha 有意义。
+      // ⚠ **只给点名的那张发。** 第一版对所有图都发，每张多花一半预算，1200KB 提前见底 ——
+      //   到 17:51 连 translate / 京东 / 华为 / 微博 这些**点名名单自己的输入都抓不回来了**。
+      //   要看"设备交出什么"的只有点名那几张；可疑但不是点名的，输入才是诊断要的东西。
       val mask = ramp
-      if (mask != null && mask.size >= w * h && budget > WATCH_RESERVE_KB / 2) {
+      if (watched && mask != null && mask.size >= w * h && budget > WATCH_RESERVE_KB / 2) {
         val mb = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val mp = IntArray(mask.size) { i -> (mask[i] and -0x1000000) or 0x00FFFFFF }
         mb.setPixels(mp, 0, w, 0, 0, w, h)
