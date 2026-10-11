@@ -1429,7 +1429,7 @@ internal object MonochromeMask {
     // ⚠ **擦完不许擦空**：极性本来就判错的那类（暗盘=墨、白针=空气，deskclock 是这种）把盘擦掉
     //   之后什么都不剩 —— 交一张空掩码比留着旧的更坏（桌面会自己补一张、极性还会算反）。
     //   所以先看擦完还剩多少墨，少于原来的 1/4 就整张不擦。
-    var plateCut = 0
+    var plateCut = 0; var plateCand = -1
     if (under != null && under.size >= total) {
       val fam = HashMap<Int, Int>(); var solid = 0
       for (i in 0 until total) {
@@ -1438,18 +1438,24 @@ internal object MonochromeMask {
       }
       val top = fam.maxByOrNull { it.value }
       if (top != null && solid > 0 && top.value * 100 >= solid * PLATE_ALT_MIN) {
+        plateCand = 0
         val kept = IntArray(total)
-        var cut = 0; var left = 0; var was = 0
+        var cut = 0; var left = 0
         for (i in 0 until total) {
-          val a = Color.alpha(out[i])
-          if (a == 0) continue
-          was++
+          if (Color.alpha(out[i]) == 0) continue
           // ⚠ 比的是**源图**那一格的颜色，不是 `out` —— `out` 的 RGB 是墨色（几乎恒为黑/白），
           //   拿它归族会把"有没有墨"当成"是不是那块盘"，第一版就是这么一声没响。
           val isPlate = Color.alpha(under[i]) >= A_SOLID && plateKey(pixels[i]) == top.key
-          if (isPlate) cut++ else { kept[i] = out[i]; left++ }
+          if (isPlate) { cut++; plateCand++ } else { kept[i] = out[i]; left++ }
         }
-        if (left * 4 >= was) { for (i in 0 until total) out[i] = kept[i]; plateCut = cut }
+        // **拦的是"擦成空"，不是"擦掉一大片"** —— 第一版写成"剩下的墨不许少于原来的 1/4"，
+        // 方向就错了：擦掉一块大平色盘，本来就该去掉绝大多数格子、只留下字。
+        // translate 正是被这一条挡住的（盘色墨 59430 格，擦完只剩字，占原来不到 1/4 → 整张不擦）。
+        // 所以门槛换成"擦完剩下的墨至少占**整张画布**的 PLATE_ALT_LEFT_PCT"——
+        // deskclock 那种（盘=墨、字=空气）擦完是 0，照样拦住。
+        if (left * 100 >= total * PLATE_ALT_LEFT_PCT) {
+          for (i in 0 until total) out[i] = kept[i]; plateCut = cut
+        }
       }
     }
     val sep = separation(out, w, h, box, s)
@@ -1504,7 +1510,10 @@ internal object MonochromeMask {
           (if (tonal == null) "" else " 膜刀=$cutP+$cutD 膜尾=$pDeep/$dDeep 膜格=$pN/$dN") +
           // 第三把刀，**加在整串最末尾、每一支都报**：`盘刀=N` = 按"背景层那块平色"擦掉的格数。
           // 0 = 这一张没有另一层、或有层但屏幕上没有一格是那块盘被交成了墨。
-          " 盘刀=$plateCut",
+          // `盘候` = 有墨且落在盘色里的格数（**-1 = 根本没走到这一步**：没另一层，或那块层不够"整块盘"）；
+          // `盘层` = 有没有拿到背景层。三个数一起看才分得开"没拿到层 / 拿到了不认它是盘 /
+          // 认了但没有墨 / 有墨但被『不许擦空』挡住"这四种不响。
+          " 盘刀=$plateCut 盘候=$plateCand 盘层=${if (under == null) 0 else 1}",
       ground.hyp,
       s.h0why,
       s.veto
@@ -1642,6 +1651,11 @@ internal object MonochromeMask {
 
   /** 背景层那块盘要占这一层实心格的这么多%，才算"这一层就是一块盘"（`盘刀` 那一刀用）。 */
   private const val PLATE_ALT_MIN = 85
+
+  /** 擦完剩下的墨至少要占**整张画布**的这么多%，这一刀才落。
+   *  拦的是"擦成空"（deskclock：盘=墨、字=空气，擦完是 0），**不是**"擦掉一大片" ——
+   *  擦一块大平色本来就该去掉绝大多数格、只留下字（translate 第一版就是被比例版挡住的）。 */
+  private const val PLATE_ALT_LEFT_PCT = 2
 
   /** `盘刀` 用的粗色归族：每通道 24 格一档。要的是"同一块平色"，不是"两个色分得开" ——
    *  所以这里**故意不用 ΔE**：ΔE 会把白字和浅灰盘并成一块（translate 的 G 就是 255 对 237），
