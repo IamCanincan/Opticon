@@ -295,11 +295,25 @@ internal object MonochromeSynth {
       // ⚠ `flatten` 那一路（背景是一张真 drawable）**另起一张只画背景层的**，作为 `under` 一起交
       //   给模型：那一层自己也可能就是一块盘，而合成之后模型只认一块底，另一块会被整片交成墨
       //   （主人 2026-10-11 点名的 translate「半边黑了」就是这一张）。见 [MonochromeMask.build] 的 `盘刀`。
+      // ⚠ **「盘在另一层」这个前提会假。** 主人 2026-10-11 点名 `oss.krtirtho.spotube`
+      //   「背景是黑色，被硬生生反色了」—— 它把一块**不透明黑底画进了自己的前景层**（背景层确实是
+      //   `ColorDrawable`，所以按上面的规则只取了前景）。于是告诉模型"这层里不许有底" = H3，
+      //   那块黑没有归属，被整片交成墨：`底占=0.00 框内=0.91`。同一张按"这层里可以有底"跑，
+      //   得到的是 `底占=0.83 框内=0.09`（霓虹耳机是墨、黑底是盘）—— **差的就是这一位**。
+      //   判据：前景层自己的最大色族盖到整张画布的这么多%，就说明这块层里有一张盘，别说它没有。
+      //   ⚠ 线画在 35% 之前先摊过分布（`_harness/FgPlateKt.kt`，34 张走这条路的）：中位 13、
+      //   p90 28，**≥35% 的只有 4 张** —— 贴吧 59 / kazumi 44 / spotify 38 / spotube 44。
+      //   而逐张对过：前三张翻不翻**结果完全一样**（spotify 两条路逐字节相同），
+      //   只有 spotube 真的变。所以这一条的波及面就是一张，不是 34 张。
+      val plateLayer = adaptive && !flatten && fgPlatePct(pixels) < FG_PLATE_MIN_PCT
+      // ⚠ `flatten` 那一路（背景是一张真 drawable）**另起一张只画背景层的**，作为 `under` 一起交
+      //   给模型：那一层自己也可能就是一块盘，而合成之后模型只认一块底，另一块会被整片交成墨
+      //   （主人 2026-10-11 点名的 translate「半边黑了」就是这一张）。见 [MonochromeMask.build] 的 `盘刀`。
       val under = if (flatten && adaptive) rasterizeLayer(source.background, edge) else null
       // 取完像素就回收：这张 384² 的 ARGB 有 590KB，留着要一直活到 `raster` 那两处 recycle 才走。
       val underPx = under?.let { u -> IntArray(total).also { a -> u.getPixels(a, 0, edge, 0, 0, edge, edge) }
         .also { u.recycle() } }
-      val out = MonochromeMask.build(pixels, edge, edge, adaptive && !flatten, underPx)
+      val out = MonochromeMask.build(pixels, edge, edge, plateLayer, underPx)
       // H0 的射程跟着记：见 [noteSynthesized] 那条汇总为什么带它。
       noteH0(out.h0why)
       noteVeto(out.veto)
@@ -625,6 +639,25 @@ internal object MonochromeSynth {
    * 交出去的掩码仍然是桌面要的「整张 108dp 画布」。bounds 的还原理由与 [rasterize] 里那条一样
    * （子层必须自己还原，不能指望父层那次 setBounds 带回去）。
    */
+  /** 走"只取前景层"那条路时，前景层自己的最大色族盖到整张画布的这么多%，
+   *  就说明**这张盘在这一层里**，不能再对它说"底只许是空气"。见 [render] 里那段。 */
+  private const val FG_PLATE_MIN_PCT = 35
+
+  /** 前景层里最大色族占**整张画布**的百分比（粗量化，每通道 24 一档，与 `plateKey` 同口径）。 */
+  private fun fgPlatePct(px: IntArray): Int {
+    if (px.isEmpty()) return 0
+    val fam = HashMap<Int, Int>(); var solid = 0
+    for (p in px) {
+      if (Color.alpha(p) < 128) continue
+      solid++
+      val k = ((((p shr 16) and 0xff) / 24) shl 10) or
+        ((((p shr 8) and 0xff) / 24) shl 5) or ((p and 0xff) / 24)
+      fam[k] = (fam[k] ?: 0) + 1
+    }
+    if (solid == 0) return 0
+    return (fam.maxByOrNull { it.value }?.value ?: 0) * 100 / px.size
+  }
+
   private fun rasterizeLayers(source: AdaptiveIconDrawable, edge: Int): Bitmap? {
     val bg = source.background
     val fg = source.foreground ?: return null
