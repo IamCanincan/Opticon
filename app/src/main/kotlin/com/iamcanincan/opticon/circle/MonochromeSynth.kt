@@ -292,7 +292,14 @@ internal object MonochromeSynth {
       raster.getPixels(pixels, 0, edge, 0, 0, edge, edge)
       // `!flatten` 且是自适应 = 交给这里的**只有前景层**，那张盘在背景层里（桌面自己补）。
       // 把这件事告诉模型：这一张里不许有"实心的一块当底" —— 混元那半个太极就是这么丢的。
-      val out = MonochromeMask.build(pixels, edge, edge, adaptive && !flatten)
+      // ⚠ `flatten` 那一路（背景是一张真 drawable）**另起一张只画背景层的**，作为 `under` 一起交
+      //   给模型：那一层自己也可能就是一块盘，而合成之后模型只认一块底，另一块会被整片交成墨
+      //   （主人 2026-10-11 点名的 translate「半边黑了」就是这一张）。见 [MonochromeMask.build] 的 `盘刀`。
+      val under = if (flatten && adaptive) rasterizeLayer(source.background, edge) else null
+      // 取完像素就回收：这张 384² 的 ARGB 有 590KB，留着要一直活到 `raster` 那两处 recycle 才走。
+      val underPx = under?.let { u -> IntArray(total).also { a -> u.getPixels(a, 0, edge, 0, 0, edge, edge) }
+        .also { u.recycle() } }
+      val out = MonochromeMask.build(pixels, edge, edge, adaptive && !flatten, underPx)
       // H0 的射程跟着记：见 [noteSynthesized] 那条汇总为什么带它。
       noteH0(out.h0why)
       noteVeto(out.veto)
@@ -636,6 +643,23 @@ internal object MonochromeSynth {
     } finally {
       if (bg != null && savedBg != null) bg.bounds = savedBg
       fg.bounds = savedFg
+    }
+  }
+
+  /** 只画**一层**，几何与 [rasterizeLayers] 里那两笔一模一样（`setBounds(0,0,edge,edge)` 后直接画），
+   *  这样它和合成那张逐格对得上 —— `盘刀` 问的就是"这一格屏幕上看到的是不是背景层那块色"。 */
+  private fun rasterizeLayer(d: Drawable?, edge: Int): Bitmap? {
+    if (d == null) return null
+    val saved = Rect(d.bounds)
+    return try {
+      val bmp = Bitmap.createBitmap(edge, edge, Bitmap.Config.ARGB_8888)
+      d.setBounds(0, 0, edge, edge)
+      d.draw(Canvas(bmp))
+      bmp
+    } catch (t: Throwable) {
+      null
+    } finally {
+      d.bounds = saved
     }
   }
 

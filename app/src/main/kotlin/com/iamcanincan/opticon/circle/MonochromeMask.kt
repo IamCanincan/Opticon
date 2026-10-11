@@ -675,10 +675,11 @@ internal object MonochromeMask {
    *   跨档差，里面另 1 张是入场跨度本来就会翻的旧账，**两个口径别混着引用**。
    *   真机 logcat 里 237 次合成**全部**是 384 档，所以这一条现在不上屏；但 `learnEdge`
    *   学到更大尺寸会重压，那时它就成了。 */
-  fun build(pixels: IntArray, w: Int, h: Int, plateIsLayer: Boolean = false): Output {
-    val ramp = buildOnce(pixels, w, h, plateIsLayer, false)
+  fun build(pixels: IntArray, w: Int, h: Int, plateIsLayer: Boolean = false,
+    under: IntArray? = null): Output {
+    val ramp = buildOnce(pixels, w, h, plateIsLayer, false, under)
     if (!ramp.report.contains("调=1")) return ramp          // 本来就走参照那一支，不必算第二遍
-    val ref = buildOnce(pixels, w, h, plateIsLayer, true)
+    val ref = buildOnce(pixels, w, h, plateIsLayer, true, under)
     return if (picksRef(w, h, ramp, ref)) ref else ramp
   }
 
@@ -746,9 +747,12 @@ internal object MonochromeMask {
    *  盘有没有、是哪一块，只能从像素里判。
    * @param forceRef `true` = 这一遍**不许**走满幅那一支。只有选支那一段（[build]）用得到，
    *  它要把同一张图按两条支各交付一遍再比成品。
+   * @param under 自适应图标里**背景层单独光栅化**那一张（与 [pixels] 同尺寸同裁法），没有另一层
+   *  时传 null。它只回答一句模型自己看不见的话：某一格屏幕上看到的颜色，是不是"背景层自己铺开的
+   *  那块平色"。是 → 那一格是盘，不许交成墨。见下面 `盘刀` 那一刀。
    */
   private fun buildOnce(pixels: IntArray, w: Int, h: Int, plateIsLayer: Boolean,
-    forceRef: Boolean
+    forceRef: Boolean, under: IntArray? = null
   ): Output {
     val total = w * h
     if (total <= 0) return Output(IntArray(0), 0f, 0f, 0f, 0, 0f, 0f, "尺寸非法 → 空层")
@@ -1410,6 +1414,44 @@ internal object MonochromeMask {
       if (filmP) cutP = filmCutOf(true)
       if (filmD) cutD = filmCutOf(false)
     }
+    // ── 「这块盘在另一层」那一刀：背景层自己铺出来的平色，屏幕上不是墨 ──────────────────
+    //
+    // 自适应图标的两层里，**每一层自己都可以是"一块盘 + 一个字"**。装机那条路把两层合成一张
+    // 交给模型（`MonochromeSynth` 的 `flatten` 那一路），而模型只认一块底 —— 另一块就被极性
+    // 整片交成墨。真机 2026-10-11 点名的 `com.google.android.apps.translate` 正是这一张：
+    // 背景层 = 浅灰盘 + 深灰「文」，前景层 = 蓝楔形盘 + 白 G，合成之后屏幕上右半整块黑。
+    // [under] = 背景层单独光栅化那一张（**只有调用方有这两层，模型本来看不见**）。
+    // 判据只有一句：**这一格屏幕上看到的颜色，就是背景层那块主色** —— 那一格是盘，不许有墨。
+    //   它同时挡住两种误伤：translate 的「文」在背景层上，但它的颜色不在那块浅灰主色里；
+    //   azure 的背景是整张纯白，盾牌画在前景层，盾牌那一片屏幕上看到的是蓝、不是白。
+    // ⚠ 范围就是一张。判据台 `LayerPlateKt` 在**会上屏的 61 张**上量过：只有 translate 动得大
+    //   （墨 50%→20%），第二名拼多多 5 个点，其余只擦零头。**别把它当通用修法。**
+    // ⚠ **擦完不许擦空**：极性本来就判错的那类（暗盘=墨、白针=空气，deskclock 是这种）把盘擦掉
+    //   之后什么都不剩 —— 交一张空掩码比留着旧的更坏（桌面会自己补一张、极性还会算反）。
+    //   所以先看擦完还剩多少墨，少于原来的 1/4 就整张不擦。
+    var plateCut = 0
+    if (under != null && under.size >= total) {
+      val fam = HashMap<Int, Int>(); var solid = 0
+      for (i in 0 until total) {
+        if (Color.alpha(under[i]) < A_SOLID) continue
+        solid++; val k = plateKey(under[i]); fam[k] = (fam[k] ?: 0) + 1
+      }
+      val top = fam.maxByOrNull { it.value }
+      if (top != null && solid > 0 && top.value * 100 >= solid * PLATE_ALT_MIN) {
+        val kept = IntArray(total)
+        var cut = 0; var left = 0; var was = 0
+        for (i in 0 until total) {
+          val a = Color.alpha(out[i])
+          if (a == 0) continue
+          was++
+          // ⚠ 比的是**源图**那一格的颜色，不是 `out` —— `out` 的 RGB 是墨色（几乎恒为黑/白），
+          //   拿它归族会把"有没有墨"当成"是不是那块盘"，第一版就是这么一声没响。
+          val isPlate = Color.alpha(under[i]) >= A_SOLID && plateKey(pixels[i]) == top.key
+          if (isPlate) cut++ else { kept[i] = out[i]; left++ }
+        }
+        if (left * 4 >= was) { for (i in 0 until total) out[i] = kept[i]; plateCut = cut }
+      }
+    }
     val sep = separation(out, w, h, box, s)
     val st = measure(out, w, h, box, s, bridge = colourDriven, despeckle = colourDriven)
     val fill = st.kept.toFloat() / boxArea
@@ -1459,7 +1501,10 @@ internal object MonochromeMask {
           // 第二把刀的两列，**只在这一支上加、加在整串最末尾**（前面所有列的列位一个不动）：
           // `膜刀=底堆/残堆` = 这一刀各清掉的格数；`膜尾=底堆/残堆` = 两堆各自的 α≥128 尾巴率
           //（-1 = 那一堆根本没格）。开门条件的四个数全在日志里，事后不用回头猜它为什么响、为什么不响。
-          (if (tonal == null) "" else " 膜刀=$cutP+$cutD 膜尾=$pDeep/$dDeep 膜格=$pN/$dN"),
+          (if (tonal == null) "" else " 膜刀=$cutP+$cutD 膜尾=$pDeep/$dDeep 膜格=$pN/$dN") +
+          // 第三把刀，**加在整串最末尾、每一支都报**：`盘刀=N` = 按"背景层那块平色"擦掉的格数。
+          // 0 = 这一张没有另一层、或有层但屏幕上没有一格是那块盘被交成了墨。
+          " 盘刀=$plateCut",
       ground.hyp,
       s.h0why,
       s.veto
@@ -1594,6 +1639,15 @@ internal object MonochromeMask {
   /** [ownBrightPlate] 里"从这一层自己的边上走到的亮端"至少要占实心百分之几，才算那块亮端是**这层的底**。
    *  25 沿用本仓另一条"两成五"的口径；实测的两侧是 `{0, 6, 15}` 与 `{49, 53}`，中间空 34 个点。 */
   private const val PLATE_OWN_MIN = 25
+
+  /** 背景层那块盘要占这一层实心格的这么多%，才算"这一层就是一块盘"（`盘刀` 那一刀用）。 */
+  private const val PLATE_ALT_MIN = 85
+
+  /** `盘刀` 用的粗色归族：每通道 24 格一档。要的是"同一块平色"，不是"两个色分得开" ——
+   *  所以这里**故意不用 ΔE**：ΔE 会把白字和浅灰盘并成一块（translate 的 G 就是 255 对 237），
+   *  而 24 这一档把它们分开。判据台 `LayerPlateKt` 用的是同一个函数，两边必须一模一样。 */
+  private fun plateKey(p: Int): Int =
+    ((((p shr 16) and 0xff) / 24) shl 10) or ((((p shr 8) and 0xff) / 24) shl 5) or ((p and 0xff) / 24)
 
   /** 判据产物。[lo]/[hi] 是这张自己亮度的 p5/p95（L\\*×64），[span] = hi−lo。 */
   internal class Tonal(val tex: Int, val flat: Int, val span: Int, val lo: Int, val hi: Int) {
