@@ -322,11 +322,20 @@ internal object MonochromeSynth {
       val sig = MonoDump.sigOf(pixels, edge, edge)
       val id = noteBranch(edge, sig, label, out)
       val isWatched = MonoDump.watched(label)
+      // ⚠ **变体标记必须进带回来的那个名字。** 桌面会把**同一张图标按不同尺寸再画一遍**：
+      //   真机实测（`live2.txt`，2026-10-11 20:34–21:39）translate 在 `edge=384` 下有两种前景层
+      //   —— `@432x432 intrinsic=288x288`（45 次）与 `@425x425 intrinsic=283x283`（3 次），
+      //   而这两张算出来的掩码**不一样**（`盘刀 59430 / 分档第2级 134` vs `59351 / 155`）。
+      //   8×8 指纹认不出这种差别（两种尺寸给出同一个 `sig=ce1fbfbd3fe7`），于是去重把后到的那张
+      //   吞掉、重放时两张又写进同一个文件名 —— 2026-10-12 那次"同一张输入、设备和判据台算出两张掩码"
+      //   就是这么判错的：**比的根本不是同一张。** 分歧不在 `under`。
+      val variant = label.substringAfter("fg=", "").substringBefore(" intrinsic", "")
+        .replace(Regex("[^A-Za-z0-9]"), "")
       val dump = {
         // 带上包名：不带回来的话，重放出来的预览图不知道是哪个应用的 —— 而那正是要对的东西。
         // 包名解不出来时（`?`）退而带指纹，重放的文件名里就带着它。
         MonoDump.maybe(id, label, raster, pixels, out.mask, edge, edge,
-          "${label.substringBefore(' ')}_$sig | ${out.report}", isWatched)
+          "${label.substringBefore(' ')}_${sig}${if (variant.isEmpty()) "" else "_$variant"} | ${out.report}", isWatched)
       }
       // 可疑的那几张把**原像素**带回来（PNG → base64 → 分片进日志），判据台原样重放。
       // 没有这条通道，"不够细致"永远只能靠猜：他报的应用发的是 vector / webp，台子解不出。

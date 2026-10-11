@@ -48,18 +48,18 @@ internal object MonoDump {
   /**
    * 只留给**点名名单**的那一块预算（KB）。
    *
-   * 为什么要有这一条：普通可疑图是按渲染先后顺序抢预算的。真机实测（2026-09-29 20:09 那一轮）
-   * 桌面一起来，前 30 张在 **4 秒**里花掉 1249 KB → 预算见底，而 `com.cnspeedtest.globalspeed`
-   * 第一次出现是在 `20:09:51`，**晚了 0.7 秒** → 它被看到了 3 次、一张没带回来，而当时那条
-   * `if (budget <= 0) return` 是**静默**的，于是"点名要抓的应用没被抓"和"这个应用没被渲染过"
-   * 在日志里长得一模一样。这是本仓第三次撞上"静默失效"（前两次：12 处 `if (hooked > 0)` 没有
-   * else、装钩期解析失败不报名字），所以这里两件事一起做：**拦住要报名字** + **给名单留一块**。
-   * 保留额只影响名单之外的图：它们最多花到剩 [WATCH_RESERVE_KB]，够再收七八张点名的。
+   * 为什么要有这一条：普通可疑图是按渲染先后顺序抢预算的。真机实测（2026-10-11 20:34 那一轮）
+   * 桌面一起来，前 23 张花掉 1207 KB → 预算见底（`dump 不抓 … 预算剩 -7KB`），而
+   * **translate 就在那一轮被点名、一张都没回来** —— 于是"设备上到底画成什么样"只能靠猜，
+   * 猜错的那次就是被主人否掉、已 revert 的那一刀。
+   * 2026-10-12 把总预算抬到 [BUDGET_KB]、保留额抬到这一条：普通图能花的绝对量不变（1500KB），
+   * 但名单里那 24 个包从此有一块谁也抢不走的地 —— 而且它们现在每个可能带**两种尺寸**各一张
+   * （见 [dedupeKey]），要的正是这一块。
    */
-  private const val WATCH_RESERVE_KB = 300
+  private const val WATCH_RESERVE_KB = 900
 
   /** 一次进程的总预算。改这个数之前先想清楚：这条通道抢的是全设备共享的 logd。 */
-  private const val BUDGET_KB = 1200
+  private const val BUDGET_KB = 2400
 
   /**
    * 已经带过的图标签名。⚠ 必须有：桌面一次加载里同一个图标会被问很多次（不同 Drawable 实例、
@@ -151,6 +151,11 @@ internal object MonoDump {
   fun sigOf(pixels: IntArray, w: Int, h: Int): String =
     java.lang.Long.toHexString(signature(pixels, w, h)).take(12)
 
+  /** 形状指纹 ⊕ 前景层尺寸：同一张图标的两种尺寸是两个键，各自能带回来一张。 */
+  private fun dedupeKey(pixels: IntArray, w: Int, h: Int, label: String): Long =
+    signature(pixels, w, h) * 1000003L +
+      label.substringAfter("fg=", "").substringBefore(" intrinsic", "").hashCode()
+
   /**
    * 带一张。**只带 src，不带 mask** —— 掩码是模型从 src 算出来的，重放那边跑同一份代码就能
    * 自己得到，双份发只是把日志量翻倍（而日志量正是这条通道的瓶颈：上一版 14 个图标里有 2 个
@@ -177,7 +182,13 @@ internal object MonoDump {
       }
       return
     }
-    if (!seen.add(signature(pixels, w, h))) return
+    // 点名的那几张按「形状 **＋ 前景层尺寸**」去重，普通可疑图仍按纯形状。
+    // 为什么分开处理：桌面会把同一张图标按两种尺寸再画一遍（`@432x432` 与 `@425x425`），
+    // 而 8×8 指纹给这两张**同一个** `sig` —— 按纯形状去重就等于"第二张永远带不回来"，
+    // 于是"设备与判据台对不上"这类问题根本没法判（见 [MonochromeSynth] 里 `variant` 那一段）。
+    // 只对名单里的包放宽：多一种尺寸就多一张 PNG，全放开会把预算吃光。
+    val key = if (watched) dedupeKey(pixels, w, h, label) else signature(pixels, w, h)
+    if (!seen.add(key)) return
     sent++
     val n = sent
     runCatching {
