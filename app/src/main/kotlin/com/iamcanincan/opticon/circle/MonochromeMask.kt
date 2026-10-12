@@ -1540,6 +1540,7 @@ internal object MonochromeMask {
     val famMinN = 300          // 一块至少 300 格（≈画布 0.2%）才配叫"一个部分"，与 DustKt 的"看得见"同量级
     val famInkPct = 60         // 这一族里交付了墨的至少占 60% —— 多数是墨，少数被判成底才是病
     val famPlatePct = 35       // 而少数那一头不许超过 35%：再大就是**两种用途**，不是判错
+    val famMinPlate = 25       // 而它还得够大（5×5）才算"看得见的一块"，不然就是噪声记成开火
     var famLift = 0; var famFires = 0
     run {
       val cnt = HashMap<Int, Int>()
@@ -1566,7 +1567,9 @@ internal object MonochromeMask {
         for (key in big) {
           val n = cnt[key] ?: 0; val ink = inkN[key] ?: 0; val plate = plateN[key] ?: 0
           if (n < famMinN || ink * 100 < n * famInkPct || plate * 100 > n * famPlatePct) continue
-          if (plate == 0) continue        // 少数那一头是 0 就不算"切开"，别把它记成开火
+          // 少数那一头至少要有**看得见的一块**（25 格 = 5×5，与 `DustKt` 同一条约定）才值得抬：
+          // 真机第一轮里 12306 与混元各只抬了 1 格 —— 那不是「"不"没了」，是噪声在记开火。
+          if (plate < famMinPlate) continue
           tone[key] = (inkSum[key] ?: 0) / ink.coerceAtLeast(1)
           famFires++
         }
