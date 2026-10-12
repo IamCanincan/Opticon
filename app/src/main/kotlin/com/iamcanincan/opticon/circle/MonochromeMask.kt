@@ -1441,7 +1441,7 @@ internal object MonochromeMask {
     // ⚠ **擦完不许擦空**：极性本来就判错的那类（暗盘=墨、白针=空气，deskclock 是这种）把盘擦掉
     //   之后什么都不剩 —— 交一张空掩码比留着旧的更坏（桌面会自己补一张、极性还会算反）。
     //   所以先看擦完还剩多少墨，少于原来的 1/4 就整张不擦。
-    var plateCut = 0; var plateCand = -1
+    var plateCut = 0; var plateCand = -1; var plateInv = 0; var plateHole = 0
     if (under != null && under.size >= total) {
       val fam = HashMap<Int, Int>(); var solid = 0
       for (i in 0 until total) {
@@ -1449,7 +1449,53 @@ internal object MonochromeMask {
         solid++; val k = plateKey(under[i]); fam[k] = (fam[k] ?: 0) + 1
       }
       val top = fam.maxByOrNull { it.value }
-      if (top != null && solid > 0 && top.value * 100 >= solid * PLATE_ALT_MIN) {
+      // ── 「一块被别的卡压着的平色卡 + 卡上画着标记」：卡交墨、标记镂空 ──
+      // 主人 2026-10-12 点名 translate：「右半边全黑、只有"文"是镂空的会更好」。
+      // 这一族与下面盘刀的动作**正好相反**，所以放在同一个入口、由类判据二选一
+      // （plateInv != 0 时盘刀整个跳过），不会出现两把刀抢同一张。
+      // ⚠ 四条判据，数都是 _harness/PlateSplitKt.kt 在**两套语料 124 张**上量的：
+      //   ① 盘 = 背景层亮度的**众数**，占实心格 ≥ PLATE_INV_L_MIN
+      //   ② 标记 = 离盘 ≥ PLATE_INV_DELTA，**不分方向**（translate 的字比盘暗 119；白字蓝盘那种比盘亮）
+      //      —— ⚠ **不用色族桶**：v1 用桶把支付宝算进来了，它背景层按桶 96.4% 是一族、按亮度众数只有
+      //      51.4%，而那一层里**压根没有标记**（「支」在前景层）。桶把一道渐变数成了"一档"。
+      //   ③ 标记要真有 ≥ PLATE_INV_MARK_MIN —— 拦那 7 张"整层就是一块纯色空盘"的：翻了就是交黑方
+      //   ④ **这块盘要 ≥ PLATE_INV_OCCL_MIN 被前景层盖住** —— 这一条是"翻对/翻错"的分界：
+      //      translate 的盘被气泡盖住 **55%**（它是**一张垫在别的卡底下的卡**，翻它 = 后卡黑前卡亮，读得通）；
+      //      而对表台上同样"平盘+平标记"的 **10 张系统图标**（计算器/联系人/时钟/短信/设置/光圈/日历/
+      //      浏览器/录音机/音乐）只被盖住 **1%–12%** —— 那块盘**就是整个图标的底**，上面没有第二张卡，
+      //      翻它等于把字翻成墨底，而设计师画的答案恰恰是浅盘深字。v2 没有这一条，
+      //      对表台当场 iouMed **0.94 → 0.845**、10 张全变差、零张变差里没有一个变好。
+      // ⚠ 只动"背景层露在外面"的格：合成图那一格离背景层自己太远 = 被前景盖住了，不越权去改
+      //   （气泡压在盘上的那一截、气泡投在盘上的那道影，都是靠这一条保住的）。
+      if (under != null && under.size >= total) {
+        val hL = IntArray(256); var sol = 0
+        for (i in 0 until total) {
+          if (Color.alpha(under[i]) < A_SOLID) continue
+          sol++; hL[invLuma(under[i])]++
+        }
+        val plateL = (0..255).maxByOrNull { hL[it] } ?: -1
+        var markN = 0; var covN = 0
+        if (plateL >= 0) for (i in 0 until total) {
+          if (Color.alpha(under[i]) < A_SOLID) continue
+          val lu = invLuma(under[i])
+          if (Math.abs(lu - plateL) >= PLATE_INV_DELTA) markN++
+          if (Math.abs(invLuma(pixels[i]) - lu) >= PLATE_INV_COVER) covN++
+        }
+        if (sol > 0 && plateL >= 0 && hL[plateL] * 100 >= sol * PLATE_INV_L_MIN &&
+            markN * 1000 >= sol * PLATE_INV_MARK_MIN &&
+            covN * 100 >= sol * PLATE_INV_OCCL_MIN) {
+          var inked = 0; var holed = 0
+          for (i in 0 until total) {
+            if (Color.alpha(under[i]) < A_SOLID) continue
+            val lu = invLuma(under[i])
+            if (Math.abs(invLuma(pixels[i]) - lu) >= PLATE_INV_COVER) continue   // 被前景盖住
+            if (Math.abs(lu - plateL) >= PLATE_INV_DELTA) { out[i] = 0; holed++ }
+            else { out[i] = (255 shl 24) or 0x00FFFFFF; inked++ }
+          }
+          plateInv = inked; plateHole = holed
+        }
+      }
+      if (plateInv == 0 && top != null && solid > 0 && top.value * 100 >= solid * PLATE_ALT_MIN) {
         plateCand = 0
         val kept = IntArray(total)
         var cut = 0; var left = 0
@@ -1525,7 +1571,7 @@ internal object MonochromeMask {
           // `盘候` = 有墨且落在盘色里的格数（**-1 = 根本没走到这一步**：没另一层，或那块层不够"整块盘"）；
           // `盘层` = 有没有拿到背景层。三个数一起看才分得开"没拿到层 / 拿到了不认它是盘 /
           // 认了但没有墨 / 有墨但被『不许擦空』挡住"这四种不响。
-          " 盘刀=$plateCut 盘候=$plateCand 盘层=${if (under == null) 0 else 1}",
+          " 盘刀=$plateCut 盘候=$plateCand 盘层=${if (under == null) 0 else 1} 反相=$plateInv/$plateHole",
       ground.hyp,
       s.h0why,
       s.veto
@@ -1663,6 +1709,16 @@ internal object MonochromeMask {
 
   /** 背景层那块盘要占这一层实心格的这么多%，才算"这一层就是一块盘"（`盘刀` 那一刀用）。 */
   private const val PLATE_ALT_MIN = 85
+  /** 反相那一族：背景层亮度的众数要占到这么多，才算"这一层自己就是一块平色卡"。 */
+  private const val PLATE_INV_L_MIN = 85
+  /** 离盘这么远就算"那是画在卡上的标记"，不是卡自己。**不分方向**。 */
+  private const val PLATE_INV_DELTA = 40
+  /** 标记至少要占背景层实心格的这么多（千分比），否则那是**一块纯色空盘**，翻了就是交黑方。 */
+  private const val PLATE_INV_MARK_MIN = 10
+  /** 合成图那一格离背景层自己这么远 = 被前景层盖住了，这一刀不越权。 */
+  private const val PLATE_INV_COVER = 24
+  /** 这块盘至少要被前景层盖住这么多，才算"一张垫在别的卡底下的卡"，而不是"整个图标的底"。 */
+  private const val PLATE_INV_OCCL_MIN = 25
 
   /** 擦完剩下的墨至少要占**整张画布**的这么多%，这一刀才落。
    *  拦的是"擦成空"（deskclock：盘=墨、字=空气，擦完是 0），**不是**"擦掉一大片" ——
@@ -1672,6 +1728,10 @@ internal object MonochromeMask {
   /** `盘刀` 用的粗色归族：每通道 24 格一档。要的是"同一块平色"，不是"两个色分得开" ——
    *  所以这里**故意不用 ΔE**：ΔE 会把白字和浅灰盘并成一块（translate 的 G 就是 255 对 237），
    *  而 24 这一档把它们分开。判据台 `LayerPlateKt` 用的是同一个函数，两边必须一模一样。 */
+  /** 反相那一刀用的亮度（盘刀用色族桶，这一刀用"离盘中位亮度多远"—— 见调用点那段）。 */
+  private fun invLuma(p: Int): Int =
+    (0.2126 * ((p shr 16) and 0xff) + 0.7152 * ((p shr 8) and 0xff) + 0.0722 * (p and 0xff)).toInt()
+
   private fun plateKey(p: Int): Int =
     ((((p shr 16) and 0xff) / 24) shl 10) or ((((p shr 8) and 0xff) / 24) shl 5) or ((p and 0xff) / 24)
 
