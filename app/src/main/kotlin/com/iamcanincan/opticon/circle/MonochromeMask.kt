@@ -1484,12 +1484,25 @@ internal object MonochromeMask {
         if (sol > 0 && plateL >= 0 && hL[plateL] * 100 >= sol * PLATE_INV_L_MIN &&
             markN * 1000 >= sol * PLATE_INV_MARK_MIN &&
             covN * 100 >= sol * PLATE_INV_OCCL_MIN) {
+          // 压在盘上的**那张卡自己多亮**：只看"背景层是盘、而合成图离盘很远"的那些格取亮度众数
+          // （translate 就是气泡的 132）。有了它，斜边那道混色带不用再靠一个魔数判"被盖住"。
+          val hT = IntArray(256)
+          for (i in 0 until total) {
+            if (Color.alpha(under[i]) < A_SOLID) continue
+            if (Math.abs(invLuma(under[i]) - plateL) >= PLATE_INV_DELTA) continue
+            val lc = invLuma(pixels[i])
+            if (Math.abs(lc - plateL) < PLATE_INV_DELTA) continue
+            hT[lc]++
+          }
+          val topL = (0..255).maxByOrNull { hT[it] } ?: plateL
           var inked = 0; var holed = 0
           for (i in 0 until total) {
             if (Color.alpha(under[i]) < A_SOLID) continue
             val lu = invLuma(under[i])
-            if (Math.abs(invLuma(pixels[i]) - lu) >= PLATE_INV_COVER) continue   // 被前景盖住
-            if (Math.abs(lu - plateL) >= PLATE_INV_DELTA) { out[i] = 0; holed++ }
+            val lc = invLuma(pixels[i])
+            val isMark = Math.abs(lu - plateL) >= PLATE_INV_DELTA
+            if (Math.abs(lc - lu) >= PLATE_INV_COVER && !stillPlate(lc, plateL, topL)) continue
+            if (isMark) { out[i] = 0; holed++ }
             else { out[i] = (255 shl 24) or 0x00FFFFFF; inked++ }
           }
           plateInv = inked; plateHole = holed
@@ -1731,6 +1744,18 @@ internal object MonochromeMask {
   /** 反相那一刀用的亮度（盘刀用色族桶，这一刀用"离盘中位亮度多远"—— 见调用点那段）。 */
   private fun invLuma(p: Int): Int =
     (0.2126 * ((p shr 16) and 0xff) + 0.7152 * ((p shr 8) and 0xff) + 0.0722 * (p and 0xff)).toInt()
+
+  /**
+   * 这一格**离盘近，还是离压在盘上的那张卡近** —— 近盘就算还是盘。
+   *
+   * 为什么要有这一条：判"被前景盖住"原来只看一个数（合成图离背景层 ≥24）。可气泡与盘之间那道
+   * **混色带**（抗锯齿，加上贴着边的影子核心）差值正好落在 24..106 —— 它是盘，却被判成"盖住了"，
+   * 于是铺不上墨。主人 2026-10-12 装机后点名的「"文"左边还有一小块也是空着的」就是它：
+   * 量出来 **2919 格 = 画布 2.0%，贴着斜边 0..11 格、平均 4 格**。
+   * 换成关系判据之后，边界落在"盘色 ↔ 卡色"的中点上，不再靠那个 24。
+   */
+  private fun stillPlate(lc: Int, plateL: Int, topL: Int): Boolean =
+    Math.abs(lc - plateL) <= Math.abs(lc - topL)
 
   private fun plateKey(p: Int): Int =
     ((((p shr 16) and 0xff) / 24) shl 10) or ((((p shr 8) and 0xff) / 24) shl 5) or ((p and 0xff) / 24)
