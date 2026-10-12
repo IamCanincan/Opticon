@@ -334,7 +334,9 @@ internal object MonochromeSynth {
       val dump = {
         // 带上包名：不带回来的话，重放出来的预览图不知道是哪个应用的 —— 而那正是要对的东西。
         // 包名解不出来时（`?`）退而带指纹，重放的文件名里就带着它。
-        MonoDump.maybe(id, label, raster, pixels, out.mask, edge, edge,
+        // ⚠ 三个输入**一个都不能少**：模型吃的是 `(合成图, 层底, under)`，重放只拿到合成图时
+        //   `盘刀/反相` 读的那一层就不存在了 —— 复放出来的掩码不是设备上那一张（见 [MonoDump.maybe]）。
+        MonoDump.maybe(id, label, raster, pixels, out.mask, underPx, plateLayer, edge, edge,
           "${label.substringBefore(' ')}_${sig}${if (variant.isEmpty()) "" else "_$variant"} | ${out.report}", isWatched)
       }
       // 可疑的那几张把**原像素**带回来（PNG → base64 → 分片进日志），判据台原样重放。

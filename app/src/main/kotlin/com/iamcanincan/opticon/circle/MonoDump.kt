@@ -2,6 +2,7 @@ package com.iamcanincan.opticon.circle
 
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.os.Process
 import android.util.Base64
 import android.util.Log
 import com.iamcanincan.opticon.runtime.TAG
@@ -34,6 +35,22 @@ internal object MonoDump {
   /** 一条日志的安全长度：logd 单条约 4000 字节，留足余量免得截断。 */
   private const val CHUNK = 3000
 
+  /**
+   * **这一份 dump 是谁发的** —— 打在每个 `dump#N` 后面（`p=<十六进制 pid>`）。
+   *
+   * 为什么必须带：[sent] 是**每进程**各自从 1 开始数的，而一次抓取日志里从来不只一个进程
+   * （模块的作用域里有桌面、也有 SystemUI / 设置；桌面自己被杀重启时，旧进程那一段还在文件里）。
+   * 只按 `(dump#N, what)` 重组，两个进程就会写成同一组 —— 而且两边的分片**内容是不同的**
+   * （不同尺寸、不同 drawable），后到的那片覆盖先到的那片。
+   * 真机四份日志实测（`live2 / live4 / live / cap1`）：
+   *   live2 = 3 个进程 **102 组**，旧口径只认得出 **36** 组，其中 **7** 组是跨进程混拼；
+   *   live  = 4 个进程 **122 组**，旧口径 **44** 组，混拼 **10**；
+   *   cap1  = 只有 1 个进程 → 旧口径 67/68 全对，**这就是上一轮误判"logd 吞了 15% 的 BEGIN 行"的原因**：
+   *           单进程那份什么也没丢，多进程那三份丢的是我自己的键，不是通道。
+   * 每条分片行多 7~9 个字符（一轮约 +12KB / 2.2MB），换来的是"这一张到底是谁画的"能回答。
+   */
+  private val PROC = Integer.toHexString(Process.myPid())
+
   private var sent = 0
 
   /** 一次进程允许发多少 KB 的 PNG。logcat 是共享通道，超了就停，别把别的日志挤掉。 */
@@ -55,11 +72,17 @@ internal object MonoDump {
    * 桌面一起来，前 23 张花掉 1207 KB → 预算见底（`dump 不抓 … 预算剩 -7KB`），而
    * **translate 就在那一轮被点名、一张都没回来** —— 于是"设备上到底画成什么样"只能靠猜，
    * 猜错的那次就是被主人否掉、已 revert 的那一刀。
-   * 2026-10-12 把总预算抬到 [BUDGET_KB]、保留额抬到这一条：普通图能花的绝对量不变（1500KB），
+   * 2026-10-12 把总预算抬到 [BUDGET_KB]、保留额抬到这一条：普通图能花的绝对量不变，
    * 但名单里那 24 个包从此有一块谁也抢不走的地 —— 而且它们现在每个可能带**两种尺寸**各一张
    * （见 [dedupeKey]），要的正是这一块。
+   *
+   * ⚠ **2026-10-12 夜再抬到 1500，因为名单每张多了 `under` 那一份**。按 cap1（唯一一份
+   * 单进程、67/68 全拼回来的一轮）实测的张数与尺寸：名单 26 张各带 `src 41KB + out 16KB + under 6KB`
+   * ≈ **1.6MB**，而那一轮普通可疑图只花了 15 张 ×41KB ≈ **0.6MB** —— 所以把保留额从 900 抬到 1500
+   * （普通图剩 900KB ≈ 22 张，比实际用到的多 7 张），总预算不动。
+   * 不抬的代价是看得见的：名单尾部那几张会连 `src` 都发不出来，而那正是判一刀成败的东西。
    */
-  private const val WATCH_RESERVE_KB = 900
+  private const val WATCH_RESERVE_KB = 1500
 
   /** 一次进程的总预算。改这个数之前先想清楚：这条通道抢的是全设备共享的 logd。 */
   private const val BUDGET_KB = 2400
@@ -160,18 +183,24 @@ internal object MonoDump {
       label.substringAfter("fg=", "").substringBefore(" intrinsic", "").hashCode()
 
   /**
-   * 带一张。**只带 src，不带 mask** —— 掩码是模型从 src 算出来的，重放那边跑同一份代码就能
-   * 自己得到，双份发只是把日志量翻倍（而日志量正是这条通道的瓶颈：上一版 14 个图标里有 2 个
-   * 的 src 因为片数太多被 logd 丢掉）。带上 mask 的唯一价值是"核对重放是否等价"，
-   * 那个用日志里那行判据数字对就够了。
+   * 带一张。**发 src，点名的再发 out 与 under**。
+   *
+   * ⚠ **掩码（out）本来是不发的** —— 它是模型从 src 算出来的，重放那边跑同一份代码就能自己得到，
+   *   双份发只是把日志量翻倍。2026-10-11 改成"点名的发"：重放跑的是**我改过之后的代码**，
+   *   要看"设备上到底画成什么样"必须拿设备那一张，不能拿我以为它画成的那一张。
+   * ⚠ **`under`（背景层）是 2026-10-12 补的，补的是"复放不忠实"这一件事**：`flatten` 那一路
+   *   模型吃的是 `build(合成图, 层底, under)` 三个输入，而通道以前只带合成图 ——
+   *   少一个 `under`，`盘刀/反相` 这两刀在判据台上就不是设备上那一刀（translate 那刀的成败正押在这里）。
+   *   实测一张背景层压完 **中位 5.8KB**（`rec_model` 里 20 张 `_modelbg.png`；同一图标的合成图 40.8KB），
+   *   所以它比 out（16.1KB）还便宜，只给点名的带、走的还是保留额那一条。
    *
    * 全程 runCatching：这是诊断，诊断把自己跑挂的图标弄坏是不可接受的（这里跑在桌面加载图标的
    * 路上，抛出去就是那个图标没了）。失败只打一行原因。
    */
   @Synchronized
   fun maybe(
-    id: Int, label: String, src: Bitmap, pixels: IntArray, ramp: IntArray?, w: Int, h: Int,
-    why: String, watched: Boolean,
+    id: Int, label: String, src: Bitmap, pixels: IntArray, ramp: IntArray?, under: IntArray?,
+    plateIsLayer: Boolean, w: Int, h: Int, why: String, watched: Boolean,
   ) {
     // 普通可疑图花到剩 [WATCH_RESERVE_KB] 就停；点名的那张可以花到底。
     if (sent >= MAX_ICONS || budget - (if (watched) 0 else WATCH_RESERVE_KB) <= 0) {
@@ -204,18 +233,35 @@ internal object MonoDump {
     }
     sent++
     val n = sent
+    // 复放要还原设备这一次的**输入**，除了像素还得知道两位：`层底`（plateIsLayer）与
+    // `层`（这一张到底有没有背景层）。少了后者，"没带 under"就分不清是**它本来没有**还是
+    // **被预算拦下了** —— 而这两种在日志里长得一模一样，正是本仓反复撞的那类静默。
+    // 它们打在 BEGIN 的注记里而不是新加一列判据数字：判据行是十一道闸的读数口径，
+    // 动一列就得重钉一片基线。
+    val note = "$why 层底=${if (plateIsLayer) 1 else 0} 层=${if (under != null) 1 else 0}"
     runCatching {
       val png = pngOf(src)
       // 一张照片底图标能压到 200KB+，一条通道被它占满就没有别人的位置了：按 KB 记预算，
       // 超了就停（宁可少带几个，也不要带回来的全是截断的半张）。
       budget -= png.size / 1024
-      emit(n, id, "src", why, png)
+      emit(n, id, "src", note, png)
+      // **背景层那一张（`under`）**：只给点名的、只给真的有背景层的（`flatten` 那一路才有），
+      // 彩色原样发 —— 这一张的**颜色**就是要看的东西（它就是那张盘）。
+      // ⚠ 排在 `out` 前面是有意为之：两个抢同一块预算时保**输入**（少了它复放就是错的），
+      //   不保输出（有 src + under + 层底，判据台自己算得出掩码，而设备那一张另有 `反相/分档` 两列对）。
+      //   实测两个都便宜到不必取舍：under 6KB、out 16KB。
+      if (watched && under != null && under.size >= w * h && budget > WATCH_RESERVE_KB / 2) {
+        val ub = Bitmap.createBitmap(under, w, h, Bitmap.Config.ARGB_8888)
+        val up = pngOf(ub)
+        ub.recycle()
+        budget -= up.size / 1024
+        emit(n, id, "under", note, up)
+      }
       // ⚠ **原来这里就停了：只发输入，不发交出去的那一张。** 于是"设备上到底画成什么样"
       //   从日志里拿不回来，只能亮屏截屏 —— 而桌面在休眠时就什么都不知道（2026-10-11 主人报
       //   translate「半边黑」，我修完只能看到 `框内 0.47→0.06` 这一格数，看不到那张墨）。
-      //   掩码是**纯 alpha**，压出来比彩色那张小（实测一轮：src 平均 42KB、out 平均 24KB）。
-      //   解码侧只取 alpha 通道：PNG 的 RGBA 是直通 alpha，Android 内部转预乘再转回来时
-      //   RGB 会有舍入误差，**alpha 不会** —— 而这一张只有 alpha 有意义。
+      //   掩码是**纯 alpha**（解码侧只取 alpha：PNG 的 RGBA 是直通 alpha，Android 转预乘再转回来时
+      //   RGB 会有舍入误差而 alpha 不会 —— 而这一张只有 alpha 有意义），压出来比彩色那张小。
       // ⚠ **只给点名的那张发。** 第一版对所有图都发，每张多花一半预算，1200KB 提前见底 ——
       //   到 17:51 连 translate / 京东 / 华为 / 微博 这些**点名名单自己的输入都抓不回来了**。
       //   要看"设备交出什么"的只有点名那几张；可疑但不是点名的，输入才是诊断要的东西。
@@ -227,7 +273,7 @@ internal object MonoDump {
         val op = pngOf(mb)
         mb.recycle()
         budget -= op.size / 1024
-        emit(n, id, "out", why, op)
+        emit(n, id, "out", note, op)
       }
     }.onFailure {
       Log.w(TAG, "Mono: dump#$n failed: ${it.javaClass.simpleName}: ${it.message}")
@@ -265,16 +311,19 @@ internal object MonoDump {
   private fun emit(n: Int, id: Int, what: String, why: String, bytes: ByteArray) {
     val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
     val parts = (b64.length + CHUNK - 1) / CHUNK
-    Log.d(TAG, "Mono: dump#$n BEGIN id=$id what=$what parts=$parts ${if (why.isEmpty()) "" else why}")
+    // 三行都带 `p=`（这一份是谁发的，见 [PROC]）：重组按 `(p, dump#N, what)` 分组，
+    // 少一处就意味着那一种行丢了这一组拼不回来 —— 而 BEGIN 恰恰是三行里最容易被漏读的
+    //（它带着文件名，读不到就整组蒸发，上一轮就是这么把账算到 logd 头上的）。
+    Log.d(TAG, "Mono: dump#$n p=$PROC BEGIN id=$id what=$what parts=$parts $why")
     for (p in 0 until parts) {
       val from = p * CHUNK
       val to = minOf(b64.length, from + CHUNK)
-      // 分片行里**必须带上 what**：一个图标要发 src 与 mask 两份，两边共用同一个 dump#N。
+      // 分片行里**必须带上 what**：一个图标要发 src / out / under 三份，共用同一个 dump#N。
       // 上一版没带，重放时两份的分片混进同一个桶、片数对不上，14 个图标全部被当成截断丢掉。
-      Log.d(TAG, "Mono: dump#$n $what P" + String.format(Locale.ROOT, "%03d", p) + "/" +
+      Log.d(TAG, "Mono: dump#$n p=$PROC $what P" + String.format(Locale.ROOT, "%03d", p) + "/" +
         String.format(Locale.ROOT, "%03d", parts - 1) + " " + b64.substring(from, to))
     }
-    Log.d(TAG, "Mono: dump#$n END id=$id what=$what bytes=" + bytes.size)
+    Log.d(TAG, "Mono: dump#$n p=$PROC END id=$id what=$what bytes=" + bytes.size)
   }
 
   /** 掩码的 ASCII 预览（`#` 实心 / `+` 中浓 / `·` 淡）—— 不带 PNG 时也能在日志里看个形状。 */
