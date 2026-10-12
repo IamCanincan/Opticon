@@ -507,6 +507,14 @@ internal object MonochromeMask {
     var cellN = IntArray(0)
     /** 这一格里参照像素的**总数**（含透明的）—— 出 [fCov]（原语里的那一个 β）。 */
     var cellTot = IntArray(0)
+    /**
+     * **双峰格的"第二族"槽位**（2026-10-13）：一格里有两种底颜色时（`FieldMixKt` 量到语料 1.5% 的格），
+     * 中位落在两峰之间、两边都离它远 → `零` 被抬起。`bimSlot[k]` = 那一格的另一族占用的**额外槽位下标**
+     * （≥ `cells`），`bimMid[k]` = 两峰的 L\\* 中点（-1 = 这一格不是双峰）。`propagateField` 按像素自己在
+     * 哪一侧决定用哪个槽 —— 于是每格能**同时**代表两族。见 [bimodalSplit]。
+     */
+    var bimSlot = IntArray(0)
+    var bimMid = IntArray(0)
     /** 每格参照色的 Lab（×64）与覆盖率 β —— 距离与浓度都直接查它们，不每像素现算转换。 */
     var fL = IntArray(0)
     var fA = IntArray(0)
@@ -581,8 +589,11 @@ internal object MonochromeMask {
       if (cellR.size < cells) {
         cellR = ShortArray(cells); cellG = ShortArray(cells); cellB = ShortArray(cells)
         cellN = IntArray(cells); cellTot = IntArray(cells)
-        fL = IntArray(cells); fA = IntArray(cells); fB = IntArray(cells); fCov = IntArray(cells)
-        fTop = IntArray(cells)
+        // ⚠ `fL…fTop` 按 **2×cells** 开：双峰格里"另一族"占的槽位下标 ≥ cells（见 [Scratch.bimSlot]），
+        //   而它们必须能直接当下标用（`departure` / `propagateField` 之后到处都按 `ref[i]` 查）。
+        fL = IntArray(cells * 2); fA = IntArray(cells * 2); fB = IntArray(cells * 2)
+        fCov = IntArray(cells * 2); fTop = IntArray(cells * 2)
+        bimSlot = IntArray(cells); bimMid = IntArray(cells)
         fieldHist = IntArray(cells * 1024)
       }
     }
@@ -3041,6 +3052,63 @@ internal object MonochromeMask {
       tol = percentile(s.hist, nGround, TOL_PCT).coerceIn(DEP_TOL_MIN, DEP_TOL_MAX)
     }
 
+    // ── **分族参照压在洪泛之后**（2026-10-13）──────────────────────────────────────────
+    // 场既喂**归属**（洪泛、`absorbSeams`、"哪一支底赢"都读 `dep`），也喂**标定与出图**。
+    // 第一版 `cand/FamRef` 每轮都分，pixez 的 H1 占比 0.91→**0.94** 越过 `PLATE_ALL_SHARE=0.92`
+    // 被退到 H2、`框内 0.18→0.82` —— 对表 IoU 0.94→0.874 全是它一个人赔的
+    // （92 张装机输入里只有 4 张动，其中只有它换了支）。
+    // **分族参照是标定侧的事，不许改归属**：所以压到整个 FIELD_ITERS 循环之后，
+    // 再重传一遍参照、按分好的槽把 `dist`/`hist` 重算，`tol`/`zero` 才吃分完的场。
+    // ── **分族参照压在洪泛之后，而且只在它真的把噪声地板降下来时才留**（2026-10-13）──────
+    // 场既喂**归属**（洪泛、`absorbSeams`、"哪一支底赢"都读 `dep`），也喂**标定与出图**。
+    // 第一版 `cand/FamRef` 每轮都分：pixez 的 H1 占比 0.91→**0.94** 越过 `PLATE_ALL_SHARE=0.92`
+    // 被退到 H2、`框内 0.18→0.82` —— 对表 IoU 0.94→0.874 全是它一个人赔的（92 张装机输入里
+    // 只有 4 张动，其中只有它换了支）。→ **分族是标定侧的事，不许改归属**，压到循环之后。
+    // 第二版 `cand/FamRefLate` 归属稳了（对表逐位不变、第十二闸 6/11→5/9、兼容性 57→58），
+    // 但 `残盘` 1480→1732 **全部来自 `com.example.appui` 一张**：它只有 1 个双峰格、自己的 `零`
+    // 20→20 一点没降，却多出 252 格出墨 255 的**实心**残盘。
+    // → **这一刀只有把地板真的降下来才付得起**：分完 p97 不降就整个退回。
+    val histBefore = s.hist.copyOf()
+    val nBefore = nGround
+    fun refit() {
+      propagateField(w, h, total, box, s, s.plate)
+      s.hist.fill(0)
+      nGround = 0
+      for (y in box.top until box.bottom) {
+        val row = y * w
+        for (x in box.left until box.right) {
+          val i = row + x
+          val cell = if (s.ref[i] >= 0) s.ref[i] else 0
+          s.dist[i] = departure(pixels[i], i, s).toShort()
+          s.beta[i] = s.fCov[cell].toShort()
+          s.gRefL[i] = s.fL[cell].toShort()
+          if (s.plate[i] != 0.toByte()) {
+            s.hist[departure(pixels[i], i, s, withCoverage = false).coerceAtMost(DBUCKETS - 1)]++
+            nGround++
+          }
+        }
+      }
+    }
+    if (bimodalSplit(pixels, w, box, g, s, s.plate) > 0) {
+      refit()
+      // **降得够多才留**：门槛用模型自己那把"最小可分辨的一格" `DEP_TOL_MIN`，不新造数。
+      // appui 分了之后 `零` 只从 20 降到 19（1 个单位），却多出 252 格出墨 255 的实心残盘 ——
+      // 付的比赚的多；知到 206→17、云闪付 253→35，才是真买到东西。
+      if (percentile(histBefore, nBefore, TOL_PCT) - percentile(s.hist, nGround, TOL_PCT) < DEP_TOL_MIN) {
+        // 退回要把**本格被覆盖掉的那个色**也还原 —— `bimodalSplit` 把低 L 那一族的中位写进了
+        // `fL[k]`，只清槽位等于留半个改动（第一版就这么漏了：转转的 `零` 51→**115** 反而更挤）。
+        // 原色不用另存：`fL[k]` 本来就是 [fitField] 从 `cellR/G/B[k]` 推出来的，按同一个式子算回去。
+        for (k in 0 until g * g) {
+          if (s.bimSlot[k] < 0) continue
+          val rgb = (0xff shl 24) or ((s.cellR[k].toInt() and 0xff) shl 16) or
+            ((s.cellG[k].toInt() and 0xff) shl 8) or (s.cellB[k].toInt() and 0xff)
+          s.fL[k] = labChannel(rgb, 0); s.fA[k] = labChannel(rgb, 1); s.fB[k] = labChannel(rgb, 2)
+          s.bimSlot[k] = -1
+        }
+        refit()
+      }
+    }
+
     // 出图：底按覆盖重算（实心板与自己比必然差 0，按颜色量它量到的都是噪声与拼底的中缝），
     // 而且只有**贴着墨**的那一圈才算数 —— 淡的像素要么是某条笔画的抗锯齿边，要么是背景的一部分，
     // 这两件事靠"离墨多远"分开，不靠再画一条绝对 alpha 线。（旧版在"透明底"那一支里用
@@ -4326,7 +4394,10 @@ internal object MonochromeMask {
         val i = row + x
         if (seed[i] == 0.toByte()) continue
         val cx = ((x - box.left) * g / bw).coerceAtMost(g - 1)
-        ref[i] = cy * g + cx
+        val k = cy * g + cx
+        // 双峰格（[bimodalSplit]）：按这一像素落在哪一峰，取那一族的槽；另一族在 [Scratch.bimSlot]。
+        val slot = s.bimSlot[k]
+        ref[i] = if (slot >= 0 && (s.labL[i].toInt() shr 6) >= s.bimMid[k]) slot else k
         q[tail++] = i
       }
     }
@@ -4848,6 +4919,100 @@ internal object MonochromeMask {
       s.fA[k] = labChannel(rgb, 1)
       s.fB[k] = labChannel(rgb, 2)
     }
+    // 分族参照**不在这里做**：那要等归属全部跑完（洪泛、吸缝、哪一支底赢都读 `dep`），
+    // 见 [fitGround] 末尾那一段。这里只负责把槽位清干净，免得上一遍（另一个假设）的槽
+    // 被这一遍的 `propagateField` 接着用。
+    for (k in 0 until cells) s.bimSlot[k] = -1
+  }
+
+  /**
+   * **双峰格：一格里的两种底颜色各给一个参照槽位**（2026-10-13）。
+   *
+   * 判据是 `MonochromeMask` 注释里留的那一句「只碰真双峰的格」：该格参照像素的**明度直方图**里
+   * 有两个峰（各 ≥10% 格、相距 ≥12 L\\*）、且两峰之间的**谷 ≤ 0.6×较低峰**。宽渐变是单峰、
+   * 谷 ≈ 1，一格都不动 —— 这正是 2026-10-01 那版（按 ΔE≤[SEAM_DIVERGE] 重取中位）面太宽的根。
+   * 语料实测（`_harness/FieldMixKt`）：62 张 3233 格里只有 **47 格（1.5%）** 落进这个集合。
+   *
+   * 低 L\\* 那一族留在原槽位 `k`，高 L\\* 那一族用额外槽位（下标 ≥ `cells`）；`propagateField`
+   * 按每个像素自己在哪一侧选槽。于是每格能**同时**代表两族，`零` 不再被两族之间的落差抬起
+   * （FieldMixKt 量到知到 `零` 206→17、云闪付 253→35、饿了么 131→48、易班 81→40）。
+   */
+  private fun bimodalSplit(pixels: IntArray, w: Int, box: Rect, g: Int, s: Scratch, seed: ByteArray): Int {
+    val cells = g * g
+    for (k in 0 until cells) { s.bimSlot[k] = -1; s.bimMid[k] = -1 }
+    val lh = IntArray(cells * 101)
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      val cy = ((y - box.top) * g / box.height()).coerceAtMost(g - 1)
+      for (x in box.left until box.right) {
+        val i = row + x
+        if (seed[i] == 0.toByte()) continue
+        if (Color.alpha(pixels[i]) < A_SOLID) continue
+        val cx = ((x - box.left) * g / box.width()).coerceAtMost(g - 1)
+        lh[(cy * g + cx) * 101 + (s.labL[i].toInt() shr 6).coerceIn(0, 100)]++
+      }
+    }
+    val pA = IntArray(cells); val pB = IntArray(cells)
+    var nBi = 0
+    for (k in 0 until cells) {
+      pA[k] = -1; pB[k] = -1
+      val n = s.cellN[k]
+      if (n < 64) continue
+      val at = k * 101
+      var p1 = 0
+      for (v in 0..100) if (lh[at + v] > lh[at + p1]) p1 = v
+      val minPeak = maxOf(4, n / 10)
+      if (lh[at + p1] < minPeak) continue
+      var valley = 1.0; var b2 = -1
+      for (p2 in 0..100) {
+        if (kotlin.math.abs(p2 - p1) < 12 || lh[at + p2] < minPeak) continue
+        var dip = Int.MAX_VALUE
+        for (t in minOf(p1, p2)..maxOf(p1, p2)) if (lh[at + t] < dip) dip = lh[at + t]
+        val r = dip.toDouble() / minOf(lh[at + p1], lh[at + p2])
+        if (r < valley) { valley = r; b2 = p2 }
+      }
+      if (valley <= 0.6) { pA[k] = p1; pB[k] = b2; nBi++ }
+    }
+    if (nBi == 0) return 0
+    val hi = IntArray(cells * 2 * 768)
+    val hc = IntArray(cells * 2)
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      val cy = ((y - box.top) * g / box.height()).coerceAtMost(g - 1)
+      for (x in box.left until box.right) {
+        val i = row + x
+        if (seed[i] == 0.toByte()) continue
+        if (Color.alpha(pixels[i]) < A_SOLID) continue
+        val cx = ((x - box.left) * g / box.width()).coerceAtMost(g - 1)
+        val k = cy * g + cx
+        if (pA[k] < 0) continue
+        val l = s.labL[i].toInt() shr 6
+        val slot = if (kotlin.math.abs(l - pA[k]) <= kotlin.math.abs(l - pB[k])) 0 else 1
+        val at = (k * 2 + slot) * 768
+        hi[at + ((pixels[i] shr 16) and 0xff)]++
+        hi[at + 256 + ((pixels[i] shr 8) and 0xff)]++
+        hi[at + 512 + (pixels[i] and 0xff)]++
+        hc[k * 2 + slot]++
+      }
+    }
+    var next = cells
+    for (k in 0 until cells) {
+      if (pA[k] < 0) continue
+      val lowSlot = if (pA[k] <= pB[k]) 0 else 1
+      val nLow = hc[k * 2 + lowSlot]; val nHigh = hc[k * 2 + 1 - lowSlot]
+      val minSide = maxOf(16, s.cellN[k] / 10)
+      if (nLow < minSide || nHigh < minSide) continue
+      val at0 = (k * 2 + lowSlot) * 768; val at1 = (k * 2 + 1 - lowSlot) * 768
+      val rgb0 = (0xff shl 24) or (median(hi, at0, nLow) shl 16) or (median(hi, at0 + 256, nLow) shl 8) or median(hi, at0 + 512, nLow)
+      val rgb1 = (0xff shl 24) or (median(hi, at1, nHigh) shl 16) or (median(hi, at1 + 256, nHigh) shl 8) or median(hi, at1 + 512, nHigh)
+      s.fL[k] = labChannel(rgb0, 0); s.fA[k] = labChannel(rgb0, 1); s.fB[k] = labChannel(rgb0, 2)
+      val ex = next++
+      s.fL[ex] = labChannel(rgb1, 0); s.fA[ex] = labChannel(rgb1, 1); s.fB[ex] = labChannel(rgb1, 2)
+      s.fCov[ex] = s.fCov[k]; s.fTop[ex] = s.fTop[k]
+      s.bimSlot[k] = ex
+      s.bimMid[k] = (minOf(pA[k], pB[k]) + maxOf(pA[k], pB[k]) + 1) / 2
+    }
+    return next - cells
   }
 
   /** 没有底像素的格子（图形整个盖住那一格）由邻格平均补上，迭代到不再有新增。 */
