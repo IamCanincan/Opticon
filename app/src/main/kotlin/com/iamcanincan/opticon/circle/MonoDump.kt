@@ -45,6 +45,9 @@ internal object MonoDump {
   /** 点名的图标被拦下时每个标签报一次：这一条就是"为什么它一张都没回来"的答案。 */
   private val dropped = HashSet<String>()
 
+  /** 被**去重**挡下的那些，每个去重键报一次（不然桌面每滚一屏就多一行，把日志本身挤掉）。 */
+  private val dupSeen = HashSet<Long>()
+
   /**
    * 只留给**点名名单**的那一块预算（KB）。
    *
@@ -188,7 +191,17 @@ internal object MonoDump {
     // 于是"设备与判据台对不上"这类问题根本没法判（见 [MonochromeSynth] 里 `variant` 那一段）。
     // 只对名单里的包放宽：多一种尺寸就多一张 PNG，全放开会把预算吃光。
     val key = if (watched) dedupeKey(pixels, w, h, label) else signature(pixels, w, h)
-    if (!seen.add(key)) return
+    if (!seen.add(key)) {
+      // ⚠ **这一条 else 是补的，原来这里是一个静默 `return`。** 于是"这个图标一张都没带回来"和
+      //   "它压根没被渲染过"在日志里长得一模一样 —— 本仓**第四次**撞上"提前 return 不留痕"
+      //   （前三次：12 处 `if (hooked > 0)` 没有 else、装钩期解析失败不报名字、`dump 不抓` 那条）。
+      //   2026-10-12 那一轮：translate 有 7 次渲染、`Mono: dump` 一行都没有、连"不抓"也没报 ——
+      //   就是被这一行吞的（第一次带过之后，后面每次都被"已经见过"悄悄挡掉）。
+      // 只给点名的报、而且每个去重键只报一次：这条通道和全设备的 logd 抢地方。
+      if (watched && dupSeen.add(key))
+        Log.d(TAG, "Mono: dump 跳过（同一种尺寸已带过）$label")
+      return
+    }
     sent++
     val n = sent
     runCatching {
