@@ -1529,6 +1529,57 @@ internal object MonochromeMask {
         }
       }
     }
+    // ── 同色族对账：一种源色被"底/墨"这一刀切成两半时，**多数那一半说了算** ──
+    // 主人从 2026-10-06 报到现在的那句「"不"没了」就是这个形状：转转那一张里 `#76212a` 共 6766 格，
+    // **79% 交 220、21%（1450 格，正好是「不」那一个字）被判成底** → 屏幕上那个字整个不见了。
+    // ⚠ 分组**必须按精确源色，不许按连通**：本仓已经三次量到"逐格相连会顺抗锯齿爬进字里"
+    //   （`GreyFar` / `OpenGrey` / 自带底那条），只有"同色"这条边不爬。
+    // ⚠ 只往"多数是墨"的方向抬，**不往"多数是底"的方向压**：后者会把合法的强调色擦掉，
+    //   而 `#ffffff 盘91% / 墨9%（墨侧本来就交 0）` 那种在门槛外，方向也正好相反（12306 那一族是标定那头的事）。
+    // 三个数都进日志（`族抬=<抬的格数>/<开火的族数>`）：这一刀的成败必须当场看得见。
+    val famMinN = 300          // 一块至少 300 格（≈画布 0.2%）才配叫"一个部分"，与 DustKt 的"看得见"同量级
+    val famInkPct = 60         // 这一族里交付了墨的至少占 60% —— 多数是墨，少数被判成底才是病
+    val famPlatePct = 35       // 而少数那一头不许超过 35%：再大就是**两种用途**，不是判错
+    var famLift = 0; var famFires = 0
+    run {
+      val cnt = HashMap<Int, Int>()
+      for (i in 0 until total) {
+        val p = pixels[i]
+        if ((p ushr 24) and 0xff != 255) continue        // 半透明与空气都不参加（AA 自成一族，别爬进去）
+        val key = p and 0xffffff
+        cnt[key] = (cnt[key] ?: 0) + 1
+      }
+      val big = HashSet<Int>()
+      for ((key, c) in cnt) if (c >= famMinN) big.add(key)
+      if (big.isNotEmpty()) {
+        val inkN = HashMap<Int, Int>(); val inkSum = HashMap<Int, Int>(); val plateN = HashMap<Int, Int>()
+        for (i in 0 until total) {
+          val p = pixels[i]
+          if ((p ushr 24) and 0xff != 255) continue
+          val key = p and 0xffffff
+          if (key !in big) continue
+          val a = (out[i] ushr 24) and 0xff
+          if (a >= 128) { inkN[key] = (inkN[key] ?: 0) + 1; inkSum[key] = (inkSum[key] ?: 0) + a }
+          else plateN[key] = (plateN[key] ?: 0) + 1
+        }
+        val tone = HashMap<Int, Int>()
+        for (key in big) {
+          val n = cnt[key] ?: 0; val ink = inkN[key] ?: 0; val plate = plateN[key] ?: 0
+          if (n < famMinN || ink * 100 < n * famInkPct || plate * 100 > n * famPlatePct) continue
+          if (plate == 0) continue        // 少数那一头是 0 就不算"切开"，别把它记成开火
+          tone[key] = (inkSum[key] ?: 0) / ink.coerceAtLeast(1)
+          famFires++
+        }
+        if (tone.isNotEmpty())
+          for (i in 0 until total) {
+            val p = pixels[i]
+            if ((p ushr 24) and 0xff != 255) continue
+            val t = tone[p and 0xffffff] ?: continue
+            if (((out[i] ushr 24) and 0xff) >= 128) continue
+            out[i] = (t shl 24) or 0x00FFFFFF; famLift++
+          }
+      }
+    }
     val sep = separation(out, w, h, box, s)
     val st = measure(out, w, h, box, s, bridge = colourDriven, despeckle = colourDriven)
     val fill = st.kept.toFloat() / boxArea
@@ -1584,7 +1635,9 @@ internal object MonochromeMask {
           // `盘候` = 有墨且落在盘色里的格数（**-1 = 根本没走到这一步**：没另一层，或那块层不够"整块盘"）；
           // `盘层` = 有没有拿到背景层。三个数一起看才分得开"没拿到层 / 拿到了不认它是盘 /
           // 认了但没有墨 / 有墨但被『不许擦空』挡住"这四种不响。
-          " 盘刀=$plateCut 盘候=$plateCand 盘层=${if (under == null) 0 else 1} 反相=$plateInv/$plateHole",
+          " 盘刀=$plateCut 盘候=$plateCand 盘层=${if (under == null) 0 else 1} 反相=$plateInv/$plateHole" +
+          // 同色族对账抬回了几格 / 几族开火（新列一律加在**整串最末尾**，前面列位一个都不动）
+          " 族抬=$famLift/$famFires",
       ground.hyp,
       s.h0why,
       s.veto
