@@ -2421,10 +2421,6 @@ internal object MonochromeMask {
     val sumA = LongArray(SEP_BUCKETS)
     val sumB = LongArray(SEP_BUCKETS)
     val sumDep = LongArray(SEP_BUCKETS)
-    // 这一块**有没有碰到内容框的外沿**（2026-10-13 上线）。被围住的洞在框里面，永远碰不到 ——
-    //   这是"实心块"与"洞"之间唯一不用新造判据的几何事实（FadeTop 那版只按 dep 抬手，
-    //   把 SelfTest「镂空刻出来了」填成洞=255，一票否决）。
-    val edgeHit = BooleanArray(SEP_BUCKETS)
     var ink = 0
     for (y in box.top until box.bottom) {
       val row = y * w
@@ -2435,7 +2431,6 @@ internal object MonochromeMask {
         if (a == 0) continue
         val k = bucketOf(i, s)
         cnt[k]++; sum[k] += a; ink++
-        if (x == box.left || x == box.right - 1 || y == box.top || y == box.bottom - 1) edgeHit[k] = true
         sumL[k] += s.labL[i].toInt(); sumA[k] += s.labA[i].toInt(); sumB[k] += s.labB[i].toInt()
         sumDep[k] += s.dist[i].toInt() and 0xffff
       }
@@ -2491,17 +2486,10 @@ internal object MonochromeMask {
       //   硬拉的结果就是沿着一根线出现四段台阶（`2/6(31,39,230,231,253,255)` → `4/6(27,34,135,165,225,253)`，
       //   主人点名的"线条整条消失/断开"）。而易班熊的毛/嘴/衣是**离散的平色**（相邻差 54~82），
       //   该拉的照拉 —— 它的 `6/6` 与五官一条都不动。
-      //   ⚠ 桶是**按源色**分的、不按区域：洞的颜色若与某个碰外沿的元素同色，这个桶也算"碰到外沿"，
-      //   那一格照样会被抬。所以这条只是**必要**条件，不是充分条件 —— 跑完必须看性质台那条红还在不在。
-      val lift = j > 0 && depMean[idx] >= SEP_SINK_DEP && edgeHit[pick[idx]]
       target[idx] = if (j == 0) 255
-      else if (lift) 255
       else if (apart) minOf(mean[idx], maxOf(prev - SEP_MIN_GAP, fl)).coerceAtLeast(0)
       else minOf(mean[idx], prev)
-      // 抬的那一块**不去当后面那些块的天花板**：`prev` 仍按它原来的位置走（2026-10-13）。
-      //   FadeTop2/3 的账证明：易班丢的那 2 档不是被抬的那块丢的，是它**下游**被这条 `prev` 链重排掉的。
-      //   所以抬 = 只改这一块，不许顺带把别人往下拽。（j==0 那一支不动 —— 那是仓里原有行为。）
-      prev = if (lift) mean[idx] else target[idx]
+      prev = target[idx]
     }
     val shift = HashMap<Int, Int>(pick.size)
     for (idx in pick.indices) {
