@@ -5869,7 +5869,9 @@ MIT —— 见 [LICENSE](LICENSE)。
     ⚠  是这一刀最贵的部分：没有它，易班丢 **2** 档而不是 1 档 —— **动发档 = 动一条链，"只改这一块"必须让 `prev` 不传染才成立。**
     （`FadeTop3` 那道"该块自己 mean≥220"的条件一张都没滤掉，正好证伪了我最初的猜想。）
   - ✅ **真 Android 编译过 + 重装包已打**：`./gradlew --offline assembleRelease` → `app-release.apk`
-    md5 **`d508baa9`**（收刀前那份是 `e91adfc7`，两条不同 = 改动确实在产物里）。`versionCode` 仍 3 / 1.0.3，**没升版本**。
+    md5 **`0b83b455`** —— `assembleRelease` 在提交 `30562e2` **之后**重打，与仓里源码逐字对应。
+    （收刀前那份是 `e91adfc7`；中间还有一份 `d508baa9` 是清理注释之前的构建 ——
+    **三条不同 = 改动确实在产物里**，别拿旧 md5 去核新包。）`versionCode` 仍 3 / 1.0.3，**没升版本**。
     上屏：`adb install -r app/build/outputs/apk/release/app-release.apk` 然后点图标页「**清图标缓存并重启桌面**」
     （换模块 + 重启桌面**不会**重压 `app_icons.db`，不点那一下看到的还是旧位图）。
   - 📌 **仍然挂着的**：① 第十四闸还有 **16 张 ≥5%** 的灰没解决，其中 qiin 81% / audioplayer 45% 在**满幅那一支**
