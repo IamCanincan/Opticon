@@ -495,6 +495,21 @@ internal object MonochromeMask {
     var vote = ByteArray(0)
     /** [flatVote] 的三笔账：抹了多少格、抬了多少格、动了几块（只为进日志）。 */
     var voteErase = 0; var voteRaise = 0; var voteHits = 0
+    /**
+     * 【SepTone】要挪的那几块：**源色桶号**（-1 = 空位）与那一块要加的浓度增量，最多 [SEP_MAX_PARTS] 条。
+     *
+     * ⚠ **这里是"决定"，不是"施加"** —— [assignLevels] 只把它们写下来，真正改像素的是
+     * [build] 里选支之后的 [separateAfterPick]。为什么非得拆成两步：发档的产出正是**选支的输入**
+     * （[build] 把两条支各交付一遍、再由 [picksRef] 挑一条），在 [assignLevels] 里改一块的浓度
+     * 就可能把**另一张图**搬去另一支 —— 前四轮四次都栽在这里，见 [separateAfterPick] 的类文档。
+     * 每次 [assignLevels] 开头归零（满幅那一支压根不跑它，不归零会拿上一张的读数开火）。
+     */
+    var sepBucket = IntArray(SEP_MAX_PARTS) { -1 }
+    var sepDelta = IntArray(SEP_MAX_PARTS)
+    var sepN = 0
+    /** [applySepTone] 实际挪了几格 —— 只为进日志（0 = 没动，与"没走到"要分得开），
+     *  以及 [build] 用来判断"要不要多算一遍参照给选支"。 */
+    var sepApplied = 0
     /** H2 那一圈轮廓到自己中位色的 p97 ΔE —— 「这一圈是不是一种颜色」（见 [outlineFamilies]）。 */
     var ringSpread = 0
     var hist = IntArray(DBUCKETS)
@@ -692,8 +707,58 @@ internal object MonochromeMask {
     under: IntArray? = null): Output {
     val ramp = buildOnce(pixels, w, h, plateIsLayer, false, under)
     if (!ramp.report.contains("调=1")) return ramp          // 本来就走参照那一支，不必算第二遍
-    val ref = buildOnce(pixels, w, h, plateIsLayer, true, under)
-    return if (picksRef(w, h, ramp, ref)) ref else ramp
+    val s = checkNotNull(pool.get())
+    // 【SepTone】先按**没挪过**的参照交付一遍（`sepOff`）—— 那一遍的成品与上一轮（这一刀还不存在时）
+    //   逐字节相同，所以"选支"这一件事与改动前**完全同口径**。这一刀真开火、且选中的正是参照那一支，
+    //   才再算一遍带挪档的来交付。
+    //   ⚠ 为什么不把"挪之前的读数"顺手记下来当捷径：`softAndInk` 量的是**成品**，而 `measure` 的
+    //   bridge/despeckle 也会改这张掩码（钉钉实测淡膜 1%→0%，恰好卡在 `r < s` 那条线上）——
+    //   在它之前记下的数是**另一个口径**，2026-10-13 我自己就这么踩了一次（钉钉被搬去满幅）。
+    //   ⚠ 代价：真开火的那几张多算一遍参照（`rec_model` 62 张里 6 张开火、2 张最终交付）。
+    val ref0 = buildOnce(pixels, w, h, plateIsLayer, true, under, sepOff = true)
+    val useRef = picksRef(w, h, ramp, ref0)
+    if (!useRef || s.sepN <= 0) return if (useRef) ref0 else ramp
+    return buildOnce(pixels, w, h, plateIsLayer, true, under)
+  }
+
+  /**
+   * 【SepTone】把"源色差得开、交付却撞成同一浓度"的那一块挪开 —— **在 [buildOnce] 的最后一步施加**。
+   *
+   * ## 为什么必须在这里，不能像前四轮那样放进 [assignLevels]
+   * [build] 的流程是"两条支各交付一遍、再由 [picksRef] 挑一条"，所以**发档的产出正是选支的输入**。
+   * 在 [assignLevels] 里动一块的浓度，[picksRef] 的比较结果就可能翻 —— 于是**另一张图**换了支。
+   * 前四轮（抬顶 / 撞浓度就把两块拉开 / 只挪小的那一块 / 加"面积均等就不动"守卫）**四次都栽在
+   * 同一个地方**，第五轮才指名到人：`com.sina.weibo_logo` 在 256 与 320 两档都从参照跳到满幅，
+   * 档位整条换掉（`5/6(3,147,195,225,255,255)` → `4/6(0,32,104,246,255,255)`）—— 屏幕上另一个样子。
+   *
+   * ## 落点在"最后一步"的意思是
+   * 它落在 `separation` / `measure` **之前**、在 [Scratch] 上那几行诊断（`分档` / `浓度` / `字均` /
+   * `淡` …）**之后**，所以那些数量的都是**交出去那一张**（判据与产物同口径）。
+   * 选支那一边不受影响，由 [build] 多算一遍参照来保证 —— 见那里的说明。
+   *
+   * ## 施加的方式
+   * 按 [Scratch.sepBucket] 给出的**源色桶**逐格加 [Scratch.sepDelta]（与 [assignLevels] 末尾那次
+   * 整块平移同一把尺、同一套过滤：非盘、源像素实心、本来就有墨）。**只加增量、不重算浓度** ——
+   * 块内部的渐变与抗锯齿原样保留，不会画成硬边色块。
+   *
+   * @return 这一刀实际改了几格（0 = 没动，与"压根没走到"要分得开）。
+   */
+  private fun applySepTone(out: IntArray, pixels: IntArray, s: Scratch): Int {
+    if (s.sepN <= 0) return 0
+    var n = 0
+    for (i in out.indices) {
+      if (s.plate[i] != 0.toByte() || Color.alpha(pixels[i]) < A_SOLID) continue
+      val a = out[i] ushr 24
+      if (a == 0) continue
+      val k = bucketOf(i, s)
+      var d = 0
+      for (q in 0 until s.sepN) if (s.sepBucket[q] == k) { d = s.sepDelta[q]; break }
+      if (d == 0) continue
+      val v = (a + d).coerceIn(0, 255)
+      out[i] = if (v == 0) 0 else (v shl 24) or 0x00FFFFFF
+      n++
+    }
+    return n
   }
 
   /** 淡膜占内切框%、交出去的墨占内切框% —— 与判据台 FilmAreaKt **同一把尺**（同一个分母）。 */
@@ -775,7 +840,7 @@ internal object MonochromeMask {
    *  那块平色"。是 → 那一格是盘，不许交成墨。见下面 `盘刀` 那一刀。
    */
   private fun buildOnce(pixels: IntArray, w: Int, h: Int, plateIsLayer: Boolean,
-    forceRef: Boolean, under: IntArray? = null
+    forceRef: Boolean, under: IntArray? = null, sepOff: Boolean = false
   ): Output {
     val total = w * h
     if (total <= 0) return Output(IntArray(0), 0f, 0f, 0f, 0, 0f, 0f, "尺寸非法 → 空层")
@@ -787,6 +852,11 @@ internal object MonochromeMask {
     val s = checkNotNull(pool.get()) { "withInitial 建的 ThreadLocal 不会给回 null" }
     s.grid = g
     s.ensure(total, g * g)
+    // 【SepTone】这一张的挪档结论从这里清零。**归零必须在这一层，不能在 [assignLevels] 里**：
+    //   满幅那一支压根不跑 `assignLevels`，而它和参照那一支共用同一个 [Scratch] —— 不清零的话
+    //   满幅那一支会拿着**上一张图**的块号去改这一张的像素（`applySepTone` 里那次 `sepN <= 0` 判断
+    //   就成了摆设）。见 [applySepTone]。
+    s.sepN = 0; s.sepApplied = 0
 
     // 0) 每个像素的 Lab 只算一次：后面每一轮洪泛、每一次距离都只是查表 + 一次开方。
     for (i in 0 until total) {
@@ -1200,6 +1270,8 @@ internal object MonochromeMask {
     //     代价是 `字均净<200` 从 57 涨到 72（弄坏 16 张、修好 1 张）—— 那是他最早点名的
     //     「颜色偏淡」，[LEVEL_FLOOR] 那段已经表过态：细腻与实心冲突时先不伤人。所以不取。
     if (tonal == null) assignLevels(out, pixels, w, box, s)
+    // ⚠ `sepOff` 那一遍**不把 `sepN` 清掉** —— [build] 要靠它判断"这一刀会不会开火"。
+    //   真正拦住施加的是下面 `applySepTone` 那个 `!sepOff`（见那里的注释）。
     // 4.6) 一条连续的描边被颜色渐变切成几截 —— 按**拓扑**把它接回去（见 [propagateBands]）。
     //   ⚠ **必须放在发档之后**：放之前它会改掉色桶的均值，`assignLevels` 于是重排、整桶平移量跟着变，
     //   结果"接一条线"这件事被放大成"改一整张的台阶"（易班上看跳≥30 的连续像素对 0%→1%、p99 25→52，
@@ -1594,6 +1666,10 @@ internal object MonochromeMask {
           }
       }
     }
+    // ── 【SepTone】最后一步：把"源色差得开、交付却撞成同一浓度"的那一块挪开（见 [applySepTone]）。
+    //   ⚠ 落在 `separation` / `measure` **之前**，那几行诊断才是**交出去那一张**的数（判据与产物
+    //   同口径）；`sepOff` 那一遍不施加（它就是要一张没挪过的成品给 [build] 比）。
+    if (tonal == null && !sepOff) s.sepApplied = applySepTone(out, pixels, s)
     val sep = separation(out, w, h, box, s)
     val st = measure(out, w, h, box, s, bridge = colourDriven, despeckle = colourDriven)
     val fill = st.kept.toFloat() / boxArea
@@ -1651,7 +1727,11 @@ internal object MonochromeMask {
           // 认了但没有墨 / 有墨但被『不许擦空』挡住"这四种不响。
           " 盘刀=$plateCut 盘候=$plateCand 盘层=${if (under == null) 0 else 1} 反相=$plateInv/$plateHole" +
           // 同色族对账抬回了几格 / 几族开火（新列一律加在**整串最末尾**，前面列位一个都不动）
-          " 族抬=$famLift/$famFires",
+          " 族抬=$famLift/$famFires" +
+          // 【SepTone】**加在整串最末尾**：这一刀挪了几格（见 [applySepTone]）。
+          // ⚠ 满幅那一支**压根不走这一刀**，所以那里一个字符都不加 —— 与本仓那条
+          //   「一个不跑的步骤不许报通过」同一条规矩：不报 ≠ 报 0。
+          (if (tonal == null) " 挪档=${s.sepApplied}" else ""),
       ground.hyp,
       s.h0why,
       s.veto
@@ -2089,6 +2169,43 @@ internal object MonochromeMask {
    */
   private const val SEP_SINK_DEP = 224
 
+  /**
+   * 【SepTone】"两块**平色、源色离得远、都落在中间带**，交付却撞成几乎同一个浓度"—— 把小的那块挪开。
+   *
+   * 来源：主人 2026-10-13 报「易班的青带和熊头粘在一起」。病不在"边上没台阶"，在**两个分离的
+   * 物体被分到同一浓度**。判据在真机语料上量过：不带"源色离得远"命中 50/60 张（`xbox` 那种
+   * 250~250 本来就该实心）；加上它只命中 **3 张 5 对**（易班 135~166 / 166~199、sgame 166~196、
+   * bili 179~204 / 192~204）。
+   *
+   * ⚠ **前三轮的坑，一个常数都不许改回去**：
+   *  · v1「挪到与其它块最小距离最大的位置」= **全图重排**，易班当场变成 `83/146/160/223/251/255`，
+   *    气泡与黑字都被拖着走。这一版约束住：**只挪一块、只挪到合法的位置、没有合法位置就整张不动**。
+   *  · v2 挪"面积小的那一块"，而易班的**黑字**只有 1923 格、比熊(12658)小 → 被判成该让路的，
+   *    `195→75` 交成浅灰（主人报的「字变浅」）。真正分得开的是**源色**：黑字 L\\*=27、青带 L\\*=86.5。
+   *  · v3「几块面积均等 = 同一物体的分格」这条守卫**留用**（见 [SEP_TONE_EVEN]），但见下一条：
+   *    它挡得住 photos 的五片扇叶，挡不住微博换支 —— 因为**落点错了**，不在这一层。
+   */
+  /** 撞浓度判据：两块浓度差 ≤ 这个数才算"撞"。 */
+  private const val SEP_TONE_COLLIDE = 40
+  /** 只动**中间带**的块 —— 两头（近黑/近白）本来就该实心，那是"该实心的东西"，不是"撞了"。 */
+  private const val SEP_TONE_MID_LO = 100
+  private const val SEP_TONE_MID_HI = 210
+  /** 两块**源色**至少要差这么多个 ΔE 才许动 —— 低于它的是同一条坡的切片（渐变路过的桶），
+   *  动了就是"一根笔画被切成几段灰"（2026-10-12 明令不许碰的那一类）。 */
+  private const val SEP_TONE_FAR = 60
+  /** 挪开之后要与**伙伴**隔多远。 */
+  private const val SEP_TONE_SEP = 55
+  /** 源色 L\\* 低于它的块**不许挪** —— 那是「该黑的东西」（字、标、深色主体），挪浅了就是
+   *  主人报过的「字变浅」（v2 就是这么坏的）。 */
+  private const val SEP_TONE_DARK = 40
+  /** 能挪到的最低浓度（宁可并列，也不许挪到看不清）。 */
+  private const val SEP_TONE_MIN = 60
+  /** 几块**面积均等**（最大/最小 < 2）＝ 同一物体的分格（photos 的五片扇叶
+   *  1864/1818/1449/1413/1241/1158）→ **整张不动**：把平等设计涂成深浅不一正是 v3 把 photos
+   *  弄坏的方式（灰 +4.17pp、IoU 0.369→0.314）。面积**悬殊**（易班 12658 vs 1230 = 10 倍）
+   *  ＝ 主体 + 装饰，那才是该拉开的。 */
+  private const val SEP_TONE_EVEN = 2
+
 
   /**
    * 把画面按**源色**归成块（一块 = 图上的一个部分），返回每块的平均值，按值升序。
@@ -2413,6 +2530,10 @@ internal object MonochromeMask {
    *   接在后面的 [stretchMark] 会把单色字形重新抬实，两层是配套的，不是互相打脸。
    */
   private fun assignLevels(out: IntArray, pixels: IntArray, w: Int, box: Rect, s: Scratch) {
+    // ⚠ 挪档那两笔账的归零在 [buildOnce] 开头（满幅那一支不跑这里，清不到它）——
+    //   这里再清一次是**防御性**的：这一条只在 `tonal == null` 时被调用，而调用它的那一遍
+    //   刚刚清过，两次之间没有任何东西写过它。
+    s.sepN = 0
     val cnt = IntArray(SEP_BUCKETS)
     val sum = LongArray(SEP_BUCKETS)
     // 每块的**源色**均值（×64 的 Lab）。发档往下让一格的理由只能是"这两块在源图上真的差得开"，
@@ -2491,6 +2612,9 @@ internal object MonochromeMask {
       else minOf(mean[idx], prev)
       prev = target[idx]
     }
+    // 【SepTone】两块**平色、源色离得远、都落在中间带**却拿到几乎同一浓度 → 记下"小的那块该挪到哪"。
+    //   ⚠ **这里一个字都不改 `target`** —— 改了就动到 [picksRef] 的比较，前四轮全死在那上面。
+    decideSepTone(target, cnt, pick, colL, colA, colB, s)
     val shift = HashMap<Int, Int>(pick.size)
     for (idx in pick.indices) {
       val d = target[idx] - mean[idx]
@@ -2508,6 +2632,64 @@ internal object MonochromeMask {
         val v = (a + d).coerceIn(0, 255)
         out[i] = if (v == 0) 0 else (v shl 24) or 0x00FFFFFF
       }
+    }
+  }
+
+  /**
+   * 【SepTone】**决定**"要挪哪几块、各挪到哪" —— 只把结论写进 [Scratch.sepBucket] / [Scratch.sepDelta]，
+   * **一个像素都不改**（改的地方是 [build] 里选支之后的 [separateAfterPick]）。
+   *
+   * 规则（每一条都是前几轮实测换来的，见 [SEP_TONE_COLLIDE] 那一段的"一个常数都不许改回去"）：
+   *  1. 几块面积**均等**（最大/最小 < [SEP_TONE_EVEN]）＝ 同一物体的分格 → 整张不动；
+   *  2. 找一对浓度差 ≤ [SEP_TONE_COLLIDE]、两块都在 [SEP_TONE_MID_LO]..[SEP_TONE_MID_HI] 之间、
+   *     且**源色** ΔE ≥ [SEP_TONE_FAR] 的块；
+   *  3. 挪**面积小**的那一块（主体别动），但它的**源色 L\\*** 必须 ≥ [SEP_TONE_DARK]（深色是字/标）；
+   *  4. 落点 = **改动最小**的那个合法值：与伙伴隔 ≥ [SEP_TONE_SEP]、与其它每一块都隔
+   *     ≥ [SEP_MIN_GAP]、不低于 [SEP_TONE_MIN]。**没有合法位置就整张不动**（v1 的坑：全图重排）。
+   */
+  private fun decideSepTone(
+    target: IntArray, cnt: IntArray, pick: List<Int>,
+    colL: IntArray, colA: IntArray, colB: IntArray, s: Scratch
+  ) {
+    val n = pick.size
+    val tone = IntArray(n) { target[it] }
+    val area = IntArray(n) { cnt[pick[it]] }
+    val aMax = area.max(); val aMin = area.min()
+    if (aMin <= 0 || aMax < aMin * SEP_TONE_EVEN) return
+    if (System.getenv("SEP_DBG") != null) {
+      println("[dbg] tone0=" + tone.joinToString(",") + "  area=" + area.joinToString(","))
+      // ⚠ **`Locale.ROOT` 不能省** —— 少它 lint 的 `DefaultLocale` 就会在 sarif 里多出一条，
+      //   而"results 相对 HEAD 不新增"是本项目的验收口径之一（埋点/诊断代码一样算代码）。
+      for (q in 0 until n) println(
+        String.format(Locale.ROOT, "[dbg块] area=%6d tone=%3d 源色 L=%.1f a=%.1f b=%.1f",
+          area[q], tone[q], colL[q] / 64.0, colA[q] / 64.0, colB[q] / 64.0))
+    }
+    fun labD(i: Int, j: Int) = deltaE(colL[i], colA[i], colB[i], colL[j], colA[j], colB[j]) shr 6
+    for (i in 0 until n) for (j in i + 1 until n) {
+      if (Math.abs(tone[i] - tone[j]) > SEP_TONE_COLLIDE) continue
+      if (tone[i] < SEP_TONE_MID_LO || tone[i] > SEP_TONE_MID_HI) continue
+      if (tone[j] < SEP_TONE_MID_LO || tone[j] > SEP_TONE_MID_HI) continue
+      if (labD(i, j) < SEP_TONE_FAR) continue
+      val k = if (area[i] <= area[j]) i else j          // 挪小的那一块（主体别动）
+      if (colL[k] shr 6 < SEP_TONE_DARK) continue        // 深色 = 字/标，挪浅了就是「字变浅」
+      val other = if (k == i) j else i
+      var best = -1; var bestD = Int.MAX_VALUE
+      for (v in SEP_TONE_MIN..255) {
+        if (Math.abs(v - tone[other]) < SEP_TONE_SEP) continue
+        var ok = true
+        for (t in 0 until n) if (t != k && Math.abs(v - tone[t]) < SEP_MIN_GAP) { ok = false; break }
+        if (!ok) continue
+        val d = Math.abs(v - tone[k])                    // 取**改动最小**的那个合法位置
+        if (d < bestD) { bestD = d; best = v }
+      }
+      if (best < 0 || best == tone[k]) continue
+      if (s.sepN < s.sepBucket.size) {
+        s.sepBucket[s.sepN] = pick[k]; s.sepDelta[s.sepN] = best - tone[k]; s.sepN++
+      }
+      tone[k] = best                                     // 后续的配对按**挪完**的位置算
+      if (System.getenv("SEP_DBG") != null) println(
+        "[dbg] 挪 桶=" + pick[k] + " " + tone[k] + " （伙伴 " + tone[other] +
+          "，源色 ΔE=" + labD(i, j) + "，面积 " + area[k] + "/" + area[other] + "）")
     }
   }
 
