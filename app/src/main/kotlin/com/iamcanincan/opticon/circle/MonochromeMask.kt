@@ -2645,7 +2645,9 @@ internal object MonochromeMask {
    *     且**源色** ΔE ≥ [SEP_TONE_FAR] 的块；
    *  3. 挪**面积小**的那一块（主体别动），但它的**源色 L\\*** 必须 ≥ [SEP_TONE_DARK]（深色是字/标）；
    *  4. 落点 = **改动最小**的那个合法值：与伙伴隔 ≥ [SEP_TONE_SEP]、与其它每一块都隔
-   *     ≥ [SEP_MIN_GAP]、不低于 [SEP_TONE_MIN]。**没有合法位置就整张不动**（v1 的坑：全图重排）。
+   *     ≥ [SEP_MIN_GAP]、**只许往淡、且不低于恒底 [LEVEL_FLOOR_MIN]**
+   *     （[SEP_TONE_MIN] 不再是下界——跌破实心线会让带内亮尾浮成深棱，见 [decideSepTone] 里的
+   *     「不跌破实心线」注）。**没有合法位置就整张不动**（v1 的坑：全图重排）。
    */
   private fun decideSepTone(
     target: IntArray, cnt: IntArray, pick: List<Int>,
@@ -2675,6 +2677,13 @@ internal object MonochromeMask {
       val other = if (k == i) j else i
       var best = -1; var bestD = Int.MAX_VALUE
       for (v in SEP_TONE_MIN..255) {
+        // 【C：不跌破实心线】易班青带被推到 105（<[LEVEL_FLOOR_MIN]）后，带内亮尾(176~181，同色不同阶)
+        //   仍浮在线以上，于是"浅带压深棱"= 主人圈出的疙瘩。恒底 [LEVEL_FLOOR_MIN] 正是"再淡也不能
+        //   淡过这条"。
+        // ⚠ 光有下限会**反向**：伙伴 165 + [SEP_TONE_SEP]55 把合法落点拱到 ≥220（比熊身还深），
+        //   yiban 反而更糟。故连带钉方向 —— 只许往淡了挪（分开=让小的那块淡下去），不许加深。
+        if (v < LEVEL_FLOOR_MIN) continue
+        if (v > tone[k]) continue
         if (Math.abs(v - tone[other]) < SEP_TONE_SEP) continue
         var ok = true
         for (t in 0 until n) if (t != k && Math.abs(v - tone[t]) < SEP_MIN_GAP) { ok = false; break }
