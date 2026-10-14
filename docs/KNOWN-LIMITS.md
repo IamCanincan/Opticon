@@ -289,5 +289,9 @@
   ⚠ 这台桌面上另一条同样被读数否掉的是**并行化合成**（1894 次请求全在同一条加载线程上）。
   两条都不是"没试"，是**量到零**。
   **How to apply:** 换一台桌面若要重开，先跑 `_harness/_statekey.cjs <日志>` 看**共享率** —— 那一层要省的
-  是"同一个 state 被问了多次"，只有真复用 state 的桌面才有钱；而且**必须让内容键兜底**
-  （state 相同而像素不同 = 交出别的图标的掩码，那是错，不是慢）。
+  是"同一个 state 被问了多次"，只有真复用 state 的桌面才有钱；
+  ⚠ **读数里不能含包装路径**：`CircleIconDrawable.getConstantState()` 每次调用**新建一个匿名 ConstantState**，
+  那条路上"state 永远独一无二"说的是我们的 getter，不是桌面的行为 —— 日志里这一位对自己标 `state=-wrap`，
+  看到 `-wrap` 就说明这一张的 state 不可用。今天那批读数（607 AdaptiveIconDrawable / 405 BitmapDrawable /
+  32 VectorDrawable / 10 LayerDrawable / 1 GradientDrawable）一张 wrapper 都没有，所以那条否决站得住。
+  而且**必须让内容键兜底**（state 相同而像素不同 = 交出别的图标的掩码，那是错，不是慢）。
