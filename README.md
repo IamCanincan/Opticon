@@ -176,7 +176,7 @@ cc/top/小片/空洞/淡/色驱`），逐字段解释见 `_harness/SelfTest.kt` 
 `ApplicationPackageManager.getDrawableInternal` / `getDrawable`）都没挂上，
 模块会主动放弃打标记，此时不会有任何图标被改动（也不会弄坏图标）。
 
-## 功能一：应用图标 —— 裁圆与单色合成
+## 功能一：强制圆形图标
 
 ### 原理
 
@@ -234,7 +234,7 @@ cc/top/小片/空洞/淡/色驱`），逐字段解释见 `_harness/SelfTest.kt` 
 对它们而言「关掉开关」不生效。真正决定全局的是 **system_server**：它在名单里，
 读到关闭就不给图标 id 打标记，下游任何进程拿到的都是未经处理的原图标。
 
-### 单色遮罩的极性（Android 16 强制取色）
+## 功能二：单色合成（强制取色）
 
 Android 16 的「强制动态取色」会给**没做单色适配**的应用现场生成一张单色遮罩
 （`com.android.launcher3.icons.MonochromeIconFactory`）。它的算法是**亮度当 alpha**：把图标
@@ -268,31 +268,9 @@ Android 16 的「强制动态取色」会给**没做单色适配**的应用现�
 > 这里曾经的第一条路是**翻转兜底**：让桌面先算出一张极性错误的遮罩、模块再整张翻回来。
 > 换成合成优先之后它只剩兜底，现在整条已删。`MonochromeMask` 里那套极性判据
 > （`Polarity` / `polarity()`）**只剩判据台与性质在用**，业务侧已无调用者 —— 别把它当成
-> "屏幕上那条路还在翻转"的证据。取舍见下一节。
+> "屏幕上那条路还在翻转"的证据。极性怎么判、模型长什么样，见下面的「单色合成引擎」一节。
 
-### 运维按钮（纯 LSP，不 root 不 shell）
-
-界面里的三个按钮走的是「App 发广播点名 → **目标进程里的模块**自己执行」：
-
-- **清除缓存并重启桌面**：删 launcher 自己数据目录里的 `app_icons.db*`，然后自杀重启
-- **重启 SystemUI** / **重启其他进程**：白名单进程收到就自杀重启
-
-白名单 = launcher3 / nexuslauncher / systemui / settings / settings.intelligence /
-intentresolver / permissioncontroller / wellbeing。
-⚠ **绝不能含 `system` / `system_server`** —— 杀它们等于软重启整机。
-
-接收器是**动态注册且必须导出**的（发送方是另一个 uid），所以入口由权限把闸：
-本 APK 自己声明一个 `signature` 级权限
-`com.iamcanincan.opticon.permission.PROCESS_CONTROL`，`registerReceiver` 一侧要求它。
-同签名才拿得到 —— 没有这一道的话，任何第三方应用发一条
-`com.iamcanincan.opticon.RESTART_SELF` 就能反复杀桌面和 SystemUI。
-注意权限只加在接收侧：`sendBroadcast` 再传一次会变成检查**接收方**是否持有，
-而宿主进程并不持有它。
-
-> 测之前**必须先把目标进程重启过**，否则它跑的是旧模块代码、接收器还没注册
-> （会误判成「按钮没生效」）。
-
-## 功能二：修复通知小图标
+## 功能三：修复通知小图标
 
 ### 只做黑白
 
@@ -335,6 +313,29 @@ intentresolver / permissioncontroller / wellbeing。
 
 替换只发生在通知行**首次** `inflateViews` 时，**已经在通知栏里的那条不会变** ——
 要等它重新加载（重新发出，或重启系统界面）。
+
+## 运维按钮（纯 LSP，不 root 不 shell）
+
+界面里的三个按钮走的是「App 发广播点名 → **目标进程里的模块**自己执行」：
+
+- **清除缓存并重启桌面**：删 launcher 自己数据目录里的 `app_icons.db*`，然后自杀重启
+- **重启 SystemUI** / **重启其他进程**：白名单进程收到就自杀重启
+
+白名单 = launcher3 / nexuslauncher / systemui / settings / settings.intelligence /
+intentresolver / permissioncontroller / wellbeing。
+⚠ **绝不能含 `system` / `system_server`** —— 杀它们等于软重启整机。
+
+接收器是**动态注册且必须导出**的（发送方是另一个 uid），所以入口由权限把闸：
+本 APK 自己声明一个 `signature` 级权限
+`com.iamcanincan.opticon.permission.PROCESS_CONTROL`，`registerReceiver` 一侧要求它。
+同签名才拿得到 —— 没有这一道的话，任何第三方应用发一条
+`com.iamcanincan.opticon.RESTART_SELF` 就能反复杀桌面和 SystemUI。
+注意权限只加在接收侧：`sendBroadcast` 再传一次会变成检查**接收方**是否持有，
+而宿主进程并不持有它。
+
+> 测之前**必须先把目标进程重启过**，否则它跑的是旧模块代码、接收器还没注册
+> （会误判成「按钮没生效」）。
+
 
 ## 应用图标
 
