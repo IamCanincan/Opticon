@@ -349,6 +349,9 @@ internal object MonochromeSynth {
         // 包名解不出来时（`?`）退而带指纹，重放的文件名里就带着它。
         // ⚠ 三个输入**一个都不能少**：模型吃的是 `(合成图, 层底, under)`，重放只拿到合成图时
         //   `盘刀/反相` 读的那一层就不存在了 —— 复放出来的掩码不是设备上那一张（见 [MonoDump.maybe]）。
+        // ⚠ **这条通道看不见甲那一刀**：带的是 `out.mask`，而搬位置发生在它**之后**。两版装机对
+        //   dump 里的 PNG 逐张相同（2026-10-15 量过：21/21 same），而屏上 me.ele 已经大了 1.5 倍。
+        //   要核对"搬完之后那张"，只有 [noteDiagnosis] 那 8 行 ASCII 缩略图（`_harness/_thumbab.cjs`）。
         MonoDump.maybe(id, label, raster, pixels, out.mask, underPx, plateLayer, edge, edge,
           "${label.substringBefore(' ')}_${sig}${if (variant.isEmpty()) "" else "_$variant"} | ${out.report}${geoTag(win)}", isWatched)
       }
@@ -364,9 +367,18 @@ internal object MonochromeSynth {
         return@runCatching null
       }
       // 甲：判据算完**之后**才搬位置 —— 浓度、分档、盘刀、极性一个像素都不动，只把算好的墨
-      // 摆到裁圆定的那个尺寸上。目标矩形**没传**（= 整张图层画布）：这正是主人对着判"没问题"
-      // 的那一版，改它等于改那 32 张里他点头的 30 张，不在这一刀的范围里（上限见 [GEO_ZOOM_CAP]）。
-      val alpha = toAlphaMask(if (win == null) ramp else IconCropWindow.reframe(ramp, edge, edge, win), edge, edge)
+      // 摆到裁圆定的那个尺寸上。**搬过的那一张一律落到"可见区"（画布中间那 2/3）**：
+      // 自适应图标的图层是 108dp 画布，桌面按 1.5 倍铺进去再裁四边 —— 窗口映射到**整张画布**
+      // 就等于把字形又放大 1.5 倍、四边贴出屏幕（2026-10-15 量到的就是这个：`me.ele` 占盘
+      // 0.65 → 1.00，墨 0.09 → 0.19，主人一句「别的几个图标又变大了」）。
+      // 没搬过的那张不动它：图层本来就是应用自己按 108dp 排好的，缩它 = 改 49 张满幅图标。
+      // 非自适应那一路内容满幅，先铺满画布、再整体缩进可见区，落点与上面同一条算式。
+      val inset = visibleInset(edge)
+      val visT = edge - 2 * inset
+      val moved = if (win == null) ramp else if (adaptive)
+        IconCropWindow.reframe(ramp, edge, edge, win, inset, inset, visT, visT)
+      else IconCropWindow.reframe(ramp, edge, edge, win)
+      val alpha = toAlphaMask(moved, edge, edge)
       // 非自适应图标的内容是满幅的，而它在图层 bounds 里只该占中间那 2/3（可见区），
       // 所以掩码算完**之后**才缩进 —— 顺序反了就会踩 [rasterize] 上面那个坑。
       val placed = if (adaptive) alpha else intoVisibleArea(alpha, edge)
