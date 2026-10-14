@@ -3749,6 +3749,18 @@ internal object MonochromeMask {
     var h1thick = -1
     var h1fams = -1
     var h1ink = -1
+    if (plateIsSubject) {
+      // **极性跟着裁圆的档位走**（2026-10-15 主人定，为 `org.mewx.wenku8` 那本蓝书）：
+      // 彩色那支判这张是"裁不动、整幅缩进圆里、裁了只剩 55%" —— 这块大色块是**要被整块保住的
+      // 图案**，那染色就没有资格把它当"承载图形的板"摘掉。同一个模块对同一张图给两个主张，
+      // 屏幕上就是「应该蓝色部分上色」（当时只剩一条书签当墨，`框内=0.07`）。
+      // ⚠ 必须在这里就退干净，不能只否 H1：真机上 H2 会以 `底占=0.86` 把同一块蓝再当一次底
+      //   （2026-10-15 03:31 pid 4375：`拦=128 H=2 底占=0.86 框内=0.07` —— 屏上一点没变），
+      //   后面还有"薄底接手"与 H0 两条路会接手。裁圆那句话的意思就是**这张图里没有底**，
+      //   参照只剩空气：直接交 H3，四个候选一个都不问。线摆在哪见 [MonochromeSynth.PLATE_SUBJECT_MIN]。
+      bandSeed(s, w, box, band, seed); s.veto = s.veto or 128
+      return fitGround(pixels, w, h, box, g, s, 0, seed).apply { hyp = 3 }
+    }
     val fams = cornerFamilies(pixels, w, box, band, s)
     // ⚠ **这一张的盘在另一层的时候，实心区里不许有底**（H1 角上那一色 / H2 轮廓那一色 都不许）。
     // 依据不是统计量，是**输入是怎么来的**：`MonochromeSynth` 只有在"自适应图标 + 背景层是
@@ -3785,15 +3797,7 @@ internal object MonochromeMask {
       //   四周全是空气 —— "什么都是底"不可能是对的，**岛本身就是图形**。所以豁免加一条前提。
       val island = box.width().toLong() * box.height() * 100L <=
         w.toLong() * h * GROUND_ISLAND_PCT.toLong()
-      // ⚠ **极性跟着裁圆的档位走**（2026-10-15 主人定，为 `org.mewx.wenku8` 那本蓝书）：
-      //   彩色那支判这张是"裁不动、整幅缩进圆里、还剩 55%" —— 也就是说**这块大色块是要被整块
-      //   保住的图案**。那染色就没有资格把它当"承载图形的板"摘掉：同一个模块里两套主张，
-      //   屏幕上就是主人那句「应该蓝色部分上色」（当时只剩一条书签当墨，`框内=0.07`）。
-      //   退掉 H1 之后的效果量过（今晚 `周空` 那一版顺手否掉 H1 时看到的）：wenku8
-      //   `底占=0.00 H=3 框内=0.93` —— 整本书成墨、书签是镂空。
-      //   线摆在哪、为什么只有这一张过线，见 [MonochromeSynth.PLATE_SUBJECT_MIN]。
-      if (plateIsSubject) s.veto = s.veto or 128
-      else if ((p.share < PLATE_ALL_SHARE || (p.families <= 1 && !island)) && !vacuous(s, p, box)) return p
+      if ((p.share < PLATE_ALL_SHARE || (p.families <= 1 && !island)) && !vacuous(s, p, box)) return p
       if (p.share >= PLATE_ALL_SHARE && p.families > 1) s.veto = s.veto or 16
       if (vacuous(s, p, box)) s.veto = s.veto or 1
       h1share = p.share; h1thick = p.thick; h1fams = p.families; h1ink = p.iN
