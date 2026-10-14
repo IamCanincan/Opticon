@@ -964,8 +964,8 @@ internal object MonochromeMask {
    *   真机 logcat 里 237 次合成**全部**是 384 档，所以这一条现在不上屏；但 `learnEdge`
    *   学到更大尺寸会重压，那时它就成了。 */
   fun build(pixels: IntArray, w: Int, h: Int, plateIsLayer: Boolean = false,
-    under: IntArray? = null): Output {
-    val ramp = buildOnce(pixels, w, h, plateIsLayer, false, under)
+    under: IntArray? = null, plateIsSubject: Boolean = false): Output {
+    val ramp = buildOnce(pixels, w, h, plateIsLayer, false, under, plateIsSubject = plateIsSubject)
     if (!ramp.report.contains("调=1")) return ramp          // 本来就走参照那一支，不必算第二遍
     val s = checkNotNull(pool.get())
     // 【SepTone】先按**没挪过**的参照交付一遍（`sepOff`）—— 那一遍的成品与上一轮（这一刀还不存在时）
@@ -975,10 +975,10 @@ internal object MonochromeMask {
     //   bridge/despeckle 也会改这张掩码（钉钉实测淡膜 1%→0%，恰好卡在 `r < s` 那条线上）——
     //   在它之前记下的数是**另一个口径**，2026-10-13 我自己就这么踩了一次（钉钉被搬去满幅）。
     //   ⚠ 代价：真开火的那几张多算一遍参照（`rec_model` 62 张里 6 张开火、2 张最终交付）。
-    val ref0 = buildOnce(pixels, w, h, plateIsLayer, true, under, sepOff = true)
+    val ref0 = buildOnce(pixels, w, h, plateIsLayer, true, under, sepOff = true, plateIsSubject = plateIsSubject)
     val useRef = picksRef(w, h, ramp, ref0)
     if (!useRef || s.sepN <= 0) return if (useRef) ref0 else ramp
-    return buildOnce(pixels, w, h, plateIsLayer, true, under)
+    return buildOnce(pixels, w, h, plateIsLayer, true, under, plateIsSubject = plateIsSubject)
   }
 
   /**
@@ -1100,7 +1100,8 @@ internal object MonochromeMask {
    *  那块平色"。是 → 那一格是盘，不许交成墨。见下面 `盘刀` 那一刀。
    */
   private fun buildOnce(pixels: IntArray, w: Int, h: Int, plateIsLayer: Boolean,
-    forceRef: Boolean, under: IntArray? = null, sepOff: Boolean = false
+    forceRef: Boolean, under: IntArray? = null, sepOff: Boolean = false,
+    plateIsSubject: Boolean = false
   ): Output {
     val total = w * h
     if (total <= 0) return Output(IntArray(0), 0f, 0f, 0f, 0, 0f, 0f, "尺寸非法 → 空层")
@@ -1149,7 +1150,7 @@ internal object MonochromeMask {
     val ownPct = if (plateLayer) ownBrightPlate(pixels, w, h, box, s) else 0
     val ownPlate = ownPct >= PLATE_OWN_MIN
     // 1) 两遍参照。顺序固定：第二遍要用第一遍剩下的那一半当工作集。
-    val ground = groundPass(pixels, w, h, box, band, g, s, plateLayer)
+    val ground = groundPass(pixels, w, h, box, band, g, s, plateLayer, plateIsSubject)
     val body = bodyPass(pixels, w, h, box, g, s)
 
     // 2) 明度序的两个刻度，都从这张图自己的分布量：
@@ -3735,7 +3736,7 @@ internal object MonochromeMask {
    */
   private fun groundPass(
     pixels: IntArray, w: Int, h: Int, box: Rect, band: Int, g: Int, s: Scratch,
-    plateIsLayer: Boolean = false,
+    plateIsLayer: Boolean = false, plateIsSubject: Boolean = false,
   ): Pass {
     val seed = s.mark      // 洪泛的种子掩码（measure 之前没人用这块）
     s.h0why = 0            // 这一张走到 H0 没有、被哪道拦下，逐张归零（见 [Scratch.h0why]）
@@ -3784,7 +3785,15 @@ internal object MonochromeMask {
       //   四周全是空气 —— "什么都是底"不可能是对的，**岛本身就是图形**。所以豁免加一条前提。
       val island = box.width().toLong() * box.height() * 100L <=
         w.toLong() * h * GROUND_ISLAND_PCT.toLong()
-      if ((p.share < PLATE_ALL_SHARE || (p.families <= 1 && !island)) && !vacuous(s, p, box)) return p
+      // ⚠ **极性跟着裁圆的档位走**（2026-10-15 主人定，为 `org.mewx.wenku8` 那本蓝书）：
+      //   彩色那支判这张是"裁不动、整幅缩进圆里、还剩 55%" —— 也就是说**这块大色块是要被整块
+      //   保住的图案**。那染色就没有资格把它当"承载图形的板"摘掉：同一个模块里两套主张，
+      //   屏幕上就是主人那句「应该蓝色部分上色」（当时只剩一条书签当墨，`框内=0.07`）。
+      //   退掉 H1 之后的效果量过（今晚 `周空` 那一版顺手否掉 H1 时看到的）：wenku8
+      //   `底占=0.00 H=3 框内=0.93` —— 整本书成墨、书签是镂空。
+      //   线摆在哪、为什么只有这一张过线，见 [MonochromeSynth.PLATE_SUBJECT_MIN]。
+      if (plateIsSubject) s.veto = s.veto or 128
+      else if ((p.share < PLATE_ALL_SHARE || (p.families <= 1 && !island)) && !vacuous(s, p, box)) return p
       if (p.share >= PLATE_ALL_SHARE && p.families > 1) s.veto = s.veto or 16
       if (vacuous(s, p, box)) s.veto = s.veto or 1
       h1share = p.share; h1thick = p.thick; h1fams = p.families; h1ink = p.iN

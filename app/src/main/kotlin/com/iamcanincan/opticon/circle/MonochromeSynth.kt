@@ -347,7 +347,10 @@ internal object MonochromeSynth {
       // `under` 必须一起搬，否则模型看到的合成图与它背后那张层底对不上（真机上整张图标都动了）。
       val underIn = if (win == null || underPx == null) underPx
         else IconCropWindow.reframe(underPx, edge, edge, win, tOff, tOff, tSide, tSide)
-      val out = MonochromeMask.build(pxIn, edge, edge, plateLayer, underIn)
+      // 裁圆把这张判成"裁不动、整幅缩进圆里、还剩一半以上" → 那块大色块是**图案**，
+      // 不是板。极性必须与彩色同意的档位一致，否则同一个模块对同一张图给两个答案。
+      val plateSubject = win != null && win.plate && win.keepPct >= PLATE_SUBJECT_MIN
+      val out = MonochromeMask.build(pxIn, edge, edge, plateLayer, underIn, plateSubject)
       // H0 的射程跟着记：见 [noteSynthesized] 那条汇总为什么带它。
       noteH0(out.h0why)
       noteVeto(out.veto)
@@ -612,6 +615,22 @@ internal object MonochromeSynth {
   }
 
   private val diagnosed = AtomicInteger(0)
+
+  /**
+   * 裁圆判"这块大色块是要整块保住的图案"的那条线：**缩进圆里那一档，且按圆裁下去还剩到这么多%**。
+   *
+   * 为什么需要它（2026-10-15 主人定，`org.mewx.wenku8`）：彩色那支把蓝书整块缩进圆里保护起来，
+   * 染色那支却把同一块蓝当底摘掉、只剩书签当墨（`框内=0.07`）—— 一个模块两套主张，屏幕上就是
+   * 「应该蓝色部分上色」。这条一开，极性跟着档位走：wenku8 `底占 0.91→0.00`、`框内 0.07→0.93`，
+   * **整本书成墨、书签是镂空**（主人原话：「就是整本书成墨、书签是镂空，继续吧」）。
+   *
+   * ⚠ 线摆在 **50**，依据是真机 plate 档那四张"裁了只剩"：
+   *   wenku8 **55%** / contacts 那三张 **49%** / mipush **32%** / easytier **0%**。
+   *   也就是说 50 上面只有 wenku8 一张，下面第一张差 **6 个点** —— **空档很薄**，
+   *   摆在这里是因为它是**裁圆自己的档位**（不是我又找一个形状量去拟合），
+   *   但下一次真机多出一张 50~55% 的，这条就会连它一起翻，届时必须重新摊分布。
+   */
+  private const val PLATE_SUBJECT_MIN = 50
 
   /**
    * 染色几何搬动的**上限**：倍数超过这个数的图标整张不搬（不是缩到上限 —— 搬一半会得到一张
