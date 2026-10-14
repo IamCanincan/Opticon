@@ -44,8 +44,8 @@ extensions.configure<ApplicationExtension> {
     // 取两个来源模块里更宽的那个：通知侧最低到 Android 8.0（API 26）。
     minSdk = 26
     targetSdk = 37
-    versionCode = 4
-    versionName = "1.1.0"
+    versionCode = 5
+    versionName = "1.1.1"
   }
 
   signingConfigs {

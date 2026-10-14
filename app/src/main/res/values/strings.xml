@@ -120,7 +120,7 @@
     <!-- 效果示意（形状对比图）-->
     <string name="section_effect">效果</string>
     <string name="effect_title">一律裁成正圆</string>
-    <string name="effect_body">桌面、应用列表、最近任务里的图标都会变成圆形，圆外透明。</string>
+    <string name="effect_body">桌面、应用列表、最近任务里的图标都会变成圆形。图案铺得满的直接裁成正圆、圆外透明；个别"裁不动"的（宽幅式、空心一类）保持图案完整 —— 缩进圆里、圆内补白底。</string>
 
     <!--
         单色遮罩极性修正。这条和裁圆是**两个独立开关**：它管的是 Android 16 强制取色下
@@ -137,7 +137,7 @@
     <string name="section_notes">说明</string>
     <string name="note_adaptive">自适应图标也会被强制裁成圆形：系统给它的形状（圆角方、水滴等）不一定是圆。</string>
     <string name="note_tiles">快捷设置磁贴画的是单色小图形，被排除在外。</string>
-    <string name="note_launcher3">Android 16 及以上会关掉桌面自带的背景板，图标按原样铺满圆形。</string>
+    <string name="note_launcher3">Android 16 及以上会关掉桌面自带的背景板；圆形（以及少数图标圆内那层白底）都由模块自己画。</string>
     <string name="note_themed_icon">本 App 图标已提供 monochrome 层，在 Android 13+ 启动器的“主题图标”开关下会染成壁纸取色。</string>
 
     <!-- 更新卡片 -->
