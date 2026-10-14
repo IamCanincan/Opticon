@@ -499,4 +499,4 @@ MIT —— 见 [LICENSE](LICENSE)。
 ## 变更日志
 
 - **v1.1.0（2026-10-14）**：图标单色合成引擎整条重写为对比度模型；判据台 7 闸 → 14 闸。见 [docs/CHANGELOG.md](docs/CHANGELOG.md)。
-- 完整过程记录（每一刀为什么收、为什么拒、被哪道闸拦下）→ [docs/CHANGELOG.md](docs/CHANGELOG.md)。
+- 完整过程记录（每一刀为什么收、为什么拒、被哪道闸拦下）→ [docs/CHANGELOG.md](docs/CHANGELOG.md)（近期）与 [docs/CHANGELOG-1.md](docs/CHANGELOG-1.md)（引擎重构期）。
