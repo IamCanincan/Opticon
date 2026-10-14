@@ -386,7 +386,7 @@ Android 16 的「强制动态取色」会给**没做单色适配**的应用现�
 
 ## 已知取舍
 
-以下都是**量死后有意不修**的边界，不是没看见；每条的完整过程（试过什么、数字多少、为什么死、尸体埋在哪）见 [docs/KNOWN-LIMITS.md](docs/KNOWN-LIMITS.md)，判据的编年史见 [docs/CHANGELOG.md](docs/CHANGELOG.md)。
+以下都是**量死后有意不修**的边界，不是没看见；每条的完整过程（试过什么、数字多少、为什么死、尸体埋在哪）见 [docs/KNOWN-LIMITS.md](docs/KNOWN-LIMITS.md)，判据的编年史见 [docs/devlog/](docs/devlog/)。
 
 - **一层 alpha 只能表达一个量**：与底同色相又同亮度的东西本来就画不出来。仪表环续弧（globalspeed）断口就是这条颜色墙，四条路全部量死。
 - **两块都被判成底时，中间那道边留不下**：给其中一块降档要先指认「哪块是图形」，那道证据至今量不出来。
@@ -498,5 +498,5 @@ MIT —— 见 [LICENSE](LICENSE)。
 
 ## 变更日志
 
-- **v1.1.0（2026-10-14）**：图标单色合成引擎整条重写为对比度模型；判据台 7 闸 → 14 闸。见 [docs/CHANGELOG.md](docs/CHANGELOG.md)。
-- 完整过程记录（每一刀为什么收、为什么拒、被哪道闸拦下）→ [docs/CHANGELOG.md](docs/CHANGELOG.md)（近期）与 [docs/CHANGELOG-1.md](docs/CHANGELOG-1.md)（引擎重构期）。
+- **v1.1.0（2026-10-14）**：图标单色合成引擎整条重写为对比度模型；判据台 7 闸 → 14 闸。按版本收口的摘要见根目录 [CHANGELOG.md](CHANGELOG.md)；
+  每一刀的完整过程（为什么收、为什么拒、被哪道闸拦下）见 [docs/devlog/](docs/devlog/)。
