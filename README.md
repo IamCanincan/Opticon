@@ -878,7 +878,11 @@ MIT —— 见 [LICENSE](LICENSE)。
 
 ## 更新日志
 
-### 未发布（v1.0.3 之后）
+### 未发布
+
+（尚无）
+
+### v1.1.0（2026-10-14）
 - ✅ **【carrierPocket】落码：跨块承载面口袋（易班蓝块凸起）**（2026-10-14，离线 v5 配方 → 产品刀）。
   位置在 `measure`（含 bridge/despeckle）**之后**、`separation` 之前，`tonal == null` 才跑，纯减不抬。
   判据：Lab 粗桶（L 4 单位、a/b 16 单位）→ 代表色 ΔE76 < `CARRIER_MERGE_DE=8` 贪心合并成底族（族门 ≥1%、至多 8）
