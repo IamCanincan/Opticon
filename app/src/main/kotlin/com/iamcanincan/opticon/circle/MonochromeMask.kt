@@ -330,6 +330,29 @@ internal object MonochromeMask {
    */
   private const val VOTE_BAND_INK = 25
 
+  // ── 【carrierPocket】跨块承载面口袋的常数 ──
+  /** ⚠ [deltaE] 的「真值 ×64」只对 L 成立：[labChannel] 里 L 是 ×64、a/b 是 ×1，直接拿它当
+   *  ΔE 用会把「同明度异色相」的设计色全判成贴底（易班第一次实跑就因此抹了 2246 格，把
+   *  青带 C 也吃了一半）。这一把全部走 [carrierDep]（真 ΔE76），别再用 [deltaE]。 */
+  /** 病袋核心判「与底同族」的真 ΔE76 上限。易班实测：B 族洪泛的病袋到族色 ΔE76 全部 <24；
+   *  图案青带 C 到最近的底族 min=26.9 —— 空档在 24..26.9，取上沿。 */
+  private const val CARRIER_DE = 24
+  /** 沿边扫尾的 ΔE76 上限：离任何底族比这还远的格不再可能是过渡混色（易班尾巴 max=40）。 */
+  private const val CARRIER_DE_MAX = 40
+  /** 扫尾时找「真图案锚点」的半径（切比雪夫格数）。 */
+  private const val CARRIER_ANCHOR_R = 3
+  /** 底族至少占画布百分之几才参与（白 39% / 淡蓝 24% / 黑 2.8% 都过，零星杂色不建族）。 */
+  private const val CARRIER_FAMILY_MIN_PCT = 1
+  /** 两个候选桶的代表色 ΔE76 小于这个算同族（插值抖动 ±4ΔE 量级，取两倍余量）。 */
+  private const val CARRIER_MERGE_DE = 8
+  /** 底格算进一族种子的 ΔE76 上限（比病袋门松：种子是底，错一颗不伤，漏一颗断链）。 */
+  private const val CARRIER_SEED_DE = 8
+  /** 一个底族吃掉的病袋至多是它自己的百分之几（易班 346/35113 = 1%）—— 超了说明这族颜色
+   *  被设计大量复用（白熊就长在白边上那种情况反过来），这一族整个弃权。 */
+  private const val CARRIER_SHARE = 10
+  /** 最多参与几个底族（按 α≤4 格数取最大的这几个；防病态图族数爆炸）。 */
+  private const val CARRIER_MAX_FAMILIES = 8
+
   /**
    * **「同一块平色被给了两个答案」—— 按这块自己的多数定调，少数侧统一过去。**
    *
@@ -456,6 +479,241 @@ internal object MonochromeMask {
   /** 源像素是不是全不透明（[flatVote] 只在实心格里走块）。 */
   private fun solidPx(pixels: IntArray, i: Int): Boolean = (pixels[i] ushr 24) == 255
 
+  /** 真 ΔE76：[labChannel] 里 L 是 ×64、a/b 是 ×1，先把尺度对齐再开方（误差 <0.5，够用）。 */
+  /** 真 ΔE76：[labChannel] 三条通道**全是**真值 ×64（行 247 的注释一直是对的——2026-10-14 曾误判
+   *  「只有 L 是 ×64」，把 a/b 当 ×1 用，跨色 ΔE 被放大 64 倍，颜色门/合并门全部失灵）。 */
+  private fun carrierDep(l1: Int, a1: Int, b1: Int, l2: Int, a2: Int, b2: Int): Int {
+    val dl = (l1 - l2) / 64.0
+    val da = (a1 - a2) / 64.0
+    val db = (b1 - b2) / 64.0
+    return Math.sqrt(dl * dl + da * da + db * db).toInt()
+  }
+
+
+  /** [carrierPocket] 的底族桶号：L 4 单位、a/b 16 单位一桶（a/b 先偏置 160 避开负号）。
+   *  ⚠ a/b 与 L 一样是**真值 ×64** 的 Short——先除回 64 再分桶，偏移量才是真尺度
+   *  （直接 `a+160` 会在 ±2.5 的真值窗里回绕出负桶号，合并门跟着全废）。 */
+  private fun carrierKey(l: Short, a: Short, b: Short): Int {
+    val lb = (l.toInt() and 0xffff) shr 8
+    val ab = ((a.toInt() / 64) + 160) shr 4
+    val bb = ((b.toInt() / 64) + 160) shr 4
+    return (lb shl 10) or (ab shl 5) or bb
+  }
+
+  /**
+   * **跨块承载面口袋 —— 与「交成底的自己」连通、却被交成墨的同色口袋，抹掉。**
+   *
+   * 为什么 [flatVote] 治不了它：那一把的票箱是**一块**，而它的分块条件是「与起点同色」——
+   * 同一种承载面颜色被设计师画成两片、中间隔着真图案时（易班：淡蓝承载面 B 在青带 C 两侧
+   * 各伸出一截），每一小片各自成一整块、块内 100% 一个答案，两侧门永远凑不齐两票。
+   * `VoteScan2` 量过：被卡住的 1194 块里多数侧占比 82%→100% 连续、100% 档 1064 块
+   * （少数侧 = 0），**没有空档**可再钉「压倒多数」的新常数。
+   *
+   * 为什么不能只按「全图同色多数」来投：**设计会复用底色** —— 易班 384² 实测，交成底的格
+   * 里白色 58089 最多、淡蓝 35113 次之，而白熊本身就是白的（被交成墨的白有 1674 格）。
+   * 按多数抹会把熊吃掉。真正把「白熊的白」和「白边的白」分开的是**空间衔接**：
+   * 病袋与同色底区 8-连通（凸起是从方块边上长出来的），白熊与白边中间隔着整圈淡蓝。
+   *
+   * 做法：把交成底（α≤4）的实心格按源色精确分组，≥ 画布 [CARRIER_FAMILY_MIN_PCT]% 的算
+   * **底族**（至多 [CARRIER_MAX_FAMILIES] 个）；对每个底族，从它的底格出发 8-连通洪泛，
+   * 只踩「交成实墨（α≥80）且与族色真 ΔE76 < [CARRIER_DE]」的格 —— 踩到的就是病袋核心。
+   * 开门两道：一族吃到的病袋至少 [MIN_SPECK_DIVISOR] 口径的碎渣下限（零星格不记开火），
+   * 至多是族自己的 [CARRIER_SHARE]%（超了 = 这族颜色被设计大量复用，整族弃权）。
+   *
+   * 核心抹掉之后沿边扫两轮，收 ΔE76 落在 [CARRIER_DE]..[CARRIER_DE_MAX] 的尾巴：贴着已抹格、
+   * 自己还是墨、离**最近的底族**比离最近的「真图案锚点」还近的格是过渡混色，一并抹。
+   * 锚点 = 半径 [CARRIER_ANCHOR_R] 内还活着的墨格里、自己离所有底族都 > [CARRIER_DE] 的那些
+   * —— 图案色自己离同族近（dd≈0），永远轮不到被扫。
+   *
+   * 最后给新边补半透：已抹格里还挨着活墨的，按邻居墨数 on/9 收一点邻居墨的平均浓度
+   * （封顶 127，仍算底），新边不再是一圈硬台阶。
+   *
+   * ⚠ **纯减**：这一把只抹不抬。依据：易班 384² 实测核心 347 格 + 扫尾补到 ~359 + 软边 ~96，
+   *   与手绘红标那版（`_harness/yb_arc_bridge.py`，降 461 / 升 95）二值不一致仅 38 格 ——
+   *   那 38 格全是红标没画到、但源色同样是承载面的 x=0 列残留，这一把按源色治全图。
+   *
+   * @return 动了的格数（抹 + 软边）。0 = 这张图一格都没碰到。
+   */
+  private fun carrierPocket(out: IntArray, pixels: IntArray, w: Int, h: Int, box: Rect, s: Scratch): Int {
+    val total = w * h
+    val minSpeck = maxOf(8, total / MIN_SPECK_DIVISOR)
+    // 1) 底族：交成底的实心格按 **Lab 粗桶**分组再**按代表色合并**。⚠ 两步都不能省：
+    //    · 不能按精确 RGB 分：量具/真机那一路对源图做了重采样，平色内部也被插值出渐变
+    //      —— 易班实测最大桶只剩 2639 格（离线没重采样的解码里是 35113）。
+    //    · 不能只拿桶当族：同一块承载面会被插值抖动劈进相邻桶，一族拆成几片后每片的
+    //      病袋都过不了碎渣门。所以先取大桶当候选，代表色 ΔE76 < [CARRIER_MERGE_DE]
+    //      的并成一族，族色取最大桶的代表。
+    val famCnt = HashMap<Int, Int>()
+    for (y in box.top until box.bottom) for (x in box.left until box.right) {
+      val i = y * w + x
+      val p = pixels[i]
+      if ((p ushr 24) != 255) continue
+      if ((out[i] ushr 24) > 4) continue
+      val key = carrierKey(s.labL[i], s.labA[i], s.labB[i])
+      famCnt[key] = (famCnt[key] ?: 0) + 1
+    }
+    val cand = famCnt.entries.filter { it.value * 1000 >= total * 3 }
+      .sortedByDescending { it.value }.take(32).map { it.key }.toIntArray()
+    if (cand.isEmpty()) return 0
+    val candLab = Array(cand.size) { Triple(0, 0, 0) }
+    val candSeen = BooleanArray(cand.size)
+    var candLeft = cand.size
+    for (y in box.top until box.bottom) for (x in box.left until box.right) {
+      if (candLeft == 0) break
+      val i = y * w + x
+      val p = pixels[i]
+      if ((p ushr 24) != 255) continue
+      if ((out[i] ushr 24) > 4) continue
+      val kk = cand.indexOf(carrierKey(s.labL[i], s.labA[i], s.labB[i]))
+      if (kk < 0 || candSeen[kk]) continue
+      candLab[kk] = Triple(s.labL[i].toInt(), s.labA[i].toInt(), s.labB[i].toInt())
+      candSeen[kk] = true; candLeft--
+    }
+    // 合并：贪心，从最大的候选起，与已有族代表 ΔE76 < CARRIER_MERGE_DE 的并入，否则自立一族。
+    val famLabL = ArrayList<Triple<Int, Int, Int>>()
+    val famN = ArrayList<Int>()
+    for (kk in cand.indices) {
+      if (!candSeen[kk]) continue
+      val rep = candLab[kk]
+      var hit = -1
+      for (f in famLabL.indices) {
+        if (carrierDep(rep.first, rep.second, rep.third,
+              famLabL[f].first, famLabL[f].second, famLabL[f].third) < CARRIER_MERGE_DE) { hit = f; break }
+      }
+      if (hit >= 0) famN[hit] = famN[hit] + famCnt[cand[kk]]!!
+      else { famLabL.add(rep); famN.add(famCnt[cand[kk]]!!) }
+    }
+    // 族门：≥ 画布 CARRIER_FAMILY_MIN_PCT%，至多 CARRIER_MAX_FAMILIES 个。
+    val fams = (0 until famLabL.size)
+      .filter { famN[it] * 100 >= total * CARRIER_FAMILY_MIN_PCT }
+      .sortedByDescending { famN[it] }.take(CARRIER_MAX_FAMILIES)
+    if (fams.isEmpty()) return 0
+    val famLab = Array(fams.size) { f -> famLabL[fams[f]] }
+    /** 这一格离最近的底族多远（真 ΔE76）。 */
+    fun dFam(i: Int): Int {
+      var best = Int.MAX_VALUE
+      for (k in fams.indices) {
+        val d = carrierDep(s.labL[i].toInt(), s.labA[i].toInt(), s.labB[i].toInt(),
+          famLab[k].first, famLab[k].second, famLab[k].third)
+        if (d < best) best = d
+      }
+      return best
+    }
+    // 2) 逐族洪泛：从同族底格出发，只踩「实墨且与族色 ΔE76 < CARRIER_DE」的格。
+    //    `visit` 每族清一次（借跨族会挡住上一族弃权的格），`erased` 才是最终决定。
+    val erased = ByteArray(total)
+    val visit = ByteArray(total)
+    val stack = IntArray(total); var nSt = 0
+    val q = IntArray(total)
+    var erase = 0
+    for (k in fams.indices) {
+      var head = 0; var tail = 0
+      val fl = famLab[k]
+      java.util.Arrays.fill(visit, 0)
+      for (y in box.top until box.bottom) for (x in box.left until box.right) {
+        val i = y * w + x
+        if (carrierDep(s.labL[i].toInt(), s.labA[i].toInt(), s.labB[i].toInt(),
+              famLab[k].first, famLab[k].second, famLab[k].third) < CARRIER_SEED_DE &&
+          (pixels[i] ushr 24) == 255 && (out[i] ushr 24) <= 4) {
+          q[tail++] = i; visit[i] = 1
+        }
+      }
+      var n = 0
+      while (head < tail) {
+        val c = q[head++]
+        val cy = c / w; val cx = c - cy * w
+        for (dy in -1..1) for (dx in -1..1) {
+          if (dx == 0 && dy == 0) continue
+          val xx = cx + dx; val yy = cy + dy
+          if (xx < box.left || xx >= box.right || yy < box.top || yy >= box.bottom) continue
+          val j = yy * w + xx
+          if (visit[j] != 0.toByte() || erased[j] != 0.toByte()) continue
+          if ((pixels[j] ushr 24) != 255) continue
+          if ((out[j] ushr 24) < 80) continue
+          if (carrierDep(s.labL[j].toInt(), s.labA[j].toInt(), s.labB[j].toInt(),
+               fl.first, fl.second, fl.third) >= CARRIER_DE) continue
+          visit[j] = 1; q[tail++] = j; n++
+        }
+      }
+      // 门：这一族吃到的病袋要够多、又必须是少数 —— 不过就整族弃权（`erased` 没动过，无需回滚）。
+      if (n < minSpeck || n * 100 > famN[fams[k]] * CARRIER_SHARE) continue
+      for (u in 0 until tail) {
+        val i = q[u]
+        if (visit[i] != 0.toByte() && (out[i] ushr 24) >= 80) {
+          out[i] = (0 shl 24) or 0x00FFFFFF
+          erased[i] = 1; stack[nSt++] = i
+        }
+      }
+      erase += n
+    }
+    if (nSt == 0) return 0
+    // 3) 沿边扫尾两轮：ΔE76 到最近底族在 CARRIER_DE..CARRIER_DE_MAX、离底族比离锚点近 → 混色，抹。
+    for (round in 0 until 2) {
+      val batch = IntArray(total); var nB = 0
+      for (u in 0 until nSt) {
+        val c = stack[u]
+        val cy = c / w; val cx = c - cy * w
+        for (dy in -1..1) for (dx in -1..1) {
+          if (dx == 0 && dy == 0) continue
+          val xx = cx + dx; val yy = cy + dy
+          if (xx < box.left || xx >= box.right || yy < box.top || yy >= box.bottom) continue
+          val j = yy * w + xx
+          if (erased[j] != 0.toByte() || (pixels[j] ushr 24) != 255) continue
+          if ((out[j] ushr 24) < 80) continue
+          val dp = dFam(j)
+          if (dp < CARRIER_DE || dp >= CARRIER_DE_MAX) continue
+          var dd = Int.MAX_VALUE
+          for (dy2 in -CARRIER_ANCHOR_R..CARRIER_ANCHOR_R) for (dx2 in -CARRIER_ANCHOR_R..CARRIER_ANCHOR_R) {
+            if (dx2 == 0 && dy2 == 0) continue
+            val x2 = xx + dx2; val y2 = yy + dy2
+            if (x2 < box.left || x2 >= box.right || y2 < box.top || y2 >= box.bottom) continue
+            val kk = y2 * w + x2
+            if (erased[kk] != 0.toByte() || (pixels[kk] ushr 24) != 255) continue
+            if ((out[kk] ushr 24) < 80) continue
+            if (dFam(kk) <= CARRIER_DE) continue
+            val d = carrierDep(s.labL[j].toInt(), s.labA[j].toInt(), s.labB[j].toInt(),
+              s.labL[kk].toInt(), s.labA[kk].toInt(), s.labB[kk].toInt())
+            if (d < dd) dd = d
+          }
+          if (dd == Int.MAX_VALUE || dp >= dd) continue
+          batch[nB++] = j
+        }
+      }
+      if (nB == 0) break
+      for (u in 0 until nB) {
+        val j = batch[u]
+        if (erased[j] != 0.toByte()) continue                       // 同一轮里被两个方向点到
+        out[j] = (0 shl 24) or 0x00FFFFFF
+        erased[j] = 1; stack[nSt++] = j
+      }
+      erase += nB
+    }
+    // 4) 软边：已抹格里还挨着活墨的，按邻居墨数 on/9 收一点邻居墨的平均浓度（封顶 127）。
+    var soft = 0
+    for (u in 0 until nSt) {
+      val c = stack[u]
+      val cy = c / w; val cx = c - cy * w
+      var on = 0; var sum = 0
+      for (dy in -1..1) for (dx in -1..1) {
+        if (dx == 0 && dy == 0) continue
+        val xx = cx + dx; val yy = cy + dy
+        if (xx < box.left || xx >= box.right || yy < box.top || yy >= box.bottom) continue
+        val k = yy * w + xx
+        if (erased[k] != 0.toByte() || (pixels[k] ushr 24) != 255) continue
+        val ak = out[k] ushr 24
+        if (ak < 80) continue
+        on++; sum += ak
+      }
+      if (on == 0) continue
+      val v = (sum / 9).coerceAtMost(127)
+      if (v <= 0) continue
+      out[c] = (v shl 24) or 0x00FFFFFF
+      soft++
+    }
+    s.carrierErase = erase; s.carrierSoft = soft
+    return erase + soft
+  }
+
   private class Scratch {
     var labL = ShortArray(0)
     var labA = ShortArray(0)
@@ -495,6 +753,8 @@ internal object MonochromeMask {
     var vote = ByteArray(0)
     /** [flatVote] 的三笔账：抹了多少格、抬了多少格、动了几块（只为进日志）。 */
     var voteErase = 0; var voteRaise = 0; var voteHits = 0
+    /** [carrierPocket] 的两笔账：抹了多少格（含沿边扫尾）、补了多少格软边（只为进日志）。 */
+    var carrierErase = 0; var carrierSoft = 0
     /**
      * 【SepTone】要挪的那几块：**源色桶号**（-1 = 空位）与那一块要加的浓度增量，最多 [SEP_MAX_PARTS] 条。
      *
@@ -1670,8 +1930,16 @@ internal object MonochromeMask {
     //   ⚠ 落在 `separation` / `measure` **之前**，那几行诊断才是**交出去那一张**的数（判据与产物
     //   同口径）；`sepOff` 那一遍不施加（它就是要一张没挪过的成品给 [build] 比）。
     if (tonal == null && !sepOff) s.sepApplied = applySepTone(out, pixels, s)
-    val sep = separation(out, w, h, box, s)
+    // 4.9) **跨块承载面口袋** —— 与「交成底的自己」连通、却被交成墨的同色口袋，抹掉
+    //   （见 [carrierPocket]）。放在 [measure]（含 bridge/despeckle 那两笔形状修补）**之后**：
+    //   凸起那批格要等 bridge 把 1..127 的淡边填实才交成 128..254 的「墨」，放在修补之前
+    //   洪泛根本踩不到它们。修完再抹、抹在交出去那张上；`sep` 挪到它后面量（产物同口径），
+    //   `st` 仍按修补完那一版量（这一刀只减不增，cc/淡 的口径差当场可对浓度直方）。
+    //   满幅那一支不跑（没有「底」可言）。
     val st = measure(out, w, h, box, s, bridge = colourDriven, despeckle = colourDriven)
+    s.carrierErase = 0; s.carrierSoft = 0
+    val carrierN = if (tonal == null) carrierPocket(out, pixels, w, h, box, s) else 0
+    val sep = separation(out, w, h, box, s)
     val fill = st.kept.toFloat() / boxArea
     return Output(
       out, fill, st.hole, st.largest, st.components, st.smallShare, softShare(st, box),
@@ -1731,7 +1999,10 @@ internal object MonochromeMask {
           // 【SepTone】**加在整串最末尾**：这一刀挪了几格（见 [applySepTone]）。
           // ⚠ 满幅那一支**压根不走这一刀**，所以那里一个字符都不加 —— 与本仓那条
           //   「一个不跑的步骤不许报通过」同一条规矩：不报 ≠ 报 0。
-          (if (tonal == null) " 挪档=${s.sepApplied}" else ""),
+          (if (tonal == null) " 挪档=${s.sepApplied}" else "") +
+          // 【carrierPocket】**加在整串最末尾**：抹了几格（含沿边扫尾）/ 补了几格软边。
+          // 0 也要报 —— 「没走到」与「走到了没开火」要分得开。
+          (if (tonal == null) " 承载=${s.carrierErase}抹/${s.carrierSoft}软" else ""),
       ground.hyp,
       s.h0why,
       s.veto
