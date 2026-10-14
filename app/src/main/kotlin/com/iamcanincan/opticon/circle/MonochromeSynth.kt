@@ -520,7 +520,8 @@ internal object MonochromeSynth {
     val n = diagnosed.incrementAndGet()
     val outcome = if (hit.mask == null) "判据不成立（负缓存，未重算）" else "直接交缓存里那张（未重算）"
     Log.d(TAG, "Mono: diag#$n edge=$edge 键=${MonoKey.hex(key)} $label 缓存=${hit.from} → $outcome")
-    if (hitDiag.incrementAndGet() <= HIT_DIAG_LIMIT) noteDiagnosis(edge, label, input, hit.mask)
+    // 名额由 [noteDiagnosis] 自己按路判（这里再判一次会把同一个计数器加两遍，冷那条路就被挤掉更多）
+    noteDiagnosis(edge, label, input, hit.mask, cache = true)
   }
 
   /**
@@ -571,8 +572,11 @@ internal object MonochromeSynth {
    * [ASCII_DUMP_LIMIT] 张（一张 40 行，全放行会淹掉 logcat）。逐条的判据分布由
    * [noteBranch] 那行廉价汇总兜着 —— 降级掉的是**贵的那部分**，不是「每条出口都留痕」这条规矩。
    */
-  private fun noteDiagnosis(edge: Int, label: String, input: Bitmap, mask: Bitmap?) {
-    if (heavyDiag.incrementAndGet() > HEAVY_DIAG_LIMIT) return
+  private fun noteDiagnosis(edge: Int, label: String, input: Bitmap, mask: Bitmap?, cache: Boolean = false) {
+    // ⚠ **名额按路分开**（装机量出来的：两条路共用一套名额这件事本身就是错的，谁先到谁吃干）。
+    //   冷那 12 条是要核对的东西；命中那 8 条是"缓存交的那张与现算的那张对得上"的证据。
+    val budget = if (cache) hitDiag else heavyDiag
+    if (budget.incrementAndGet() > if (cache) HIT_DIAG_LIMIT else HEAVY_DIAG_LIMIT) return
     val n = diagnosed.incrementAndGet()
     val w = input.width
     val h = input.height
@@ -646,7 +650,9 @@ internal object MonochromeSynth {
       "out=${pct(opaque, total)} fill=${pct((weight / 255).toInt(), total)} " +
       "cc=$components top=${pct(largest, opaque)}")
 
-    val dumped = asciiDumped.incrementAndGet()
+    // 缩略图的名额**也按路分**：不然热重启那几秒里命中先把 8 张占满，**现算那两张一张都不出** ——
+    // 而"缓存交的那张对不对"恰恰要拿现算那张当参照。
+    val dumped = (if (cache) asciiHitDumped else asciiDumped).incrementAndGet()
     if (dumped <= ASCII_DUMP_LIMIT) dumpAscii(n, mw, mh, mask.rowBytes, bytes)
   }
 
@@ -749,6 +755,9 @@ internal object MonochromeSynth {
   private const val ASCII_DUMP_LIMIT = 8
 
   private val asciiDumped = AtomicInteger(0)
+
+  /** 命中那条路的缩略图计数（与 [asciiDumped] 分开，理由见 [noteDiagnosis] 里那段）。 */
+  private val asciiHitDumped = AtomicInteger(0)
 
   /**
    * 剪影阈值：alpha 低于它就不算图形。与 `MonochromeMask.A_SOLID`、`IconBitmap.MIN_SHAPE_ALPHA`
