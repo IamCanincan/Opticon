@@ -108,7 +108,7 @@
     <string name="section_tools">运维操作</string>
     <string name="tools_body">下面这些操作全部由模块在目标进程内部完成（删自己的缓存、重启自己），不需要 root，也不会执行任何 shell 命令。</string>
     <string name="cache_title">清除桌面图标缓存</string>
-    <string name="cache_body">桌面把图标位图缓存在自己的数据库里，而且只按“目标 App 的版本”更新 —— 所以开关改了、模块升级了之后，桌面可能仍旧显示上一次渲染出来的图。点下面的按钮删掉缓存并重启桌面，图标会按当前设置重新生成。</string>
+    <string name="cache_body">桌面把图标位图缓存在自己的数据库里，而且只按“目标 App 的版本”更新 —— 所以开关改了、模块升级了之后，桌面可能仍旧显示上一次渲染出来的图。点下面的按钮删掉缓存并重启桌面，图标会按当前设置重新生成。这个按钮清的是桌面那一份渲染结果；模块自己压出来的那张剪影另有一层缓存（见下面「说明」里那条），它按图标内容和模块的装机身份自动作废，不用你手动清。</string>
     <string name="action_clear_launcher">清除缓存并重启桌面</string>
     <string name="action_restart_systemui">重启 SystemUI</string>
     <string name="action_restart_others">重启其他进程</string>
@@ -137,6 +137,7 @@
     <string name="section_notes">说明</string>
     <string name="note_adaptive">自适应图标也会被强制裁成圆形：系统给它的形状（圆角方、水滴等）不一定是圆。</string>
     <string name="note_tiles">快捷设置磁贴画的是单色小图形，被排除在外。</string>
+    <string name="note_mono_cache">剪影缓存在哪里：没做单色适配的图标，那张剪影由模块现压一次，然后按图标内容缓存进桌面自己的缓存目录（上限 48 MB，系统存储紧张时会被清）。换了模块版本、或图标本身更新过，这一层自动重压，不用你管。所以升级模块后重启桌面的那一次会慢一些，之后就快了。</string>
     <string name="note_launcher3">Android 16 及以上会关掉桌面自带的背景板；圆形（以及少数图标圆内那层白底）都由模块自己画。</string>
     <string name="note_themed_icon">本 App 图标已提供 monochrome 层，在 Android 13+ 启动器的“主题图标”开关下会染成壁纸取色。</string>
 

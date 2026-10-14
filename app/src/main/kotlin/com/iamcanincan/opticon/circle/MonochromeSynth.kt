@@ -107,13 +107,16 @@ internal object MonochromeSynth {
   private const val MAX_EDGE = 768
 
   /**
-   * 掩码缓存的字节上限（见 [store]）。8 MB ≈ 55 张 384² 的掩码。
+   * 实例层的字节上限（见 [store]）。8 MB ≈ 55 张 384² 的掩码。
    *
    * 按字节而不是按条数封顶：一张 ALPHA_8 掩码 = 边长² 字节（384² = 147 KB），桌面一次会话里
    * 会问几百个图标 —— 按条数封顶的话，上限是多少内存取决于桌面问的是哪些尺寸，等于没人管
    * （原来那句「256 条，图标数本来有界」是 37 MB，住在桌面进程里）。
    * 超了就整体清掉：图标数有界，清一次的重建代价只是几毫秒 × N 张，比常驻几十 MB 划算；
-   * 做 LRU 是给这个缓存加它不需要的复杂度。
+   * 做 LRU 是给这一层加它不需要的复杂度（[MonoCache] 那边才值得做，因为那边是真在命中的层）。
+   * ⚠ **别把这一层的预算与 [MonoCache] 那 8 MB 相加当成"总共 16 MB"**：两层存的是**同一批位图对象**，
+   *   各自记账、各自过封顶。真实常驻取决于两层有没有装到不相交的两批 —— 最坏 16 MB，常见远小于这个数。
+   *   这条只是提醒：**这两个 8 MB 不是两道独立的墙，是一道半**。
    */
   private const val MAX_CACHE_BYTES = 8L * 1024 * 1024
 
@@ -122,8 +125,11 @@ internal object MonochromeSynth {
   /**
    * 按图标**实例**缓存已经压好的**掩码位图**（[IdentityHashMap] 语义：同一个对象才命中）。
    *
-   * 用实例而不是内容做 key：桌面滚动时同一个图标对象会被反复取 monochrome，每次都重压一遍太贵。
-   * 图标对象由桌面的 IconCache 长期持有、数量有界，所以这里不会无限增长。
+   * ⚠ **这一层的存在理由原来写错过一次，而且是它整条设计的前提**：这里原本写着「图标对象由桌面的
+   *   IconCache 长期持有、数量有界」—— 装机数（2026-10-15）直接推翻：桌面每次取 monochrome 都
+   *   `getConstantState().newDrawable()` 交一个**新实例**，所以一次重启 1594 次合成里这一层几乎没命中过。
+   *   留着它只为"同一个实例被连着问两次"那种场合（应用信息页、长按菜单），那一类命中仍然免费。
+   *   **真正干活的是 [MonoCache]**（按内容认，不认对象）。
    *
    * ⚠ 缓存的是**位图**而不是 [MonochromeLayer] 实例：掩码是只读的，可以放心共享，而 Drawable
    * 不行 —— 同一个实例被两个父 `AdaptiveIconDrawable` 同时持有的话，`setBounds` / `setCallback`
@@ -334,8 +340,10 @@ internal object MonochromeSynth {
       val key = MonoCache.keyOf(pixels, underPx, edge, adaptive, flatten, circle)
       MonoCache.lookup(key, edge)?.let { hit ->
         // 负缓存（`mask == null`）= 这张判据不成立，照旧交 null 给桌面走它自己的路。
-        // 出口与今天一模一样，只是不再重算第二遍。
-        if (hit.mask != null) noteCached(edge, label, hit, raster, key)
+        // 出口与不缓存时一模一样，只是不再重算第二遍 —— **两种命中都要留痕**：原来只在
+        // `mask != null` 时打，"放弃合成"这条 telemetry 就从每 bind 一次塌成每内容一次，
+        // 日志上看着像"这台桌面根本不放弃合成"（本仓吃过四次的那类静默）。
+        noteCached(edge, label, hit, raster, key)
         raster.recycle()
         return@runCatching hit.mask
       }
@@ -470,7 +478,15 @@ internal object MonochromeSynth {
       append(" intrinsic=").append(source.intrinsicWidth).append('x').append(source.intrinsicHeight)
       append(" bounds=").append(source.bounds.width()).append('x').append(source.bounds.height())
       append(" adaptive=").append(adaptive)
-      val st = runCatching { source.constantState }
+      // `state=` = 这张 drawable 的 ConstantState 身份。它今天回答过一个值不值钱的问题
+      // （"按 state 建一层缓存能省掉光栅化吗" —— 真机量到 1043 次请求对 1043 个 state，答案是不能）。
+      // ⚠ **本模块自己的 wrapper 不适用这一位**：`CircleIconDrawable.getConstantState()` 每次调用
+      //   **新建一个匿名 ConstantState**，所以在包装路径上它**永远"独一无二"** —— 那种 1:1 不是"桌面不复用"，
+      //   是这个 getter 自己每次新建。今天这批读数恰好一张 wrapper 都没有
+      //   （`AdaptiveIconDrawable` 607 / `BitmapDrawable` 405 / `VectorDrawable` 32 / `LayerDrawable` 10 / `GradientDrawable` 1），
+      //   所以那条否决站得住；但**换一台桌面再读同一位，先看类名**。这一位要打就把自己标出来。
+      val vacuous = source is CircleIconDrawable
+      val st = if (vacuous) "-wrap" else runCatching { source.constantState }
         .getOrNull()?.let { Integer.toHexString(System.identityHashCode(it)) } ?: "-"
       append(" state=").append(st)
     }
@@ -494,11 +510,17 @@ internal object MonochromeSynth {
    * 两件事必须留痕：① 它是个提前 return，本项目吃过两次「提前 return 静默失效」的亏；
    * ② 它带**同一张掩码的缩略图**（走 [noteDiagnosis]），这样"缓存交的那张"与"现算的那张"
    * 能在日志里逐张对上 —— 只看命中数不能证明缓存没错，只能证明它被走到了。
+   *
+   * ⚠ **负缓存也要留痕**（原来这一条只在 `mask != null` 时打，等于把"放弃合成"这条 telemetry
+   * 从每 bind 一次改成每内容一次 —— 真机上一趟重启从 148 行塌成 1 行，看上去像"这台桌面根本不放弃合成"）。
+   * ⚠ **命中不能占冷启动那 12 个 [HEAVY_DIAG_LIMIT] 名额**：热重启 1880 次命中会把预算吃干，
+   * 于是**真正现算的那几张反而没有缩略图** —— 而那正是要核对的东西。两条路各一套名额。
    */
   private fun noteCached(edge: Int, label: String, hit: MonoCache.Entry, input: Bitmap, key: Long) {
     val n = diagnosed.incrementAndGet()
-    Log.d(TAG, "Mono: diag#$n edge=$edge 键=${MonoKey.hex(key)} $label 缓存=${hit.from} → 直接交缓存里那张（未重算）")
-    noteDiagnosis(edge, label, input, hit.mask)
+    val outcome = if (hit.mask == null) "判据不成立（负缓存，未重算）" else "直接交缓存里那张（未重算）"
+    Log.d(TAG, "Mono: diag#$n edge=$edge 键=${MonoKey.hex(key)} $label 缓存=${hit.from} → $outcome")
+    if (hitDiag.incrementAndGet() <= HIT_DIAG_LIMIT) noteDiagnosis(edge, label, input, hit.mask)
   }
 
   /**
@@ -703,6 +725,17 @@ internal object MonochromeSynth {
   private const val HEAVY_DIAG_LIMIT = 12
 
   private val heavyDiag = AtomicInteger(0)
+
+  /**
+   * **缓存命中那条路单独一套名额**（[noteCached]）。
+   *
+   * 不能与 [heavyDiag] 共用：真机热重启一趟有 1880 次命中，共用会把 12 条名额在几秒内吃干，
+   * 于是**现算的那几张反而一张缩略图都没有** —— 而现算那几张才是要核对的东西。
+   * 8 条足够对上一眼（一张 40 行，8 张 = 320 行，再多就淹 logcat）。
+   */
+  private const val HIT_DIAG_LIMIT = 8
+
+  private val hitDiag = AtomicInteger(0)
 
 
 

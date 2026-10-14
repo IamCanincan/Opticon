@@ -309,6 +309,7 @@ private fun NotesCard() {
     listOf(
       R.string.note_adaptive,
       R.string.note_tiles,
+      R.string.note_mono_cache,
       R.string.note_launcher3,
       R.string.note_themed_icon,
     )

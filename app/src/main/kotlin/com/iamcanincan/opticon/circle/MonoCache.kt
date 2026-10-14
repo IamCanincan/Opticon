@@ -50,9 +50,21 @@ internal object MonoCache {
   private const val MAX_MEM_BYTES = 8L * 1024 * 1024
 
   /**
+   * 内存层的**条数**上限。4096 条，对 209 种内容的抽屉留了二十倍余量。
+   *
+   * ⚠ 为什么按字节封了还要按条数封：**负缓存条目一个字节都不占**（`mask == null`，bytes=0），
+   * 所以 [MAX_MEM_BYTES] 那道闸对它们**完全无效** —— 淘汰循环 `while (memBytes > cap)` 永远不触发，
+   * 一张永远压不出来的图标每被问一次就多一个键，桌面在后台批量预载整个抽屉的那条路径上能一直涨。
+   * 每个条目本身几十字节 + 一个键，看着不多，但"没有上限"这三个字在常驻进程里就是问题。
+   */
+  private const val MAX_MEM_ENTRIES = 4096
+
+  /**
    * 磁盘那层的字节上限。48 MB ≈ 340 张 384²：一个抽屉 209 种 = 30 MB，留三成余量给
    * 多尺寸 / 新增应用。超了按**最旧**删（`lastModified`）—— 这里没有访问计数，而"这轮没再被
    * 问到的那张"正是最该扔的。落在宿主 `cacheDir` 里，系统存储紧张会自己清：它是缓存，扔掉只慢不坏。
+   * ⚠ **界面上那条「剪影缓存在哪里」写着 48 MB**（`note_mono_cache`）—— 改这个数要同步改文案，
+   *   那是给用户看的，不能飘。
    */
   private const val MAX_DISK_BYTES = 48L * 1024 * 1024
 
@@ -82,6 +94,9 @@ internal object MonoCache {
   private val diskHits = AtomicLong()
   private var writesSinceSweep = 0
 
+  /** 写失败的警告只放行前 3 条（清过 cacheDir 之后每个图标都会失败一次，那不该刷屏）。 */
+  private var writeWarned = 0
+
   /** 内容键：见 [MonoKey.keyOf]，那六样就是掩码的全部输入。 */
   fun keyOf(
     px: IntArray, under: IntArray?, edge: Int, adaptive: Boolean, flatten: Boolean, circle: Boolean,
@@ -96,6 +111,9 @@ internal object MonoCache {
   fun lookup(key: Long, edge: Int): Entry? {
     mem[key]?.let {
       hits.incrementAndGet()
+      // ⚠ 汇总行**两层都要打**：原来只在磁盘那一支打，于是"全内存命中"的一趟重启（真机第二次就是这样：
+      //   1880 命中里只有 480 次落盘）**一行都不出**，命中率这件事在日志里等于没记。
+      note()
       return it.copy(from = FROM_MEM)
     }
     val loaded = readDisk(key, edge)
@@ -126,8 +144,8 @@ internal object MonoCache {
     val bytes = mask?.byteCount?.toLong() ?: 0L
     mem[key] = Entry(mask, bytes, from)
     memBytes += bytes
-    // 弹出最旧的，直到回到上限之下。负缓存条目 bytes=0，跟着一起弹也无所谓。
-    while (memBytes > MAX_MEM_BYTES && mem.size > 1) {
+    // 弹出最旧的，直到回到两道上限之内（字节与条数 —— 后者管的是 bytes=0 的负缓存条目，见 [MAX_MEM_ENTRIES]）。
+    while (mem.size > 1 && (memBytes > MAX_MEM_BYTES || mem.size > MAX_MEM_ENTRIES)) {
       val it = mem.entries.iterator()
       if (!it.hasNext()) break
       val e = it.next()
@@ -143,23 +161,40 @@ internal object MonoCache {
    * 换到模块的 dataDir 就是跨 UID 写，那是权限拒绝。
    * ⚠ 也因此：按「清除桌面图标缓存」那一下**不会**清掉这里（它删的是桌面的 `app_icons.db`）。
    * 换装新构建靠目录名换掉一整层，见 [pruneOldBuilds]。
+   *
+   * ⚠ **"还没就绪"不算失败**（主人 2026-10-11 量过同一条坑：attach 阶段 `currentApplication()` 常常是 null）：
+   * 头几次 bind 可能全落在那个窗口里，按次数计上限会把这一层**永久**关掉而只在日志里留三行。
+   * 所以只有"拿到了 Context 却建不出目录 / 拿不到装机身份"这种**确定失败**才计数；
+   * `app == null` 只是没就绪，下次再来。
+   * ⚠ 反过来，写失败要**把目录忘掉**：系统的 `cacheDir` 会被清（存储紧张、用户清缓存、别的工具），
+   * 抓住一个已消失的 `dir` 不放 = 这个进程余下每一次写都抛，而每次写都抛就是每次图标一行警告。
    */
   private fun dir(): File? {
     dir?.let { return it }
     if (dirTries >= 3) return null
-    dirTries++
-    val id = runCatching { renderId() }.getOrNull()
-    if (id == null) {
-      Log.w(TAG, "Mono: 掩码缓存拿不到装机身份，磁盘那一层不开（只会慢，不会给旧答案）")
-      return null
-    }
-    val app = runCatching { currentApplication() }.getOrNull()
-    if (app == null) {
+    // ⚠ 顺序是**先 Context 后要身份**，反过来会把这一层永久关掉：`renderId()` 内部第一件事就是
+    //   `currentApplication()`，而 attach 阶段那会儿它就是 null —— 于是"没就绪"会被当成"拿不到装机身份"
+    //   计数，头三次 bind 一眨眼就把 3 次额度烧光，之后整个进程再试过不了。
+    val app = runCatching { currentApplication() }.getOrNull() ?: return null   // 没就绪：不计数，下次再来
+    val root = runCatching { app.cacheDir }.getOrNull()
+    if (root == null) {
+      dirTries++
       Log.w(TAG, "Mono: 掩码缓存拿不到宿主 cacheDir，磁盘那一层不开")
       return null
     }
-    val d = File(File(app.cacheDir, DIR_NAME), id.replace(Regex("[^A-Za-z0-9._-]"), "_"))
+    val id = runCatching { renderId() }.getOrNull()
+    if (id == null) {
+      dirTries++
+      Log.w(TAG, "Mono: 掩码缓存拿不到装机身份，磁盘那一层暂不开（只会慢，不会给旧答案）")
+      return null
+    }
+    // ⚠ 目录名里带上 **SDK_INT**：装机身份只认我们自己的安装包，而**系统 OTA 不动我们**
+    //   （`lastUpdateTime` 是"我们这个包"的）。像素变了键自然变，但 ALPHA_8 的 `rowBytes`、
+    //   ColorSpace 语义这类"像素没变、交付口径变了"的东西只有系统侧会动 —— 那一条键盖不住。
+    //   多一个目录名后缀的钱，比"OTA 之后继续发上一套框架下压出来的掩码"便宜。
+    val d = File(File(root, DIR_NAME), "${id}_api${android.os.Build.VERSION.SDK_INT}".replace(Regex("[^A-Za-z0-9._-]"), "_"))
     if (!runCatching { d.mkdirs(); d.isDirectory }.getOrDefault(false)) {
+      dirTries++
       Log.w(TAG, "Mono: 掩码缓存目录建不出来（$d），磁盘那一层不开")
       return null
     }
@@ -213,7 +248,10 @@ internal object MonoCache {
     val ok = runCatching { tmp.writeBytes(bytes); tmp.renameTo(to) }.getOrDefault(false)
     if (!ok) {
       runCatching { tmp.delete() }
-      Log.w(TAG, "Mono: 掩码缓存写不进去（${to.name}），这一层白跑")
+      // ⚠ 忘掉这个目录，下一张重新解析：`cacheDir` 会被系统或用户清掉，而抓住一个已经不存在的
+      //   路径不放 = 这个进程余下每一次写都抛 → **每个图标一行警告**。清缓存不是故障，是常态。
+      dir = null
+      if (writeWarned++ < 3) Log.w(TAG, "Mono: 掩码缓存写不进去（${to.name}），重找目录；再失败就只关这一层")
     }
     if (++writesSinceSweep >= SWEEP_EVERY) {
       writesSinceSweep = 0
