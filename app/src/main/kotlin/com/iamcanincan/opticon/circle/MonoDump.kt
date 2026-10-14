@@ -145,6 +145,12 @@ internal object MonoDump {
     // 从来没被判过）。**这一条只改诊断通道，不改任何掩码**：加完 8 个包之后六段回归台逐位不变。
     "cn.com.zjol", "com.jingdong.app.mall", "com.xunmeng.pinduoduo", "com.sony.songpal.mdr",
     "me.ele", "com.sina.weibo", "com.tencent.hunyuan.app.chat", "com.able.wisdomtree",
+    // 2026-10-14「取色吃调整好的图标」这一轮：这 5 张是**乙会改输入、而之前一张像素都没回来过**的。
+    // 要把仓里那把尺（第十一闸源尺寸账）重钉到"设备真喂给模型的那张"上，就必须拿到它们的
+    // `pxIn` —— 现在判据台用的是我仿造的输入语料，**那份不能当基线**（口径是我猜的）。
+    // 其余 4 张（azure / tieba / openlist / 元宝 / 拼多多）上面已经在名单里了。
+    "com.netease.uuremote", "com.termux", "com.microsoft.xboxone.smartglass",
+    "org.chromium.webapk", "com.example.appui",
   )
 
   fun watched(label: String): Boolean = WATCH.any { label.contains(it) }
