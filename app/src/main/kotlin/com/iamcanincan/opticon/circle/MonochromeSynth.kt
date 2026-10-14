@@ -290,11 +290,15 @@ internal object MonochromeSynth {
       val total = edge * edge
       val pixels = IntArray(total)
       raster.getPixels(pixels, 0, edge, 0, 0, edge, edge)
-      // 彩色那支的裁剪窗口 —— **量在彩色量的那个对象上**（整个 `source` 光栅化到 128），
-      // 见 [geometryWindow]。只在「强制裁圆」开着时量 —— 主人那条原则是"两个开关都开着，
-      // 取色才跟着裁好的图走"，关掉裁圆时桌面看到的就是原图，剪影不该被一个没开的功能搬动。
-      val win =
-        if (ModuleRuntime.options().circleEnabled) geometryWindow(source) else null
+      // 裁圆那个窗口 —— 量在**模型真吃的那一张**上（`raster` 的像素）。只在「强制裁圆」开着时量。
+      // 搬的是**算好的墨**（见下面「甲」那一段），判据本身不看这个窗口。
+      // ⚠ 这一位只认真机的数。拿离线 `_model.png`（只有前景层、没有那块盘）复算对不上：
+      //   那里元宝 2.26×、uu远程 1.75×，而主人判"没问题"装机的那一版（2026-10-14 20:15 那一批）
+      //   95 个包只有 11 个真被搬过，最大的一张 `切1.19×`；元宝和 openlist 都在 `几何=满幅`
+      //   那一堆 —— 那两张的大，是**没搬**造成的大，不是搬错。今晚据此加的 1.82 上限一张都不拦，
+      //   等于没写，删了。
+      val win = if (ModuleRuntime.options().circleEnabled)
+        IconCropWindow.of(pixels, edge, edge) else null
       // `!flatten` 且是自适应 = 交给这里的**只有前景层**，那张盘在背景层里（桌面自己补）。
       // 把这件事告诉模型：这一张里不许有"实心的一块当底" —— 混元那半个太极就是这么丢的。
       // ⚠ `flatten` 那一路（背景是一张真 drawable）**另起一张只画背景层的**，作为 `under` 一起交
@@ -318,27 +322,16 @@ internal object MonochromeSynth {
       // 取完像素就回收：这张 384² 的 ARGB 有 590KB，留着要一直活到 `raster` 那两处 recycle 才走。
       val underPx = under?.let { u -> IntArray(total).also { a -> u.getPixels(a, 0, edge, 0, 0, edge, edge) }
         .also { u.recycle() } }
-      // ── 乙：模型吃的是**裁圆调整好的那张图标**（主人三次要的就是这一条）──
-      //   开着裁圆与取色，取色就该按桌面上那张调好的图来，而不是按应用原始的图层。
-      //   窗口来自 [geometryWindow]（与彩色同一个对象、同一套判据），搬的是**输入**。
-      // ⚠ `plateLayer` 仍按**原始像素**判：它问的是"盘在哪一层"，那是图层结构的事，
-      //   不会因为放大而改变；而 35% 那条线是在原始取景下摊过分母定的（上面那段注释），
-      //   换取景再比它 = 拿没标定的尺量。`under` 必须一起搬 —— 真机上整张图标都动了。
-      // ⚠ 抓取通道带回来的也必须是**搬过的那两张**（`pxIn`/`underIn`），否则判据台复放出来的
-      //   掩码不是设备上那一张 —— 这一条是 2026-10-12 那次"同一张输入、两边算出两张掩码"的教训。
-      val inset = visibleInset(edge)
-      val visT = edge - 2 * inset
-      val pxIn = if (win == null) pixels
-      else IconCropWindow.reframe(pixels, edge, edge, win, inset, inset, visT, visT)
-      val underIn = if (win == null || underPx == null) underPx
-      else IconCropWindow.reframe(underPx, edge, edge, win, inset, inset, visT, visT)
-      val out = MonochromeMask.build(pxIn, edge, edge, plateLayer, underIn)
+      // 判据吃的是**原样像素**（浓度、分档、盘刀、极性都不受几何影响）；几何只作用在
+      // **算完之后**的交付掩码上 —— 这条是今晚量出来的：把重排放到输入侧（模型吃裁好的图），
+      // 双线性会让 xbox 换支成一块黑饼、最近邻也会动到 4 张的判据；放到输出侧，14 闸结构上不可能红。
+      val out = MonochromeMask.build(pixels, edge, edge, plateLayer, underPx)
       // H0 的射程跟着记：见 [noteSynthesized] 那条汇总为什么带它。
       noteH0(out.h0why)
       noteVeto(out.veto)
       // 指纹打在判据行上：解不出包名的那一批（快捷方式）在日志里都叫 `?`，没有这个数
       // 就对不上"哪一行判据是哪一个带回来的 PNG"。见 [MonoDump.sigOf]。
-      val sig = MonoDump.sigOf(pxIn, edge, edge)
+      val sig = MonoDump.sigOf(pixels, edge, edge)
       val id = noteBranch(edge, sig, label, out, win)
       val isWatched = MonoDump.watched(label)
       // ⚠ **变体标记必须进带回来的那个名字。** 桌面会把**同一张图标按不同尺寸再画一遍**：
@@ -355,7 +348,7 @@ internal object MonochromeSynth {
         // 包名解不出来时（`?`）退而带指纹，重放的文件名里就带着它。
         // ⚠ 三个输入**一个都不能少**：模型吃的是 `(合成图, 层底, under)`，重放只拿到合成图时
         //   `盘刀/反相` 读的那一层就不存在了 —— 复放出来的掩码不是设备上那一张（见 [MonoDump.maybe]）。
-        MonoDump.maybe(id, label, raster, pxIn, out.mask, underIn, plateLayer, edge, edge,
+        MonoDump.maybe(id, label, raster, pixels, out.mask, underPx, plateLayer, edge, edge,
           "${label.substringBefore(' ')}_${sig}${if (variant.isEmpty()) "" else "_$variant"} | ${out.report}${geoTag(win)}", isWatched)
       }
       // 可疑的那几张把**原像素**带回来（PNG → base64 → 分片进日志），判据台原样重放。
@@ -369,18 +362,16 @@ internal object MonochromeSynth {
         raster.recycle()
         return@runCatching null
       }
-      // 掩码这一步**不再搬位置** —— 乙已经在输入侧搬过了（窗口映射到的就是可见区）。
-      val alpha = toAlphaMask(ramp, edge, edge)
+      // 甲：判据算完**之后**才搬位置 —— 浓度、分档、盘刀、极性一个像素都不动，只把算好的墨
+      // 摆到裁圆定的那个尺寸上。目标矩形**没传**（= 整张图层画布）：这正是主人对着判"没问题"
+      // 的那一版，改它等于改那 11 张真被搬过的图标，不在这一刀的范围里。
+      val alpha = toAlphaMask(if (win == null) ramp else IconCropWindow.reframe(ramp, edge, edge, win), edge, edge)
       // 非自适应图标的内容是满幅的，而它在图层 bounds 里只该占中间那 2/3（可见区），
       // 所以掩码算完**之后**才缩进 —— 顺序反了就会踩 [rasterize] 上面那个坑。
-      // ⚠ 但有窗口时**不能再缩一遍**：`pxIn` 那一步已经把窗口放进可见区了。
-      val placed0 = if (adaptive || win != null) alpha else intoVisibleArea(alpha, edge)
-      // 最后一步：**剪影归一（只缩不放）** —— 顶到盘边的那一批缩回安全区，本来在区里的不动。
-      val placed = normalizeSilhouette(placed0, edge, label)
+      val placed = if (adaptive) alpha else intoVisibleArea(alpha, edge)
       noteDiagnosis(edge, label, raster, placed)
       raster.recycle()
-      if (placed !== placed0) placed0.recycle()
-      if (placed0 !== alpha) alpha.recycle()
+      if (placed !== alpha) alpha.recycle()
       placed
     }.onFailure {
       // ⚠ 这一条不能省：上面整个块包在 runCatching 里，任何异常都会被 `getOrNull()` 变成一个
@@ -451,9 +442,9 @@ internal object MonochromeSynth {
   }
 
   /**
-   * 判据行末尾那截几何标记：`几何=满幅`（彩色也没动它）/ `几何=切1.47×`（内切放大）/
-   * `几何=缩0.78×`（缩进，尖角不许顶到边）。**这一趟是搬输入** —— 模型吃的就是搬过的那张，
-   * 所以这个数变了意味着判据也变了，不是只挪位置。
+   * 判据行末尾那截几何标记：`几何=满幅`（这张没搬）/ `几何=切1.47×`（内切放大）/
+   * `几何=缩0.78×`（缩进，尖角不许顶到边）。**这一趟是搬输出**：这个数只说明"算好的墨被摆到
+   * 了多大"，判据吃的是搬之前那一张，所以它变了不动任何一档判断。
    *
    * 为什么挂在**这一行**而不是另起一行：图标加载是热路径，本仓的规矩是"每个图标一行"。
    * 装机后要判"染色那支有没有跟着裁圆走"，grep 这一个字段就够了。
@@ -597,15 +588,7 @@ internal object MonochromeSynth {
 
   private val heavyDiag = AtomicInteger(0)
 
-  /** 「几何量不到」每进程最多打几条 —— 见 [geometryWindow] 里那条"量不到 ≠ 满幅"。 */
-  private const val GEOM_FAIL_LIMIT = 20
 
-  private val geomFailLogged = AtomicInteger(GEOM_FAIL_LIMIT)
-
-  /** 「剪影归一」每进程放行几条日志（每张图标都合成一次，全打会淹掉 logcat）。 */
-  private const val SIL_LOG_LIMIT = 40
-
-  private val silLog = AtomicInteger(SIL_LOG_LIMIT)
 
   /** ASCII 缩略图的行列数（降采样后的画布大小）与最多打几张。 */
   private const val ASCII_COLS = 40
@@ -633,41 +616,6 @@ internal object MonochromeSynth {
    */
   private fun pct(part: Int, whole: Int): String =
     if (whole <= 0) "0" else String.format(Locale.ROOT, "%.2f", part.toFloat() / whole)
-
-  /**
-   * 裁圆那个窗口 —— **量在彩色那支量的同一个对象上**：把整个 [source] 光栅化到量测格子再量。
-   *
-   * ⚠ 这里"就是"要用 [rasterize] 画整个 `source`，与 [render] 里那条"整张那一路不能用
-   *   `rasterize(source)`"**正好相反** —— 那条讲的是**喂给模型的像素**（要 1.0 倍、不能裁边），
-   *   而这里要的是**桌面上那个块头**：`AdaptiveIconDrawable.draw()` 按视口画（子层 1.5 倍铺出去、
-   *   裁掉四边），彩色那支 `MaskedDrawable` 量的就是这个东西。
-   *   量错对象 = 把剪影统一多放大约 1.5 倍（2026-10-14 第一版就错在这里：量前景层给出
-   *   元宝 2.26×，而彩色实际是 1.49×；62 张里 13 张全不一致，其中 6 张彩色根本不动）。
-   *
-   * 成本：一张 128 边长的光栅化 + 一趟扫描，真机同类量测中位 0.60ms，而这里每次**合成**一次
-   *   （不是每帧），合成本身是几十毫秒那一档。
-   */
-  private fun geometryWindow(source: Drawable): IconCropWindow.Window? {
-    val edge = IconCropWindow.scanEdge
-    val bmp = rasterize(source, edge)
-    if (bmp == null) {
-      // **量不到 ≠ 满幅**：这两件事如果打成同一个字，装机上就永远分不清「这张确实不用搬」
-      // 和「我根本没量成」—— 本仓为这类事翻过不止一次车。
-      if (geomFailLogged.decrementAndGet() >= 0) {
-        Log.w(TAG, "Mono: 几何 ${IconNames.of(source)} 光栅化失败 → 量不到，不搬")
-      }
-      return null
-    }
-    return try {
-      val px = IntArray(edge * edge)
-      bmp.getPixels(px, 0, edge, 0, 0, edge, edge)
-      // 视口空间 → 图层空间：掩码活在 108dp 画布里，桌面画它时按 1.5 倍铺出去再裁边。
-      // 不换这一手，两个 1.5 正好抵消，重排等于没做（见 [IconCropWindow.inLayer]）。
-      IconCropWindow.of(px, edge, edge)?.inLayer(AdaptiveIconDrawable.getExtraInsetFraction())
-    } finally {
-      bmp.recycle()
-    }
-  }
 
   /**
    * 把 [target] 光栅化成 `edge × edge` 的位图，一律 `setBounds(0, 0, edge, edge)`。
@@ -817,44 +765,6 @@ internal object MonochromeSynth {
    * ⚠ 只能在掩码**算完之后**调用，不能提前到光栅化那一步 —— 为什么，见 [rasterize]。
    * 缩放用双线性：掩码现在是一条连续斜坡，混它只会更平滑。
    */
-  /**
-   * 交付掩码的**剪影归一**：墨的主体出安全区就整体缩回去，**只缩不放**。
-   *
-   * 为什么放在最后一步、且只碰 alpha 的排布：判据（浓度、分档、盘刀、极性）此时已经算完，
-   * 这一手不动任何一个判据数字 —— 那是今晚用真机语料量过的教训（改输入会让 spotube 那一族
-   * 换支、把 xbox 推成一块黑饼）。
-   *
-   * ⚠ 分母是**盘的边长**（可见区），不是整张 108dp 画布；写错的话一堆图标会读成"100% 占满"，
-   *   那条"大小不一"的账当场就是假的。判据与尺子都在 [IconCropWindow.silhouetteScale]。
-   * ⚠ ALPHA_8 的 `rowBytes` 会补到 4 的倍数，读写都必须按 rowBytes 走（[toAlphaMask] 那条老坑）。
-   */
-  private fun normalizeSilhouette(mask: Bitmap, edge: Int, label: String): Bitmap {
-    val h = mask.height
-    val plateSide = edge - 2 * visibleInset(edge)
-    val stride = mask.rowBytes
-    val bytes = ByteArray(stride * h)
-    mask.copyPixelsToBuffer(ByteBuffer.wrap(bytes))
-    val a = IntArray(edge * h)
-    for (y in 0 until h) {
-      val row = y * stride
-      for (x in 0 until edge) a[y * edge + x] = bytes[row + x].toInt() and 0xFF
-    }
-    val s = IconCropWindow.silhouetteScale(a, edge, h, plateSide)
-    if (s >= 0.999f) return mask
-    val scaled = IconCropWindow.scaleAbout(a, edge, h, s)
-    val out = Bitmap.createBitmap(edge, h, Bitmap.Config.ALPHA_8)
-    val ob = ByteArray(out.rowBytes * h)
-    for (y in 0 until h) {
-      val row = y * out.rowBytes
-      for (x in 0 until edge) ob[row + x] = scaled[y * edge + x].toByte()
-    }
-    out.copyPixelsFromBuffer(ByteBuffer.wrap(ob))
-    if (silLog.decrementAndGet() >= 0) {
-      Log.d(TAG, "Mono: 剪影归一 $label 缩到 ${"%.3f".format(s)}（盘边 ${plateSide}px）")
-    }
-    return out
-  }
-
   private fun intoVisibleArea(source: Bitmap, edge: Int): Bitmap {
     val inset = visibleInset(edge)
     val out = Bitmap.createBitmap(edge, edge, Bitmap.Config.ALPHA_8)

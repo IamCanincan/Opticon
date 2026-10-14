@@ -63,6 +63,10 @@ internal object IconCropWindow {
      * （2026-10-14 第二版就是这么错的：元宝块头 53.5% → 52.7%）。
      *
      * [zoom] 原样保留 —— 它是彩色那支那个放大倍数，日志与语料账要报的是"桌面上动了多少"。
+     *
+     * 现在装机那两路都不需要它（彩色自己在视口空间里画，染色量与搬都在图层空间里），留着是给
+     * 判据台复算用的：它从 `_model.png`（前景层）起算，而那**不是**设备上喂进去的那张 ——
+     * 离线拿它量元宝 2.26×、真机同一条路 `几何=满幅`。**以真机的数为准。**
      */
     fun inLayer(f: Float): Window = Window(
       (l + f) / (1f + 2f * f), (t + f) / (1f + 2f * f),
@@ -212,22 +216,21 @@ internal object IconCropWindow {
 
   /**
    * 把 [px] 按 [win] 重排成"窗口铺满目标矩形"的那张图（cover + 窗口中心对齐目标中心），
-   * 与 [MaskedDrawable] 画彩色那支时用的**同一个仿射**。最近邻采样，返回新数组。
+   * 与 [MaskedDrawable] 画彩色那支时用的**同一个仿射**。双线性采样，返回新数组。
    *
-   * ⚠ **[tx,ty,tw,th] 在染色那一路必须是"可见区"，不是整张画布。** 单色层的画布是 108dp，
-   *   桌面只画中间那 2/3（子层按 1.5× 铺进去）；彩色那支的 `bounds` 本来就是可见区。所以窗口
-   *   映射到整张画布 = 把墨推到桌面根本不画的地方，屏幕上就是**字形被切一圈**
-   *   （2026-10-14 第一版就踩了这个：`me.ele` 重排后块头 100%，四边全贴）。
+   * ⚠ **染色那一路的目标矩形就是整张图层画布（默认值），不要传可见区。** 单色那一层本身是
+   *   108dp 的画布，桌面按 1.5× 铺进去、只画中间那 2/3 —— 铺满画布落到屏幕上正好就是铺满可见区。
+   *   这里再缩一遍 = 缩两遍。非自适应那张该缩进可见区，由 [MonochromeSynth] 在掩码算完**之后**
+   *   调 `intoVisibleArea` 做，不在这儿。
    *
-   * ## 为什么是**最近邻**，不是双线性（2026-10-14，量出来的，别再改回去）
-   * 双线性会**造出一批源图里根本没有的中间浓度**，而模型的底色场、分档、盘刀吃的就是浓度分布。
-   * 62 张真机语料上对照（`_harness/YiKtKt` + `SizeVarKt`）：
-   *  · 双线性 —— 第十一闸源尺寸账 `branch 2→3 / 4→5`，其中 `com.microsoft.xboxone.smartglass`
-   *    在 384 上**换支**、`底占 0.45→0.00` = 整张交成墨（一块黑饼）；源尺寸漂移面 81%→84%。
-   *  · 最近邻 —— `branch 2 / 4`、`platecut 5 / 4` **与基线逐字相同**，xbox 那条回归消失；
-   *    漂移面只从 81% 涨到 82%（`fields 49→51 / 44→45`，浓度细节级，不换支不动盘刀）。
-   * 代价是放大档的边缘会有锯齿感 —— 但这一路搬的是**模型的输入**，最终掩码的抗锯齿由桌面画的时候
-   * 负责，不该在这里替源图发明像素。
+   * ## 采样：搬**掩码**用双线性，搬**输入**必须用最近邻 —— 两者不是一回事
+   * 这条几何现在作用在算完之后的交付掩码上（只改像素排布，不改任何判据数字），
+   * 用双线性（只对 alpha 插值，颜色取最近邻）—— 主人 2026-10-14 逐张判"没问题"的就是这一版。
+   *
+   * ⚠ 但如果哪天把它挪到**模型之前**（让模型吃重排后的图），采样必须换成最近邻：双线性会造出
+   *   源图里没有的中间浓度，而模型的底色场/分档吃的就是浓度分布。那条路量过 —— 双线性让
+   *   `com.microsoft.xboxone.smartglass` 换支、`底占 0.45→0.00`（整张交成墨），源尺寸漂移面 81%→84%；
+   *   最近邻则 `branch`/`platecut` 与基线逐字相同。见分支 `wip/tint-silhouette` 的提交说明。
    */
   fun reframe(
     px: IntArray, w: Int, h: Int, win: Window,
@@ -243,15 +246,31 @@ internal object IconCropWindow {
     val out = IntArray(px.size)
     for (y in 0 until h) {
       // 目标像素 → 源坐标（draw() 那一步的逆变换：先减目标心、除 scale、再加回窗口心）
-      val sy = ((y + 0.5f - cyDst) / scale + cySrc).toInt()
-      if (sy !in 0 until h) continue
-      val row = sy * w
+      val sy = (y + 0.5f - cyDst) / scale + cySrc
       for (x in 0 until w) {
-        val sx = ((x + 0.5f - cxDst) / scale + cxSrc).toInt()
-        if (sx in 0 until w) out[y * w + x] = px[row + sx]
+        val sx = (x + 0.5f - cxDst) / scale + cxSrc
+        out[y * w + x] = sample(px, w, h, sx, sy)
       }
     }
     return out
+  }
+
+  /**
+   * ⚠ **只对 alpha 双线性插值，颜色取最近的那个源像素。** 直接对打包的 ARGB 求平均会跨字节进位
+   *   （`0x00FFFFFF` 与 `0xFFFFFFFF` 的平均是 `0x80EFFFFB` —— 蓝通道被算坏了）。
+   */
+  private fun sample(px: IntArray, w: Int, h: Int, sx: Float, sy: Float): Int {
+    val x0 = sx.toInt()
+    val y0 = sy.toInt()
+    fun alphaAt(x: Int, y: Int): Int =
+      if (x < 0 || y < 0 || x >= w || y >= h) 0 else px[y * w + x] ushr 24
+    val fx = sx - x0
+    val fy = sy - y0
+    val top = alphaAt(x0, y0) + ((alphaAt(x0 + 1, y0) - alphaAt(x0, y0)) * fx)
+    val bot = alphaAt(x0, y0 + 1) + ((alphaAt(x0 + 1, y0 + 1) - alphaAt(x0, y0 + 1)) * fx)
+    val a = (top + (bot - top) * fy).roundToInt().coerceIn(0, 255)
+    val nearest = if (x0 < 0 || y0 < 0 || x0 >= w || y0 >= h) 0 else px[y0 * w + x0]
+    return (a shl 24) or (nearest and 0x00FFFFFF)
   }
 
   /**
