@@ -4,6 +4,7 @@
 /.idea
 /.kotlin
 /.workbuddy-ai
+/.workbuddy/
 /screenshots
 .DS_Store
 /build

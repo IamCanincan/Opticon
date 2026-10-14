@@ -13,7 +13,7 @@
         长度约定：中文 <= 26 字，太长在模块列表里会占好几行。当前 21 字，
         两个功能都要提到 —— 用户只看得到这一行。
     -->
-    <string name="xposed_description">把应用图标裁成圆形，修好未适配的通知小图标</string>
+    <string name="xposed_description">应用图标裁圆、修复未适配的通知小图标，并为强制取色合成极性正确的单色层</string>
 
     <!--
         自有权限 PROCESS_CONTROL 的名字与说明（出现在系统「设置 → 应用」里）。
