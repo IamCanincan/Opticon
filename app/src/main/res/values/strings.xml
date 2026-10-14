@@ -10,8 +10,12 @@
         老式写法（xposeddescription meta-data / module.prop 里的 description=）已经不用，
         那是给 API <= 93 的旧框架用的，留着反而让模块变成「兼容模式」。
 
-        长度约定：中文 <= 26 字，太长在模块列表里会占好几行。当前 21 字，
-        两个功能都要提到 —— 用户只看得到这一行。
+        长度约定：中文 <= 26 字，太长在模块列表里会占好几行。
+        ⚠ **现在这一条已经 35 字，超约定 9 字** —— 是补上「单色合成」那一路时涨上来的
+        （`xposed_description` 要提到三路功能，而这条约定写在只有两路的时候）。
+        两个候选压回 19 字以内：「图标裁圆、取色单色剪影、通知小图标修复」/
+        「桌面图标裁圆、取色剪影、通知小图标」。**换不换由主人定，别自动截。**
+        用户只看得到这一行。
     -->
     <string name="xposed_description">应用图标裁圆、修复未适配的通知小图标，并为强制取色合成极性正确的单色层</string>
 
@@ -23,7 +27,7 @@
     <string name="permission_process_control_description">只允许 Opticon 自己请求被注入的进程清图标缓存或重启自身</string>
 
     <!--
-        底部导航：图标页（裁圆 + 运维按钮）、通知页、模块页（作用域 / 步骤 / 验证）、关于页（更新 / 版本）。
+        底部导航：图标页（裁圆 + 单色层 + 运维按钮）、通知页、模块页（作用域 / 步骤 / 验证）、关于页（更新 / 版本）。
         四格 —— 三格时药丸太短，撑不起"悬浮药丸"的形态。
     -->
     <string name="tab_icon">图标</string>
@@ -44,7 +48,7 @@
 
     <!-- 作用域分组 -->
     <string name="section_scope">作用域</string>
-    <string name="scope_hint">图标裁圆发生在这些进程里 —— 谁解析应用图标，谁就得认得模块打的标记。作用域不写死：任何会显示应用图标的应用都能在管理器里自行勾选；没勾上的进程会拿到无法解析的资源 id。</string>
+    <string name="scope_hint">图标的两路（裁圆、强制取色的单色合成）都发生在这些进程里 —— 谁解析应用图标，谁就得认得模块打的标记。作用域不写死：任何会显示应用图标的应用都能在管理器里自行勾选；没勾上的进程会拿到无法解析的资源 id。</string>
 
     <!-- 作用域标签（3 种，多个作用域共享同一档位）-->
     <string name="scope_tag_required">必选</string>
@@ -91,7 +95,7 @@
     <string name="step_1">在框架中启用本模块</string>
     <string name="step_1_hint">在管理器里把模块开关打开。</string>
     <string name="step_2">按上方清单勾选要生效的进程</string>
-    <string name="step_2_hint">至少勾选 com.android.launcher3 才能在桌面看到裁圆效果；通知那一路还需要 com.android.systemui。</string>
+    <string name="step_2_hint">至少勾选 com.android.launcher3 才能在桌面看到裁圆与单色层（两路都在桌面进程里）；通知那一路还需要 com.android.systemui。</string>
     <string name="step_3">重启设备</string>
     <string name="step_3_hint">框架不会热加载模块，必须重启。</string>
     <string name="step_4">桌面无变化时，强制停止桌面再打开</string>
@@ -173,8 +177,8 @@
 
     <!-- 关于（分区标题直接复用底栏的 tab_about，免得两处文案不一致被判重复）-->
     <string name="about_version">版本 %1$s · MIT 许可</string>
-    <!-- Opti = 优化，con = icon。两件事都落在"图标"上，别写成互不相干的两块功能 -->
-    <string name="about_body">源码与说明在 GitHub。Opticon 就是「优化图标」：桌面上的图标裁圆，通知栏里的小图标修好。</string>
+    <!-- Opti = 优化，con = icon。**三件事**都落在"图标"上（形状、强制取色的剪影、通知里的小图），别写成互不相干的几块功能 -->
+    <string name="about_body">源码与说明在 GitHub。Opticon 就是「优化图标」：桌面上的图标裁圆，强制取色时没做单色适配的应用由本模块补一张极性正确的剪影，通知栏里的小图标修好。</string>
 
     <!-- ============ 「通知」页 ============ -->
 

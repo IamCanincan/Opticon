@@ -101,7 +101,7 @@ class OpticonModule : XposedModule() {
     override fun onPackageReady(param: XposedModuleInterface.PackageReadyParam) {
         if (!param.isFirstPackage) return
 
-        // 两个功能都按同一份配置走，先挂上模块实例、读一次开关。
+        // 三路功能都按同一份配置走，先挂上模块实例、读一次开关。
         // 之后不再需要重启：每次取图标 / 处理通知时 ModuleRuntime.options() 会按 TTL 重读，
         // 界面里改了开关立刻生效。
         ModuleRuntime.attach(this)

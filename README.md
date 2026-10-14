@@ -44,7 +44,7 @@
    不会报错，只是没有进程会加载它。
 
    > **通知功能只需要 `com.android.systemui`** —— 通知是系统界面画出来的。
-   > 上面其余几条是给图标裁圆用的。
+   > 上面其余几条是给图标那两路用的（裁圆、强制取色的单色合成）。
 
 3. **重启**（框架不会热加载模块）。
 
@@ -532,7 +532,7 @@ com.iamcanincan.opticon
 │   ├── MainActivity           入口 Activity（同时是桌面图标）
 │   ├── OpticonApp             外壳：顶栏 + 悬浮药丸导航 + Pager（左右滑动切页）
 │   ├── Common                 各页共用：Section / SectionLabel / IconTile / FloatingNavSpace
-│   ├── icon/IconScreen        「图标」页（裁圆 + 运维按钮）
+│   ├── icon/IconScreen        「图标」页（裁圆 + 单色层 + 运维按钮）
 │   ├── notify/NotifyScreen    「通知」页（通知小图标）
 │   ├── module/ModuleScreen    「模块」页（作用域 / 步骤 / 验证）
 │   ├── about/AboutScreen      「关于」页（检查更新 / 版本信息）

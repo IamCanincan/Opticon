@@ -429,7 +429,7 @@ object ModuleRuntime {
         return out
     }
 
-    // 日志统一打到共享的 tag，两个功能在 logcat 里挨在一起，便于对照。
+    // 日志统一打到共享的 tag，三路功能在 logcat 里挨在一起，便于对照。
     // ⚠ 别写成 `= logI(message)` —— 那会解析成这个成员函数本身，无限递归。
     fun logI(message: String) = Log.i(TAG, message)
 

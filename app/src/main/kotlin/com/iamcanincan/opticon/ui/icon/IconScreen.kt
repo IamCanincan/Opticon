@@ -303,7 +303,7 @@ private fun ShapeSample(label: String, fill: Color, shape: Shape, border: Color?
 /** 说明要点：带圆点的列表。 */
 @Composable
 private fun NotesCard() {
-  // 只放**这两个功能自己**的注意事项。模块级的那些（框架 daemon 启动时机之类）
+  // 只放**这一页那两个功能自己**（裁圆 / 单色层）的注意事项。模块级的那些（框架 daemon 启动时机之类）
   // 属于「模块」页的启用步骤，别在这里再抄一遍。
   val notes =
     listOf(

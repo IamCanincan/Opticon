@@ -5,7 +5,7 @@ import android.util.Log
 /**
  * 全模块统一的日志 tag。
  *
- * 两个功能（裁圆图标 / 通知图标）刻意共用同一个 tag：排查时
+ * 三路功能（裁圆图标 / 强制取色的单色合成 / 通知图标）刻意共用同一个 tag：排查时
  * `adb logcat -s Opticon` 一次就能看到所有进程里本模块干了什么，
  * 不用先猜「这次该看哪个 tag」。具体是哪一路，日志正文里都有前缀
  * （`install in …` / `PixelLauncher: …` / `patched …` 等）。

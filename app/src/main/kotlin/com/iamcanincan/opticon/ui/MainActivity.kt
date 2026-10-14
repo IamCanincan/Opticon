@@ -8,7 +8,7 @@ import com.iamcanincan.opticon.ui.theme.OpticonTheme
 
 /**
  * 模块的设置界面。这个 Activity 同时承担两件事：
- * 1. 给用户看两个功能的开关、作用域、启用步骤与验证方式；
+ * 1. 给用户看三个功能的开关、作用域、启用步骤与验证方式；
  * 2. 让模块有 MAIN + LAUNCHER 入口 —— 否则它是纯后台模块，桌面上根本不会出现图标。
  *
  * 它只负责读写自己的 SharedPreferences；真正的挂钩工作发生在被注入的进程里，
