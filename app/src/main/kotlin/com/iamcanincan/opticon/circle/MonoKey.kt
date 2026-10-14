@@ -40,6 +40,12 @@ internal object MonoKey {
 
   private fun mix(h: Long, v: Long): Long = (h xor v) * FNV_PRIME
 
+  /**
+   * 键的写法：日志里的 `键=` 与磁盘上的文件名**必须是同一个字符串**，
+   * 否则拿着日志去数目录时对不上（"这一张到底写没写出去"又要靠推演回答）。
+   */
+  fun hex(key: Long): String = java.lang.Long.toHexString(key)
+
   /** 逐像素 FNV，先钉进长度与这一路的编号 —— 前缀相同、长度不同的两张，或「同一组像素挂在
    *  `px` 还是挂在 `under` 上」，都要分开。 */
   private fun fold(h0: Long, px: IntArray?, tag: Long): Long {

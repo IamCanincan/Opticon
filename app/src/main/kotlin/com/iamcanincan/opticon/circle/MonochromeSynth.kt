@@ -335,7 +335,7 @@ internal object MonochromeSynth {
       MonoCache.lookup(key, edge)?.let { hit ->
         // 负缓存（`mask == null`）= 这张判据不成立，照旧交 null 给桌面走它自己的路。
         // 出口与今天一模一样，只是不再重算第二遍。
-        if (hit.mask != null) noteCached(edge, label, hit, raster)
+        if (hit.mask != null) noteCached(edge, label, hit, raster, key)
         raster.recycle()
         return@runCatching hit.mask
       }
@@ -373,7 +373,7 @@ internal object MonochromeSynth {
       // 指纹打在判据行上：解不出包名的那一批（快捷方式）在日志里都叫 `?`，没有这个数
       // 就对不上"哪一行判据是哪一个带回来的 PNG"。见 [MonoDump.sigOf]。
       val sig = MonoDump.sigOf(pxIn, edge, edge)
-      val id = noteBranch(edge, sig, label, out, win)
+      val id = noteBranch(edge, sig, label, out, win, key)
       val isWatched = MonoDump.watched(label)
       // ⚠ **变体标记必须进带回来的那个名字。** 桌面会把**同一张图标按不同尺寸再画一遍**：
       //   真机实测（`live2.txt`，2026-10-11 20:34–21:39）translate 在 `edge=384` 下有两种前景层
@@ -446,6 +446,16 @@ internal object MonochromeSynth {
    *
    * `adaptive=` 是**这次要看的关键位**：`false` 表示这是非自适应图标 —— 它的掩码算完之后还要
    * 缩进可见区，正是「全是色块」问题所在的分类。
+   *
+   * `state=` 打的是**这张 drawable 的 `ConstantState` 身份**（不是实例身份 —— 实例每一次 bind 都是新的，
+   * 那是 [cache] 那一层已经量明的事实）。这一位是为下一刀摆的读数：桌面在两次 bind 之间到底
+   * 共不共享 state，决定「把键换成 state、在取像素之前就命中」那一刀有没有东西可省
+   * （现在每次命中仍付一次光栅化 + 哈希）。**两个方向都要看**：
+   *   · 同一个内容键下 state 只有几个 → 共享成立，那一刀能省掉光栅化；
+   *   · **同一个 state 会不会对出两个不同的内容键** → 那就是那一刀的否决票（共享了 state 而像素不同，
+   *     按 state 命中就是交出别的图标的掩码）。`mutate()`、加徽标、桌面的 `BitmapInfo` 后处理都会造成这种分叉。
+   * ⚠ 挂在 [describe] 而不是另起一行：本仓的规矩是每个图标一行；`getConstantState()` 对个别
+   *   drawable 可能抛或返回 null，所以包起来、解不出打 `-`（一条读数不该把宿主的加载线程带崩）。
    */
   private fun describe(source: Drawable, adaptive: Boolean): String {
     val foreground = (source as? AdaptiveIconDrawable)?.foreground
@@ -460,6 +470,9 @@ internal object MonochromeSynth {
       append(" intrinsic=").append(source.intrinsicWidth).append('x').append(source.intrinsicHeight)
       append(" bounds=").append(source.bounds.width()).append('x').append(source.bounds.height())
       append(" adaptive=").append(adaptive)
+      val st = runCatching { source.constantState }
+        .getOrNull()?.let { Integer.toHexString(System.identityHashCode(it)) } ?: "-"
+      append(" state=").append(st)
     }
   }
 
@@ -482,9 +495,9 @@ internal object MonochromeSynth {
    * ② 它带**同一张掩码的缩略图**（走 [noteDiagnosis]），这样"缓存交的那张"与"现算的那张"
    * 能在日志里逐张对上 —— 只看命中数不能证明缓存没错，只能证明它被走到了。
    */
-  private fun noteCached(edge: Int, label: String, hit: MonoCache.Entry, input: Bitmap) {
+  private fun noteCached(edge: Int, label: String, hit: MonoCache.Entry, input: Bitmap, key: Long) {
     val n = diagnosed.incrementAndGet()
-    Log.d(TAG, "Mono: diag#$n edge=$edge $label 缓存=${hit.from} → 直接交缓存里那张（未重算）")
+    Log.d(TAG, "Mono: diag#$n edge=$edge 键=${MonoKey.hex(key)} $label 缓存=${hit.from} → 直接交缓存里那张（未重算）")
     noteDiagnosis(edge, label, input, hit.mask)
   }
 
@@ -501,9 +514,10 @@ internal object MonochromeSynth {
    */
   private fun noteBranch(
     edge: Int, sig: String, label: String, out: MonochromeMask.Output, win: IconCropWindow.Window?,
+    key: Long,
   ): Int {
     val n = diagnosed.incrementAndGet()
-    Log.d(TAG, "Mono: diag#$n edge=$edge sig=$sig $label ${out.report} → " +
+    Log.d(TAG, "Mono: diag#$n edge=$edge sig=$sig 键=${MonoKey.hex(key)} $label ${out.report} → " +
       (if (out.mask != null) "已交出掩码" else "判据不成立，放弃合成") + geoTag(win))
     return n
   }

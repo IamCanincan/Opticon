@@ -176,7 +176,7 @@ internal object MonoCache {
   }
 
   /** 边长进文件名：同一张内容在 192 与 384 两档是两张掩码，各自存。 */
-  private fun name(key: Long, edge: Int) = "${java.lang.Long.toHexString(key)}_$edge.a8"
+  private fun name(key: Long, edge: Int) = "${MonoKey.hex(key)}_$edge.a8"
 
   private fun file(key: Long, edge: Int): File? = dir()?.let { File(it, name(key, edge)) }
 
