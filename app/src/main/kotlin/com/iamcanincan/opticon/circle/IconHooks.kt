@@ -254,8 +254,11 @@ private fun cacheStamp(packageName: String) =
  * 那才是"代码换过了、缓存该重画"的证据；版本号只在正式发版时动。
  *
  * 拿不到 Context 时返回 null（调用方要么等，要么明说没法核对 —— 不许静默当成"一致"）。
+ *
+ * `internal` 是因为 [MonoCache] 也认这一个身份：掩码缓存的目录名换不换，决定的是
+ * 「新装一版之后还会不会看见上一版画的那张」，两处必须同进同退。
  */
-private fun renderId(): String? = runCatching {
+internal fun renderId(): String? = runCatching {
   val app = currentApplication() ?: return null
   val pi = app.packageManager.getPackageInfo(BuildConfig.APPLICATION_ID, 0)
   "${BuildConfig.VERSION_NAME}@${pi.lastUpdateTime / 1000L}"

@@ -298,7 +298,8 @@ internal object MonochromeSynth {
       //   而离线 `_model.png` 量的 1.893 / 2.263 与这两个**对得上**。
       //   （今晚我在这儿加过 1.82 又删掉，是因为拿 20:14 之后那一版的日志当 19:45 的账 —— 那一版
       //   改成量整图标，元宝在它那里是 `满幅`。同一个字段名、两本账，别再对串了。）
-      val win = if (ModuleRuntime.options().circleEnabled)
+      val circle = ModuleRuntime.options().circleEnabled
+      val win = if (circle)
         IconCropWindow.of(pixels, edge, edge)?.takeIf { it.zoom <= GEO_ZOOM_CAP } else null
       // `!flatten` 且是自适应 = 交给这里的**只有前景层**，那张盘在背景层里（桌面自己补）。
       // 把这件事告诉模型：这一张里不许有"实心的一块当底" —— 混元那半个太极就是这么丢的。
@@ -323,6 +324,21 @@ internal object MonochromeSynth {
       // 取完像素就回收：这张 384² 的 ARGB 有 590KB，留着要一直活到 `raster` 那两处 recycle 才走。
       val underPx = under?.let { u -> IntArray(total).also { a -> u.getPixels(a, 0, edge, 0, 0, edge, edge) }
         .also { u.recycle() } }
+      // ── 内容缓存：到这里为止，输入已经全了 ──
+      //   掩码是 `(pixels, underPx, edge, adaptive, flatten, circle)` 的纯函数，这六样就是键。
+      //   为什么这一层必须存在：桌面**每次 bind 都交一个新实例**（`getConstantState().newDrawable()`），
+      //   上面那个按实例的缓存结构上命中不了 —— 真机一次重启 1594 次合成、只有 209 种内容，
+      //   同一张图标最多重压 148 次，串行在一把锁上就是 760 秒。见 [MonoCache]。
+      // ⚠ 键算在这里而不是 `forIcon` 里：算键要像素，而拿像素就得先光栅化。所以命中这条路
+      //   仍然付一次光栅化（几毫秒），省下的是整条模型（三百多毫秒）。
+      val key = MonoCache.keyOf(pixels, underPx, edge, adaptive, flatten, circle)
+      MonoCache.lookup(key, edge)?.let { hit ->
+        // 负缓存（`mask == null`）= 这张判据不成立，照旧交 null 给桌面走它自己的路。
+        // 出口与今天一模一样，只是不再重算第二遍。
+        if (hit.mask != null) noteCached(edge, label, hit, raster)
+        raster.recycle()
+        return@runCatching hit.mask
+      }
       // 判据吃的是**原样像素**（浓度、分档、盘刀、极性都不受几何影响）；几何只作用在
       // **算完之后**的交付掩码上 —— 这条是今晚量出来的：把重排放到输入侧（模型吃裁好的图），
       // 双线性会让 xbox 换支成一块黑饼、最近邻也会动到 4 张的判据；放到输出侧，14 闸结构上不可能红。
@@ -387,6 +403,8 @@ internal object MonochromeSynth {
       if (MonoDump.suspicious(out) || isWatched) dump()
       val ramp = out.mask
       if (ramp == null) {
+        // 判据不成立 = 这张以后再问还是一样，记个负缓存（只进内存，见 [MonoCache]）。
+        MonoCache.store(key, edge, null)
         raster.recycle()
         return@runCatching null
       }
@@ -405,6 +423,9 @@ internal object MonochromeSynth {
       noteDiagnosis(edge, label, raster, placed)
       raster.recycle()
       if (placed !== alpha) alpha.recycle()
+      // 存的是**交出去那一张**（几何与位置都在里面了），不是模型刚算完的那张 ——
+      // 命中时返回的必须与屏幕上的是同一个东西，否则「判据吃的那张」与「屏上那张」又分家。
+      MonoCache.store(key, edge, placed)
       placed
     }.onFailure {
       // ⚠ 这一条不能省：上面整个块包在 runCatching 里，任何异常都会被 `getOrNull()` 变成一个
@@ -452,6 +473,19 @@ internal object MonochromeSynth {
   private fun noteGiveUp(edge: Int, label: String, reason: String) {
     val n = diagnosed.incrementAndGet()
     Log.d(TAG, "Mono: diag#$n edge=$edge $label 放弃合成：$reason")
+  }
+
+  /**
+   * 诊断：这一张**没重算**，是从缓存里拿出来的（[MonoCache]）。
+   *
+   * 两件事必须留痕：① 它是个提前 return，本项目吃过两次「提前 return 静默失效」的亏；
+   * ② 它带**同一张掩码的缩略图**（走 [noteDiagnosis]），这样"缓存交的那张"与"现算的那张"
+   * 能在日志里逐张对上 —— 只看命中数不能证明缓存没错，只能证明它被走到了。
+   */
+  private fun noteCached(edge: Int, label: String, hit: MonoCache.Entry, input: Bitmap) {
+    val n = diagnosed.incrementAndGet()
+    Log.d(TAG, "Mono: diag#$n edge=$edge $label 缓存=${hit.from} → 直接交缓存里那张（未重算）")
+    noteDiagnosis(edge, label, input, hit.mask)
   }
 
   /**
