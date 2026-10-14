@@ -226,14 +226,14 @@ internal object IconCropWindow {
    *   `me.ele` 的交付掩码：占盘 0.65 → 1.00，墨 0.09 → 0.19）。没搬过的那一张不在此列 —— 图层
    *   本来就是应用自己按 108dp 排好的，缩它等于改 49 张满幅图标。
    *
-   * ## 采样：搬**掩码**用双线性，搬**输入**必须用最近邻 —— 两者不是一回事
-   * 这条几何现在作用在算完之后的交付掩码上（只改像素排布，不改任何判据数字），
-   * 用双线性（只对 alpha 插值，颜色取最近邻）—— 主人 2026-10-14 逐张判"没问题"的就是这一版。
-   *
-   * ⚠ 但如果哪天把它挪到**模型之前**（让模型吃重排后的图），采样必须换成最近邻：双线性会造出
-   *   源图里没有的中间浓度，而模型的底色场/分档吃的就是浓度分布。那条路量过 —— 双线性让
-   *   `com.microsoft.xboxone.smartglass` 换支、`底占 0.45→0.00`（整张交成墨），源尺寸漂移面 81%→84%；
-   *   最近邻则 `branch`/`platecut` 与基线逐字相同。见分支 `wip/tint-silhouette` 的提交说明。
+   * ## 采样必须是最近邻 —— 因为现在**判据吃的就是这张重排后的图**
+   * 2026-10-15 主人把这一刀搬到判据之前（「取色判断得按调整后的图标来，不然到时候出错了」）：
+   * 交出去的那张 = 判过的那张，不再事后 resample。代价是采样不能再用双线性 —— 双线性会造出
+   * **源图里根本没有的中间浓度**，而底色场/分档吃的正是浓度分布。那条路量过：双线性让
+   * `com.microsoft.xboxone.smartglass` 在 384 上**换支**、`底占 0.45→0.00`（整张交成一块黑饼），
+   * 源尺寸漂移面 81%→84%；最近邻则 `branch`/`platecut` 与基线**逐字相同**。
+   * ⚠ 最近邻不做抗锯齿：重排完边缘是阶梯。桌面那 1.5 倍缩放会抹掉一部分，但 `淡`/`soft`
+   *   那一列会变 —— 所以这一版的账必须重量，不许引用双线性那版的数。
    */
   fun reframe(
     px: IntArray, w: Int, h: Int, win: Window,
@@ -248,33 +248,19 @@ internal object IconCropWindow {
     val cyDst = ty + th / 2f
     val out = IntArray(px.size)
     for (y in 0 until h) {
-      // 目标像素 → 源坐标（draw() 那一步的逆变换：先减目标心、除 scale、再加回窗口心）
-      val sy = (y + 0.5f - cyDst) / scale + cySrc
+      // 目标像素 → 源坐标（draw() 那一步的逆变换：先减目标心、除 scale、再加回窗口心）。
+      // ⚠ **最近邻**：判据吃的就是这张，插值会凭空造出浓度（理由见函数上那段文档）。
+      val sy = ((y + 0.5f - cyDst) / scale + cySrc).toInt()
+      if (sy !in 0 until h) continue
+      val row = sy * w
       for (x in 0 until w) {
-        val sx = (x + 0.5f - cxDst) / scale + cxSrc
-        out[y * w + x] = sample(px, w, h, sx, sy)
+        val sx = ((x + 0.5f - cxDst) / scale + cxSrc).toInt()
+        if (sx in 0 until w) out[y * w + x] = px[row + sx]
       }
     }
     return out
   }
 
-  /**
-   * ⚠ **只对 alpha 双线性插值，颜色取最近的那个源像素。** 直接对打包的 ARGB 求平均会跨字节进位
-   *   （`0x00FFFFFF` 与 `0xFFFFFFFF` 的平均是 `0x80EFFFFB` —— 蓝通道被算坏了）。
-   */
-  private fun sample(px: IntArray, w: Int, h: Int, sx: Float, sy: Float): Int {
-    val x0 = sx.toInt()
-    val y0 = sy.toInt()
-    fun alphaAt(x: Int, y: Int): Int =
-      if (x < 0 || y < 0 || x >= w || y >= h) 0 else px[y * w + x] ushr 24
-    val fx = sx - x0
-    val fy = sy - y0
-    val top = alphaAt(x0, y0) + ((alphaAt(x0 + 1, y0) - alphaAt(x0, y0)) * fx)
-    val bot = alphaAt(x0, y0 + 1) + ((alphaAt(x0 + 1, y0 + 1) - alphaAt(x0, y0 + 1)) * fx)
-    val a = (top + (bot - top) * fy).roundToInt().coerceIn(0, 255)
-    val nearest = if (x0 < 0 || y0 < 0 || x0 >= w || y0 >= h) 0 else px[y0 * w + x0]
-    return (a shl 24) or (nearest and 0x00FFFFFF)
-  }
 
   /**
    * [0] = 半径 r 的圆盘里还剩多少"有像素"的格；[1] = 图案总共有多少格。

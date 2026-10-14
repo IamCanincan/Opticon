@@ -326,13 +326,34 @@ internal object MonochromeSynth {
       // 判据吃的是**原样像素**（浓度、分档、盘刀、极性都不受几何影响）；几何只作用在
       // **算完之后**的交付掩码上 —— 这条是今晚量出来的：把重排放到输入侧（模型吃裁好的图），
       // 双线性会让 xbox 换支成一块黑饼、最近邻也会动到 4 张的判据；放到输出侧，14 闸结构上不可能红。
-      val out = MonochromeMask.build(pixels, edge, edge, plateLayer, underPx)
+      // ── 几何搬到**判据之前**（主人 2026-10-15：「取色判断得按调整后的图标来，不然到时候出错了」）──
+      //   交出去那张 = 判过那张，不再事后 resample。上一版（甲）判据吃原件、只把成品搬位置，
+      //   于是**判据台量的那张与屏幕上的那张不是同一张**：倍数逐张相同也能差 1.5 倍，
+      //   2026-10-15 为这件事返工了三轮，最后是靠量交付掩码的外接框才抓出来。
+      // ⚠ 目标矩形**分两档** —— 这一条就是昨晚乙翻车的地方：
+      //   · 自适应：桌面画这一层按 1.5 倍铺进去、只画中间那 2/3 → 输入映射到**可见区**；
+      //   · 非自适应：判据必须吃**满幅口径**。先缩进可见区会在四周留一圈透明边，把一张满幅
+      //     不透明的老式图标量成"透明底 + 图形" —— 那正是 2026-09-24「非自适应图标全部变成
+      //     色块」的病根（见 [rasterize] 上面那段）。所以这一档映射到整张画布，位置留到掩码
+      //     算完之后由 [intoVisibleArea] 收。**各收一次，不许收两遍。**
+      // ⚠ `plateLayer` 仍按**原始像素**判：它问的是"盘在哪一层"，那是图层结构的事，不因放大
+      //   而变；而 35% 那条线是在原始取景下摊过分母定的（上面那段），换取景再比 = 拿没标定的尺量。
+      val inset = visibleInset(edge)
+      val visT = edge - 2 * inset
+      val tOff = if (adaptive) inset else 0
+      val tSide = if (adaptive) visT else edge
+      val pxIn = if (win == null) pixels
+        else IconCropWindow.reframe(pixels, edge, edge, win, tOff, tOff, tSide, tSide)
+      // `under` 必须一起搬，否则模型看到的合成图与它背后那张层底对不上（真机上整张图标都动了）。
+      val underIn = if (win == null || underPx == null) underPx
+        else IconCropWindow.reframe(underPx, edge, edge, win, tOff, tOff, tSide, tSide)
+      val out = MonochromeMask.build(pxIn, edge, edge, plateLayer, underIn)
       // H0 的射程跟着记：见 [noteSynthesized] 那条汇总为什么带它。
       noteH0(out.h0why)
       noteVeto(out.veto)
       // 指纹打在判据行上：解不出包名的那一批（快捷方式）在日志里都叫 `?`，没有这个数
       // 就对不上"哪一行判据是哪一个带回来的 PNG"。见 [MonoDump.sigOf]。
-      val sig = MonoDump.sigOf(pixels, edge, edge)
+      val sig = MonoDump.sigOf(pxIn, edge, edge)
       val id = noteBranch(edge, sig, label, out, win)
       val isWatched = MonoDump.watched(label)
       // ⚠ **变体标记必须进带回来的那个名字。** 桌面会把**同一张图标按不同尺寸再画一遍**：
@@ -352,7 +373,7 @@ internal object MonochromeSynth {
         // ⚠ **这条通道看不见甲那一刀**：带的是 `out.mask`，而搬位置发生在它**之后**。两版装机对
         //   dump 里的 PNG 逐张相同（2026-10-15 量过：21/21 same），而屏上 me.ele 已经大了 1.5 倍。
         //   要核对"搬完之后那张"，只有 [noteDiagnosis] 那 8 行 ASCII 缩略图（`_harness/_thumbab.cjs`）。
-        MonoDump.maybe(id, label, raster, pixels, out.mask, underPx, plateLayer, edge, edge,
+        MonoDump.maybe(id, label, raster, pxIn, out.mask, underIn, plateLayer, edge, edge,
           "${label.substringBefore(' ')}_${sig}${if (variant.isEmpty()) "" else "_$variant"} | ${out.report}${geoTag(win)}", isWatched)
       }
       // 可疑的那几张把**原像素**带回来（PNG → base64 → 分片进日志），判据台原样重放。
@@ -366,19 +387,9 @@ internal object MonochromeSynth {
         raster.recycle()
         return@runCatching null
       }
-      // 甲：判据算完**之后**才搬位置 —— 浓度、分档、盘刀、极性一个像素都不动，只把算好的墨
-      // 摆到裁圆定的那个尺寸上。**搬过的那一张一律落到"可见区"（画布中间那 2/3）**：
-      // 自适应图标的图层是 108dp 画布，桌面按 1.5 倍铺进去再裁四边 —— 窗口映射到**整张画布**
-      // 就等于把字形又放大 1.5 倍、四边贴出屏幕（2026-10-15 量到的就是这个：`me.ele` 占盘
-      // 0.65 → 1.00，墨 0.09 → 0.19，主人一句「别的几个图标又变大了」）。
-      // 没搬过的那张不动它：图层本来就是应用自己按 108dp 排好的，缩它 = 改 49 张满幅图标。
-      // 非自适应那一路内容满幅，先铺满画布、再整体缩进可见区，落点与上面同一条算式。
-      val inset = visibleInset(edge)
-      val visT = edge - 2 * inset
-      val moved = if (win == null) ramp else if (adaptive)
-        IconCropWindow.reframe(ramp, edge, edge, win, inset, inset, visT, visT)
-      else IconCropWindow.reframe(ramp, edge, edge, win)
-      val alpha = toAlphaMask(moved, edge, edge)
+      // 掩码这一步**不再搬位置**：输入已经是裁圆调好的那一张，判出来的墨天然就在那个尺寸上。
+      // （这里原来挂着甲那一刀 —— 判完再 resample 交付掩码。2026-10-15 撤，理由见上面那段。）
+      val alpha = toAlphaMask(ramp, edge, edge)
       // 非自适应图标的内容是满幅的，而它在图层 bounds 里只该占中间那 2/3（可见区），
       // 所以掩码算完**之后**才缩进 —— 顺序反了就会踩 [rasterize] 上面那个坑。
       val placed = if (adaptive) alpha else intoVisibleArea(alpha, edge)
