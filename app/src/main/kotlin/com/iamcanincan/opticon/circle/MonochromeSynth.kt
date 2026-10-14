@@ -382,6 +382,12 @@ internal object MonochromeSynth {
       // 非自适应图标的内容是满幅的，而它在图层 bounds 里只该占中间那 2/3（可见区），
       // 所以掩码算完**之后**才缩进 —— 顺序反了就会踩 [rasterize] 上面那个坑。
       val placed = if (adaptive) alpha else intoVisibleArea(alpha, edge)
+      // ⚠ 这一趟多花的钱（判据台 `_harness/CostKt.kt`，62 张真机语料 @edge=384，取七遍最快一趟）：
+      //   `of` 中位 **0.54 ms**（**每张都跑**，因为它内部先降到 128 才扫，与画布多大无关 —— 与真机
+      //   彩色那行 `量一张` 的 0.60 ms 同一档）；`reframe` 中位 **2.24 ms**，只有开了窗口的 **13/62**
+      //   张跑到。分母是同一条语料上的合成主路（中位 332 ms）→ **整趟加的成本 0.8%，每张必付的那半 0.2%**。
+      //   ⚠ 绝对毫秒是 PC JVM 的数，手机上另有倍数（`intoVisibleArea` 是 Canvas 调用，台子量不到）——
+      //   所以这条只当**比值**用，别拿 0.54 ms 当真机读数。
       noteDiagnosis(edge, label, raster, placed)
       raster.recycle()
       if (placed !== alpha) alpha.recycle()
