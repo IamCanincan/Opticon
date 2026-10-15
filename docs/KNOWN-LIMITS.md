@@ -295,3 +295,50 @@
   看到 `-wrap` 就说明这一张的 state 不可用。今天那批读数（607 AdaptiveIconDrawable / 405 BitmapDrawable /
   32 VectorDrawable / 10 LayerDrawable / 1 GradientDrawable）一张 wrapper 都没有，所以那条否决站得住。
   而且**必须让内容键兜底**（state 相同而像素不同 = 交出别的图标的掩码，那是错，不是慢）。
+
+- **Lawndesk 那条「10% 透明口径」不能搬：同名不同义，搬过来方向是反的**（2026-10-15 读该仓时核到，**已量**）。
+  他们的「满幅」= 墨铺满**自己的外框** ≥90%（`lawnchair/.../AdaptiveIconGenerator.java:181`），而**用途是**
+  放大 1.44× 按 cover 铺满、再让遮罩把边裁掉；我们的「满幅」= 外框占画布 ≥`BOX_FULL_RATIO`(0.99)，
+  **用途是一个像素都不动**。照搬会把圆盘判成"非满幅"：`live61` 61 张里 **32 张**的外框内墨只有 **75~85%**
+  （正是圆），它们会掉进 `rCover` 那条路 —— 圆盘半径＝画布半径时 `rCover = edge − 1 = 62`（128 格上），
+  于是 **zoom = 128/124 = 1.032：整屏圆图标长大 3.2%**。那正是「满幅早退」当初要挡的那一族。**判据不动。**
+  另一头也量了：「外框 95~99%」那条带（1~2 行透明留白、刚好逃过 0.99 早退 → 会被放大 ~1.6%）在
+  **706 张语料里只有 1 张**（`live61` + `corpus_dev` + `corpus_dev2` + `corpus_audit3_rt` + `captured_live`
+  + `rec3u` + `corpus_runtime`）—— `com.moonshot.kimichat`，留白 4.4% 只在顶边；而它现在走放大那条**是对的**
+  （不放大 → 圆顶留一条 4.4% 的空档，违反验收线第一条「不要空隙」）。所以那条带是空的，
+  改容差屏上不会有任何一张变化。
+  **How to apply:** 摊分布用 `node _harness/_circbbx.cjs <目录>`（读的是 **384 语料 PNG**，不是桌面光栅化那张）。
+  ⚠ 以后要搬别的实现的口径，先比**它那条判据的用途**（放大还是不动），再比**同名那个量是不是同一个量**。
+  唯一值得留的是数字巧合：他们的 `LEGACY_ICON_SCALE = .7f × .6667f` 除回可见区 = **0.70**，与 `SHRINK_EXTRA`
+  那条真机量到的 70% 同值（已记进 `IconCropWindow` 注释）—— **旁证，不是推导**（他们量整张位图的外框）。
+
+- **应用声明了两份图标时，两份各归各的：`icon` 归我们、`roundIcon` 留给平台**（2026-10-15 主人裁决，已装机验收）。
+  桌面给**圆形遮罩**环境优先取 `roundIcon` 那份，应用信息页（Settings）走 `icon` —— 所以同一个应用两屏
+  **天然不同源**，不是缺陷。真机案例 `com.github.standardadb`：`icon` = `res/drawable/ic_launcher.png`
+  （512² 白底位图、无透明通道），`roundIcon` = `mipmap/ic_launcher_round.xml`（`anydpi-v26` 那份自适应，
+  前景是矢量 `drawable/ic_launcher_round_foreground.xml`）—— **两张不是同一幅画**。
+  ⚠ **本轮唯一一次翻案，记在显眼处**：我一度把 `ApplicationInfo.roundIconRes` 也打上标记（"两边都归我们管"），
+  装机后主人一眼判掉：「**原桌面图标就是一个完美的圆了**」。他是对的 —— 桌面那份本来就是自适应图标、
+  平台画得就对，标记它等于**把对的抢进我们的内切圆流程**。**已撤回**（`markIconResId` 只标记 `icon`），
+  并在"未标记"那条口子上补了 `passed is AdaptiveIconDrawable → 不碰`，免得按资源名那两条判据再误伤它。
+  ⚠ 字段名也是这一轮才认准的：桌面 dex 读的是 **`ApplicationInfo.roundIconRes`**；`roundIcon` 在 framework 里
+  只是 `android.R$attr` 的常数 —— 我第一次改的那个名字**压根没生效**，而且它不报任何错。
+  **How to apply:** 再遇到「桌面和应用信息页不一样」的报法，**先查这个应用声明了几份图标**
+  （`aapt2 dump resources <apk> | grep -i ic_launcher`）：两份不同资源 → 天然不同源，回这一条；
+  只有一份 → 那是**缩放**差异（同一幅画被平台缩了），属我们该修的（`Hook.JiuWu.Xp` 那类）。
+  ⚠ 已知残留：只声明 `roundIcon`（没有 `icon`）的应用，`unmarkedAppIcon` 那一支只比 `app.icon`，这一版会漏。
+
+- **图标标记 id 不再假设应用资源住在 `0x7f`**（2026-10-15 换掉"顶字节换 `0x6e`、还原时 OR 回 `0x7f`"那套）。
+  真机 `Hook.JiuWu.Xp` 的 APK **5701 个资源全在 `0x95` 包号下**（`aapt2 link --package-id 0x95`）——
+  老写法同时坏两处：还原回去的 id **指向错的包**（加载要么抛、要么解成别人的资源），
+  而打标记那道闸（`isAppResource`）原来**也只认 `0x7f`**，于是这类应用**从头到尾没被打过标记**、
+  裁圆那条路永远碰不到它（桌面与应用信息页因此不一致）。现在标记 id 的低 24 位是**槽位号**，
+  真身存在进程内两张表里（`markSlots` 原 id→槽位 / `slotOrigin` 槽位→原 id），应用的包号是多少都不影响。
+  同一处还把"参数里哪个 Int 是资源 id"的判据从 `v > 0x1000000` 换成 `(v ushr 24) != 0`（`resIdArg`）：
+  包号 ≥ `0x80` 的 id（`0x950f0009`）在**有符号** Int 里是负数，老比较会把它们整批滤掉。
+  **有意留的边界**：槽位表是**进程内**的 —— 打标记与还原必须发生在同一进程
+  （加载出口，或跨 Binder 前 `writeToParcel` 那次反标记），跨进程不共享；
+  上限 `MARK_SLOT_LIMIT = 4096`，超了整表重来，那之后**旧标记 id 解不回去**
+  （`unmarked()` 退回 `0x7f` 老写法 → 非 `0x7f` 包号的解不出）。图标 id 每进程是几百个量级，够用。
+  **How to apply:** 再看到「某应用桌面与应用信息页不一致、而我们的判据行里一条都没有」，
+  先查它的资源包号（`aapt2 dump resources <apk> | head`）—— `0x7f` 之外的老写法会整批隐形。

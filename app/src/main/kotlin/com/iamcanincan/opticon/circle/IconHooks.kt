@@ -36,24 +36,65 @@ import java.lang.reflect.Constructor
 import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.util.WeakHashMap
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.Volatile
 
-// 应用资源 id 都住在 0x7f 这个 package 里。把图标 id 挪到一个不会有真实资源的 package，
-// 它到达 Resources 时就能被认出来；调用原方法之前会换回 0x7f，所以解析逻辑不受影响。
+// 把图标 id 挪到一个不会有真实资源的 package，它到达 Resources 时就能被认出来；
+// 调用原方法之前会换回真身，所以解析逻辑不受影响。
 private const val REAL_PACKAGE_ID = 0x7f000000
 private const val MARKED_PACKAGE_ID = 0x6e000000
 
 // 应用图标解析不出来时系统用的那个默认图标，它同样不是圆形的。
 private const val DEFAULT_APP_ICON = android.R.drawable.sym_def_app_icon
 
+/**
+ * 标记 id ↔ 原 id 的对照表（**进程内**）。
+ *
+ * ⚠ 别再用"低 24 位原样保留、顶字节换 0x6e，还原时 OR 回 0x7f"那套（2026-10-15 换掉）：
+ * 那等于假设**所有应用资源都住在 0x7f**。真机上 `Hook.JiuWu.Xp` 的 APK 5701 个资源
+ * 全在 **0x95** 包号下（`aapt2 link --package-id 0x95`）—— 还原回去的 id 指向错的包，
+ * 加载要么抛要么解析成别人的资源；更要命的是打标记那道闸原来也只认 0x7f，于是**这类应用
+ * 从头到尾没被打过标记**，我们的裁圆路永远碰不到它（桌面与应用信息页因此不一致）。
+ * 现在标记 id 的低 24 位是**槽位号**，真身存在表里：应用的包号是多少都不影响。
+ *
+ * 进程内就够 —— 打标记发生在**本进程**构造/反序列化 `PackageItemInfo` 时，
+ * 还原也发生在同一进程（加载出口，或跨 Binder 之前那次反标记）。
+ */
+private val markSlots = ConcurrentHashMap<Int, Int>()   // 原 id → 槽位
+private val slotOrigin = ConcurrentHashMap<Int, Int>()  // 槽位 → 原 id
+private val nextSlot = AtomicInteger(1)
+
+/** 槽位表上限：图标 id 每进程几百个量级，超了整表重来（与 [IconNames] 同一套做法）。 */
+private const val MARK_SLOT_LIMIT = 4096
+
+/** 能不能给这个 id 打标记：不是框架资源（0x01）、不是共享库（0x00）、也还没打过。 */
+private fun Int.isMarkableIcon(): Boolean {
+  val pkg = this ushr 24
+  return this != 0 && pkg != 0x01 && pkg != 0x00 && !isMarkedIcon()
+}
+
 private fun Int.isMarkedIcon() = (this and 0xff000000.toInt()) == MARKED_PACKAGE_ID
 
-private fun Int.marked() = (this and 0x00ffffff) or MARKED_PACKAGE_ID
+private fun Int.marked(): Int {
+  markSlots[this]?.let { return MARKED_PACKAGE_ID or it }
+  if (markSlots.size >= MARK_SLOT_LIMIT) {
+    markSlots.clear()
+    slotOrigin.clear()
+  }
+  val slot = nextSlot.getAndIncrement() and 0x00ffffff
+  markSlots.putIfAbsent(this, slot)
+  val real = markSlots[this]!!
+  slotOrigin[real] = this
+  return MARKED_PACKAGE_ID or real
+}
 
-private fun Int.unmarked() = (this and 0x00ffffff) or REAL_PACKAGE_ID
-
-private fun Int.isAppResource() = (this and 0xff000000.toInt()) == REAL_PACKAGE_ID
+/**
+ * 还原真身：查表。查不到是"不该发生"的情况（说明标记不是本进程做的）；那时退回老写法，
+ * 至少不比换掉之前差，但这类 id 的包号如果不是 0x7f 就仍然解不出来 —— 所以别把查表当成兜底。
+ */
+private fun Int.unmarked(): Int =
+  slotOrigin[this and 0x00ffffff] ?: ((this and 0x00ffffff) or REAL_PACKAGE_ID)
 
 /**
  * 打标记的重入保护。
@@ -84,6 +125,12 @@ private inline fun runMarkingIcons(block: () -> Unit) {
     markingIcons.set(false)
   }
 }
+
+/** 「未标记 → 原样放行」那条口子的一次性诊断条数（见 [hookIconLoader] 里那一支）。 */
+private val passLogLeft = AtomicInteger(300)
+
+/** 「非 0x7f 包号被标记」那条一次性诊断的条数（见 [markIconResId]）。 */
+private val markLogLeft = AtomicInteger(60)
 
 /** 同一进程里 `onSystemServerStarting` 和 `onPackageReady` 可能都来，别装两遍。 */
 @Volatile private var installed = false
@@ -520,7 +567,7 @@ private fun hookIconLoader(xposed: XposedInterface, method: Method): Boolean =
             val passed = chain.proceed()
             if (passed is AdaptiveIconDrawable) {
               val res = chain.thisObject as? Resources
-              val rid = args.firstOrNull { (it as? Int)?.let { v -> v > 0x1000000 } == true } as? Int
+              val rid = resIdArg(args)
               if (res != null && rid != null) {
                 val nm = resourceName(res, rid)
                 // 资源 id 是从参数里挑的，不保证就是这张图的 id；解到桌面自己包上的名字
@@ -529,6 +576,29 @@ private fun hookIconLoader(xposed: XposedInterface, method: Method): Boolean =
                   !nm.startsWith("com.google.android.apps.nexuslauncher") &&
                   !nm.startsWith("android")
                 ) IconNames.remember(passed, nm)
+              }
+            } else if (passed is Drawable) {
+              // 没打标记 **不等于** 不是应用图标（真机名单见 [unmarkedAppIcon] 那条注释）。
+              // 判据两条，命中就**按同一套窗口包装** —— 这些图标从此和应用信息页一致；
+              // 宿主自己的界面资源（桌面 / SystemUI 包）不碰，那不是应用图标。
+              //
+              // ⚠ **自适应图标这一支也不碰**（2026-10-15 主人裁决后补）：桌面给圆形遮罩环境
+              //   优先取的"圆图标"是自适应那份（`mipmap/ic_launcher_round.xml`），它**本来
+              //   就是一个完美的圆**（自带安全区与遮罩，平台画得就对）。名字里带 `ic_launcher`
+              //   会让我按名字那两条判据误伤它 —— 所以按**结果类型**再挡一次：未标记 + 自适应
+              //   = 平台自己的那份圆图标，留给平台。原文：「adb 的桌面图标……原桌面图标就是一个完美的圆了」。
+              val who = if (passed is AdaptiveIconDrawable) null else unmarkedAppIcon(method, args, chain.thisObject)
+              if (who != null && !who.isHostSystemResource()) {
+                if (passLogLeft.decrementAndGet() >= 0) {
+                  Log.d(TAG, "放行(未标记)→已包装 via ${method.name}/${method.parameterTypes.size}参: $who | " +
+                    "${passed.javaClass.simpleName} ${passed.intrinsicWidth}x${passed.intrinsicHeight}")
+                }
+                replacingIcon.set(true)
+                try {
+                  return@intercept clipToCircle(passed)
+                } finally {
+                  replacingIcon.set(false)
+                }
               }
             }
             return@intercept passed
@@ -1194,7 +1264,20 @@ private fun markIconResId(info: PackageItemInfo) {
   // 配置按 TTL 重读，所以界面里关掉后很快生效。
   if (!ModuleRuntime.options().circleEnabled) return
   val icon = info.icon
-  if (icon != 0 && icon.isAppResource()) info.icon = icon.marked()
+  if (icon.isMarkableIcon()) {
+    // 一次性诊断（2026-10-15）：非 0x7f 包号的资源**以前根本不会被标记**（那道 `isAppResource`
+    // 闸把它整批放过），这里把它们报出来 —— 既是"这一类有多少应用"的读数，
+    // 也是"改动真编进包了"的凭据（字节数相同证明不了什么）。
+    if ((icon ushr 24) != 0x7f && markLogLeft.decrementAndGet() >= 0) {
+      Log.d(TAG, "标记(非0x7f包号): ${info.packageName} 原id=" + "0x%08x".format(icon) + " → 已标记")
+    }
+    info.icon = icon.marked()
+  }
+  // ⚠ **`roundIconRes`/`roundIcon` 刻意不标记**（2026-10-15 主人裁决后撤回）：
+  // 桌面用圆形遮罩时优先取那份"圆图标"，而**那份本来就是一个完美的圆**（自适应图标自带
+  // 安全区与遮罩，平台画得就对）——标记它等于把这幅从平台手里抢到我们的内切圆流程里，
+  // 反而改掉它原本的样子。所以两份资源各归各的：`icon`（应用信息页那类）归我们，
+  // `roundIconRes`（桌面那份）留给平台。主人原话：「adb 的桌面图标……原桌面图标就是一个完美的圆了」。
 }
 
 private fun markResolveInfo(info: ResolveInfo?) {
@@ -1451,6 +1534,53 @@ internal object IconNames {
 private fun resourceName(res: Resources?, id: Int): String = runCatching {
   if (res == null) "" else "${res.getResourcePackageName(id)}/${res.getResourceTypeName(id)}/${res.getResourceEntryName(id)}"
 }.getOrDefault("")
+
+/**
+ * 未标记的加载里，这一张**到底是不是"某应用的启动图标"**；是就返回它的名字（给日志），否则 null。
+ *
+ * 两条出口能拿到的证据不同，所以分两步，**精确的那一步放前面**：
+ *  1. `ApplicationPackageManager.getDrawable(pkg, resId, appInfo)`：参数里就有 `ApplicationInfo`，
+ *     直接比 `resId` 是不是这张应用声明的 `icon`/`roundIcon` —— 精确，不用解资源名。返回 `pm:包名`；
+ *  2. `Resources.getDrawableForDensity` 那一支拿不到 `ApplicationInfo`，只能看资源名
+ *     （`/mipmap/`、`ic_launcher`、`appicon`，与登记名字那条用同一把尺）。
+ * 调用方按前缀区分这两档：**只有第一档动手包装**，第二档先只记录（名单照样拿得到）。
+ *
+ * ⚠ 名字的来源必须跟着出口走：`APM.getDrawable` 的 `chain.thisObject` 是
+ *   `ApplicationPackageManager` **不是 Resources** —— 第一版诊断只从 `Resources` 取名字，
+ *   于是这一支永远算不出名字、被自己的过滤挡掉（"没打出来"被我误读成"没走这条路"）。
+ */
+/**
+ * 参数表里哪个是资源 id：**顶字节非 0** 的那个 Int（密度/主题等都是小整数）。
+ *
+ * ⚠ 别写 `v > 0x1000000`（2026-10-15 修）：包号 ≥ 0x80 的 id（真机 `Hook.JiuWu.Xp`
+ *   是 `0x950f0009`）在有符号 Int 里是**负数**，会被那个比较整批滤掉 ——
+ *   于是这类应用在我那条"未标记"的口子上永远隐形。
+ */
+private fun resIdArg(args: List<Any?>): Int? =
+  args.firstOrNull { (it as? Int)?.let { v -> (v ushr 24) != 0 } == true } as? Int
+
+private fun unmarkedAppIcon(method: Method, args: List<Any?>, host: Any?): String? {
+  val rid = resIdArg(args)
+  if (rid == null || rid == 0 || rid.isMarkedIcon()) return null
+  val app = args.firstOrNull { it is ApplicationInfo } as? ApplicationInfo
+  // ⚠ 只比 `icon`：这个 compile SDK 上 `ApplicationInfo.roundIcon` 解析不到（编译期 Unresolved），
+  //   而真机上这一族（Hook.JiuWu.Xp）声明的正是 `icon`。只声明 `roundIcon` 的应用这一版会漏，
+  //   但那种会在"只记录"名单里露头，届时再补。
+  if (app != null && app.icon == rid) return "pm:${app.packageName}"
+  val res = host as? Resources ?: return null
+  val nm = resourceName(res, rid)
+  // 真机实测这一支漏出去的（2026-10-15，清库+重启那一趟只记名单）：浙江在线 / appui /
+  // 美的洗衣机 / steampy / xbud / 移动的 mc10086 —— 全是 `mipmap/…` 开头的老式位图图标。
+  return if (nm.contains("/mipmap/") || nm.contains("ic_launcher") || nm.contains("appicon")) nm else null
+}
+
+/**
+ * 名字指向**宿主自己的界面资源**时不碰：桌子自己 / SystemUI / 框架的资源不是应用图标，
+ * 裁它等于把界面上的图切一圈（与 [IconNames] 那边登记名字时的排除是同一条理由）。
+ */
+private fun String.isHostSystemResource(): Boolean =
+  startsWith("com.android.launcher3") || startsWith("com.google.android.apps.nexuslauncher") ||
+    startsWith("android/") || startsWith("com.android.systemui")
 
 /**
  * PackageManager 那条路的参数里认出「是哪个应用」，`pm:包名` 形式交给 [IconNames]。
