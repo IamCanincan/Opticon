@@ -298,15 +298,26 @@ internal object MonochromeSynth {
       raster.getPixels(pixels, 0, edge, 0, 0, edge, edge)
       // 裁圆那个窗口 —— 量在**模型真吃的那一张**上（`raster` 的像素）。只在「强制裁圆」开着时量。
       // 搬的是**算好的墨**（见下面「甲」那一段），判据本身不看这个窗口。
-      // ⚠ 这一位量的是前景层那一张，所以倍数比彩色那支（量含盘的整图标）大一档 —— 这不是 bug，
-      //   主人验收的就是这一档。真机账（19:45 那一版，2026-10-15 00:23 重放，32 张搬过）：
-      //   他说"没问题"的最大一张是 uu远程 **1.75×**，他点名的两张是 **1.90×（openlist）/ 2.23×（元宝）**，
-      //   而离线 `_model.png` 量的 1.893 / 2.263 与这两个**对得上**。
+      // ⚠ **「只给前景层」那一支不许搬**（主人 2026-10-16：强制裁圆开着时，单色几何要和彩色完全一样）。
+      //   彩色那支（`MaskedDrawable.measureWindow`）量的是**整个图标** —— `AdaptiveIconDrawable.draw()`
+      //   的合成图 = 盘 + 前景，而这一支的背景是纯色盘、盘把整张画布**铺满** → 彩色那边**恒判「满幅」**
+      //   （内容按原位交付，屏幕上就是 1.5 倍铺出去）；这里量的是**前景层本身**（图形只占层画布的
+      //   ~0.6）→ 拿到的窗口与彩色**不是同一档**，照着搬就是把前景撑到满盘。
+      //   `_harness/DeckKt.kt`（`rec_model` 62 张：把两个窗口都换算到**层口径**再比跨度）逐张对表：
+      //   这一支差别**方向两边都有** —— uu远程 mono 偏大 11 个点、termux 偏大 7 个点、azure 偏小 5 个点
+      //   （正是主人说的"有大有小"）；置空后 **62 张全对齐**。非自适应与 `flatten` 两路本来就同源。
+      // ⚠ 真机那一档（19:45 版，2026-10-15 00:23 重放，32 张搬过）**没有作废**：他说"没问题"的最大一张
+      //   是 uu远程 **1.75×**、点名的两张是 **1.90×（openlist）/ 2.23×（元宝）**，离线 `_model.png` 量的
+      //   1.893 / 2.263 与这两个对得上。**它量的是"倍数"，本条改的是"搬不搬"，两件事** —— 倍数口径一字未动。
       //   （今晚我在这儿加过 1.82 又删掉，是因为拿 20:14 之后那一版的日志当 19:45 的账 —— 那一版
       //   改成量整图标，元宝在它那里是 `满幅`。同一个字段名、两本账，别再对串了。）
       val circle = ModuleRuntime.options().circleEnabled
-      val win = if (circle)
+      // 「只给前景层」= 自适应且背景是纯色盘（`flatten` = false）。见上面那条。
+      val fgOnly = adaptive && !flatten
+      // 窗口**照量**（`plateSubject` 那一档还要用它，见下），搬不搬由 `win` 定。
+      val winMeasured = if (circle)
         IconCropWindow.of(pixels, edge, edge)?.takeIf { it.zoom <= GEO_ZOOM_CAP } else null
+      val win = if (fgOnly) null else winMeasured
       // `!flatten` 且是自适应 = 交给这里的**只有前景层**，那张盘在背景层里（桌面自己补）。
       // 把这件事告诉模型：这一张里不许有"实心的一块当底" —— 混元那半个太极就是这么丢的。
       // ⚠ `flatten` 那一路（背景是一张真 drawable）**另起一张只画背景层的**，作为 `under` 一起交
@@ -373,7 +384,9 @@ internal object MonochromeSynth {
         else IconCropWindow.reframe(underPx, edge, edge, win, tOff, tOff, tSide, tSide)
       // 裁圆把这张判成"裁不动、整幅缩进圆里、还剩一半以上" → 那块大色块是**图案**，
       // 不是板。极性必须与彩色同意的档位一致，否则同一个模块对同一张图给两个答案。
-      val plateSubject = win != null && win.plate && win.keepPct >= PLATE_SUBJECT_MIN
+      // ⚠ 量的是 `winMeasured` 而不是 `win`：这一档问的是"**量出来的窗口**判成哪一档"，
+      //   与"搬不搬"无关 —— 「只给前景层」那一支现在不搬（`win` 为空），但它量出来的档位照旧。
+      val plateSubject = winMeasured != null && winMeasured.plate && winMeasured.keepPct >= PLATE_SUBJECT_MIN
       val out = MonochromeMask.build(pxIn, edge, edge, plateLayer, underIn, plateSubject)
       // H0 的射程跟着记：见 [noteSynthesized] 那条汇总为什么带它。
       noteH0(out.h0why)
