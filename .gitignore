@@ -45,3 +45,8 @@ signing.properties
 /酷安发布帖.md
 # 同理：不带下划线的本地设备日志抓取（`dev_plate2.txt` 那种 base64 分片 dump）
 /dev_*.txt
+
+# 工具生成的规划/方案文件目录（`.trae/documents/*.md`）：它不是代码、也不是
+# 仓库文档（那三类分别在 src/、docs/devlog/、docs/），是**本地工作产物**，
+# 而 `git add -A` 会把它一起卷进提交 —— 所以按目录整条挡掉。
+/.trae/
