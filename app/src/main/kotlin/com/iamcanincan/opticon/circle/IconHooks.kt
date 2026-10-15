@@ -618,7 +618,17 @@ private fun hookIconLoader(xposed: XposedInterface, method: Method): Boolean =
           // 只给日志用的名字。取的是**还原后的真实 id** —— args 里那份是打过标记的假 id，
           // 拿它问资源名只会得到异常或错名字。只在「这确实是个被标记的应用图标 id」这条
           // 分支上做，热路径的其余 drawable 一次都不问。
-          IconNames.remember(icon, resourceName(chain.thisObject as? Resources, restored[index] as Int))
+          //
+          // ⚠ **名字的来源必须跟着出口走**（2026-10-15 修）：这条钩挂在两类出口上，
+          //   `chain.thisObject` 只有 `Resources` 那一类是 Resources；
+          //   `ApplicationPackageManager.getDrawable(pkg, resId, appInfo)`（**应用信息页取图标走的就是它**）
+          //   拿到的是 APM → 资源名恒为 `""` → 登记被 [IconNames.remember] 里的 `isEmpty` 挡掉
+          //   → 屏上那一份在日志里一直是 `?`（真机 800 张里 73 张是 `?`；那几张没法用
+          //   "报一个应用名"grep 到它那一行，而判据对不对只能靠那些行看）。
+          //   所以资源名取不到时退回**参数里的包名**，与 [packageFromArgs] 那条路同一个口径
+          //   （`pm:包名`）；两类出口都取不到才真不登记。
+          val named = resourceName(chain.thisObject as? Resources, restored[index] as Int)
+          IconNames.remember(icon, named.ifEmpty { packageFromArgs(args) })
           clipToCircle(icon)
         } finally {
           replacingIcon.set(false)
