@@ -399,8 +399,7 @@ internal object MonochromeSynth {
       //   `plate && keepPct>=50` 一共 **6 行 / 2 个图标**（Bard、LocalSend），其中 spiky 的就是这 2 个 ——
       //   · `org.localsend.localsend_app`：新旧掩码**逐格相同**（它两条口径都落到 H3 同一个产物）；
       //   · `com.google.android.apps.bard`：改后整颗四角星干净上墨，改前星里多一块深灰楔形伪影（看图判的）。
-      val plateSubject = winMeasured != null && winMeasured.plate && winMeasured.keepPct >= PLATE_SUBJECT_MIN &&
-        !winMeasured.spiky
+      val plateSubject = winMeasured?.polaritySubject == true
       val out = MonochromeMask.build(pxIn, edge, edge, plateLayer, underIn, plateSubject)
       // H0 的射程跟着记：见 [noteSynthesized] 那条汇总为什么带它。
       noteH0(out.h0why)
@@ -428,7 +427,7 @@ internal object MonochromeSynth {
         //   dump 里的 PNG 逐张相同（2026-10-15 量过：21/21 same），而屏上 me.ele 已经大了 1.5 倍。
         //   要核对"搬完之后那张"，只有 [noteDiagnosis] 那 8 行 ASCII 缩略图（`_harness/_thumbab.cjs`）。
         MonoDump.maybe(id, label, raster, pxIn, out.mask, underIn, plateLayer, edge, edge,
-          "${label.substringBefore(' ')}_${sig}${if (variant.isEmpty()) "" else "_$variant"} | ${out.report}${geoTag(win)}", isWatched)
+          "${label.substringBefore(' ')}_${sig}${if (variant.isEmpty()) "" else "_$variant"} | ${out.report}${geoTag(win, winMeasured)}", isWatched)
       }
       // 可疑的那几张把**原像素**带回来（PNG → base64 → 分片进日志），判据台原样重放。
       // 没有这条通道，"不够细致"永远只能靠猜：他报的应用发的是 vector / webp，台子解不出。
@@ -568,13 +567,17 @@ internal object MonochromeSynth {
   ): Int {
     val n = diagnosed.incrementAndGet()
     Log.d(TAG, "Mono: diag#$n edge=$edge sig=$sig 键=${MonoKey.hex(key)} $label ${out.report} → " +
-      (if (out.mask != null) "已交出掩码" else "判据不成立，放弃合成") + geoTag(win) +
+      (if (out.mask != null) "已交出掩码" else "判据不成立，放弃合成") + geoTag(win, measured) +
       polarityTag(measured, subject))
     return n
   }
 
   /**
-   * 极性那一档**自己吃的那两个数**，打在判据行末尾：`极性=开 判剩55% 入口=keep`。
+   * 极性那一档**自己吃的那两个数**，打在判据行末尾：`接管=开 判剩52% 入口=keep`。
+   *
+   * ⚠ 字段名叫 `接管=` 不叫 `极性=`：`README.md` 里 `极性=翻/不翻` 说的是另一件事
+   *   （`MonochromeMask.polarity()` 那套翻不翻色，2026-10-16 全量检查时它**业务侧已零调用者**，
+   *   装机永远打不出那一行）。同名两义会让人把"盘被整块保住"读成"这张要翻色"。
    *
    * 为什么必须打在**这一行**、不能只看彩色侧那行 `裁圆外框`（2026-10-16 装机第一读抓到的）：
    * 两边的 `keepPct` 不是同一个量 —— 彩色那行量的是 `icon.draw()` 出来的那张，
@@ -585,23 +588,29 @@ internal object MonochromeSynth {
    * ⚠ 所以"哪条入口 fired"这个问题只有这一行能答；`拦=0` 时也能看出是**没过 50** 还是**被 spiky 挡下**。
    */
   private fun polarityTag(w: IconCropWindow.Window?, subject: Boolean): String {
-    if (w == null || !w.plate) return if (subject) " 极性=开" else ""
+    if (w == null || !w.plate) return if (subject) " 接管=开" else ""
     val byKeep = w.keepPct < IconCropWindow.keepRatioPercent
     val entry = if (w.spiky && byKeep) "keep+spiky" else if (w.spiky) "spiky" else "keep"
-    return " 极性=${if (subject) "开" else "关"} 判剩${w.keepPct}% 入口=$entry"
+    return " 接管=${if (subject) "开" else "关"} 判剩${w.keepPct}% 入口=$entry"
   }
 
   /**
-   * 判据行末尾那截几何标记：`几何=满幅`（这张没搬）/ `几何=切1.47×`（内切放大）/
-   * `几何=缩0.78×`（缩进，尖角不许顶到边）。**这一趟是搬输出**：这个数只说明"算好的墨被摆到
-   * 了多大"，判据吃的是搬之前那一张，所以它变了不动任何一档判断。
+   * 判据行末尾那截几何标记，三个值：`几何=切1.47×`（内切放大）/ `几何=缩0.78×`（缩进，尖角不许顶到边）/
+   * `几何=量到没搬`（`fgOnly` 或倍数超 `GEO_ZOOM_CAP`）/ `几何=满幅`（真没量到窗口）。
+   * ⚠ 以前只有"搬了"和"满幅"两档，于是 `fgOnly` 那张也被叫作"满幅" —— 同一行可以同时打出
+   *   `几何=满幅` 和 `判剩55%`，自相矛盾（2026-10-16 全量检查抓的）。
+   * **这一趟是搬输出**：这个数只说明"算好的墨被摆到了多大"，判据吃的是搬之前那一张，所以它变了不动任何一档判断。
    *
    * 为什么挂在**这一行**而不是另起一行：图标加载是热路径，本仓的规矩是"每个图标一行"。
    * 装机后要判"染色那支有没有跟着裁圆走"，grep 这一个字段就够了。
    */
-  private fun geoTag(win: IconCropWindow.Window?): String = when {
-    win == null -> " 几何=满幅"
-    else -> " 几何=${if (win.plate) "缩" else "切"}${"%.2f".format(win.zoom)}×"
+  private fun geoTag(win: IconCropWindow.Window?, measured: IconCropWindow.Window?): String = when {
+    win != null -> " 几何=${if (win.plate) "缩" else "切"}${"%.2f".format(win.zoom)}×"
+    // 量到了窗口却整张不搬 = `fgOnly`（只给前景层，那张盘在背景层）或倍数超 `GEO_ZOOM_CAP`。
+    //   以前这一格也印 `满幅`，于是同一行能打成 `几何=满幅 判剩55%` —— "满幅"和"只剩 55%"自相矛盾。
+    measured != null -> " 几何=量到没搬"
+    // 剩下才是真·满幅（或裁圆压根关着 —— 那时无窗口可量）。
+    else -> " 几何=满幅"
   }
 
   /**
@@ -738,28 +747,9 @@ internal object MonochromeSynth {
 
   private val diagnosed = AtomicInteger(0)
 
-  /**
-   * 裁圆判"这块大色块是要整块保住的图案"的那条线：**缩进圆里那一档，且按圆裁下去还剩到这么多%**。
-   *
-   * 为什么需要它（2026-10-15 主人定，`org.mewx.wenku8`）：彩色那支把蓝书整块缩进圆里保护起来，
-   * 染色那支却把同一块蓝当底摘掉、只剩书签当墨（`框内=0.07`）—— 一个模块两套主张，屏幕上就是
-   * 「应该蓝色部分上色」。这条一开，极性跟着档位走：wenku8 `底占 0.91→0.00`、`框内 0.07→0.93`，
-   * **整本书成墨、书签是镂空**（主人原话：「就是整本书成墨、书签是镂空，继续吧」）。
-   *
-   * ⚠ 线摆在 **50**，依据是真机 plate 档那四张"裁了只剩"：
-   *   wenku8 **55%** / contacts 那三张 **49%** / mipush **32%** / easytier **0%**。
-   *   也就是说 50 上面只有 wenku8 一张，下面第一张差 **6 个点** —— **空档很薄**，
-   *   摆在这里是因为它是**裁圆自己的档位**（不是我又找一个形状量去拟合），
-   *   但下一次真机多出一张 50~55% 的，这条就会连它一起翻，届时必须重新摊分布。
-   *
-   * ⚠⚠ **这条线上还挂着一位前提：`!spiky`（2026-10-16，Kodi「还是整块上色了」）。**
-   *   `plate` 档有**两条入口**（见 `IconCropWindow` 里 `COVER_BOX_FLOOR` 那条常数的注释）：`keep`（"圆会咬掉一大块形状"，
-   *   `keepPct < 60`）与 `spiky`（"圆盘比外框小太多"，**纯几何**）。上面那四张样本**全在 keep 入口**；
-   *   spiky 入口说的是几何适配、对像素归属一个主张都没有，极性跟着它走就是"这张图里没有底"。
-   *   kodi 就是被漏进来的（`spiky`、`keepPct=72` 过了 50 这条线）—— 所以本条是
-   *   **`plate && keepPct >= 50 && !spiky`**，不是单独那一个百分数。改这条线时**两位一起看**。
-   */
-  private const val PLATE_SUBJECT_MIN = 50
+  // `PLATE_SUBJECT_MIN` 与它那条算式已搬去 `IconCropWindow`（2026-10-16）——
+  //   判据台编译得动那个文件、编译不动这个，留在原地就等于让闸只能抄一份、测一份镜像。
+  //   线摆在 50 的依据与"下面第一张只差 3 个点"那笔账，记在那边。
 
   /**
    * 染色几何搬动的**上限**：倍数超过这个数的图标整张不搬（不是缩到上限 —— 搬一半会得到一张
