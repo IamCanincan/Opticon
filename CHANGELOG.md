@@ -26,6 +26,8 @@
 > <https://github.com/IamCanincan/Opticon/releases/tag/v1.1.2>，资产 `Opticon-v1.1.2-release.apk`；
 > **从云端拉回来与本地构建 `cmp` 无差异**（两边都是 1329253 字节、md5 `0d0ea9b0…`），
 > `releases/latest` 已指向 v1.1.2 —— 更新器读的就是这一条。
+> **更强的一条**：GitHub 自己在资产上记的 `digest` 是 `sha256:ff98c88af180b101b6230886ddbf948e0cc7b6898c60bb94eae272422a6a0bdd`，
+> 与本地构建 `sha256sum` **逐位相同** —— 这比"我拉回来正好对上"硬，因为比的是**平台存的那份**的哈希，不是我取回的副本。
 > ⚠ **做法记一句，因为下次还要用**：这台机器原本**没有 `gh`**（`winget install GitHub.cli` 装了 v2.102.0），
 > 而 `gh` **不读 `git config http.proxy`** —— 它那句 `error connecting to api.github.com` 是这个意思，
 > **不是令牌坏了**（我一度以为是）。走法：把 git 已有的凭据**只经管道**送进 `GH_TOKEN`（不打印、不落盘，
