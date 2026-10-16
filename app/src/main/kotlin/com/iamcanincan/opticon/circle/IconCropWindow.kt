@@ -45,6 +45,14 @@ internal object IconCropWindow {
    * @param plate true = 这一档"裁不动"（不裁、缩进、彩色那支补白底）。
    * @param keepPct 按圆裁下去还剩几成图案（判据自己报出来，供日志与语料账用）。
    * @param zoom 这个窗口换算成的放大/缩小倍数（>1 = 放大填满，<1 = 缩进）。
+   * @param spiky 这个 `plate` 档是不是由**「圆盘比外框小太多」**那条入口进来的（见 [COVER_BOX_FLOOR]）。
+   *   ⚠ **这一位不参与裁圆自己的任何判断**，它是给**下游**用的：染色那支的极性（`plateIsSubject`）只认
+   *   `plate` + `keepPct`，而那两条线上跑着**两条含义完全不同**的入口 —— keep 入口说的是"圆会咬掉一大块
+   *   形状，这块大色块是**要整块保住的图案**"（极性该跟着它走）；spiky 入口说的是"拿内切圆当窗口会把整幅
+   *   放大到溢出画布"——**纯几何**，一个像素归属都没主张。2026-10-16 `org.xbmc.kodi` 就是死在混用上：
+   *   它 spiky 入口进来、`keepPct=72` 过了 50 那条线，染色侧于是被告诉"这张图里没有底" → H3 参照=空气
+   *   → 整块灰白菱形盘都成墨（主人报「kodi 还是整块上色了」）。
+   *   不记这一位就只能靠"keepPct 高 ⇒ 大概是 spiky"去猜，那是拿一个**余量不明的数**代替结构事实。
    *
    * ⚠ 后面那几项**只进日志**，不参与判断。留着它们是因为这两行日志是装机后的唯一读数
    *   （`_harness` 的语料账与 README 记录的排查路径都按字段 grep）—— 抽成共用之后，
@@ -55,6 +63,7 @@ internal object IconCropWindow {
     val plate: Boolean, val keepPct: Int, val zoom: Float,
     val boxW: Int, val boxH: Int, val rBox: Float, val rCover: Float,
     val scanW: Int, val scanH: Int, val bodyOverFar: Float,
+    val spiky: Boolean,
   ) {
     /**
      * 把窗口从**视口空间**换算到**图层空间**（108dp 画布，可见区只占中间那 `1/(1+2f)`）。
@@ -73,7 +82,7 @@ internal object IconCropWindow {
     fun inLayer(f: Float): Window = Window(
       (l + f) / (1f + 2f * f), (t + f) / (1f + 2f * f),
       (r + f) / (1f + 2f * f), (b + f) / (1f + 2f * f),
-      plate, keepPct, zoom, boxW, boxH, rBox, rCover, scanW, scanH, bodyOverFar,
+      plate, keepPct, zoom, boxW, boxH, rBox, rCover, scanW, scanH, bodyOverFar, spiky,
     )
   }
 
@@ -156,7 +165,7 @@ internal object IconCropWindow {
       val rInk = sqrt(keepTotal / (4f * PLATE_INK))
       val rWin = maxOf(rBox, rInk) * SHRINK_EXTRA
       return window(cx, cy, rWin, sw, sh, plate = true, keepPct = keepPct,
-        boxW = bw, boxH = bh, rBox = rBox, rCover = rCover, bodyOverFar = body / far)
+        boxW = bw, boxH = bh, rBox = rBox, rCover = rCover, bodyOverFar = body / far, spiky = spiky)
     }
 
     if (rCover < 1f) return null
@@ -165,12 +174,12 @@ internal object IconCropWindow {
     //    会让整屏图标都悄悄长大。
     if (bw >= sw * BOX_FULL_RATIO && bh >= sh * BOX_FULL_RATIO) return null
     return window(cx, cy, rCover, sw, sh, plate = false, keepPct = keepPct,
-      boxW = bw, boxH = bh, rBox = rBox, rCover = rCover, bodyOverFar = 0f)
+      boxW = bw, boxH = bh, rBox = rBox, rCover = rCover, bodyOverFar = 0f, spiky = false)
   }
 
   private fun window(
     cx: Int, cy: Int, r: Float, sw: Int, sh: Int, plate: Boolean, keepPct: Int,
-    boxW: Int, boxH: Int, rBox: Float, rCover: Float, bodyOverFar: Float,
+    boxW: Int, boxH: Int, rBox: Float, rCover: Float, bodyOverFar: Float, spiky: Boolean,
   ): Window {
     val l = cx + 0.5f - r
     val t = cy + 0.5f - r
@@ -178,7 +187,7 @@ internal object IconCropWindow {
     val bottom = cy + 0.5f + r
     val zoom = maxOf(sw / (right - l), sh / (bottom - t))
     return Window(l / sw, t / sh, right / sw, bottom / sh, plate, keepPct, zoom,
-      boxW, boxH, rBox, rCover, sw, sh, bodyOverFar)
+      boxW, boxH, rBox, rCover, sw, sh, bodyOverFar, spiky)
   }
 
   /**

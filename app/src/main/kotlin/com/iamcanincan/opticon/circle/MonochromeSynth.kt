@@ -386,7 +386,21 @@ internal object MonochromeSynth {
       // 不是板。极性必须与彩色同意的档位一致，否则同一个模块对同一张图给两个答案。
       // ⚠ 量的是 `winMeasured` 而不是 `win`：这一档问的是"**量出来的窗口**判成哪一档"，
       //   与"搬不搬"无关 —— 「只给前景层」那一支现在不搬（`win` 为空），但它量出来的档位照旧。
-      val plateSubject = winMeasured != null && winMeasured.plate && winMeasured.keepPct >= PLATE_SUBJECT_MIN
+      // ⚠ **`!winMeasured.spiky` 这一道不能省**（2026-10-16，Kodi「还是整块上色了」）：本条原话是
+      //   「彩色那支判这张是"裁不动、整幅缩进圆里、**裁了只剩这么点**" —— 这块大色块是**要被整块保住的
+      //   图案**」，它依据的是 **keep 入口**（圆会咬掉一大块形状）。`plate` 档现在有**两条入口**，
+      //   另一条 `spiky`（"圆盘比外框小太多"）说的是**几何**、对像素归属一个主张都没有 —— 极性跟着它走
+      //   就成了"这张图里没有底"，整块底按覆盖率拿到半浓的墨。
+      //   真机 `org.xbmc.kodi`：`rCover/外框内切圆 = 0.72` → spiky 入口、`keepPct=72` 过了 50 那条线，
+      //   而它的参照那一支**本来认得那块灰白菱形盘**（`盘实=34485/30358 底占=0.76`）—— 屏上却是整块上墨。
+      //   ⚠ **线一根都没挪**：keep 入口进这一档的图标 `keepPct` 必然 < 60（`IconCropWindow.KEEP_RATIO`），
+      //   真机样本是 wenku8 55 / contacts 49 / mipush 32 / easytier 0 —— 改前改后**都只选中 wenku8**。
+      //   波及面在离线台子上摊开量过（`_harness/WinReproKt.kt`，739 张 × 7 份语料）：
+      //   `plate && keepPct>=50` 一共 **6 行 / 2 个图标**（Bard、LocalSend），其中 spiky 的就是这 2 个 ——
+      //   · `org.localsend.localsend_app`：新旧掩码**逐格相同**（它两条口径都落到 H3 同一个产物）；
+      //   · `com.google.android.apps.bard`：改后整颗四角星干净上墨，改前星里多一块深灰楔形伪影（看图判的）。
+      val plateSubject = winMeasured != null && winMeasured.plate && winMeasured.keepPct >= PLATE_SUBJECT_MIN &&
+        !winMeasured.spiky
       val out = MonochromeMask.build(pxIn, edge, edge, plateLayer, underIn, plateSubject)
       // H0 的射程跟着记：见 [noteSynthesized] 那条汇总为什么带它。
       noteH0(out.h0why)
