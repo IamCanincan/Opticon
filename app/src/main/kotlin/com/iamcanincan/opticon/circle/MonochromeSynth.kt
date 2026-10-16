@@ -408,7 +408,7 @@ internal object MonochromeSynth {
       // 指纹打在判据行上：解不出包名的那一批（快捷方式）在日志里都叫 `?`，没有这个数
       // 就对不上"哪一行判据是哪一个带回来的 PNG"。见 [MonoDump.sigOf]。
       val sig = MonoDump.sigOf(pxIn, edge, edge)
-      val id = noteBranch(edge, sig, label, out, win, key)
+      val id = noteBranch(edge, sig, label, out, win, key, winMeasured, plateSubject)
       val isWatched = MonoDump.watched(label)
       // ⚠ **变体标记必须进带回来的那个名字。** 桌面会把**同一张图标按不同尺寸再画一遍**：
       //   真机实测（`live2.txt`，2026-10-11 20:34–21:39）translate 在 `edge=384` 下有两种前景层
@@ -564,12 +564,31 @@ internal object MonochromeSynth {
    */
   private fun noteBranch(
     edge: Int, sig: String, label: String, out: MonochromeMask.Output, win: IconCropWindow.Window?,
-    key: Long,
+    key: Long, measured: IconCropWindow.Window?, subject: Boolean,
   ): Int {
     val n = diagnosed.incrementAndGet()
     Log.d(TAG, "Mono: diag#$n edge=$edge sig=$sig 键=${MonoKey.hex(key)} $label ${out.report} → " +
-      (if (out.mask != null) "已交出掩码" else "判据不成立，放弃合成") + geoTag(win))
+      (if (out.mask != null) "已交出掩码" else "判据不成立，放弃合成") + geoTag(win) +
+      polarityTag(measured, subject))
     return n
+  }
+
+  /**
+   * 极性那一档**自己吃的那两个数**，打在判据行末尾：`极性=开 判剩55% 入口=keep`。
+   *
+   * 为什么必须打在**这一行**、不能只看彩色侧那行 `裁圆外框`（2026-10-16 装机第一读抓到的）：
+   * 两边的 `keepPct` 不是同一个量 —— 彩色那行量的是 `icon.draw()` 出来的那张，
+   * 这一档量的是喂进模型的 `pixels`（[winMeasured]，`IconCropWindow.of(pixels, edge, edge)`）。
+   * 真机现例：`com.android.contacts` 那三张快捷方式彩色侧读 **50%**（正好压在 `PLATE_SUBJECT_MIN` 上），
+   * 而它判据行是 `拦=0` —— 极性**没开**。拿彩色那行的 50 去断言"这张被接管了"就是错的，
+   * 我当场差点这么写进日志。
+   * ⚠ 所以"哪条入口 fired"这个问题只有这一行能答；`拦=0` 时也能看出是**没过 50** 还是**被 spiky 挡下**。
+   */
+  private fun polarityTag(w: IconCropWindow.Window?, subject: Boolean): String {
+    if (w == null || !w.plate) return if (subject) " 极性=开" else ""
+    val byKeep = w.keepPct < IconCropWindow.keepRatioPercent
+    val entry = if (w.spiky && byKeep) "keep+spiky" else if (w.spiky) "spiky" else "keep"
+    return " 极性=${if (subject) "开" else "关"} 判剩${w.keepPct}% 入口=$entry"
   }
 
   /**

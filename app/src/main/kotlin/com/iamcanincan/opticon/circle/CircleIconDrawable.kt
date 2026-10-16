@@ -393,11 +393,15 @@ private class MaskedDrawable(private val icon: Drawable) : Drawable() {
       //   72 明明不小于 60。于是日志读起来像"这张没过线"，其实它是走 spiky 进来的，
       //   而染色侧的极性只认 keep。**"哪条入口 fired"在日志里根本读不出来** ——
       //   回归台空跑 + 日志说谎，Kodi 那一刀就是这样躺了 19 小时。
-      //   keep 那一路的字符串**逐字不变**（语料账按字段 grep），只在末尾多一位；spiky 那一路不再印那句假话。
-      val why = if (win.spiky) "" else "（<${IconCropWindow.keepRatioPercent}%）"
+      // ⚠ **两条不是互斥的**（装机第一读就抓到）：`mipush 剩 32%`、`easytier 剩 0%` 两张
+      //   **既满足 keep 又满足 spiky**，第一版把 `入口=` 写成"spiky 谓词成不成立"，于是它们被打成
+      //   `入口=spiky` 并把那句真话 `（<60%）` 也一起藏了 —— 换了一个谎。所以这里**分开判**：
+      //   `（<60%）` 只看 keep 成不成立，`入口=` 三态 `keep | spiky | keep+spiky`。
+      val byKeep = win.keepPct < IconCropWindow.keepRatioPercent
+      val why = if (byKeep) "（<${IconCropWindow.keepRatioPercent}%）" else ""
+      val entry = if (win.spiky && byKeep) "keep+spiky" else if (win.spiky) "spiky" else "keep"
       Log.d(TAG, "裁圆外框: $who 画布 ${iw}x$ih 图案 ${win.boxW}x${win.boxH} 裁了只剩 ${win.keepPct}%$why → 不裁、缩进圆里" +
-        " body/far=${"%.2f".format(win.bodyOverFar)} 放大 ${"%.2f".format(win.zoom)}×，圆内补白" +
-        " 入口=${if (win.spiky) "spiky" else "keep"}")
+        " body/far=${"%.2f".format(win.bodyOverFar)} 放大 ${"%.2f".format(win.zoom)}×，圆内补白 入口=$entry")
     } else {
       Log.d(TAG, "裁圆外框: $who 画布 ${iw}x$ih 图案 ${win.boxW}x${win.boxH}（扫描 ${win.scanW}x${win.scanH}）裁了还剩 " +
         "${win.keepPct}% 外框内切圆 r=${"%.1f".format(win.rBox)}" +
