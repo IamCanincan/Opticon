@@ -1265,18 +1265,31 @@ internal object MonochromeMask {
     //     为什么必须翻：`全开`（暗=墨写死）把饿了么/全球网测/Google 翻译三张**画成反色**，
     //     而钉着的性质里 `字形实心`/`白方块还是实心` 那族全报 `方块=0.0`（白字被掏空）。
     //     加上这一条之后 `SelfTest` 从红 23 条降到红 3 条、兼容性台 30→57。
-    val tonal = if (forceRef) null else tonalClass(pixels, w, h, box)?.takeIf { it.on }
     // 候选：盘子是**空气**时不许翻极性。"亮=墨"这条启发式存在的理由是"深盘上的白字"，
     // 而那需要一个**不透明的盘**；四周本来就是透明的时候，翻极性等于把最暗的笔画擦掉
     // （azure 的锁梁 L=35.8，比它自己那块被当成底的盾牌还暗 4.3 —— 一翻就归零）。
     // 盘是**空气**的时候不许翻极性（azure 锁梁那一条）—— 这里按**内容框**数，
     // 与上面 `airCanvasPct` 是两个问题：那一条问"盘有没有透出来"（画布），这一条问
     // "这张有没有一块不透明的盘"（内容框）。**别把它们并成一个。**
+    // ⚠ 坐在空气上的那一类不进这一支（2026-10-16，Kodi「整个都上墨了」）：这一支的前提是
+    //   「满幅、没有参照可谈」，而「卡片/标记坐在透明空气上」这一类**有参照** —— [groundPass]
+    //   认得那块底。它进来纯粹是被**底 vs 墨的亮度差**顶过线的（那跨度量的是对比，不是一张
+    //   插画自己的调子）；进来之后这一支没有任何归零底的一步（发档 / 接带 / 两层抬顶全让路），
+    //   那块底就按自己的亮度拿到一份**半浓的墨** —— 屏上就是「整个图标都上墨了」。
+    //   Kodi 实测：`跨=41` 过线、`盘实=30523/36101`（底认出来了，`H=2`、`底占=0.72`）、
+    //   `框内 0.28 / 淡 0.23`；而参照那一支只交出那块蓝标记。
+    //   ⚠ 四道前提缺一不可：① 内容框里坐着空气（`groundIsAir`，= 不是满幅画）；
+    //   ② `ground.gN > 0` —— **参照真的认出了一块底**（不是空气当底；azure `盘实=0/24178`
+    //   正是这一类，它必须留在这一支）；③ `!plateIsLayer && under == null` —— **这一张只喂了
+    //   一层**（甲类与有背景层的那批本来就该坐在空气上，它们的盘由另一层 / [PLATE_FLOOR_MIN]
+    //    / `盘刀` 负责）。②那条不是新尺：与 [tonalBright] 同一条「底真的存在」前提。
     var airN = 0
-    if (tonal != null) for (y in box.top until box.bottom) for (x in box.left until box.right)
+    for (y in box.top until box.bottom) for (x in box.left until box.right)
       if (Color.alpha(pixels[y * w + x]) < A_SOLID) airN++
     val airShare = airN * 100 / maxOf(box.width() * box.height(), 1)
     val groundIsAir = airShare >= TONAL_AIR_MIN
+    val tonal = if (forceRef) null else tonalClass(pixels, w, h, box)
+      ?.takeIf { it.on && !(groundIsAir && ground.gN > 0 && !plateIsLayer && under == null) }
     // **极性问的是关系，不是绝对值**：「墨那一半比底亮吗」。
     // 原来那条 `底 L* < 80 就翻` 是一条绝对阈值，而 2026-10-09 把全语料的底 L 摊开之后
     // 它站不住（`_harness/InkSpanKt.kt`，只数"底占 ≥20%"的 50 张）：
