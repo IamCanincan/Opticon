@@ -94,6 +94,15 @@ internal object IconCropWindow {
     val boxW: Int, val boxH: Int, val rBox: Float, val rCover: Float,
     val scanW: Int, val scanH: Int, val bodyOverFar: Float,
     val spiky: Boolean,
+    /**
+     * **未取整**的那条 keep 判据本身（`keep < keepTotal * KEEP_RATIO`）。
+     *
+     * 为什么单独带一位：日志以前用 `keepPct < 60` 反推"这张是走 keep 进来的"，而 `keepPct` 是
+     * `round(keep*100/keepTotal)` —— 落在 `[59.5, 60)` 的那批会被印成"没过线"，而分支实际走了 keep。
+     * 拿取整值去反推一个由未取整值决定的分支，就是让日志去猜代码；这一位把猜换成事实。
+     * ⚠ 它**不参与任何判断**，只进日志（极性那条判据仍按 `keepPct` 取整值比 50，那是已验收的行为）。
+     */
+    val byKeep: Boolean,
   ) {
     /**
      * 这一档要不要把**染色的极性**接管过去（"这张图里没有底，整块都是要保住的图案"）。
@@ -120,7 +129,7 @@ internal object IconCropWindow {
     fun inLayer(f: Float): Window = Window(
       (l + f) / (1f + 2f * f), (t + f) / (1f + 2f * f),
       (r + f) / (1f + 2f * f), (b + f) / (1f + 2f * f),
-      plate, keepPct, zoom, boxW, boxH, rBox, rCover, scanW, scanH, bodyOverFar, spiky,
+      plate, keepPct, zoom, boxW, boxH, rBox, rCover, scanW, scanH, bodyOverFar, spiky, byKeep,
     )
   }
 
@@ -191,7 +200,9 @@ internal object IconCropWindow {
     //      外框 92~97%、`rCover` 只有外框的 0.72 → 放大 1.49 倍 → 外框比画布宽 38%。
     //      主人原话：「我觉得这个可以用那个缩小并加白底的那个算法」。
     val spiky = rCover < rBox * COVER_BOX_FLOOR
-    if (keepTotal > 0 && (keep < keepTotal * KEEP_RATIO || spiky)) {
+    // keep 判据**只在这里算一次**（未取整），分支与日志共用同一个布尔 —— 别让日志再拿 `keepPct` 反推。
+    val byKeep = keepTotal > 0 && keep < keepTotal * KEEP_RATIO
+    if (keepTotal > 0 && (byKeep || spiky)) {
       val ext = extents(px, sw, sh, cx, cy)
       val far = ext[0]
       val body = ext[1]
@@ -203,7 +214,8 @@ internal object IconCropWindow {
       val rInk = sqrt(keepTotal / (4f * PLATE_INK))
       val rWin = maxOf(rBox, rInk) * SHRINK_EXTRA
       return window(cx, cy, rWin, sw, sh, plate = true, keepPct = keepPct,
-        boxW = bw, boxH = bh, rBox = rBox, rCover = rCover, bodyOverFar = body / far, spiky = spiky)
+        boxW = bw, boxH = bh, rBox = rBox, rCover = rCover, bodyOverFar = body / far, spiky = spiky,
+        byKeep = byKeep)
     }
 
     if (rCover < 1f) return null
@@ -212,12 +224,14 @@ internal object IconCropWindow {
     //    会让整屏图标都悄悄长大。
     if (bw >= sw * BOX_FULL_RATIO && bh >= sh * BOX_FULL_RATIO) return null
     return window(cx, cy, rCover, sw, sh, plate = false, keepPct = keepPct,
-      boxW = bw, boxH = bh, rBox = rBox, rCover = rCover, bodyOverFar = 0f, spiky = false)
+      boxW = bw, boxH = bh, rBox = rBox, rCover = rCover, bodyOverFar = 0f, spiky = false,
+      byKeep = false)   // 走到这里 keep 必然不成立（上面那个 if 就是它或 spiky 才进）
   }
 
   private fun window(
     cx: Int, cy: Int, r: Float, sw: Int, sh: Int, plate: Boolean, keepPct: Int,
     boxW: Int, boxH: Int, rBox: Float, rCover: Float, bodyOverFar: Float, spiky: Boolean,
+    byKeep: Boolean,
   ): Window {
     val l = cx + 0.5f - r
     val t = cy + 0.5f - r
@@ -225,7 +239,7 @@ internal object IconCropWindow {
     val bottom = cy + 0.5f + r
     val zoom = maxOf(sw / (right - l), sh / (bottom - t))
     return Window(l / sw, t / sh, right / sw, bottom / sh, plate, keepPct, zoom,
-      boxW, boxH, rBox, rCover, sw, sh, bodyOverFar, spiky)
+      boxW, boxH, rBox, rCover, sw, sh, bodyOverFar, spiky, byKeep)
   }
 
   /**

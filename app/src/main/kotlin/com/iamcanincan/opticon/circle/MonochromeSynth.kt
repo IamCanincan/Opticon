@@ -589,7 +589,7 @@ internal object MonochromeSynth {
    */
   private fun polarityTag(w: IconCropWindow.Window?, subject: Boolean): String {
     if (w == null || !w.plate) return if (subject) " 接管=开" else ""
-    val byKeep = w.keepPct < IconCropWindow.keepRatioPercent
+    val byKeep = w.byKeep   // 未取整的分支原值，别拿 keepPct 反推（见 Window.byKeep）
     val entry = if (w.spiky && byKeep) "keep+spiky" else if (w.spiky) "spiky" else "keep"
     return " 接管=${if (subject) "开" else "关"} 判剩${w.keepPct}% 入口=$entry"
   }
@@ -605,7 +605,10 @@ internal object MonochromeSynth {
    * 装机后要判"染色那支有没有跟着裁圆走"，grep 这一个字段就够了。
    */
   private fun geoTag(win: IconCropWindow.Window?, measured: IconCropWindow.Window?): String = when {
-    win != null -> " 几何=${if (win.plate) "缩" else "切"}${"%.2f".format(win.zoom)}×"
+    win != null -> " 几何=${if (win.plate) "缩" else "切"}${"%.2f".format(win.zoom)}×" +
+      // `缩/切` 是**档位名不是方向**（真机 9 行打成 `缩1.00×`～`缩1.17×`），但这两个字已经被上百条
+      //   devlog 引用，换掉等于把历史读数全孤儿化 —— 所以**留着**，另加一个不会歧义的 `档=`。
+      " 档=${if (win.plate) "plate" else "inscribe"}"
     // 量到了窗口却整张不搬 = `fgOnly`（只给前景层，那张盘在背景层）或倍数超 `GEO_ZOOM_CAP`。
     //   以前这一格也印 `满幅`，于是同一行能打成 `几何=满幅 判剩55%` —— "满幅"和"只剩 55%"自相矛盾。
     measured != null -> " 几何=量到没搬"

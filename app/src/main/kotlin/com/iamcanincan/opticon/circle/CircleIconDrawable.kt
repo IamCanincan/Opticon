@@ -386,6 +386,9 @@ private class MaskedDrawable(private val icon: Drawable) : Drawable() {
     // 带包名：这两行原本只有尺寸，装机上**没法把"彩色对某张做了什么"和"染色对同一张做了什么"
     // 对起来** —— 2026-10-14 这一轮三次判错都卡在这个洞上（单色那行有包名，这两行没有）。
     val who = IconNames.of(icon)
+    // ⚠ 方向词按**数**给，不按档位给（2026-10-16 全量检查）：这两行以前**无论 zoom 是多少都印"放大"**，
+    //   真机就打出过 `放大 0.57×`（明明是缩）。plate 档的 zoom 可以 <1 也可以 >1，档位不是方向。
+    val dir = if (win.zoom < 1f) "缩" else "放"
     if (win.plate) {
       // ⚠ `入口=` 这一位是 2026-10-16 补的：plate 档有**两条语义完全不同的入口**
       //   （keep = "圆会咬掉一大块形状，这块大色块是要整块保住的图案"；spiky = 纯几何"圆盘比外框小太多"），
@@ -395,17 +398,21 @@ private class MaskedDrawable(private val icon: Drawable) : Drawable() {
       //   回归台空跑 + 日志说谎，Kodi 那一刀就是这样躺了 19 小时。
       // ⚠ **两条不是互斥的**（装机第一读就抓到）：`mipush 剩 32%`、`easytier 剩 0%` 两张
       //   **既满足 keep 又满足 spiky**，第一版把 `入口=` 写成"spiky 谓词成不成立"，于是它们被打成
-      //   `入口=spiky` 并把那句真话 `（<60%）` 也一起藏了 —— 换了一个谎。所以这里**分开判**：
-      //   `（<60%）` 只看 keep 成不成立，`入口=` 三态 `keep | spiky | keep+spiky`。
-      val byKeep = win.keepPct < IconCropWindow.keepRatioPercent
+      //   `入口=spiky` 并把那句真话 `（<60%）` 也一起藏了 —— 换了一个谎。
+      // ⚠ 这里读 `win.byKeep`（**未取整**的分支原值），不再用 `keepPct < 60` 反推 ——
+      //   `keepPct` 是四舍五入过的，`[59.5,60)` 那批会被印成"没过线"而分支其实走的 keep。
+      val byKeep = win.byKeep
       val why = if (byKeep) "（<${IconCropWindow.keepRatioPercent}%）" else ""
       val entry = if (win.spiky && byKeep) "keep+spiky" else if (win.spiky) "spiky" else "keep"
-      Log.d(TAG, "裁圆外框: $who 画布 ${iw}x$ih 图案 ${win.boxW}x${win.boxH} 裁了只剩 ${win.keepPct}%$why → 不裁、缩进圆里" +
-        " body/far=${"%.2f".format(win.bodyOverFar)} 放大 ${"%.2f".format(win.zoom)}×，圆内补白 入口=$entry")
+      // `（扫描 WxH）` 以前**只在非 plate 分支打** —— 偏偏最需要拿它核对"两边量的是不是同一格"的
+      //   就是 plate 这一档（彩色量 draw() 那张、染色量喂进模型那张，两个 keepPct 不是一回事）。
+      Log.d(TAG, "裁圆外框: $who 画布 ${iw}x$ih 图案 ${win.boxW}x${win.boxH}（扫描 ${win.scanW}x${win.scanH}）" +
+        " 裁了只剩 ${win.keepPct}%$why → 不裁、缩进圆里" +
+        " body/far=${"%.2f".format(win.bodyOverFar)} $dir ${"%.2f".format(win.zoom)}×，圆内补白 入口=$entry")
     } else {
       Log.d(TAG, "裁圆外框: $who 画布 ${iw}x$ih 图案 ${win.boxW}x${win.boxH}（扫描 ${win.scanW}x${win.scanH}）裁了还剩 " +
         "${win.keepPct}% 外框内切圆 r=${"%.1f".format(win.rBox)}" +
-        " 不透明圆盘 r=${"%.1f".format(win.rCover)} → 放大 ${"%.2f".format(win.zoom)}×")
+        " 不透明圆盘 r=${"%.1f".format(win.rCover)} → $dir ${"%.2f".format(win.zoom)}×")
     }
     return win
   }

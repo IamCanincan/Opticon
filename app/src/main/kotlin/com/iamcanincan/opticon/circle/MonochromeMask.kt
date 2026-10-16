@@ -2000,7 +2000,10 @@ internal object MonochromeMask {
           // 【SepTone】**加在整串最末尾**：这一刀挪了几格（见 [applySepTone]）。
           // ⚠ 满幅那一支**压根不走这一刀**，所以那里一个字符都不加 —— 与本仓那条
           //   「一个不跑的步骤不许报通过」同一条规矩：不报 ≠ 报 0。
-          (if (tonal == null) " 挪档=${s.sepApplied}" else "") +
+          // ⚠ `sepOff` 那一遍同样**没走**这一刀（`applySepTone` 只在 `!sepOff` 时施加），
+          //   而 `ref0` 是**可以被当成最终产物返回**的（`picksRef` 选中它的时候）——
+          //   以前那一遍照样印 `挪档=0`，读起来像"走过了、挪 0 格"。2026-10-16 全量检查抓的。
+          (if (tonal == null && !sepOff) " 挪档=${s.sepApplied}" else "") +
           // 【carrierPocket】**加在整串最末尾**：抹了几格（含沿边扫尾）/ 补了几格软边。
           // 0 也要报 —— 「没走到」与「走到了没开火」要分得开。
           (if (tonal == null) " 承载=${s.carrierErase}抹/${s.carrierSoft}软" else ""),
