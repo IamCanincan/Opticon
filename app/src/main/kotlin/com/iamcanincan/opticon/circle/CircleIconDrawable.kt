@@ -387,9 +387,17 @@ private class MaskedDrawable(private val icon: Drawable) : Drawable() {
     // 对起来** —— 2026-10-14 这一轮三次判错都卡在这个洞上（单色那行有包名，这两行没有）。
     val who = IconNames.of(icon)
     if (win.plate) {
-      Log.d(TAG, "裁圆外框: $who 画布 ${iw}x$ih 图案 ${win.boxW}x${win.boxH} 裁了只剩 ${win.keepPct}%" +
-        "（<${IconCropWindow.keepRatioPercent}%）→ 不裁、缩进圆里" +
-        " body/far=${"%.2f".format(win.bodyOverFar)} 放大 ${"%.2f".format(win.zoom)}×，圆内补白")
+      // ⚠ `入口=` 这一位是 2026-10-16 补的：plate 档有**两条语义完全不同的入口**
+      //   （keep = "圆会咬掉一大块形状，这块大色块是要整块保住的图案"；spiky = 纯几何"圆盘比外框小太多"），
+      //   而这一行原本**两条都印同一句 `（<60%）`** —— kodi 真机打出来就是 `裁了只剩 72%（<60%）`，
+      //   72 明明不小于 60。于是日志读起来像"这张没过线"，其实它是走 spiky 进来的，
+      //   而染色侧的极性只认 keep。**"哪条入口 fired"在日志里根本读不出来** ——
+      //   回归台空跑 + 日志说谎，Kodi 那一刀就是这样躺了 19 小时。
+      //   keep 那一路的字符串**逐字不变**（语料账按字段 grep），只在末尾多一位；spiky 那一路不再印那句假话。
+      val why = if (win.spiky) "" else "（<${IconCropWindow.keepRatioPercent}%）"
+      Log.d(TAG, "裁圆外框: $who 画布 ${iw}x$ih 图案 ${win.boxW}x${win.boxH} 裁了只剩 ${win.keepPct}%$why → 不裁、缩进圆里" +
+        " body/far=${"%.2f".format(win.bodyOverFar)} 放大 ${"%.2f".format(win.zoom)}×，圆内补白" +
+        " 入口=${if (win.spiky) "spiky" else "keep"}")
     } else {
       Log.d(TAG, "裁圆外框: $who 画布 ${iw}x$ih 图案 ${win.boxW}x${win.boxH}（扫描 ${win.scanW}x${win.scanH}）裁了还剩 " +
         "${win.keepPct}% 外框内切圆 r=${"%.1f".format(win.rBox)}" +
