@@ -2022,7 +2022,10 @@ internal object MonochromeMask {
           //   第十闸（换支账）以前把"算了没过线"与"没算"混成同一个"没有 `调=`"（2026-10-17 摊四档
           //   边长时抓到的：5/9 张换支其实是这一类，而 `forceRef` 那一遍**按设计**就不看跨度）。
           //   **1** = 内容框太小（格子 <2）；**2** = 框内没有实心像素（`opq == 0`，白剪影坐空气那一族）；
-          //   **3** = 参照那一遍（`forceRef`，跨度这条闸门按设计不参与，见 `build` 第 2.5 步）。
+          //   **3** = 参照那一遍（`forceRef`，跨度这条闸门按设计不参与，见 `build` 第 2.5 步）；
+          //   **4** = 格子之间凑不出相邻对（`pairs == 0`，等于"这张没有纹理可量"）；
+          //   **0** = **有 null 出口没插桩** —— 真机第一读就落到这里 1509 行，就是漏了 4 号那条。
+          //   ⚠ 今后给 `tonalClass` 加 `return null`，**必须同时给一个新编号**，否则它会悄悄混进 0。
           (if (tonal == null && tonalSeen == null) " 调未算=${tonalWhy[0]}" else ""),
       ground.hyp,
       s.h0why,
@@ -2289,7 +2292,7 @@ internal object MonochromeMask {
         if (d in TONAL_TEX_LO..TONAL_TEX_HI) mid++
       }
     }
-    if (pairs == 0L) return null
+    if (pairs == 0L) { why?.set(0, 4); return null }
     val lo = percentile(hist, opq, LUM_LOW_PCT) shl 6
     val hi = percentile(hist, opq, LUM_HIGH_PCT) shl 6
     return Tonal(
