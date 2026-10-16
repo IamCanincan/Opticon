@@ -387,7 +387,13 @@ internal object CorpusCapture {
    *   而模型吃的是那一层**自己 `setBounds(0,0,edge,edge)` 画满**的版本 —— **差整整 1.5 倍构图**。
    * 于是任何拿 `_bg.png` 当 `under` 喂 `盘刀` 的台子，比的是**错位 1.5 倍的两张**；任何拿合成图
    * 当输入的台子，对那 34 张量的是模型从没见过的输入（盘被当成图形的一部分）。
-   * 这一张不做判断、不裁、不缩 —— 它唯一的责任是「与 `MonochromeMask.build()` 收到的像素逐位相同」。
+   * 这一张不做判断、不裁、不缩 —— 它对齐的是「`MonochromeMask.build()` 收到的像素**在 flatten 那一叉上**
+   * 逐位相同」。⚠ **不包括裁圆窗口的 reframe**（2026-10-16 核对：本函数一次都没碰 `IconCropWindow`）。
+   * 装机在 `build()` 之前还有一步 `pxIn = IconCropWindow.reframe(...)`，所以凡是**落进 plate/切 档被搬过**
+   * 的那张（kodi 就是：`几何=缩0.83×`），`_model.png` 是**搬之前**的满幅那一张，不是模型真吃的那张。
+   * 台子对此的处置是**换算输出而不是换算输入**（`GeoKt` 那条定案：`_model`/合成图=满幅，
+   * 对表时把【我们】的产物换算回可见区），别反过来以为读 `_model.png` 就等于读了模型输入。
+   * 把抓取也改成搬之后那一张 = **分母变更**，`rec_model`/`plate_model` 全部要重钉，不在这一条里顺手做。
    *
    * 分支与 `MonochromeSynth` 逐句对齐：`flatten = adaptive && background !is ColorDrawable`；
    * `flatten` → 两层各自满幅叠加，且 `under` = 背景层满幅那一张；否则输入 = 前景层满幅，无 `under`。
