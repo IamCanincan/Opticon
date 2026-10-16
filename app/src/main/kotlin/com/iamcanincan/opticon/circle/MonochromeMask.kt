@@ -1265,7 +1265,11 @@ internal object MonochromeMask {
     //     为什么必须翻：`全开`（暗=墨写死）把饿了么/全球网测/Google 翻译三张**画成反色**，
     //     而钉着的性质里 `字形实心`/`白方块还是实心` 那族全报 `方块=0.0`（白字被掏空）。
     //     加上这一条之后 `SelfTest` 从红 23 条降到红 3 条、兼容性台 30→57。
-    val tonal = if (forceRef) null else tonalClass(pixels, w, h, box)?.takeIf { it.on }
+    // ⚠ `tonalSeen` 只为**报告**留着：以前 `?.takeIf { it.on }` 直接把没开火的那个对象丢掉，
+    //   于是 `跨=` 只在开火时印得出来 —— 第十闸摊四档边长时发现"离阈值多远"永远看不见，
+    //   而换支恰恰发生在**没开火**那几张身上（2026-10-17）。开火判据一个字没动，还是 `tonal.on`。
+    val tonalSeen = if (forceRef) null else tonalClass(pixels, w, h, box)
+    val tonal = tonalSeen?.takeIf { it.on }
     // 候选：盘子是**空气**时不许翻极性。"亮=墨"这条启发式存在的理由是"深盘上的白字"，
     // 而那需要一个**不透明的盘**；四周本来就是透明的时候，翻极性等于把最暗的笔画擦掉
     // （azure 的锁梁 L=35.8，比它自己那块被当成底的盾牌还暗 4.3 —— 一翻就归零）。
@@ -2006,7 +2010,13 @@ internal object MonochromeMask {
           (if (tonal == null && !sepOff) " 挪档=${s.sepApplied}" else "") +
           // 【carrierPocket】**加在整串最末尾**：抹了几格（含沿边扫尾）/ 补了几格软边。
           // 0 也要报 —— 「没走到」与「走到了没开火」要分得开。
-          (if (tonal == null) " 承载=${s.carrierErase}抹/${s.carrierSoft}软" else ""),
+          (if (tonal == null) " 承载=${s.carrierErase}抹/${s.carrierSoft}软" else "") +
+          // 【调跨】**加在整串最末尾**：没开火时也把这张自己的亮度跨度报出来。
+          //   第十闸（换支账）要判的是"离 `TONAL_SPAN_MIN` 多远"，而那个数以前**只在开火时印** ——
+          //   偏偏换支的那几张在换到的那一档上就是不开火的，于是最该看距离的时候读不到数。
+          //   （2026-10-17 四档全扫：yiban 在 192 与 768 都 `跨=66` 却在 384 不开火，
+          //    384 那一档它到底是多少，当时无从得知。）
+          (if (tonal == null && tonalSeen != null) " 调跨=${tonalSeen.span}" else ""),
       ground.hyp,
       s.h0why,
       s.veto
