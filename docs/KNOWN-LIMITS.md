@@ -353,6 +353,16 @@
   0.80 是空档中点，**语料一张都不动**（改前改后逐行 `diff` 为空）。
   ⚠ 这一档的白边是**我们画的**，画在**前景层的位图里**，不动 `AdaptiveIconDrawable` 的背景层
   （那一层的颜色是给取色合成器当盘色用的）。
+  ⚠⚠ **这一档有二阶后果（2026-10-16 才被发现，配 `spiky` 已修）**：`plate` 档有**两条入口** ——
+  `keep`（"圆会咬掉一大块形状"，`keepPct < 60`）与 `spiky`（本条这条，**纯几何**）。
+  而染色侧的极性闸 `plateIsSubject` 当时只按 `plate && keepPct ≥ 50` 判，标定样本
+  （wenku8 55 / contacts 49 / mipush 32 / easytier 0）**全是 keep 入口** —— 本条把 kodi
+  （`spiky` 入口、`keepPct=**72**`）塞进这一档时，**没人回头核那条闸**，于是染色侧被判成
+  「这一张里没有底」（判据行 `拦=128 H=3 盘实=0`）→ **整块灰白菱形盘都成墨**（主人报「还是整块上色了」）。
+  修法：`Window` 带一位 `spiky`，`plateIsSubject` 加 `&& !spiky` —— **只有 keep 入口有资格带走极性**。
+  **How to apply:** 以后再给 `IconCropWindow` 的`plate`/`满幅`……任一条出口**加新入口或改判据**，
+  必须同时过一遍**下游消费者**（现在有：`MaskedDrawable` 的几何、`MonochromeSynth` 的 `plateSubject`）
+  —— 离线量它的是 `_harness/PlateSubKt.kt`（已按新口径改写，会把"旧开火、新不开火"的波及面摊出来）。
   **How to apply:** 再遇到"某应用裁出来不好看"，先用 `sh run.sh harness.WinKtKt <png 或目录>`
   （`_harness/WinKt.kt`）看它走哪一档、zoom 多少、`rCover/外框内切圆` 是多少 —— **别从屏上反推**；
   要出对照给主人看就用 `node _harness/_winab.cjs <png>`（①原图 ②现状放大 ③只套圆 ④缩进补白）。
