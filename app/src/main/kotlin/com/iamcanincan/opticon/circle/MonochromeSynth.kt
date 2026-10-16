@@ -315,8 +315,7 @@ internal object MonochromeSynth {
       // 「只给前景层」= 自适应且背景是纯色盘（`flatten` = false）。见上面那条。
       val fgOnly = adaptive && !flatten
       // 窗口**照量**（`plateSubject` 那一档还要用它，见下），搬不搬由 `win` 定。
-      val winMeasured = if (circle)
-        IconCropWindow.of(pixels, edge, edge)?.takeIf { it.zoom <= GEO_ZOOM_CAP } else null
+      val winMeasured = if (circle) IconCropWindow.measure(pixels, edge) else null
       val win = if (fgOnly) null else winMeasured
       // `!flatten` 且是自适应 = 交给这里的**只有前景层**，那张盘在背景层里（桌面自己补）。
       // 把这件事告诉模型：这一张里不许有"实心的一块当底" —— 混元那半个太极就是这么丢的。
@@ -756,24 +755,10 @@ internal object MonochromeSynth {
   //   判据台编译得动那个文件、编译不动这个，留在原地就等于让闸只能抄一份、测一份镜像。
   //   线摆在 50 的依据与"下面第一张只差 3 个点"那笔账，记在那边。
 
-  /**
-   * 染色几何搬动的**上限**：倍数超过这个数的图标整张不搬（不是缩到上限 —— 搬一半会得到一张
-   * 他没见过也没验收过的中间尺寸）。
-   *
-   * 线摆在 **1.75 与 1.90 中间**，两端各留 0.07~0.15 的余量，贴的是真机同一版（19:45 那一版，
-   * 2026-10-15 00:23 重放那一趟）的两张邻居：下面最近的一张是 uu远程 `缩1.75×`（他说没问题），
-   * 上面最近的一张是 openlist `缩1.90×`（他点名的两张之一，另一张元宝 `切2.23×`）。
-   *
-   * ⚠ **这一档不是只动那两张。** 与验收那一版配对（两趟都出现的 90 个包）：`>1.82` 一共 **22 个包**
-   *   被退回不搬，绝大多数是快捷方式 —— 设置·电量 2.86 / 时钟·秒表与新建计时器 2.35 / 搜索·语音 2.35 /
-   *   YouTube·短视频 1.98 / 相册·手气不错 1.95 / 漫画·历史 1.86 一类。桌面上看得见的启动图标里，
-   *   最大的是 uu远程 `缩1.75×`（留），所以这一刀在他眼里就是那两张缩回去。
-   *   余量一处：**不用管**。相册·截屏正好 `缩1.82×`，压线、随重放取整落到"不搬"那一侧 —— 主人
-   *   2026-10-15 判「相册不用管它，原本就适配取色了」：相册**本体**（`mipmap`）确实从不走这条合成
-   *   （自带 monochrome 层，原样透传，真机日志里它一张判据行都没有），这三张是长按菜单里的
-   *   **快捷方式** drawable。**线就停在 1.82，别为了压线那张挪到 1.85。**
-   */
-  private const val GEO_ZOOM_CAP = 1.82f
+  // `GEO_ZOOM_CAP`（1.82）与"量窗口 + 卡上限"那条链已搬去 `IconCropWindow.measure()`（2026-10-17）——
+  //   理由同 `PLATE_SUBJECT_MIN`：判据台编得动那个文件、编不动这个，而 1.82 这个数
+  //   已经在 `PlateSubKt` 与 `ReframeDiffKt` 里各抄了一份。
+  //   线摆在 1.75/1.90 中间那笔账与"别为了压线那张挪到 1.85"那条，记在那边。
 
   /** 重诊断（[noteDiagnosis]：全画布直方图 + 掩码连通块 + 缩略图）每进程放行几条。 */
   private const val HEAVY_DIAG_LIMIT = 12
