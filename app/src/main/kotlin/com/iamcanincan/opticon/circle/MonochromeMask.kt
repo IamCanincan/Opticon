@@ -1268,7 +1268,8 @@ internal object MonochromeMask {
     // ⚠ `tonalSeen` 只为**报告**留着：以前 `?.takeIf { it.on }` 直接把没开火的那个对象丢掉，
     //   于是 `跨=` 只在开火时印得出来 —— 第十闸摊四档边长时发现"离阈值多远"永远看不见，
     //   而换支恰恰发生在**没开火**那几张身上（2026-10-17）。开火判据一个字没动，还是 `tonal.on`。
-    val tonalSeen = if (forceRef) null else tonalClass(pixels, w, h, box)
+    val tonalWhy = IntArray(1) { if (forceRef) 3 else 0 }
+    val tonalSeen = if (forceRef) null else tonalClass(pixels, w, h, box, tonalWhy)
     val tonal = tonalSeen?.takeIf { it.on }
     // 候选：盘子是**空气**时不许翻极性。"亮=墨"这条启发式存在的理由是"深盘上的白字"，
     // 而那需要一个**不透明的盘**；四周本来就是透明的时候，翻极性等于把最暗的笔画擦掉
@@ -2016,7 +2017,13 @@ internal object MonochromeMask {
           //   偏偏换支的那几张在换到的那一档上就是不开火的，于是最该看距离的时候读不到数。
           //   （2026-10-17 四档全扫：yiban 在 192 与 768 都 `跨=66` 却在 384 不开火，
           //    384 那一档它到底是多少，当时无从得知。）
-          (if (tonal == null && tonalSeen != null) " 调跨=${tonalSeen.span}" else ""),
+          (if (tonal == null && tonalSeen != null) " 调跨=${tonalSeen.span}" else "") +
+          // 【调未算】**加在整串最末尾**：`tonalClass` 压根没给出判定的三种原因分开报 ——
+          //   第十闸（换支账）以前把"算了没过线"与"没算"混成同一个"没有 `调=`"（2026-10-17 摊四档
+          //   边长时抓到的：5/9 张换支其实是这一类，而 `forceRef` 那一遍**按设计**就不看跨度）。
+          //   **1** = 内容框太小（格子 <2）；**2** = 框内没有实心像素（`opq == 0`，白剪影坐空气那一族）；
+          //   **3** = 参照那一遍（`forceRef`，跨度这条闸门按设计不参与，见 `build` 第 2.5 步）。
+          (if (tonal == null && tonalSeen == null) " 调未算=${tonalWhy[0]}" else ""),
       ground.hyp,
       s.h0why,
       s.veto
@@ -2227,12 +2234,12 @@ internal object MonochromeMask {
    *  2026-10-08 就已经不是开火判据了（见 [Tonal.on]）。留着一个只为旧判据服务的前提，等于让旧判据
    *  隔着两天还在决定谁能入场。
    */
-  internal fun tonalClass(pixels: IntArray, w: Int, h: Int, box: Rect): Tonal? {
+  internal fun tonalClass(pixels: IntArray, w: Int, h: Int, box: Rect, why: IntArray? = null): Tonal? {
     val bw = box.width()
     val bh = box.height()
     // 格子只服务纹理与主色这两条**报告用**的量，所以它按框缩；跨度走的是逐像素直方图，与格子无关。
     val n = minOf(TONAL_GRID, bw, bh)
-    if (n < 2) return null
+    if (n < 2) { why?.set(0, 1); return null }
     val cL = IntArray(n * n); val cR = IntArray(n * n); val cG = IntArray(n * n)
     val cB = IntArray(n * n); val cN = IntArray(n * n)
     val hist = IntArray(101)
@@ -2255,7 +2262,7 @@ internal object MonochromeMask {
         cN[k]++
       }
     }
-    if (opq == 0) return null
+    if (opq == 0) { why?.set(0, 2); return null }
     // 每格的平均亮度与平均色（平涂那一块的所有格会得到同一个色，这就是"主色"的算法）。
     // ⚠ 三通道**分开累加**：把打包好的 0xRRGGBB 直接相加再除格数，通道之间会进位，
     //   平涂区的两格会算出两个"不同的"颜色，主色那条判据就恒不成立。
