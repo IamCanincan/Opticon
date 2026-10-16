@@ -145,7 +145,7 @@ Hooked com.android.settings
 ```
 Mono: diag#81 edge=384 sig=4c8deb5010d9 键=b3df31226e76f745 org.mewx.wenku8/drawable/ic_launcher
   BitmapDrawable intrinsic=256x256 bounds=256x256 adaptive=false state=60936b4 票=0抹/0抬/0块
-  带占=86 底占=0.01 H=3 族=0 … 拦=128 盘实=0/43537 … → 已交出掩码 几何=缩0.70×
+  带占=86 底占=0.01 H=3 族=0 … 拦=128 盘实=0/43537 … → 已交出掩码 几何=缩0.70× 档=plate
   接管=开 判剩52% 入口=keep
 Mono: 680 layers synthesized  H0: 接手=9 画布拦=32 关系拦=0  同色退=17
 ```
