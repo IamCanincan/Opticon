@@ -495,12 +495,96 @@ var clipHost: String = "?"
  *   而那一页走的两条通道（`PM.loadItemIcon` 23 次 / 标记 id 17 次）**都是"本该裁"的正门**，
  *   说明剩下的不是判据宽窄，是**射程**：强制裁圆管的是桌面与设置那两联，不该管 SystemUI。
  * 代价说清楚：走默认这条路的新宿主（比如以后加的第三个桌面）会**静默不裁**，
- *   现象与"功能没生效"一模一样 —— 所以下面那一行"未启用"日志是必需的，不是啰嗦。
+ *   现象与"功能没生效"一模一样 —— 所以下面那几行"未启用"总账是必需的，不是啰嗦。
  */
 @Volatile
 var cropThisHost: Boolean = false
 
-private val cropSkipLogged = java.util.concurrent.atomic.AtomicBoolean(false)
+/**
+ * 名单外宿主里**点名放行**的那几条通道（装配时由 `IconHooks.EXTRA_CROP_CHANNELS` 置一次）。
+ * 空集 = 这个进程整个不裁，与只有 [cropThisHost] 时一模一样。
+ */
+@Volatile
+var cropChannels: Set<String> = emptySet()
+
+/**
+ * 名单外的宿主**该不该进名单**，只有一个凭据：那一次取图标是**谁**在取、取了几次。
+ *
+ * 为什么现在要这一截（2026-10-17 主人第二报之后）：把 SystemUI 踢出名单确实修好了快速设置，
+ * 但同一刀把**通知行那个应用图标**的裁圆也关了 —— 他的原话是「我通知的应用图标是要裁圆的」。
+ * 而旧日志根本读不出这两件事怎么分开：`clip` 那 40 行额度**开机就被 SystemUI 烧光**
+ * （`PM.loadItemIcon` 23 + 标记 id 17），通知行是**之后**才画的，一行不剩。
+ * ⇒ 名单只能按"哪个界面"收，不能按"哪个进程"收 —— 这一截就是那把尺。
+ *
+ * 成本：只在**名单外**那条路上跑（今天唯一一户是 SystemUI），且
+ *  ① 取堆栈只在累计表没满 64 项时付一次；
+ *  ② 总账每 [SKIP_DUMP_EVERY] 次被挡才打一行，最多打 [SKIP_DUMP_MAX] 行。
+ */
+private const val SKIP_DUMP_EVERY = 40L
+private const val SKIP_DUMP_MAX = 20L
+private val skipTally = java.util.concurrent.ConcurrentHashMap<String, Int>()
+private val skipCount = java.util.concurrent.atomic.AtomicLong(0)
+private val skipDumps = java.util.concurrent.atomic.AtomicLong(0)
+
+/**
+ * 只留框架/应用自己的帧。
+ * ⚠ **不许按"我们自己的前缀"滤**：release 包里 R8 把我们的类改成 `he.a` / `dz`，
+ *   那条过滤一条都滤不掉（本仓 10-17 刚为这个改过一次通道名的写法）。
+ *   反过来按"要谁"滤是稳的：调用方必然是 `android.*` / `com.android.*`。
+ */
+private fun callerHint(): String =
+  Thread.currentThread().stackTrace.asSequence()
+    .map { it.className }
+    .filter { it.startsWith("com.android.") || it.startsWith("android.") }
+    .take(3)
+    .joinToString("<-") { it.substringAfterLast('.') }
+
+private fun noteSkip(from: String) {
+  val key = "$from ← " + callerHint()
+  skipTally.merge(key, 1) { a, b -> a + b }
+  val n = skipCount.incrementAndGet()
+  if (skipTally.size <= SKIP_PAIR_MAX && skipTally[key] == 1) {
+    // **每一对"通道×调用方"第一次出现就打一行**：这是量"该不该放行"的原始数据，
+    // 攒够 40 次才打的旧写法在 SystemUI 这种低量宿主上永远打不出来（16:45 那一轮就是 0 行）。
+    Log.d(TAG, "裁圆挡住 host=$clipHost 第$n 次：$key")
+  }
+  if (n % SKIP_DUMP_EVERY == 0L && skipDumps.getAndIncrement() < SKIP_DUMP_MAX) {
+    val rows = skipTally.entries.sortedByDescending { it.value }.take(8)
+      .joinToString(" ; ") { "${it.key} ×${it.value}" }
+    Log.d(TAG, "裁圆未在本宿主启用 host=$clipHost 累计挡下 $n 次，通道×调用方 top：" + rows)
+  }
+}
+
+/** [noteSkip] 的对数上限：超过就不再取堆栈（表满了说明这一轮的账已经够了）。 */
+private const val SKIP_PAIR_MAX = 64
+
+/**
+ * SystemUI 里"这条通道是不是**通知行**在取应用图标"。
+ *
+ * 为什么必须按调用方分（2026-10-17 从这台机器的 framework dex 里读出来的，不是猜的）：
+ * 通知行的应用图标是 `statusbar.notification.row.icon.AppIconProviderImpl.fetchAppIconBitmapInfo`
+ * → `ApplicationInfo.loadUnbadgedIcon(pm)` → `PackageItemInfo` 那份实现
+ * → `PackageManager.loadUnbadgedItemIcon` → `APM.getDrawable(pkg, resid, appInfo)`；
+ * 而快速设置的磁贴走 `loadItemIcon` —— **`loadItemIcon` 内部第一件事就是回 `loadUnbadgedItemIcon`**
+ * （dex `1f6df0` 那一条）。两条路在框架里**汇到同一个出口**，所以通道名分不开它们，
+ * 只有"是谁调的"分得开。
+ */
+private fun calledByNotificationRow(): Boolean {
+  // 堆栈只在 SystemUI 里读：别的新宿主将来落到这条判据上时，先按"挡住"处理（少裁比多裁好收拾）。
+  if (clipHost != SYSTEMUI_HOST) return false
+  return Thread.currentThread().stackTrace.any { it.className.startsWith(NOTIFY_CALLER) }
+}
+
+private const val SYSTEMUI_HOST = "com.android.systemui"
+
+private const val NOTIFY_CALLER = "com.android.systemui.statusbar.notification."
+
+/** 按调用方放行时打的账：键里不再取堆栈（上面那条判据已经读过一次了）。 */
+private fun noteAllow(from: String) {
+  val key = "$from ← 通知行(按调用方放行)"
+  skipTally.merge(key, 1) { a, b -> a + b }
+  if (skipTally[key] == 1) Log.d(TAG, "裁圆放行(按调用方) host=$clipHost：$key")
+}
 
 /**
  * 已经套过的不重复套。
@@ -521,13 +605,14 @@ private val cropSkipLogged = java.util.concurrent.atomic.AtomicBoolean(false)
 fun clipToCircle(icon: Drawable, from: String): Drawable {
   // 配置按 TTL 重读，所以界面里关掉开关后很快生效，不用重启进程。
   if (!ModuleRuntime.options().circleEnabled) return icon
-  // 射程：只有名单里的宿主裁（默认不裁，见 [cropThisHost] 那一段）。
-  if (!cropThisHost) {
-    if (cropSkipLogged.compareAndSet(false, true)) {
-      Log.d(TAG, "裁圆未在本宿主启用 host=$clipHost 首个被挡的通道 from=$from" +
-        "（要它裁就加进 IconHooks 的 CROP_HOSTS）")
+  // 射程：名单里的宿主全裁；名单外的先看点名放行的通道，再看"是不是通知行在取应用图标"
+  // —— SystemUI 里磁贴与通知行在框架内**汇到同一个出口**，只有调用方分得开（见 [calledByNotificationRow]）。
+  if (!cropThisHost && from !in cropChannels) {
+    if (!calledByNotificationRow()) {
+      noteSkip(from)
+      return icon
     }
-    return icon
+    noteAllow(from)
   }
   if (clipLogLeft.decrementAndGet() >= 0) {
     Log.d(TAG, "clip from=$from host=$clipHost : ${icon.javaClass.simpleName} " +

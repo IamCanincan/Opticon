@@ -276,6 +276,33 @@ cc/top/小片/空洞/淡/色驱`），逐字段解释见判据台 `_harness/Self
     和 `replacingIcon`（图标加载时用，防止 `Resources` / `APM` 在同一条链上双层包装）
     两个 ThreadLocal。
 
+### 管哪些界面（射程）
+
+「裁圆」这个功能名指的是**桌面与设置那一联**，不是"屏幕上所有图标"。射程由三层决定：
+
+1. **宿主名单** `IconHooks.CROP_HOSTS` = 作用域十条**减去** `com.android.systemui`。名单外的进程
+   照样挂钩子（标记 id、单色合成那些通道不受影响），但形状**原样交回**。
+2. **名单外点名放行的通道** `EXTRA_CROP_CHANNELS`：今天只有 SystemUI 的 `PM.getApplicationIcon`。
+3. **名单外按调用方放行**：SystemUI 里凡是 `com.android.systemui.statusbar.notification.*`
+   发起的取图标都裁 —— 这一条管的是**通知行左侧那颗应用图标**。
+
+⚠ **为什么第 3 层必须是"调用方"而不是"通道"**（2026-10-17 从这台机器的 framework dex 里读出来的）：
+通知行的应用图标走 `ApplicationInfo.loadUnbadgedIcon` → `loadUnbadgedItemIcon` →
+`APM.getDrawable(pkg, resid, appInfo)`，而快速设置磁贴走的 `loadItemIcon`
+**内部第一件事就是回 `loadUnbadgedItemIcon`**（`1f6df0`）—— 两条路在框架里**汇到同一个出口**，
+通道名分不开它们。真机读数（17:03 那一轮，同一份日志）：
+
+```
+裁圆放行(按调用方) … Resources.getDrawable·标记id ← 通知行        ← 通知栏 4 张裁了
+裁圆挡住 … PM.loadItemIcon ← …IconAndNameCustomRepository$getCustomTileData$2   ← 快速设置预览页
+裁圆挡住 … Resources.getDrawable·标记id ← …SplashscreenContentDrawer            ← 启动画面
+裁圆挡住 … PM.loadItemIcon ← …FgsManagerControllerImpl$updateAppItemsLocked$2   ← 「正在运行的应用」
+```
+
+⚠ **第 3 层是对 SystemUI 类名的依赖**：OTA 把那个包改名，通知行的图标会**静默不裁**
+（现象与"功能没生效"一模一样）。挡住的那一行会点名"是谁在取"，所以查的时候
+`adb logcat -s Opticon | grep 裁圆挡住` 一眼就能看出是名单没覆盖还是通道变了。
+
 ### 开关关掉时
 
 裁圆的判定收在**一处** —— `clipToCircle()`：所有替换通道最终都汇到这里，

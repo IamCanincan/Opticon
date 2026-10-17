@@ -179,6 +179,9 @@ private fun installHooks(xposed: XposedInterface, classLoader: ClassLoader, pack
   // 给 `clip from=… host=…` 那一行用的：本进程是谁。装配时置一次，热路径不查。
   clipHost = packageName
   cropThisHost = packageName in CROP_HOSTS
+  // 名单外的宿主里，那几条点名放开的通道照样裁（见 [EXTRA_CROP_CHANNELS] 那段：SystemUI 的
+  // 通知行应用图标就是这一类 —— 射程的粒度是"界面/通道"，不是"进程"）。
+  cropChannels = EXTRA_CROP_CHANNELS[packageName] ?: emptySet()
   if (!hookIconLoaders(xposed, classLoader)) {
     Log.w(TAG, "No icon loader is found, nothing is hooked")
     return
@@ -306,6 +309,28 @@ private val CROP_HOSTS = setOf(
   // system_server：启动画面 / 框架自己那几张图从这里出，同样保持现状
   "android",
   "system",
+)
+
+/**
+ * **名单外的宿主里，单独放行的通道**（按"哪条通道"收，不按"哪个进程"收）。
+ *
+ * 为什么要有这一张：把 SystemUI 整个踢出 [CROP_HOSTS] 确实修好了快速设置，但同一刀把
+ * **通知行那个应用图标**也关了 —— 主人 2026-10-17 的原话是「快速设置是搞干净了，
+ * 但是我通知的应用图标是要裁圆的」。一个进程里两件事，说明射程的粒度不该是进程。
+ *
+ * 🔴 **第一版按通道分，量出来分不开**（16:45 那一轮装机现量）：通知行的应用图标
+ *   走 `ApplicationInfo.loadUnbadgedIcon` → `loadUnbadgedItemIcon` → `APM.getDrawable(pkg,resid,appInfo)`，
+ *   而**磁贴那条 `loadItemIcon` 内部第一件事就是回 `loadUnbadgedItemIcon`**
+ *   （framework dex `1f6df0`；两条路在框架里汇到同一个出口）。放开 `PM.getApplicationIcon`
+ *   之后 SystemUI 只裁到 1 张，通知栏那位主人说「还是不行」。
+ *   ⇒ 真正分得开的是**调用方**，规则在 `CircleIconDrawable.calledByNotificationRow`
+ *   （只认 `com.android.systemui.statusbar.notification.*` 发起的那几次）。
+ * ⚠ 这一张留着，但**它不是通知行的那条通道**：它是"名单外宿主里点名要裁的正门"。
+ *   今天这一条真机裁到的是 SystemUI 自己调 `getApplicationIcon` 的那几张（媒体/前台服务那类），
+ *   与通知行互补。要再加通道，先拿那一行"通道×调用方"的账证明它取的是**应用图标**。
+ */
+private val EXTRA_CROP_CHANNELS = mapOf(
+  "com.android.systemui" to setOf("PM.getApplicationIcon", "PM.getApplicationIconAsUser"),
 )
 
 /**
