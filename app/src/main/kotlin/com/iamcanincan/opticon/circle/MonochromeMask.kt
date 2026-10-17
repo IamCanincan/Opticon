@@ -89,6 +89,23 @@ internal object MonochromeMask {
 
   /** 底色家族的个数上限：内容框四个角，最多四块拼底。 */
   private const val CANDIDATE_K = 4
+  /** 环上（边界带）实心像素里「**单一族**」的占比达到这个数，才认为「有一块铺满外圈的底」。
+   *  主人 2026-10-18：「头发应作底，因为头发部分连接圆圈的弧线长且面积大」。
+   *  ⚠ 必须按**单一族**算，不能拿 `pass` 的并集：易班 4 族并集过半而单族只有 0.49。 */
+  private const val RIM_FAMILY_MIN = 50
+  /** 判「环上这一格属于哪一族」的 ΔE76 容差（与 [CANDIDATE_DISTINCT] 同量级）。 */
+  private const val RIM_FAMILY_DE = 18
+  /** 交付侧把「环上主导族」整族归零时的**放宽**容差 —— 主人：「渐变多的你可以放宽色度」。
+   *  现场 kazumi：头发从纯白渐变到奶白，族内跨度 ΔE≈33，而底族容差只有 18，
+   *  于是纯白（56.8%）被判底、奶白（26.4%）被当墨 —— 屏幕上就是"半片头发"。 */
+  private const val RIM_FAMILY_DE_WIDE = 40
+  /** 环族**被上墨**的面积要达到画布的百分之几，才值得归零。
+   *  低于它说明这一族本来就没上几格墨（多数图只是边缘抗锯齿），不必动 —— 44 张里有 40 张
+   *  就是这一类，白改。 */
+  private const val RIM_KILL_MIN_PCT = 5
+  /** 归零之后**至少要剩**多少墨（占画布百分之几）。低于它就说明归掉的是**主体**不是底
+   *  —— `oss.krtirtho.spotube` 那张整幅一个颜色，一刀下去 `框内 0.91→0.02`，图标整个没了。 */
+  private const val RIM_KEEP_MIN_PCT = 4
 
   /** 候选之间的互异线：两个候选差不到它，就只算一个颜色（ΔE76 真值）。 */
   private const val CANDIDATE_DISTINCT = 18
@@ -851,6 +868,16 @@ internal object MonochromeMask {
     var famB = IntArray(CANDIDATE_K)
     var famColor = IntArray(CANDIDATE_K)
     var fams = 0
+    /** 「环上单一族过半」的那一族（主人对 kazumi 的判词）。只作用于**交付**，不动 `plate` ——
+     *  动 `plate` 会把整张的参照色场换掉（实测易班 `框内 0.24→0.08`）。 */
+    var rimDomOn = false
+    var rimKill = 0
+    /** 两道门都过了才为真：环族上墨够多（≥[RIM_KILL_MIN_PCT]）且归零后还剩够多（≥[RIM_KEEP_MIN_PCT]）。 */
+    var rimKillOn = false
+    var rimDomColor = 0
+    var rimDomL = 0
+    var rimDomA = 0
+    var rimDomB = 0
 
     fun ensure(total: Int, cells: Int) {
       if (labL.size < total) {
@@ -1578,7 +1605,39 @@ internal object MonochromeMask {
           if (!cutPlate && tonal != null && s.plate[i] != 0.toByte()) plateInked++
         }
       }
-    }    // 4) 交出去之前把墨量抬到满阶（他要「图标上必须有系统最深和最浅的取色」）。**两层叠加**：
+    }
+    // 4.15) **环上过半的那一族，整族交 0**（主人 2026-10-18 对 kazumi 的判词：
+    //   「头发应作底，因为头发部分连接圆圈的弧线长且面积大」，并且「渐变多的可以放宽色度」）。
+    //   现场 kazumi：环上 100% 是纯白（背景），而头发 #C0D890 是一片浅黄绿的大块（占画布 24%），
+    //   离白 ΔE≈34 —— 底族容差 18 吃不到它，于是整片头发被交成实心墨（`框内 0.41`）。
+    //   放宽到 [RIM_FAMILY_DE_WIDE] 之后 `框内 0.41→0.18`、`字均 218→238`：浅的大块退成底，
+    //   只剩暗的线条 —— 就是主人要的那个"反色"。
+    //   ⚠ **只在这里做，不动 `plate`**：动 `plate` 会把整张的参照色场换掉（易班 `框内 −16pp`）。
+    //   ⚠ **两道门缺一不可**（都是量出来的）：
+    //     ① 环族本来就要上够墨（≥[RIM_KILL_MIN_PCT]）——否则改的只是边缘抗锯齿，44 张里 40 张是这种；
+    //     ② 归零后要剩够墨（≥[RIM_KEEP_MIN_PCT]）——`spotube` 整幅一个颜色，一刀下去 0.91→0.02。
+    if (tonal == null && s.rimDomOn) {
+      var famInk = 0
+      var inkAll = 0
+      for (i in 0 until total) {
+        if (out[i] ushr 24 == 0) continue
+        inkAll++
+        if (s.plate[i] == 0.toByte() && Color.alpha(pixels[i]) >= A_SOLID &&
+          deltaE(s.labL[i].toInt(), s.labA[i].toInt(), s.labB[i].toInt(),
+            s.rimDomL, s.rimDomA, s.rimDomB) <= RIM_FAMILY_DE_WIDE shl 6) famInk++
+      }
+      if (famInk * 100 >= total * RIM_KILL_MIN_PCT && (inkAll - famInk) * 100 >= total * RIM_KEEP_MIN_PCT) {
+        for (i in 0 until total) {
+          if (out[i] ushr 24 == 0) continue
+          if (s.plate[i] != 0.toByte() || Color.alpha(pixels[i]) < A_SOLID) continue
+          if (deltaE(s.labL[i].toInt(), s.labA[i].toInt(), s.labB[i].toInt(),
+              s.rimDomL, s.rimDomA, s.rimDomB) <= RIM_FAMILY_DE_WIDE shl 6) {
+            out[i] = 0; s.rimKill++
+          }
+        }
+      }
+    }
+    // 4) 交出去之前把墨量抬到满阶（他要「图标上必须有系统最深和最浅的取色」）。**两层叠加**：
     //    全局那一层管"整张最深都不够"，字形那一层管"只有 1% 到顶、主体停在 140"。
     //    ⚠ 中间夹一步发档（4.5），两层不能并排 —— 理由写在那一段里。
     val global = if (tonal == null) stretchGlobal(out, total) else null
@@ -2049,6 +2108,8 @@ internal object MonochromeMask {
         // `带内残` 是这些补上去的格里"颜色本来就离底很近"的那些 —— 它**故意不从 `残盘` 里消失**，
         // 只是换个名字记：这样"这一刀补了多少、其中有多少看着像底"两件事在日志里都看得见。
         " 带补=${bands.first}/${bands.second}(${bands.third}拒) 带内残=$bfN/${if (bfN == 0) 0 else bfSum / bfN}" +
+        // 【环族】「环上单一族过半」这条判据开没开火。0 = 没开（这张的环上没有一支族过半）。
+        (if (s.rimDomOn) " 环族=开#" + String.format(java.util.Locale.ROOT, "%06X", s.rimDomColor and 0xFFFFFF) else " 环族=关") + " 归零=${s.rimKill}" +
         // 满幅插画那一支开了就把三个判据数报上；**没开一个字符都不加** —— 这两列在整串末尾，
         // 前面所有列的列位一个不动（`res.sh` 按列号读，这条规矩上面已经写过两次）。
         (if (tonal == null) "" else " 调=1 纹理=${tonal.tex} 主色=${tonal.flat} 跨=${tonal.span}" +
@@ -3861,6 +3922,66 @@ internal object MonochromeMask {
       return fitGround(pixels, w, h, box, g, s, 0, seed).apply { hyp = 3 }
     }
     val fams = cornerFamilies(pixels, w, box, band, s)
+    // 「环上单一族过半」的那一族记下来，交付阶段要用（见 [Scratch.rimDomOn]）。
+    // 量的是**边界带**：底必须真的铺到外圈上（主人：「连接圆圈的弧线长」）。
+    run {
+      s.rimDomOn = false
+      if (s.fams > 0) {
+        var bandOn = 0
+        val n = IntArray(CANDIDATE_K)
+        for (y in box.top until box.bottom) {
+          val row = y * w
+          for (x in box.left until box.right) {
+            if (!inBand(x, y, box, band)) continue
+            val i = row + x
+            if (Color.alpha(pixels[i]) < A_SOLID) continue
+            bandOn++
+            val l = s.labL[i].toInt(); val a = s.labA[i].toInt(); val b = s.labB[i].toInt()
+            for (k in 0 until s.fams) {
+              if (deltaE(l, a, b, s.famL[k], s.famA[k], s.famB[k]) <= RIM_FAMILY_DE shl 6) { n[k]++; break }
+            }
+          }
+        }
+        if (bandOn > 0) {
+          var best = 0
+          for (k in 1 until s.fams) if (n[k] > n[best]) best = k
+          if (n[best] * 100 >= bandOn * RIM_FAMILY_MIN) {
+            s.rimDomOn = true; s.rimDomColor = s.famColor[best]
+            s.rimDomL = s.famL[best]; s.rimDomA = s.famA[best]; s.rimDomB = s.famB[best]
+          }
+        }
+      }
+    }
+    // 「环上单一族过半」的那一族记下来，交付阶段要用（见 [Scratch.rimDomOn]）。
+    // 量的是**边界带**：底必须真的铺到外圈上（主人：「连接圆圈的弧线长」）。
+    run {
+      s.rimDomOn = false
+      if (s.fams > 0) {
+        var bandOn = 0
+        val n = IntArray(CANDIDATE_K)
+        for (y in box.top until box.bottom) {
+          val row = y * w
+          for (x in box.left until box.right) {
+            if (!inBand(x, y, box, band)) continue
+            val i = row + x
+            if (Color.alpha(pixels[i]) < A_SOLID) continue
+            bandOn++
+            val l = s.labL[i].toInt(); val a = s.labA[i].toInt(); val b = s.labB[i].toInt()
+            for (k in 0 until s.fams) {
+              if (deltaE(l, a, b, s.famL[k], s.famA[k], s.famB[k]) <= RIM_FAMILY_DE shl 6) { n[k]++; break }
+            }
+          }
+        }
+        if (bandOn > 0) {
+          var best = 0
+          for (k in 1 until s.fams) if (n[k] > n[best]) best = k
+          if (n[best] * 100 >= bandOn * RIM_FAMILY_MIN) {
+            s.rimDomOn = true; s.rimDomColor = s.famColor[best]
+            s.rimDomL = s.famL[best]; s.rimDomA = s.famA[best]; s.rimDomB = s.famB[best]
+          }
+        }
+      }
+    }
     // ⚠ **这一张的盘在另一层的时候，实心区里不许有底**（H1 角上那一色 / H2 轮廓那一色 都不许）。
     // 依据不是统计量，是**输入是怎么来的**：`MonochromeSynth` 只有在"自适应图标 + 背景层是
     // `ColorDrawable`"时才把**前景层单独**交进来（桌面自己会补那张盘）。也就是说这一张里
