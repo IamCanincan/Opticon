@@ -2203,7 +2203,12 @@ internal object MonochromeMask {
   private fun stillPlate(lc: Int, plateL: Int, topL: Int): Boolean =
     Math.abs(lc - plateL) <= Math.abs(lc - topL)
 
-  private fun plateKey(p: Int): Int =
+  /**
+   * 「同一块平色」的粗量化：每通道 24 一档。
+   * ⚠ `internal` 不是手滑 —— 判据台第 18 闸要数"相邻两格颜色不同却被并进同一档"，
+   *   在台子里**再抄一份 `/24`** 就是本仓骂过两次的镜像（改这里那处不会跟着动）。
+   */
+  internal fun plateKey(p: Int): Int =
     ((((p shr 16) and 0xff) / 24) shl 10) or ((((p shr 8) and 0xff) / 24) shl 5) or ((p and 0xff) / 24)
 
   /** 判据产物。[lo]/[hi] 是这张自己亮度的 p5/p95（L\\*×64），[span] = hi−lo。 */

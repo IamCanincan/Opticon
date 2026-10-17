@@ -270,7 +270,19 @@ internal object MonochromeSynth {
       //   `dAlphaMed 8.1→16.7` 一项变差（整张的面积大，逐格 Δα 的分母跟着大）。
       // ⚠ 这一改同时把"盘在图里"的那批交给了**切底**那条路 —— 那正是本仓量过三次的墙。
       //   所以装机必须看：换输入之后**背景层是纯色但画成位图**的那批会不会被涂满。
-      val flatten = adaptive && source.background !is ColorDrawable
+      //
+      // 2026-10-17 主人把这条判据说成**类型**而不是像素：「背景是不上墨的，渐变底也是」。
+      //   所以渐变盘（`GradientDrawable`）与纯色盘同级 —— 整层当盘、只取前景层，
+      //   桌面会自己补主题底盘（它只在 `getMonochrome()==null` 时补，正好是这一支的前提）。
+      // 🔴 **不能反过来做成"背景层一律不上墨"**：`com.google.android.apps.translate` 那颗"文"字
+      //   就画在背景槽里（`bg=Bitmap`，10-09 那次翻案的起因），按层判会把它整个吃掉。
+      //   ⇒ 分界只能是"这块底**是不是盘**"，不是"它在哪一层"。
+      // ⚠ **波及面现量：今天 0 张开火** —— 语料 123 张里背景是渐变的只有 2 张
+      //   （`com.maxmpz.audioplayer`、`com.microsoft.emmx`），而这两张**都自带单色层**，
+      //   在第 0 关就被挡、根本走不到这一行。所以这一改是**防以后**（新装应用 / OTA 之后），
+      //   不许记成"修好了几张"。
+      val plateLayer = source.background.let { it is ColorDrawable || it is GradientDrawable }
+      val flatten = adaptive && !plateLayer
       val target = if (adaptive && !flatten) source.foreground else source
       if (target == null) {
         noteGiveUp(edge, label, "取不到前景层")
