@@ -997,7 +997,19 @@ internal object MonochromeMask {
     //   切完之后墨 23217→6801、均值 α 157→40、实心 0.48→0.03 —— 屏幕上只剩一圈幽灵。
     //   真正的背景在满幅这一支的斜坡里是**浅的**（暗=墨），切掉它只会让均值往上走；
     //   均值往下走就说明切掉的是主体。这一条不引入新阈值，只拿改动自己前后比。
-    return if (meanAlpha(cut.mask) < meanAlpha(ramp.mask)) ramp else cut
+    if (meanAlpha(cut.mask) < meanAlpha(ramp.mask)) return ramp
+    // ⚠ **切背景也不许把主体切碎。** 2026-10-17 22:4x 主人一句「王者荣耀碎了」——
+    //   那一张切前 `cc=31 top=0.96`（一整块），切完 `cc=39 top=0.52`：底与主体**交错**的插画
+    //   （角色 + 特效 + 天空），把"底"抽走之后主体自己散成几块。更狠的是云闪付
+    //   `cc 18→56、top 0.72→0.21`、吉星派对 `cc 29→49、top 0.67→0.24`。
+    //   判词拿的是**同一份成品自己的前后**，不引入绝对门槛：
+    //     · 最大块占比掉超过 15 个点 → 说明切断了主体；
+    //     · 块数翻倍还多出 4 块 → 说明切出了一地渣。
+    //   两条任一成立就退回不切（回到"一片灰"而不是"一地碎渣"）。⚠ 这是**取舍不是修复**：
+    //   这类图标在这把刀下只有"灰糊"和"碎渣"两个出口，要第三个出口得换机制，见 devlog。
+    if (cut.largest + 0.15f < ramp.largest) return ramp
+    if (cut.components > ramp.components * 2 + 4) return ramp
+    return cut
   }
 
   /**
