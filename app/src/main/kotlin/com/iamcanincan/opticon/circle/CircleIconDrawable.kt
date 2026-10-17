@@ -483,6 +483,24 @@ private val clipLogLeft = AtomicInteger(CLIP_LOG_LIMIT)
 var clipHost: String = "?"
 
 /**
+ * 本宿主该不该裁。**默认不裁**（fail-closed）—— 装配时由 [IconHooks] 按包名置位，
+ * 名单见那边的 `CROP_HOSTS`。
+ *
+ * ⚠ 为什么把默认设成"不裁"而不是"裁"：这条通道挂在**每个被注入的进程**的框架图标入口上
+ *   （`Resources.getDrawable*` / `PackageManager.loadItemIcon`），默认裁就等于默认改了
+ *   所有系统界面的图标形状。主人 2026-10-17 连着两次点的正是这件事 —— 第一次是快速设置里
+ *   一块磁贴的**前景图层**被当应用图标裁了，第二次是「快速设置预览界面还是有影响」，
+ *   而那一页走的两条通道（`PM.loadItemIcon` 23 次 / 标记 id 17 次）**都是"本该裁"的正门**，
+ *   说明剩下的不是判据宽窄，是**射程**：强制裁圆管的是桌面与设置那两联，不该管 SystemUI。
+ * 代价说清楚：走默认这条路的新宿主（比如以后加的第三个桌面）会**静默不裁**，
+ *   现象与"功能没生效"一模一样 —— 所以下面那一行"未启用"日志是必需的，不是啰嗦。
+ */
+@Volatile
+var cropThisHost: Boolean = false
+
+private val cropSkipLogged = java.util.concurrent.atomic.AtomicBoolean(false)
+
+/**
  * 已经套过的不重复套。
  *
  * ⚠ **自适应图标也要套遮罩**：它自带的形状是系统 mask 决定的（圆角方 / 水滴），
@@ -501,6 +519,14 @@ var clipHost: String = "?"
 fun clipToCircle(icon: Drawable, from: String): Drawable {
   // 配置按 TTL 重读，所以界面里关掉开关后很快生效，不用重启进程。
   if (!ModuleRuntime.options().circleEnabled) return icon
+  // 射程：只有名单里的宿主裁（默认不裁，见 [cropThisHost] 那一段）。
+  if (!cropThisHost) {
+    if (cropSkipLogged.compareAndSet(false, true)) {
+      Log.d(TAG, "裁圆未在本宿主启用 host=$clipHost 首个被挡的通道 from=$from" +
+        "（要它裁就加进 IconHooks 的 CROP_HOSTS）")
+    }
+    return icon
+  }
   if (clipLogLeft.decrementAndGet() >= 0) {
     Log.d(TAG, "clip from=$from host=$clipHost : ${icon.javaClass.simpleName} " +
       "${icon.intrinsicWidth}x${icon.intrinsicHeight}")

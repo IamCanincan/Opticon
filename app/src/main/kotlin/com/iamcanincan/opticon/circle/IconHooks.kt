@@ -178,6 +178,7 @@ private fun install(xposed: XposedInterface, classLoader: ClassLoader, packageNa
 private fun installHooks(xposed: XposedInterface, classLoader: ClassLoader, packageName: String) {
   // 给 `clip from=… host=…` 那一行用的：本进程是谁。装配时置一次，热路径不查。
   clipHost = packageName
+  cropThisHost = packageName in CROP_HOSTS
   if (!hookIconLoaders(xposed, classLoader)) {
     Log.w(TAG, "No icon loader is found, nothing is hooked")
     return
@@ -273,6 +274,39 @@ private val RESTARTABLE_PACKAGES =
 private fun isLauncher(packageName: String) =
   packageName == "com.android.launcher3" ||
     packageName == "com.google.android.apps.nexuslauncher"
+
+/**
+ * **强制裁圆的射程**：只有这里的宿主真的裁。名单外的进程照样挂钩子（标记 id、单色合成
+ * 那些通道不受影响），但 `clipToCircle` 原样把图交回去。
+ *
+ * 定这一条是因为主人 2026-10-17 连着两次点同一个方向：先是快速设置里一块磁贴的**前景图层**
+ * 被名字判据当成应用图标裁了（`…/mipmap/ic_launcher_quicktile_foreground`），挡住那一条之后
+ * 他说「快速设置预览界面**还是有影响**」—— 那一页 SystemUI 里现量 40 次包装走的
+ * **全是正门**（`PM.loadItemIcon` 23 次 + 标记 id 17 次），不是判据宽窄的问题：
+ * **强制裁圆管的是桌面那一联，不该管快速设置的磁贴。**
+ *
+ * ⚠ **这份名单是"作用域十条减去 systemui"，不是"我挑几个界面"**：他报的只有 SystemUI，
+ *   所以其余九条一位没动 —— 分享弹窗 / 权限页 / wellbeing 今天该裁的照旧裁。
+ *   写成白名单而不是黑名单，是因为新增作用域时**默认不裁**才是安全的一侧
+ *   （多裁 = 静默改掉别人界面的形状，少裁 = 那一行"未启用"日志会喊）。
+ * ⚠ **加新宿主 / 改 `scope.list` 时必须同步这里**，否则那条通道在新宿主上是静默关的；
+ *   现象与"功能没生效"一模一样。与 `scope.list` / `ConfigProvider.TRUSTED_PACKAGES` /
+ *   界面 `IconScreen.ScopeItem` 是**几张不同名单**：前两张管"注不注入、读不读得到配置"，
+ *   这张只管"裁不裁形状"。
+ */
+private val CROP_HOSTS = setOf(
+  "com.android.settings",
+  "com.google.android.settings.intelligence",
+  "com.google.android.apps.nexuslauncher",
+  "com.android.launcher3",
+  // ↓ 这三条不是桌面的 UI，但今天本来就裁着，主人没报过 —— 一位不动（见上面那条 ⚠）
+  "com.android.intentresolver",
+  "com.android.permissioncontroller",
+  "com.google.android.apps.wellbeing",
+  // system_server：启动画面 / 框架自己那几张图从这里出，同样保持现状
+  "android",
+  "system",
+)
 
 /**
  * 桌面自己数据目录的根路径。
