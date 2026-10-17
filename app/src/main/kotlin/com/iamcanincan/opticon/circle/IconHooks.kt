@@ -1569,6 +1569,23 @@ private fun resourceName(res: Resources?, id: Int): String = runCatching {
 private fun resIdArg(args: List<Any?>): Int? =
   args.firstOrNull { (it as? Int)?.let { v -> (v ushr 24) != 0 } == true } as? Int
 
+/**
+ * 自适应图标的**图层**不是图标本身 —— `_foreground` / `_background` 是平台约定的层名。
+ *
+ * 真机第一案（2026-10-17，主人报「强制裁圆把快速设置的应用图标也改了」）：
+ * `org.localsend.localsend_app/mipmap/ic_launcher_quicktile_foreground`。那是某块 QS 磁贴画在
+ * 自己背景上的**前景层**，被磁贴当图层用；它既在 `mipmap/` 里、名字又含 `ic_launcher`，
+ * 下面那两条判据**同时命中**，于是磁贴 artwork 从此被裁成圆。
+ *
+ * ⚠ **不要拿这条去换成"名字必须恰好是 ic_launcher"那种收紧**：同一份真机名单（8 个名字 / 63 次包装）里
+ *   中国移动的 `ic_launcher_round_cmcc`（25 次）、steampy 拼错的 `icon_lanuncher`、浙江在线的
+ *   `ic_app_logo`、xbud 的 `app_icon_round` **都是真应用图标** —— 收紧成精确名会把它们一起放掉，
+ *   而那正是 2026-10-15「未标记那批补包装」专门捞回来的一族。按图层后缀挡，代价现量是
+ *   **挡 1 个名字 / 63 次里只变 1 次**。
+ * 兜底仍在：真有应用把 manifest 图标指到 `…_background`，上面那条 `app.icon == rid` 的硬证据先命中，不看名字。
+ */
+private val ICON_LAYER = Regex("_(foreground|background)$", RegexOption.IGNORE_CASE)
+
 private fun unmarkedAppIcon(method: Method, args: List<Any?>, host: Any?): String? {
   val rid = resIdArg(args)
   if (rid == null || rid == 0 || rid.isMarkedIcon()) return null
@@ -1579,6 +1596,7 @@ private fun unmarkedAppIcon(method: Method, args: List<Any?>, host: Any?): Strin
   if (app != null && app.icon == rid) return "pm:${app.packageName}"
   val res = host as? Resources ?: return null
   val nm = resourceName(res, rid)
+  if (ICON_LAYER.containsMatchIn(nm.substringAfterLast('/'))) return null
   // 真机实测这一支漏出去的（2026-10-15，清库+重启那一趟只记名单）：浙江在线 / appui /
   // 美的洗衣机 / steampy / xbud / 移动的 mc10086 —— 全是 `mipmap/…` 开头的老式位图图标。
   return if (nm.contains("/mipmap/") || nm.contains("ic_launcher") || nm.contains("appicon")) nm else null
