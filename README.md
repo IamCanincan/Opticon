@@ -139,6 +139,19 @@ Hooked com.android.settings
 
 **通知小图标**：出现 `patched <包名> 2->1` 就是替换成功了（图标类型从「资源」变成「位图」）。
 
+**通知行的应用图标有没有在裁**（射程第 3 层，见上面「管哪些界面」）—— 装机后跑一条：
+
+```bash
+cd _harness && node _notifyguard.cjs        # 退码 0=在裁 / 1=前缀失配 / 2=这一轮没测到
+```
+
+它读的是「通道 × 调用方」那本账，三种读数**只有第一种算过**：
+`1` 说明 SystemUI 改了包名/类名（会把现在那个类名点名打出来，填回
+`CircleIconDrawable.NOTIFY_CALLER` 即可）；`2` 说明这一轮通知行根本没重新绑过
+（屏幕没亮、没拉通知栏、或 SystemUI 没重启）—— **那是没测到，不是没问题**。
+没有 `_harness/` 时的裸查法：`adb logcat -d -s Opticon | grep -c "clip from=.*host=com.android.systemui"` 要 ≥ 1。
+变异测过这台子（`node _notifyguardmut.cjs`：真日志绿 / 造一条改了名的红 / 抽掉 SystemUI 行报"没测到"）。
+
 **桌面主题图标（强制取色）**：每张未适配的图标一行判据，行首带**包名/资源名**，报一个应用名
 就能 grep 到它那一行；每 40 张一行汇总。
 
