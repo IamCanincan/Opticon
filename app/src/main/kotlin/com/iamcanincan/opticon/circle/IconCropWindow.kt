@@ -39,6 +39,9 @@ internal object IconCropWindow {
   /** 那条线换算成百分数，只给日志用（同理：别让调用方自己写 60）。 */
   internal val keepRatioPercent: Int get() = (KEEP_RATIO * 100f).roundToInt()
 
+  /** spiky 那条线（圆盘半径 / 外框半径）也露给判据台 —— 第十七闸的"近线带"要在**生产这份**上量，不许台子里再抄一个 0.80。 */
+  internal val coverBoxFloor: Float get() = COVER_BOX_FLOOR
+
   /**
    * 裁圆判"这块大色块是要整块保住的图案"的那条线：**缩进圆里那一档，且按圆裁下去还剩到这么多%**。
    *
