@@ -13,6 +13,7 @@ import android.graphics.Rect
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
+import android.graphics.drawable.GradientDrawable
 import android.util.Log
 
 import com.iamcanincan.opticon.runtime.ModuleRuntime
@@ -281,8 +282,13 @@ internal object MonochromeSynth {
       //   （`com.maxmpz.audioplayer`、`com.microsoft.emmx`），而这两张**都自带单色层**，
       //   在第 0 关就被挡、根本走不到这一行。所以这一改是**防以后**（新装应用 / OTA 之后），
       //   不许记成"修好了几张"。
-      val plateLayer = source.background.let { it is ColorDrawable || it is GradientDrawable }
-      val flatten = adaptive && !plateLayer
+      // ⚠ 名字不能叫 `plateLayer` —— 下面那位是"盘在不在图层里"（喂给模型的 `plateIsLayer`），
+      //   两个是不同问题；撞名会编译成 "Conflicting declarations"（本轮真撞上，见 devlog）。
+      // ⚠ 必须显式转一下：`source` 的静态类型是 `Drawable`，`background` 是 `AdaptiveIconDrawable`
+      //   那一对 getter 才有的（下面 351 行那处已经在 `adaptive` 分支里，靠智能转换过）。
+      val bg = (source as? AdaptiveIconDrawable)?.background
+      val bgIsPlate = bg is ColorDrawable || bg is GradientDrawable
+      val flatten = adaptive && !bgIsPlate
       val target = if (adaptive && !flatten) source.foreground else source
       if (target == null) {
         noteGiveUp(edge, label, "取不到前景层")
