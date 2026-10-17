@@ -299,6 +299,9 @@ internal object MonochromeMask {
      *  单独带出来是因为这一道**改的是接手人**：不记下来，日志上只看见"H=3 的一张变多了"，
      *  看不见是这一道把它们退下去的 —— 换桌面时这两件事要能分开。 */
     val veto: Int = 0,
+    /** 满幅那一支里**被切掉背景的格数**（`cutPlate` 那一遍才非 0，见 [build] 的 4.2 那段）。
+     *  带出来只为一个用途：不切的那一遍用它判断"切了会不会有变化"，没有就不必再算一遍。 */
+    val plateInked: Int = 0,
   )
 
   private class Stats(
@@ -965,6 +968,11 @@ internal object MonochromeMask {
    *   学到更大尺寸会重压，那时它就成了。 */
   fun build(pixels: IntArray, w: Int, h: Int, plateIsLayer: Boolean = false,
     under: IntArray? = null, plateIsSubject: Boolean = false): Output {
+    // ⚠ 这一遍**不切背景**，`picksRef` 拿到的就是"这一刀还不存在时"的那份成品 —— 与 SepTone
+    //   那条 `sepOff` 同一个先例：**选支这件事必须与改动前完全同口径**。
+    //   第一版把切背景直接写进交付循环，7 张（金山文档/高德/谷歌翻译/美的/拼多多/学信网/WebAPK）
+    //   当场被搬回满幅支 —— 满幅那一边被切干净之后，「参照的淡膜更低」不再成立。
+    //   拼多多 `中 0.08→0.19、α 232→205` 就是代价，而它本来是对的。
     val ramp = buildOnce(pixels, w, h, plateIsLayer, false, under, plateIsSubject = plateIsSubject)
     if (!ramp.report.contains("调=1")) return ramp          // 本来就走参照那一支，不必算第二遍
     val s = checkNotNull(pool.get())
@@ -977,8 +985,19 @@ internal object MonochromeMask {
     //   ⚠ 代价：真开火的那几张多算一遍参照（`rec_model` 62 张里 6 张开火、2 张最终交付）。
     val ref0 = buildOnce(pixels, w, h, plateIsLayer, true, under, sepOff = true, plateIsSubject = plateIsSubject)
     val useRef = picksRef(w, h, ramp, ref0)
-    if (!useRef || s.sepN <= 0) return if (useRef) ref0 else ramp
-    return buildOnce(pixels, w, h, plateIsLayer, true, under, plateIsSubject = plateIsSubject)
+    if (useRef) return if (s.sepN <= 0) ref0 else buildOnce(pixels, w, h, plateIsLayer, true, under,
+      plateIsSubject = plateIsSubject)
+    // 选中满幅那一支之后，**这才**把它的背景切掉（4.2 那段）。`plateInked == 0` = 这张的底
+    // 本来一格墨都没拿到，切了等于没切 —— 直接交上面那一份，省一遍。
+    if (ramp.plateInked == 0) return ramp
+    val cut = buildOnce(pixels, w, h, plateIsLayer, false, under, plateIsSubject = plateIsSubject,
+      cutPlate = true)
+    // ⚠ **切背景只许让剩下的墨更实，不许更虚。** 这条守卫不是拍的，是 `azure.authenticator`
+    //   给的：它的"底"被判成了**那块深色盾牌**（极性翻的，与 v1.1.2 那台 Kodi 同族），
+    //   切完之后墨 23217→6801、均值 α 157→40、实心 0.48→0.03 —— 屏幕上只剩一圈幽灵。
+    //   真正的背景在满幅这一支的斜坡里是**浅的**（暗=墨），切掉它只会让均值往上走；
+    //   均值往下走就说明切掉的是主体。这一条不引入新阈值，只拿改动自己前后比。
+    return if (meanAlpha(cut.mask) < meanAlpha(ramp.mask)) ramp else cut
   }
 
   /**
@@ -1037,6 +1056,14 @@ internal object MonochromeMask {
     }
     val n = b.toLong() * b
     return if (n == 0L) Pair(0, 0) else Pair((soft * 100 / n).toInt(), (ink * 100 / n).toInt())
+  }
+
+  /** 交付墨的**平均浓度**（只数有墨的格）。只给 4.2 那道守卫用：切背景只许让墨更实。 */
+  private fun meanAlpha(mask: IntArray?): Int {
+    if (mask == null) return 0
+    var n = 0; var sum = 0L
+    for (v in mask) { val a = v ushr 24; if (a > 0) { n++; sum += a } }
+    return if (n == 0) 0 else (sum / n).toInt()
   }
 
   private fun picksRef(w: Int, h: Int, ramp: Output, ref: Output): Boolean {
@@ -1101,7 +1128,10 @@ internal object MonochromeMask {
    */
   private fun buildOnce(pixels: IntArray, w: Int, h: Int, plateIsLayer: Boolean,
     forceRef: Boolean, under: IntArray? = null, sepOff: Boolean = false,
-    plateIsSubject: Boolean = false
+    plateIsSubject: Boolean = false,
+    /** 满幅那一支要不要把 `plate[]` 判成底的格交成 0。**只有选支之后的交付那一遍才为真** ——
+     *  理由写在 [build] 与 4.2 那两段（选支必须与改动前完全同口径）。 */
+    cutPlate: Boolean = false
   ): Output {
     val total = w * h
     if (total <= 0) return Output(IntArray(0), 0f, 0f, 0f, 0, 0f, 0f, "尺寸非法 → 空层")
@@ -1433,6 +1463,8 @@ internal object MonochromeMask {
     val miB = if (modalInk < 0) 0 else labChannel(modalInk, 2)
     val out = IntArray(total)
     var knocked = 0
+    /** 这一遍里"判成底、但本来会拿到墨"的格数。见 [Output.plateInked]。 */
+    var plateInked = 0
     for (y in box.top until box.bottom) {
       val row = y * w
       for (x in box.left until box.right) {
@@ -1458,6 +1490,23 @@ internal object MonochromeMask {
         //   按 q 混进去就是**在空气上上墨**。真机抖音量出来：模型上墨的像素里 51.4% 的源 alpha
         //   恰好是 0（最浓 68/255），屏幕上就是他报的那块灰框 —— 而它的形状是矩形，因为那是
         //   内容外接框。判据台新增一条「全透明的像素不许上墨」钉住它。
+        // 4.2) **满幅那一支也要切背景**（2026-10-17 主人裁决「切背景」）。
+        //   参照支从 1410 行起就 `s.plate[i] != 0 → continue`，所以盘从来不上墨；而这一支
+        //   的交付只按亮度斜坡发浓度，**底也被发成了墨** —— 于是"纯图片图标"在屏幕上是一块
+        //   灰方块（王者荣耀 `框内=0.44` 而 `底占=0.86`、和平精英 `0.55 / 0.20`）。
+        //   判词不新造：`s.plate[]` 就是模型自己那本账。量到 12 张满幅支的纯图片里 9 张
+        //   `底占 ≥ 0.53`，说明"哪块是底"它本来就知道，只是这一支没用。
+        //   ⚠ 代价写在明处：插画里"背景也是画的一部分"的那一类（reddit 那种）会被挖空 ——
+        //     那堵墙的第五次结论（`KNOWN-LIMITS`）。所以这一刀只对 `tonal != null` 生效，
+        //     参照支一个像素都不动。
+        //   ⚠⚠ **只有 `cutPlate` 那一遍才切**。第一版无条件切，结果把**选支**也改了口径：
+        //     `picksRef` 比的是两支成品的淡膜，满幅这一边被切干净之后「参照的淡膜更低」不再成立，
+        //     7 张（金山文档 / 高德 / 谷歌翻译 / 美的 / 拼多多 / 学信网 / WebAPK）当场被搬回满幅支 ——
+        //     拼多多 `中 0.08→0.19、α 232→205`，正是这一族最不该出现的那种"糊"。
+        //     所以选支永远看**没切过背景**的那一份（与 SepTone 那条 `sepOff` 同一个先例：
+        //     "选支这一件事与改动前完全同口径"），切只发生在**已经选中满幅之后**。
+        //     代价：满幅支选中且真有底格上墨的那些图多算一遍（见 [build] 里 `plateInked` 那道短路）。
+        if (cutPlate && tonal != null && s.plate[i] != 0.toByte()) { plateInked++; continue }
         var a = if (tonal != null) {
           // 这一支的浓度 = 这张图自己的亮度，**暗=墨**，端点是它自己的 p5/p95。
           // 透明像素照样不给墨（乘上源 alpha，与下面 `tl` 同一条规矩）。
@@ -1510,7 +1559,12 @@ internal object MonochromeMask {
             a = b
           }
         }
-        if (a > 0) out[i] = (a shl 24) or 0x00FFFFFF
+        if (a > 0) {
+          out[i] = (a shl 24) or 0x00FFFFFF
+          // 不切的那一遍也要数：这几格**本来会**上墨，切了就没了。0 = 这张切了等于没切，
+          // [build] 拿它短路掉第二遍（省下的正是满幅支那 27 张里"底没上过墨"的那批）。
+          if (!cutPlate && tonal != null && s.plate[i] != 0.toByte()) plateInked++
+        }
       }
     }    // 4) 交出去之前把墨量抬到满阶（他要「图标上必须有系统最深和最浅的取色」）。**两层叠加**：
     //    全局那一层管"整张最深都不够"，字形那一层管"只有 1% 到顶、主体停在 140"。
@@ -2029,7 +2083,8 @@ internal object MonochromeMask {
           (if (tonal == null && tonalSeen == null) " 调未算=${tonalWhy[0]}" else ""),
       ground.hyp,
       s.h0why,
-      s.veto
+      s.veto,
+      plateInked
     )
   }
 
