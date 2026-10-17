@@ -348,7 +348,9 @@ private class MaskedDrawable(private val icon: Drawable) : Drawable() {
         Log.d(TAG, "裁圆外框: ${IconNames.of(icon)} 量一张 %.2f ms → %s".format(
           (System.nanoTime() - t0) / 1_000_000.0,
           if (boxWin == null) "满幅（不放大）" else "有留白",
-        ))
+        ) + " 缓存=${IconCropWindow.winHits}/${IconCropWindow.winHits + IconCropWindow.winMisses}")
+        // ↑ 尾部那一截是**累计**命中/总量（不是这一条的）。加在最末尾：这两行的前面每个字段
+        //   都是装机后的唯一读数，位置一个不许动。没这一截的话"缓存到底有没有活"只能靠猜。
       }
     }
     val win = boxWin ?: return null

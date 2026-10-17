@@ -169,6 +169,23 @@ internal object IconCropWindow {
    * [px] 是**行主序**的 `w*h` 个 ARGB 像素（`Bitmap.getPixels` 的原样，非预乘）。
    * 边长超过 [SCAN_EDGE] 的会先就近降采样到它 —— 这一趟的成本与像素数同阶，而两个消费方给的
    * 尺寸不一定相同（彩色那支自己就画到 128；染色那支拿到的是图层尺寸），降采样让两边跑在同一套格子上。
+   *
+   * ## 降采样之后过一层按内容的缓存（2026-10-17）
+   * 桌面每绑一次图标都 `getConstantState().newDrawable()` 交出一个**新实例**，而"只量一次"那个标记
+   * 是**按实例**存的 —— 真机量到 **608 次量测 / 103 个图标 = 每个图标 5.9 次**（中位 0.73 ms/次）。
+   * 拆开看：`of()` 里判据占 0.56 ms、光栅化只占约 0.17 ms（`CostKt` 现量），所以省掉重复判据是大头。
+   *
+   * 键为什么是**格子内容哈希**而不是图标身份：身份（包名/资源 id）要额外带上"应用更新"那一层才不会串，
+   * 带漏了就是**静默把旧窗口给新图**；而内容哈希天然不会 —— 图变了键就变。代价是每次要先画图+哈希（≈0.19 ms），
+   * 换掉的是 0.56 ms 的判据，净省约 3.7 倍；这一条推翻了我一开始"键必须不画图就能算"的推断（那是猜的，没量）。
+   *
+   * ⚠ **缓存的是 `scan` 那一步，不是整趟**：降采样在缓存之前跑（不然省不掉），所以 384 那一路
+   *   每次都付降采样的钱 —— 那是正确性要的钱（键必须是判据真正吃的那张格子）。
+   * ⚠ **`null` 也进缓存**（负缓存）：满幅是真机上的多数（345/486 行），它恰恰是"什么都不做"这个答案，
+   *   不缓存就等于多数图标白量。
+   * ⚠ **64 位哈希会撞**：撞了就是把**别的图标**的窗口交出去（屏幕上=裁错一圈，无声）。上限 256 条、
+   *   每条约 100 B，生日风险极低，但不能靠"极低"过关 —— 反证钉在 `_harness/WinCacheKt.kt`
+   *   （同一张必命中、改一格必不命中旧键、两张交替各拿各的窗口、满幅负缓存），改这块缓存后跑它。
    */
   fun of(px: IntArray, w: Int, h: Int): Window? {
     if (w <= 0 || h <= 0 || px.size < w * h) return null
@@ -176,7 +193,58 @@ internal object IconCropWindow {
     val sw = maxOf(1, (w * shrink).roundToInt())
     val sh = maxOf(1, (h * shrink).roundToInt())
     val s = if (sw == w && sh == h) px else downsample(px, w, h, sw, sh)
-    return scan(s, sw, sh)
+    val key = gridKey(s, sw, sh)
+    synchronized(winCache) {
+      if (winCache.containsKey(key)) {
+        winHits++
+        return winCache[key]
+      }
+    }
+    val t0 = System.nanoTime()
+    val win = scan(s, sw, sh)
+    val dt = System.nanoTime() - t0
+    synchronized(winCache) {
+      winMisses++
+      winScanNs += dt
+      if (dt > winScanMaxNs) winScanMaxNs = dt
+      winCache[key] = win
+    }
+    return win
+  }
+
+  // ── 上面那层缓存的容器与账（都是纯 JVM 的，判据台也编得动）──
+
+  /** 一屏图标 ~60，桌面 + 抽屉 + 设置三联各一份也 200 出头；`Window` 是 14 个字段的对象。 */
+  private const val WIN_CACHE_MAX = 256
+
+  /** 访问序 LRU：超上限丢最久没用的那条（不是整表清空 —— 清空会让下一屏全部现量，白付）。 */
+  private val winCache = object : LinkedHashMap<Long, Window?>(64, 0.75f, true) {
+    override fun removeEldestEntry(eldest: Map.Entry<Long, Window?>): Boolean = size > WIN_CACHE_MAX
+  }
+
+  /** 命中/未命中与"命中省下的判据时间"用累计值估（miss 的平均 × hits），只为日志可见，不参与任何判断。 */
+  @Volatile var winHits = 0L; private set
+  @Volatile var winMisses = 0L; private set
+  private var winScanNs = 0L
+  private var winScanMaxNs = 0L
+
+  /** 平均一次判据多久（miss 实测的均值；一次都没跑过就是 0，日志里会显成"量不到"）。 */
+  val winScanAvgNs: Long get() = synchronized(winCache) { if (winMisses == 0L) 0L else winScanNs / winMisses }
+  val winScanMaxMsVal: Long get() = synchronized(winCache) { winScanMaxNs / 1_000_000 }
+
+  /** 当前条数 —— 反证台用它验"LRU 真有上限"（没这个读数，"有界"就只是注释里的一句承诺）。 */
+  val winCacheSize: Int get() = synchronized(winCache) { winCache.size }
+
+  /** 清掉整张缓存（装机身份换了、或配置里"强制重算"时用）。 */
+  fun clearWindowCache() = synchronized(winCache) { winCache.clear() }
+
+  /** 内容哈希：FNV-1a 64 走完整张格子 —— 一格一改就必须换键（这是"不会把旧窗口给新图"的全部依据）。 */
+  private fun gridKey(px: IntArray, sw: Int, sh: Int): Long {
+    var h = -3750763034362895579L   // FNV-64 offset basis
+    for (p in px) {
+      h = (h xor (p.toLong() and 0xffffffffL)) * 1099511628211L
+    }
+    return h * 31L + sw.toLong() * 4096L + sh.toLong()
   }
 
   /** 就近降采样（不平均：这一趟要的是"哪里有没有像素"，平均会把抗锯齿毛边抬过门槛）。 */
