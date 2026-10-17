@@ -176,6 +176,8 @@ private fun install(xposed: XposedInterface, classLoader: ClassLoader, packageNa
 }
 
 private fun installHooks(xposed: XposedInterface, classLoader: ClassLoader, packageName: String) {
+  // 给 `clip from=… host=…` 那一行用的：本进程是谁。装配时置一次，热路径不查。
+  clipHost = packageName
   if (!hookIconLoaders(xposed, classLoader)) {
     Log.w(TAG, "No icon loader is found, nothing is hooked")
     return
@@ -595,7 +597,7 @@ private fun hookIconLoader(xposed: XposedInterface, method: Method): Boolean =
                 }
                 replacingIcon.set(true)
                 try {
-                  return@intercept clipToCircle(passed)
+                  return@intercept clipToCircle(passed, "Resources.${method.name}·未标记包装")
                 } finally {
                   replacingIcon.set(false)
                 }
@@ -605,7 +607,7 @@ private fun hookIconLoader(xposed: XposedInterface, method: Method): Boolean =
           }
           val fallback =
             chain.proceed() as? Drawable ?: return@intercept null
-          return@intercept clipToCircle(fallback)
+          return@intercept clipToCircle(fallback, "Resources.${method.name}·无id兜底")
         }
 
         replacingIcon.set(true)
@@ -629,7 +631,7 @@ private fun hookIconLoader(xposed: XposedInterface, method: Method): Boolean =
           //   （`pm:包名`）；两类出口都取不到才真不登记。
           val named = resourceName(chain.thisObject as? Resources, restored[index] as Int)
           IconNames.remember(icon, named.ifEmpty { packageFromArgs(args) })
-          clipToCircle(icon)
+          clipToCircle(icon, "Resources.${method.name}·标记id")
         } finally {
           replacingIcon.set(false)
         }
@@ -650,7 +652,7 @@ private fun hookArchivedAppIcon(xposed: XposedInterface, classLoader: ClassLoade
         // 日志用的名字（见 packageFromArgs）：这条路上桌面根本不经过 Resources.getDrawable*，
         // 不在这里登记，`Mono: diag` 行就永远是 `?`。
         IconNames.remember(icon, packageFromArgs(chain.args))
-        clipToCircle(icon)
+        clipToCircle(icon, "PM.${method.name}·归档应用")
       }
       hooked++
     }
@@ -674,7 +676,7 @@ private fun hookPackageManagerIconGetters(xposed: XposedInterface, classLoader: 
       runCatching {
         xposed.hook(method).intercept { chain ->
           val icon = chain.proceed() as? Drawable ?: return@intercept null
-          clipToCircle(icon)
+          clipToCircle(icon, "PM.${method.name}")
         }
         hooked++
       }
@@ -915,7 +917,7 @@ private fun hookTaskIcons(xposed: XposedInterface, classLoader: ClassLoader) {
         val index = args.indexOfFirst { it is Drawable }
         if (index < 0) return@intercept chain.proceed()
         val replaced = args.toMutableList()
-        replaced[index] = clipToCircle(args[index] as Drawable)
+        replaced[index] = clipToCircle(args[index] as Drawable, "TaskIcon.${method.name}")
         chain.proceedWith(chain.thisObject, replaced.toTypedArray())
       }
       hooked++
@@ -1088,7 +1090,7 @@ private fun hookSettingsAdaptiveIcon(xposed: XposedInterface, classLoader: Class
           "Settings.getAdaptiveIcon($sig) idx=$index in=${inIcon.javaClass.simpleName} adaptive=${inIcon is AdaptiveIconDrawable}",
         )
         val replaced = args.toMutableList()
-        replaced[index] = clipToCircle(inIcon)
+        replaced[index] = clipToCircle(inIcon, "Settings.getAdaptiveIcon")
         chain.proceedWith(chain.thisObject, replaced.toTypedArray())
       }
       hooked++
@@ -1121,7 +1123,7 @@ private fun hookBatteryIcons(xposed: XposedInterface, classLoader: ClassLoader) 
           runCatching { xposed.deoptimize(method) }
           xposed.hook(method).intercept { chain ->
             val icon = chain.proceed() as? Drawable
-            if (icon == null) null else clipToCircle(icon)
+            if (icon == null) null else clipToCircle(icon, "Battery.${method.name}")
           }
           hooked++
         }
@@ -1133,7 +1135,7 @@ private fun hookBatteryIcons(xposed: XposedInterface, classLoader: ClassLoader) 
           runCatching { xposed.deoptimize(method) }
           xposed.hook(method).intercept { chain ->
             val result = chain.proceed()
-            wrapIconField(chain.thisObject, "mAppIcon")
+            wrapIconField(chain.thisObject, "mAppIcon", "BatteryDiffEntry.mAppIcon")
             result
           }
           hooked++
@@ -1149,7 +1151,7 @@ private fun hookBatteryIcons(xposed: XposedInterface, classLoader: ClassLoader) 
         runCatching { xposed.deoptimize(method) }
         xposed.hook(method).intercept { chain ->
           val result = chain.proceed()
-          wrapIconField(chain.thisObject, "mIcon")
+          wrapIconField(chain.thisObject, "mIcon", "BatteryEntry.mIcon")
           result
         }
         hooked++
@@ -1166,12 +1168,12 @@ private fun hookBatteryIcons(xposed: XposedInterface, classLoader: ClassLoader) 
  * 已经是 `AdaptiveIconDrawable` 的不动 —— 自己包出来的 [CircleIconDrawable] 也是 adaptive，
  * 所以这个判断同时避免了对同一个图标反复包。
  */
-private fun wrapIconField(owner: Any?, name: String) {
+private fun wrapIconField(owner: Any?, name: String, from: String) {
   if (owner == null) return
   runCatching {
     val field = fieldOf(owner.javaClass, name) ?: return
     val icon = field.get(owner) as? Drawable ?: return
-    if (icon !is AdaptiveIconDrawable) field.set(owner, clipToCircle(icon))
+    if (icon !is AdaptiveIconDrawable) field.set(owner, clipToCircle(icon, from))
   }
 }
 
@@ -1184,7 +1186,7 @@ private fun hookShortcutIcons(xposed: XposedInterface) {
         // 日志用的名字（见 packageFromArgs）：这条路上桌面根本不经过 Resources.getDrawable*，
         // 不在这里登记，`Mono: diag` 行就永远是 `?`。
         IconNames.remember(icon, packageFromArgs(chain.args))
-        clipToCircle(icon)
+        clipToCircle(icon, "LauncherApps.getShortcutIconDrawable")
       }
       hooked++
     }

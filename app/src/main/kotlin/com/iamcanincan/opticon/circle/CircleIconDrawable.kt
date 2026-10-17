@@ -462,21 +462,25 @@ private fun circleMaskPath(width: Int, height: Int) = Path().apply {
 }
 
 /**
- * 诊断用：所有通道最终都汇到这里，所以在这里打一次日志就能知道**这条通道到底跑没跑**，
- * 以及**是谁在取图标**。
+ * 诊断用：所有通道最终都汇到这里，所以在这里打一次日志就能知道**这条通道到底跑没跑、在哪个宿主里跑**。
  *
- * 图标加载是热路径（刷一次应用列表上千次），所以：
- * - 每个进程只记前 [CLIP_LOG_LIMIT] 条，之后不再取堆栈；
- * - 只有前 [CLIP_LOG_LIMIT] 次付出 `stackTrace` 的开销。
+ * ⚠ **通道名由调用点交进来，不再取堆栈**（2026-10-17 改）。原来的写法是
+ * "滤掉 `com.iamcanincan.opticon` 前缀的栈帧，剩下前两帧就是调用方" —— 而 **release 包里 R8
+ * 把我们的类名改成了 `he.a` / `dz` 这种短名**，前缀一条都滤不掉，于是真机 131 行追踪
+ * 全是自家帧（`he.a <- dz.intercept : AdaptiveIconDrawable`），本该由它回答的
+ * "SystemUI 的哪个页面走哪条通道"**根本读不出来**。这次能定位到磁贴图层那一案，
+ * 靠的是另一行 `放行(未标记)` 恰好带着资源名 —— 是运气，不是仪器。
+ * ⚪ 顺带把 `Thread.stackTrace` 从热路径上摘掉（图标加载一次刷新上千次，取栈不是免费的）。
+ *
+ * 图标加载是热路径，所以每个进程只记前 [CLIP_LOG_LIMIT] 条。
  */
 private const val CLIP_LOG_LIMIT = 40
 
-private const val MODULE_PREFIX = "com.iamcanincan.opticon"
-
-/** 取堆栈本身会压进来的栈帧，不是真正的调用方。 */
-private val STACK_NOISE = setOf("java.lang.Thread", "dalvik.system.VMStack")
-
 private val clipLogLeft = AtomicInteger(CLIP_LOG_LIMIT)
+
+/** 宿主包名，装配时置一次；只为这一行日志服务。 */
+@Volatile
+var clipHost: String = "?"
 
 /**
  * 已经套过的不重复套。
@@ -491,21 +495,15 @@ private val clipLogLeft = AtomicInteger(CLIP_LOG_LIMIT)
  *
  * 标记该不该打由 system_server 决定，那里是另一条路径；这里只需要保证
  * 「即使被打了标记，关闭开关也不裁」。
+ *
+ * [from] = 哪条通道把这张图交进来的（字符串在调用点写死，见上面那条 R8 的账）。
  */
-fun clipToCircle(icon: Drawable): Drawable {
+fun clipToCircle(icon: Drawable, from: String): Drawable {
   // 配置按 TTL 重读，所以界面里关掉开关后很快生效，不用重启进程。
   if (!ModuleRuntime.options().circleEnabled) return icon
   if (clipLogLeft.decrementAndGet() >= 0) {
-    // 跳过本模块自己的栈帧，剩下的第一个就是被 hook 的方法、第二个是它的调用方 ——
-    // 正是判断"某个页面走哪条通道"需要的信息。
-    val frames =
-      Thread.currentThread()
-        .stackTrace
-        .asSequence()
-        .filter { !it.className.startsWith(MODULE_PREFIX) && it.className !in STACK_NOISE }
-        .take(2)
-        .joinToString(" <- ") { it.className.substringAfterLast('.') + "." + it.methodName }
-    Log.d(TAG, "clip $frames : ${icon.javaClass.simpleName}")
+    Log.d(TAG, "clip from=$from host=$clipHost : ${icon.javaClass.simpleName} " +
+      "${icon.intrinsicWidth}x${icon.intrinsicHeight}")
   }
   return if (icon is CircleIconDrawable) icon else CircleIconDrawable(icon)
 }
