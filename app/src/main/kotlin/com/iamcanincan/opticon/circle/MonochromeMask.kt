@@ -114,16 +114,26 @@ internal object MonochromeMask {
   private const val EDGE_LOCAL_MIN = 16
 
   // ── 【场洗】满幅支底残留的开阔场（见 [fieldWash]）──
-  /** 淡墨的上限 / 浓墨的下限：这两档沿用本仓既有分档（`bridge` 填实的是 128..254，实心是 255）。 */
-  private const val FIELD_INK_MAX = 95
-  private const val FIELD_SOLID_MIN = 160
-  /** 离浓墨这么远就不可能是"主体自己的抗锯齿边"了 —— 它是开阔场。 */
-  private const val FIELD_MIN_DIST = 2
-  /** 门：淡墨占全图墨量超过这个百分比，**淡墨就是这张画本身**，一格都不许碰
-   *  （主人 2026-10-19「色度广才更有细节」）。不是拍的 —— 全语料摊开这条线：
-   *  feimo 67.3% / nutstore 50.0% / 浙江在线 46.0% 全在门外，malody 11.6% 在门内；
-   *  门取 15 时全场语料归零 25,136 格 = 开阔场淡墨总量的 6.3%，且**没有一张插画上场**。 */
+  /** **手伸到哪**：只擦近隐形那一段（α ≤ 63 = 不透明度 < 25%）。
+   *  ⚠ 第一版取 95，主人对着屏判「有点切过头了」。数抓得很具体：malody 被擦的 986 格里
+   *    **730 格落在 64..95 这一档** —— 那是淡墨里最看得见的一段，也就是 M 那一笔的面；
+   *    而菜鸟被擦的主力在 1..31（1,029/1,813）。所以"过头"不是范围画得太远，是**手伸得太深**。 */
+  private const val FIELD_INK_MAX = 63
+  /** **门看哪**：淡墨占全图墨量超过这个百分比，淡墨就是这张画本身，一格都不许碰
+   *  （主人 2026-10-19「色度广才更有细节」）。全语料摊开这条线：feimo 67.3% / nutstore 50.0% /
+   *  浙江在线 46.0% 全在门外，malody 11.6% 在门内。 */
   private const val FIELD_SHARE_MAX_PCT = 15
+  /** 门用的淡墨定义，**故意比手宽**（1..95 而不是 1..63）：两边共用一个上限的话，
+   *  把 95 降到 63 会连"淡墨占比"一起算小，反而放进更多张 —— 实测那样 14 张上场、
+   *  擦掉 53,200 格（智慧树一张就 16,724），比要治的病还大。 */
+  private const val FIELD_GATE_INK_MAX = 95
+  private const val FIELD_SOLID_MIN = 160
+  /** 离浓墨这么远就不可能是"主体自己的抗锯齿边"。
+   *  ⚠ 试过收到 3：malody 986→793，但**该保的那条面一格也没保住** —— 它离浓墨本来就 ≥3
+   *    （中间隔着约 6 格宽的高光带）。也试过拿「已判底 ∪ 淡墨」的连通性当墙、再试过拿
+   *    **源里的梯度**当墙：三种机制在这张上判出的"外面"都是 ~1,000/1,133 —— 因为 M 朝外那一侧
+   *    本来就是软边，字面与光晕之间**没有边可找**。真正分得开的只有墨量那一档（[FIELD_INK_MAX]）。 */
+  private const val FIELD_MIN_DIST = 2
 
   /** 边界连通区（按线分割后「外面那一整块」）占画布的下限 / 上限（%）。
    *  下限：它必须是**主导的那块**（主人：「面积大」）；
@@ -5617,7 +5627,7 @@ internal object MonochromeMask {
     for (p in mask) {
       val k = p ushr 24
       if (k > 0) inked++
-      if (k in 1..FIELD_INK_MAX) faint++
+      if (k in 1..FIELD_GATE_INK_MAX) faint++
       if (k >= FIELD_SOLID_MIN) solid++
     }
     return solid > 0 && inked > 0 && faint * 100 <= inked * FIELD_SHARE_MAX_PCT

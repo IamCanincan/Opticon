@@ -1464,6 +1464,16 @@ private fun hookSynthesizedMonochrome(xposed: XposedInterface) {
         //   9% 墨的正确剪影。全桌面 774 行缓存里只有这一张 ≥70% 全实，所以这条例外的射程是一个图标。
         val original = chain.proceed() as? Drawable
         if (original != null && !sameLayerAsForeground(chain.thisObject as? AdaptiveIconDrawable, original)) {
+          // ⚠ 诊断（2026-10-19，`com.fbclient.app` 装机后仍是实心方块、而 `改走合成` 0 命中）：
+          //   透传这条路以前**一声不响**，于是"桌面没问我们"和"问了、我们判成合法透传"两种情况在日志里长得一样。
+          //   现在把判据看见的东西打出来（限流：前 6 次 + 之后每 100 次），下次清缓存就能一眼分清是哪种。
+          val n = monoAsked.incrementAndGet()
+          if (n <= 6 || n % 100 == 0) {
+            val fg = runCatching { (chain.thisObject as? AdaptiveIconDrawable)?.foreground }.getOrNull()
+            Log.d(TAG, "Mono: 自带单色层，透传 #$n mono=${original.javaClass.simpleName}" +
+              " fg=${fg?.javaClass?.simpleName ?: "-"} 同实例=${fg === original}" +
+              " 同状态=${fg != null && fg.constantState === original.constantState}")
+          }
           return@intercept original
         }
         val self = chain.thisObject as? AdaptiveIconDrawable
@@ -1508,6 +1518,9 @@ private fun sameLayerAsForeground(self: AdaptiveIconDrawable?, mono: Drawable): 
  * 纯合成模式下这个数应该是 0；它非零就是"屏幕上有一批图标是反的"唯一的可见信号。
  */
 private val fellThrough = AtomicInteger(0)
+
+/** 桌面问了多少次"这图标有自带单色层吗"、我们答了"有，透传"（见 [hookSynthesizedMonochrome] 的诊断）。 */
+private val monoAsked = AtomicInteger(0)
 
 private fun classOf(name: String, classLoader: ClassLoader): Class<*>? =
   runCatching { Class.forName(name, true, classLoader) }.getOrNull()
