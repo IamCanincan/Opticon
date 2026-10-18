@@ -5395,6 +5395,16 @@ internal object MonochromeMask {
     apply: Boolean) {
     val total = w * h
     s.borderOn = false; s.borderKill = 0
+    // ⓪ 四角必须是不透明的底。只判"画布边上有没有不透明像素"不够：圆角方形图标（易班 0.650 /
+    //   闲鱼 0.794 的边不透明）也有一部分边是实的，于是把画面内容当成底退掉 —— 易班退了 23762 格
+    //   （熊+气泡）只剩五官，闲鱼鱼身同样没了。主人判据的前提是"背景边距"：四角透明 = 这张的
+    //   轮廓本身就是形状，没有可以退的底。kazumi 四角 1.000，正是这一刀要处理的那一类。
+    val corner = 8
+    for (cy in 0..1) for (cx in 0..1) for (j in 0 until corner) for (i in 0 until corner) {
+      val x = if (cx == 0) i else w - 1 - i
+      val y = if (cy == 0) j else h - 1 - j
+      if (Color.alpha(pixels[y * w + x]) < A_SOLID) return
+    }
     // ① 线 = 黑帽：3x3 邻域最亮 - 自己 > LINE_BLACKHAT。
     //   对平滑渐变天然免疫（邻域最亮与自己几乎相同），只对"比周围明显暗的细线"响应；
     //   而且能吃到**整根线**（不是只吃两侧边缘 —— 边缘梯度会让线的芯漏掉，4 邻接顺着芯就漏过去了）。
