@@ -19,7 +19,6 @@ import android.content.pm.ResolveInfo
 import android.content.pm.ServiceInfo
 import android.content.res.Resources
 import android.graphics.drawable.AdaptiveIconDrawable
-import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.Handler
@@ -1457,22 +1456,21 @@ private fun hookSynthesizedMonochrome(xposed: XposedInterface) {
   runCatching {
       xposed.hook(method).intercept { chain ->
         // 应用自己提供了单色图标：原样透传，一个像素都不碰（主人的硬规则）。
-        // ⚠ 唯一的例外：**它把 foreground 原名抄成了 monochrome** —— 那不是一张遮罩，而"透传"也就
-        //   没有对象：桌面只能按它自己那套「亮度当 alpha」去猜，猜在一张近白底的全彩图上就是一块实心。
-        //   真机 2026-10-19 `com.fbclient.app`(FlyingBird-Lite)：`<monochrome>` 与 `<foreground>` 都是
-        //   `@0x7f08014f`，屏幕上 76.6% 的像素全不透明 = 一个方块；同一张前景层走我们 `build()` 交出的是
-        //   9% 墨的正确剪影。全桌面 774 行缓存里只有这一张 ≥70% 全实，所以这条例外的射程是一个图标。
+        // ⚠ 这里曾开过一条例外（"monochrome 就是 foreground 本身"时改走合成），**2026-10-19 装机证明它开不了火**：
+        //   运行时每一层各自 inflate，`同实例` 与 `同状态` 7 条采样**全是 false** —— 与本轮删掉的
+        //   `LINE_THIN_MAX` 同一类假闸，已移除。别再往"对象同一"上押判据。
+        //   触发它的案子还在：`com.fbclient.app`(FlyingBird-Lite) 的 `<monochrome>` 与 `<foreground>`
+        //   在 XML 里都是 `@0x7f08014f`，屏幕上 76.6% 全实 = 一个方块，而同一张前景层走我们 `build()`
+        //   交出的是 9% 墨的正确剪影。要治它得先搞清桌面读的是哪条路（它同时引用了
+        //   `getMonochrome` 与 `getLayer(LAYER_*)`），所以下面这条透传诊断**留着** ——
+        //   它是唯一能区分"桌面没问我们"与"问了、我们按硬规则透传"的手段。
         val original = chain.proceed() as? Drawable
-        if (original != null && !sameLayerAsForeground(chain.thisObject as? AdaptiveIconDrawable, original)) {
-          // ⚠ 诊断（2026-10-19，`com.fbclient.app` 装机后仍是实心方块、而 `改走合成` 0 命中）：
-          //   透传这条路以前**一声不响**，于是"桌面没问我们"和"问了、我们判成合法透传"两种情况在日志里长得一样。
-          //   现在把判据看见的东西打出来（限流：前 6 次 + 之后每 100 次），下次清缓存就能一眼分清是哪种。
+        if (original != null) {
+          // 限流：前 6 次 + 之后每 100 次。
           val n = monoAsked.incrementAndGet()
           if (n <= 6 || n % 100 == 0) {
-            val fg = runCatching { (chain.thisObject as? AdaptiveIconDrawable)?.foreground }.getOrNull()
             Log.d(TAG, "Mono: 自带单色层，透传 #$n mono=${original.javaClass.simpleName}" +
-              " fg=${fg?.javaClass?.simpleName ?: "-"} 同实例=${fg === original}" +
-              " 同状态=${fg != null && fg.constantState === original.constantState}")
+              " 尺寸=${original.intrinsicWidth}x${original.intrinsicHeight}")
           }
           return@intercept original
         }
@@ -1486,31 +1484,11 @@ private fun hookSynthesizedMonochrome(xposed: XposedInterface) {
         // CircleIconDrawable **自己重写了这个 getter**，本钩拦不到它；就算框架把 override
         // 一起拦了也不能用本对象压剪影 —— 那只会得到一个实心圆饼。它自己会去合成 sourceIcon。
         if (self is CircleIconDrawable) return@intercept null
-        if (original != null) Log.d(TAG, "Mono: 声明的 monochrome 就是 foreground 本身 → 改走合成")
         MonochromeSynth.forIcon(self)
       }
       Log.d(TAG, "Mono: getMonochrome hooked (合成单色层)")
     }
     .onFailure { Log.w(TAG, "Mono: getMonochrome hook failed: ${it.message}") }
-}
-
-/**
- * 这一张"应用自己声明的单色层"是不是**就是它的 foreground**（同实例 / 同 ConstantState / 同一张 Bitmap）。
- *
- * 只认这一种结构性偷懒，不做任何颜色统计 —— 阈值一上就会碰到"foreground 本来就是剪影、
- * 作者顺手复用"的那些张，而那正是硬规则要保护的对象。三层判据从严到宽，任一命中即算：
- *  `===` 同一实例；`constantState` 同一个（资源缓存会给出同一个）；两边都是 BitmapDrawable 且 Bitmap 同一个。
- */
-private fun sameLayerAsForeground(self: AdaptiveIconDrawable?, mono: Drawable): Boolean {
-  val fg = runCatching { self?.foreground }.getOrNull() ?: return false
-  if (fg === mono) return true
-  val fs = runCatching { fg.constantState }.getOrNull()
-  val ms = runCatching { mono.constantState }.getOrNull()
-  if (fs != null && ms != null && fs === ms) return true
-  if (fg is BitmapDrawable && mono is BitmapDrawable) {
-    runCatching { fg.bitmap }.getOrNull()?.let { if (it === runCatching { mono.bitmap }.getOrNull()) return true }
-  }
-  return false
 }
 
 /**
