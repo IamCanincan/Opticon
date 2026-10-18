@@ -888,6 +888,8 @@ internal object MonochromeMask {
     /** 「环上单一族过半」的那一族（主人对 kazumi 的判词）。只作用于**交付**，不动 `plate` ——
      *  动 `plate` 会把整张的参照色场换掉（实测易班 `框内 0.24→0.08`）。 */
     var rimDomOn = false
+    /** 环上最大那一族占边界带的百分比 —— 主人那句「与圆周相连的弧长」的数，开没开火都报。 */
+    var rimDomShare = 0
     var rimKill = 0
     /** 「按线条分割」那一刀开没开火（见 [cutBorderRegion]）。0 = 门槛没过，一格没动。 */
     var borderOn = false
@@ -2170,7 +2172,7 @@ internal object MonochromeMask {
         // 只是换个名字记：这样"这一刀补了多少、其中有多少看着像底"两件事在日志里都看得见。
         " 带补=${bands.first}/${bands.second}(${bands.third}拒) 带内残=$bfN/${if (bfN == 0) 0 else bfSum / bfN}" +
         // 【环族】「环上单一族过半」这条判据开没开火。0 = 没开（这张的环上没有一支族过半）。
-        (if (s.rimDomOn) " 环族=开#" + String.format(java.util.Locale.ROOT, "%06X", s.rimDomColor and 0xFFFFFF) else " 环族=关") + " 归零=${s.rimKill}" +
+        (if (s.rimDomOn) " 环族=开#" + String.format(java.util.Locale.ROOT, "%06X", s.rimDomColor and 0xFFFFFF) else " 环族=关") + "/${s.rimDomShare}" + " 归零=${s.rimKill}" +
         // 【线割】「按线条分割」那一刀开没开火、退了几格墨。不开 = 五道门没过（这张不是线稿/底不够浅）。
         (if (!s.borderOn) " 线割=关" else if (s.borderKill > 0) " 线割=开/${s.borderKill}" else " 线割=待") +
         // 满幅插画那一支开了就把三个判据数报上；**没开一个字符都不加** —— 这两列在整串末尾，
@@ -4008,6 +4010,9 @@ internal object MonochromeMask {
         if (bandOn > 0) {
           var best = 0
           for (k in 1 until s.fams) if (n[k] > n[best]) best = k
+          // 主人那句判据里的「弧长」这一维，以前只留一个开/关，数没留下来 —— 现在留下来，
+          // 因为「线割要不要开火」要用它，而阈值必须是有数的，不能是拍的。
+          s.rimDomShare = n[best] * 100 / bandOn
           if (n[best] * 100 >= bandOn * RIM_FAMILY_MIN) {
             s.rimDomOn = true; s.rimDomColor = s.famColor[best]
             s.rimDomL = s.famL[best]; s.rimDomA = s.famA[best]; s.rimDomB = s.famB[best]
@@ -4038,6 +4043,9 @@ internal object MonochromeMask {
         if (bandOn > 0) {
           var best = 0
           for (k in 1 until s.fams) if (n[k] > n[best]) best = k
+          // 主人那句判据里的「弧长」这一维，以前只留一个开/关，数没留下来 —— 现在留下来，
+          // 因为「线割要不要开火」要用它，而阈值必须是有数的，不能是拍的。
+          s.rimDomShare = n[best] * 100 / bandOn
           if (n[best] * 100 >= bandOn * RIM_FAMILY_MIN) {
             s.rimDomOn = true; s.rimDomColor = s.famColor[best]
             s.rimDomL = s.famL[best]; s.rimDomA = s.famA[best]; s.rimDomB = s.famB[best]
