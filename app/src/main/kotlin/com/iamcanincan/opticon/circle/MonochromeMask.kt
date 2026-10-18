@@ -113,6 +113,18 @@ internal object MonochromeMask {
    *  8~50 之间取哪个数结论都一样。 */
   private const val EDGE_LOCAL_MIN = 16
 
+  // ── 【场洗】满幅支底残留的开阔场（见 [fieldWash]）──
+  /** 淡墨的上限 / 浓墨的下限：这两档沿用本仓既有分档（`bridge` 填实的是 128..254，实心是 255）。 */
+  private const val FIELD_INK_MAX = 95
+  private const val FIELD_SOLID_MIN = 160
+  /** 离浓墨这么远就不可能是"主体自己的抗锯齿边"了 —— 它是开阔场。 */
+  private const val FIELD_MIN_DIST = 2
+  /** 门：淡墨占全图墨量超过这个百分比，**淡墨就是这张画本身**，一格都不许碰
+   *  （主人 2026-10-19「色度广才更有细节」）。不是拍的 —— 全语料摊开这条线：
+   *  feimo 67.3% / nutstore 50.0% / 浙江在线 46.0% 全在门外，malody 11.6% 在门内；
+   *  门取 15 时全场语料归零 25,136 格 = 开阔场淡墨总量的 6.3%，且**没有一张插画上场**。 */
+  private const val FIELD_SHARE_MAX_PCT = 15
+
   /** 边界连通区（按线分割后「外面那一整块」）占画布的下限 / 上限（%）。
    *  下限：它必须是**主导的那块**（主人：「面积大」）；
    *  上限：整张都是它 = 这张没有结构，一刀下去把图标整个抹掉（美团 / 钉钉 / B站 那种 `块面积=100%`）。 */
@@ -1084,7 +1096,15 @@ internal object MonochromeMask {
     }
     // 选中满幅那一支之后，**这才**把它的背景切掉（4.2 那段）。`plateInked == 0` = 这张的底
     // 本来一格墨都没拿到，切了等于没切 —— 直接交上面那一份，省一遍。
-    if (ramp.plateInked == 0) return ramp
+    // 【场洗】选中哪一份，就带着 `field=true` 把**那一份**再交一遍 —— 与 `edge` 同一个先例
+    //   （代价同法记账：桌面按内容缓存，多出来的那一遍是一次性的）。
+    //   但只在"这道门真会开火"时才多跑：门用已经算好的那一份量（一次线性扫），不开火就原样交 ——
+    //   满幅支里"淡墨就是这张画本身"的那些张（feimo 67.3% / nutstore 50.0% / 浙江在线 46.0%）
+    //   既一个像素不动，也不多花一遍。
+    fun deliver(o: Output, cut: Boolean) =
+      if (!fieldEligible(o.mask)) o else buildOnce(pixels, w, h, plateIsLayer, false, under,
+        plateIsSubject = plateIsSubject, cutPlate = cut, field = true)
+    if (ramp.plateInked == 0) return deliver(ramp, false)
     val cut = buildOnce(pixels, w, h, plateIsLayer, false, under, plateIsSubject = plateIsSubject,
       cutPlate = true)
     // ⚠ **切背景只许让剩下的墨更实，不许更虚。** 这条守卫不是拍的，是 `azure.authenticator`
@@ -1092,7 +1112,7 @@ internal object MonochromeMask {
     //   切完之后墨 23217→6801、均值 α 157→40、实心 0.48→0.03 —— 屏幕上只剩一圈幽灵。
     //   真正的背景在满幅这一支的斜坡里是**浅的**（暗=墨），切掉它只会让均值往上走；
     //   均值往下走就说明切掉的是主体。这一条不引入新阈值，只拿改动自己前后比。
-    if (meanAlpha(cut.mask) < meanAlpha(ramp.mask)) return ramp
+    if (meanAlpha(cut.mask) < meanAlpha(ramp.mask)) return deliver(ramp, false)
     // ⚠ **切背景也不许把主体切碎。** 2026-10-17 22:4x 主人一句「王者荣耀碎了」——
     //   那一张切前 `cc=31 top=0.96`（一整块），切完 `cc=39 top=0.52`：底与主体**交错**的插画
     //   （角色 + 特效 + 天空），把"底"抽走之后主体自己散成几块。更狠的是云闪付
@@ -1106,10 +1126,10 @@ internal object MonochromeMask {
     //   「云闪付」三个字 + UnionPay + 卡片轮廓 —— 屏幕上认得出，老守卫却把它和"碎渣"一起拦了
     //   （它一直是 92.5% 墨的一片灰，就是主人说的"灰糊"）。所以补一条放行：**渣率够低就直接要切的那份**。
     //   数（同一块生产 `plate`）：云闪付 0.3% 放行；azure 3.7% / 王者荣耀 5.1% / 吉星派对 5.3% 照旧拦。
-    if (cut.dust in 0..CUT_DUST_MAX_PCT) return cut
-    if (cut.largest + 0.15f < ramp.largest) return ramp
-    if (cut.components > ramp.components * 2 + 4) return ramp
-    return cut
+    if (cut.dust in 0..CUT_DUST_MAX_PCT) return deliver(cut, true)
+    if (cut.largest + 0.15f < ramp.largest) return deliver(ramp, false)
+    if (cut.components > ramp.components * 2 + 4) return deliver(ramp, false)
+    return deliver(cut, true)
   }
 
   /**
@@ -1282,6 +1302,10 @@ internal object MonochromeMask {
     /** 满幅那一支要不要把 `plate[]` 判成底的格交成 0。**只有选支之后的交付那一遍才为真** ——
      *  理由写在 [build] 与 4.2 那两段（选支必须与改动前完全同口径）。 */
     cutPlate: Boolean = false,
+    /** 【场洗】这一遍要不要真归零开阔场淡墨。**只有选支之后的交付那一遍才为真** ——
+     *  与 [cutPlate] 同一条理由：`meanAlpha(cut.mask) < meanAlpha(ramp.mask)` 那道守卫读的就是掩码，
+     *  这一刀要是先进比较，守卫就是被自己改过的数喂的（本仓在"新刀加进比较之内"上栽过三次）。 */
+    field: Boolean = false,
     /** 「按线条分割」那一刀要不要真退墨。`false` 只**探**会不会开火（报告里写 `线割=待`），
      *  一格不动 —— 由 [build] 拿两支成品比过再决定，见那里的说明。 */
     cutBorder: Boolean = true,
@@ -2221,6 +2245,13 @@ internal object MonochromeMask {
     val fill = st.kept.toFloat() / boxArea
     // 渣率只属于"切背景那一遍"：别的那些遍交的是没切的成品，量它没有意义（报 -1）。
     val cutDust = if (cutPlate && tonal != null) dustPct(out, w, h, s) else -1
+    // 【场洗】满幅支：淡墨格里"离任何浓墨 >= 2 格"的那些，是**底残留的开阔场**，不是主体的边 —— 归零。
+    //   主人 2026-10-19 点名 `me.mugzone.emiria`(Malody V)「主体没切干净，还有淡墨」。
+    //   ⚠ 放在 `cutDust` **之后**：渣率那道门（[CUT_DUST_MAX_PCT]）是在 `build` 里拿它挑支的，
+    //     这一刀要是先跑，就会改到"挑支用的数"——本仓栽过三次的那条（新刀加进比较之内会被自己否决）。
+    //   ⚠ 只在**满幅支**跑：参照支的线稿里，"淡 + 离实墨远"**正是断口本身**（kazumi 那 52 格），
+    //     在这张上归零等于把刚补回来的线再擦掉。
+    val fieldN = if (tonal != null && field) fieldWash(out, w, h) else 0
     return Output(
       out, fill, st.hole, st.largest, st.components, st.smallShare, softShare(st, box),
       "票=${s.voteErase}抹/${s.voteRaise}抬/${s.voteHits}块 带占=${s.bandSolid * 100 / 255} 底占=${pct(ground.share)} H=${ground.hyp} 族=${ground.families} 底厚=${ground.thick}" +
@@ -2310,7 +2341,10 @@ internal object MonochromeMask {
           (if (cutDust < 0) "" else " 渣=$cutDust") +
           // 【边灰】**加在整串最末尾**：线稿的抗锯齿边补了几格（见 [softEdge]）。
           //   没走到这一刀时一个字符都不加 —— 「没走到」与「走到了补 0 格」要分得开。
-          (if (tonal == null && edge && s.borderKill > 0) " 边灰=$edgeGray" else ""),
+          (if (tonal == null && edge && s.borderKill > 0) " 边灰=$edgeGray" else "") +
+          // 【场洗】**加在整串最末尾**：满幅支归零了几格开阔场淡墨（见 [fieldWash]）。
+          // 只在满幅支报 —— 参照支压根不跑这一刀，"不报"与"报了 0"要分得开（本仓那条老规矩）。
+          (if (tonal != null && field) " 场洗=$fieldN" else ""),
       ground.hyp,
       s.h0why,
       s.veto,
@@ -5569,6 +5603,71 @@ internal object MonochromeMask {
       }
     }
     for (i in 0 until total) if (add[i] != 0 && (out[i] ushr 24) == 0) out[i] = add[i]
+    return n
+  }
+
+  /** 【场洗】的门（与 [fieldWash] 内部**同一条判据、一份实现**，不许抄两份）：
+   *  有浓墨、有墨、且淡墨占全图墨量 <= [FIELD_SHARE_MAX_PCT]。
+   *  [build] 用它决定"要不要为这一刀多交一遍"，[fieldWash] 用它决定"这一遍动不动手"。 */
+  private fun fieldEligible(mask: IntArray?): Boolean {
+    if (mask == null) return false
+    var inked = 0
+    var faint = 0
+    var solid = 0
+    for (p in mask) {
+      val k = p ushr 24
+      if (k > 0) inked++
+      if (k in 1..FIELD_INK_MAX) faint++
+      if (k >= FIELD_SOLID_MIN) solid++
+    }
+    return solid > 0 && inked > 0 && faint * 100 <= inked * FIELD_SHARE_MAX_PCT
+  }
+
+  /**
+   * 【场洗】把**底残留的开阔场淡墨**归零（主人 2026-10-19 点名 `me.mugzone.emiria`「主体没切干净，还有淡墨」）。
+   *
+   * 判据是**角色**，不是颜色：一格淡墨要么贴着浓墨（= 主体自己的抗锯齿边，必须留），
+   * 要么离浓墨 >= [FIELD_MIN_DIST] 格（= 开阔场里的残留，该走）。这一条是今天被三堵墙逼出来的：
+   *  · 「按局部突出度给墨」= 极性错误（平色内部恒 0，会把 65% 的实墨擦掉）；
+   *  · 「半径 >= 2 的接线刀」= 全语料只多接 556 格，且"两侧都有墨"在密集字标里恒成立（会把字的水道填掉）；
+   *  · 「让盘沿相邻相似色生长」= **主体的抗锯齿边在颜色上本来就和底连续**，
+   *    所以那种刀最先吃的一定是主体的边（实测浙江在线 89% 的淡墨是它的横幅飘带，malody 的红全贴在 M 的轮廓上）。
+   * 距离场问的是"这格是不是贴着一条真笔画"，与颜色连不连续无关 —— 这才把两者分开。
+   *
+   * ⚠ 只在**满幅支**跑（调用处保证）：参照支的线稿里"淡 + 离实墨远"**正是断口本身**（kazumi 那 52 格），
+   *   在那一支归零等于把刚补回来的线再擦掉。
+   * ⚠ 门 [FIELD_SHARE_MAX_PCT] 先判：**淡墨占多数的那些张，淡墨就是这张画本身**（中间调=细节）。
+   * @return 归零了几格。
+   */
+  private fun fieldWash(out: IntArray, w: Int, h: Int): Int {
+    if (!fieldEligible(out)) return 0
+    val total = w * h
+    val dist = IntArray(total) { -1 }
+    val q = IntArray(total)
+    var head = 0
+    var tail = 0
+    for (i in 0 until total) {
+      if ((out[i] ushr 24) >= FIELD_SOLID_MIN) { dist[i] = 0; q[tail++] = i }
+    }
+    while (head < tail) {
+      val c = q[head++]
+      val cy = c / w; val cx = c - cy * w
+      for (dy in -1..1) {
+        val ny = cy + dy
+        if (ny < 0 || ny >= h) continue
+        for (dx in -1..1) {
+          if (dx == 0 && dy == 0) continue
+          val nx = cx + dx
+          if (nx < 0 || nx >= w) continue
+          val j = ny * w + nx
+          if (dist[j] < 0) { dist[j] = dist[c] + 1; q[tail++] = j }
+        }
+      }
+    }
+    var n = 0
+    for (i in 0 until total) {
+      if (out[i] ushr 24 in 1..FIELD_INK_MAX && dist[i] >= FIELD_MIN_DIST) { out[i] = 0; n++ }
+    }
     return n
   }
 
