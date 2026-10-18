@@ -107,6 +107,16 @@ internal object MonochromeMask {
    *  6 是量出来的 —— kazumi 在 6 时线占 8.7%、分量 93 个；抬到 10 线就断，
    *  边界连通区会把整幅画都吃掉（一个分量 90.9%），分割就没意义了。 */
   private const val LINE_BLACKHAT = 6
+
+  /** 线芯的"薄"上限（步）：离最近一个空格不超过它，才算坐在线芯上、有资格往外发边（见 [softEdge]）。
+   *  扫描线量到 kazumi 的线芯是 2~3 格宽；实心块（眼睛那种）内部十几格，发不出边。 */
+  private const val LINE_THIN_MAX = 2
+
+  /** 局部反差下限（Lab L）：3×3 里最亮减最暗不到它，就认为这一片根本没有"线 vs 底"，跳过。
+   *  不是拍的：量到的斜坡格局部范围是 **109**（212−103），而平滑渐变里 3×3 范围只有 2~5 ——
+   *  8~50 之间取哪个数结论都一样。 */
+  private const val EDGE_LOCAL_MIN = 16
+
   /** 边界连通区（按线分割后「外面那一整块」）占画布的下限 / 上限（%）。
    *  下限：它必须是**主导的那块**（主人：「面积大」）；
    *  上限：整张都是它 = 这张没有结构，一刀下去把图标整个抹掉（美团 / 钉钉 / B站 那种 `块面积=100%`）。 */
@@ -1049,7 +1059,8 @@ internal object MonochromeMask {
       if (!ramp.report.contains("线割=待")) return ramp
       val cut = buildOnce(pixels, w, h, plateIsLayer, false, under, plateIsSubject = plateIsSubject,
         cutBorder = true)
-      return if (cut.soft <= ramp.soft) cut else ramp
+      return if (cut.soft > ramp.soft) ramp else buildOnce(pixels, w, h, plateIsLayer, false, under,
+        plateIsSubject = plateIsSubject, cutBorder = true, edge = true)
     }
     val s = checkNotNull(pool.get())
     // 【SepTone】先按**没挪过**的参照交付一遍（`sepOff`）—— 那一遍的成品与上一轮（这一刀还不存在时）
@@ -1072,7 +1083,8 @@ internal object MonochromeMask {
       if (!base.report.contains("线割=待")) return base
       val cut = buildOnce(pixels, w, h, plateIsLayer, true, under, plateIsSubject = plateIsSubject,
         cutBorder = true)
-      return if (cut.soft <= base.soft) cut else base
+      return if (cut.soft > base.soft) base else buildOnce(pixels, w, h, plateIsLayer, true, under,
+        plateIsSubject = plateIsSubject, cutBorder = true, edge = true)
     }
     // 选中满幅那一支之后，**这才**把它的背景切掉（4.2 那段）。`plateInked == 0` = 这张的底
     // 本来一格墨都没拿到，切了等于没切 —— 直接交上面那一份，省一遍。
@@ -1276,7 +1288,11 @@ internal object MonochromeMask {
     cutPlate: Boolean = false,
     /** 「按线条分割」那一刀要不要真退墨。`false` 只**探**会不会开火（报告里写 `线割=待`），
      *  一格不动 —— 由 [build] 拿两支成品比过再决定，见那里的说明。 */
-    cutBorder: Boolean = true
+    cutBorder: Boolean = true,
+    /** 【边灰】这一遍要不要补线稿的抗锯齿边。**只在选中之后传 `true`** ——
+     *  补边会让成品变软，混进"切 / 不切"那一次比较里就会把成品闸带偏（实测：`框内 0.07→0.18`，
+     *  等于把线割自己否决掉）。与 `sepOff` / `cutBorder` 同一条先例：**选支永远看这一刀不存在时的那份。** */
+    edge: Boolean = false
   ): Output {
     val total = w * h
     if (total <= 0) return Output(IntArray(0), 0f, 0f, 0f, 0, 0f, 0f, "尺寸非法 → 空层")
@@ -2187,6 +2203,19 @@ internal object MonochromeMask {
     s.carrierErase = 0; s.carrierSoft = 0
     val carrierN = if (tonal == null) carrierPocket(out, pixels, w, h, box, s) else 0
     val sep = separation(out, w, h, box, s)
+    // 【边灰】线稿的抗锯齿边（主人 2026-10-19「线条有锯齿，优化一下」）。量到的根因：源横切一条线是
+    //   `244 185 103 135 196 211`（芯两格 + 两侧各一格斜坡），交付只有芯那两格出墨 —— **斜坡整段被判成底**，
+    //   线宽从 3~4 格掉到 2 格（整张账：源暗于 180 的 8966 格 vs 交付 8082 格），于是台阶与断口是同一件事。
+    //   资格 = 结构（薄墨），浓度 = 3×3 局部对比度，**都不看"离底多远"**（上一版死在那上面，见 [softEdge]）。
+    //   ⚠ 落点必须在 [measure] **之后**：加在它前面会被 `bridge` 把 1..127 的软边填成实心，
+    //     屏幕上得到的是"更粗的硬线"而不是"软线"（实测 追加 1322 / 变浓 3753、`实255 4147→7411`）。
+    //   ⚠ **不重量 `st`** —— `框内/淡/cc/top` 本来就是"`measure` 那一版"的口径（`carrierPocket` 跑在
+    //     它后面、`承载=2549抹` 就是它抹的），补边之后重量会把两个口径混进同一栏（实测 0.07→0.05，
+    //     看着像覆盖率倒退，其实是换了分母时刻）。这一刀只加不减，口径差与 `carrierPocket` 同法处理：
+    //     看**浓度直方图**（那是从最终掩码量的）与 `边灰=N`。
+    //   ⚠ 只在**线割真退过墨**、且**已被选中**的那一遍生效（`edge`）—— 其余图标一个像素都不许动。
+    var edgeGray = 0
+    if (tonal == null && edge && s.borderKill > 0) edgeGray = softEdge(s, pixels, w, h, out)
     val fill = st.kept.toFloat() / boxArea
     // 渣率只属于"切背景那一遍"：别的那些遍交的是没切的成品，量它没有意义（报 -1）。
     val cutDust = if (cutPlate && tonal != null) dustPct(out, w, h, s) else -1
@@ -2276,7 +2305,10 @@ internal object MonochromeMask {
           (if (tonal == null && tonalSeen == null) " 调未算=${tonalWhy[0]}" else "") +
           // 【渣】**加在整串最末尾**：这一遍交出去的墨里，"占墨 <1% 的小块"占了几成（见 [dustPct]）。
           //   只有切背景那一遍报，其余报 -1（"没量"与"量到 0"要分得开）。
-          (if (cutDust < 0) "" else " 渣=$cutDust"),
+          (if (cutDust < 0) "" else " 渣=$cutDust") +
+          // 【边灰】**加在整串最末尾**：线稿的抗锯齿边补了几格（见 [softEdge]）。
+          //   没走到这一刀时一个字符都不加 —— 「没走到」与「走到了补 0 格」要分得开。
+          (if (tonal == null && edge && s.borderKill > 0) " 边灰=$edgeGray" else ""),
       ground.hyp,
       s.h0why,
       s.veto,
@@ -5458,6 +5490,100 @@ internal object MonochromeMask {
    *
    * ⚠ **不动 `plate`**：动 `plate` 会把整张的参照色场换掉（易班 `框内 0.24→0.08`，试过）。
    */
+  /** 【边灰·第二版】先认出"这是一条线"，再把它的抗锯齿边还回去（主人 2026-10-19「线条有锯齿」）。
+   *
+   *  上一版死在**资格**上（`_harness/edge_gray_failed.patch`）：它只看"邻格有墨 + 我离底不算近"，
+   *  而头发里每一格都满足这两条 —— ΔE 是整数 ×64 量化的，渐变里相邻两格常常**相等** ⇒ 比值 1
+   *  ⇒ 满墨 ⇒ `框内 0.07→0.18`，头发整片回来。
+   *
+   *  这一版换两处，都不再用"离底多远"：
+   *  ① **资格 = 结构**：只有坐在**薄墨**里的那一格才算线芯，才有资格往外发边。
+   *     薄 = 到最近一个"没墨的格"不超过 [LINE_THIN_MAX] 步（多源 BFS，从所有空格同时往里涨）。
+   *     扫描线量到线芯是 2~3 格宽 ⇒ 薄；眼睛那种实心块内部厚 ⇒ 不发边。
+   *  ② **浓度 = 局部对比度**，不是全局离底：`覆盖率 = (3×3 里最亮的 L − 这格的 L) / (最亮 − 最暗)`。
+   *     斜坡格上：最亮那侧就是底、最暗那侧就是芯，比值正是源自己的覆盖率（量过的那条线：
+   *     `(212−185)/(212−103) = 0.25`）。而**渐变底里这个比值天然是 0**（3×3 内最亮≈最暗），
+   *     所以它没有"把底请回来"这条路 —— 上一版那把尺子有，这把没有。
+   *     分母小于 [EDGE_LOCAL_MIN] 就跳过：那意味着这一片根本没有"线 vs 底"的局部反差。
+   *
+   *  两遍走（先算后写）：单遍边算边写会让刚补的格继续喂下一格，一条 3px 的线会被自己养粗。
+   *  @return 补了几格。 */
+  private fun softEdge(s: Scratch, pixels: IntArray, w: Int, h: Int, out: IntArray): Int {
+    val total = w * h
+    // ① 薄墨图：从所有"没墨的格"同时往里 BFS，`deep[i]` = 这一格到最近空格要跨几步（没墨 = 0）
+    val deep = IntArray(total)
+    val q = IntArray(total)
+    var head = 0
+    var tail = 0
+    for (i in 0 until total) {
+      if ((out[i] ushr 24) == 0) { deep[i] = 0; q[tail++] = i } else deep[i] = -1
+    }
+    while (head < tail) {
+      val c = q[head++]
+      if (deep[c] >= LINE_THIN_MAX) continue                 // 再往里就不是"线芯"了
+      val d = deep[c] + 1
+      val cy = c / w; val cx = c - cy * w
+      fun push(j: Int) { if (deep[j] < 0) { deep[j] = d; q[tail++] = j } }
+      if (cx > 0) push(c - 1)
+      if (cx < w - 1) push(c + 1)
+      if (cy > 0) push(c - w)
+      if (cy < h - 1) push(c + w)
+    }
+    // ② 每一空格：八邻里找"最浓的那位薄墨邻居"，按局部对比度给它一份覆盖率
+    val add = IntArray(total)
+    var n = 0
+    for (y in 0 until h) {
+      val row = y * w
+      for (x in 0 until w) {
+        val i = row + x
+        if ((out[i] ushr 24) != 0) continue
+        if (Color.alpha(pixels[i]) < A_SOLID) continue        // 空气上不许上墨（硬性质）
+        var bestA = 0
+        var bestJ = -1
+        for (dy in -1..1) {
+          val ny = y + dy
+          if (ny < 0 || ny >= h) continue
+          val nrow = ny * w
+          for (dx in -1..1) {
+            if (dx == 0 && dy == 0) continue
+            val nx = x + dx
+            if (nx < 0 || nx >= w) continue
+            val j = nrow + nx
+            if (deep[j] < 1 || deep[j] > LINE_THIN_MAX) continue   // 不是线芯（太厚，或压根没墨）
+            val a = out[j] ushr 24
+            if (a > bestA) { bestA = a; bestJ = j }
+          }
+        }
+        if (bestJ < 0) continue
+        // 3×3 的局部 L 范围：最亮那侧 = 底，最暗那侧 = 芯
+        var lMax = -1
+        var lMin = 101
+        for (dy in -1..1) {
+          val ny = y + dy
+          if (ny < 0 || ny >= h) continue
+          val nrow = ny * w
+          for (dx in -1..1) {
+            val nx = x + dx
+            if (nx < 0 || nx >= w) continue
+            val p = nrow + nx
+            if (Color.alpha(pixels[p]) < A_SOLID) continue
+            val lv = s.labL[p].toInt() / 64
+            if (lv > lMax) lMax = lv
+            if (lv < lMin) lMin = lv
+          }
+        }
+        if (lMax - lMin < EDGE_LOCAL_MIN) continue             // 这一片没有"线 vs 底"的局部反差
+        val mine = s.labL[i].toInt() / 64
+        val cov = (lMax - mine) * 255 / (lMax - lMin)
+        if (cov <= 0) continue
+        val a = bestA * cov / 255
+        if (a > 0) { add[i] = a.coerceIn(1, 255) shl 24 or 0x00FFFFFF; n++ }
+      }
+    }
+    for (i in 0 until total) if (add[i] != 0 && (out[i] ushr 24) == 0) out[i] = add[i]
+    return n
+  }
+
   private fun cutBorderRegion(s: Scratch, pixels: IntArray, w: Int, h: Int, out: IntArray,
     apply: Boolean) {
     val total = w * h
