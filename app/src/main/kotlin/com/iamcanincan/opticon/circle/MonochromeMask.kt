@@ -124,6 +124,13 @@ internal object MonochromeMask {
    *  —— `oss.krtirtho.spotube` 那张整幅一个颜色，一刀下去 `框内 0.91→0.02`，图标整个没了。 */
   private const val RIM_KEEP_MIN_PCT = 4
 
+  /** 切背景之后，墨里"占墨 <1% 的小块"占的比例不超过它，就**不再拿 top/cc 拦这一刀**。
+   *  四张"盘真带墨"的现量（生产同一块 `plate`，`_harness/KeepBigKt.kt`）：
+   *  云闪付 **0.3%**（切完是「云闪付」三字 + UnionPay + 卡片轮廓，认得出）／
+   *  azure **3.7%**／王者荣耀 **5.1%**／吉星派对 **5.3%**（切完是一堆认不出的暗块）。
+   *  0.3 与 3.7 之间是这批里唯一的空档。 */
+  private const val CUT_DUST_MAX_PCT = 2
+
   /** 候选之间的互异线：两个候选差不到它，就只算一个颜色（ΔE76 真值）。 */
   private const val CANDIDATE_DISTINCT = 18
 
@@ -336,6 +343,9 @@ internal object MonochromeMask {
     /** 满幅那一支里**被切掉背景的格数**（`cutPlate` 那一遍才非 0，见 [build] 的 4.2 那段）。
      *  带出来只为一个用途：不切的那一遍用它判断"切了会不会有变化"，没有就不必再算一遍。 */
     val plateInked: Int = 0,
+    /** 切背景那一遍的**渣率**（墨里落在"占墨 <1% 的小块"中的比例，见 [dustPct]）。
+     *  -1 = 这一遍不是切背景那遍（"没量"与"量到 0"要分得开）。 */
+    val dust: Int = -1,
   )
 
   private class Stats(
@@ -1084,6 +1094,11 @@ internal object MonochromeMask {
     //     · 块数翻倍还多出 4 块 → 说明切出了一地渣。
     //   两条任一成立就退回不切（回到"一片灰"而不是"一地碎渣"）。⚠ 这是**取舍不是修复**：
     //   这类图标在这把刀下只有"灰糊"和"碎渣"两个出口，要第三个出口得换机制，见 devlog。
+    // ⚠ 但这两条**量不到"块是不是太小"**：云闪付切完 `top 0.19 / cc 18`，那 18 块是
+    //   「云闪付」三个字 + UnionPay + 卡片轮廓 —— 屏幕上认得出，老守卫却把它和"碎渣"一起拦了
+    //   （它一直是 92.5% 墨的一片灰，就是主人说的"灰糊"）。所以补一条放行：**渣率够低就直接要切的那份**。
+    //   数（同一块生产 `plate`）：云闪付 0.3% 放行；azure 3.7% / 王者荣耀 5.1% / 吉星派对 5.3% 照旧拦。
+    if (cut.dust in 0..CUT_DUST_MAX_PCT) return cut
     if (cut.largest + 0.15f < ramp.largest) return ramp
     if (cut.components > ramp.components * 2 + 4) return ramp
     return cut
@@ -1153,6 +1168,44 @@ internal object MonochromeMask {
     var n = 0; var sum = 0L
     for (v in mask) { val a = v ushr 24; if (a > 0) { n++; sum += a } }
     return if (n == 0) 0 else (sum / n).toInt()
+  }
+
+  /** **渣率**（百分数）：这张墨里，落在"占墨 <1% 的连通块"中的那部分。
+   *  与 `小片` 不是一回事 —— 那条的下限是 `总面积/4096`（384 档 = 36 像素），量的是**擦渣之后剩下的渣**；
+   *  这条的下限按**这张自己的墨量**算（1%），量的是"这些块还撑不撑得住一个形状"。
+   *  为什么需要它：`top`（最大块占墨比）与 `components`（块数）都**看不见块的大小分布** ——
+   *  云闪付切完 `top 0.19`、18 块，那 18 块是字；王者荣耀切完 `top 0.54`、59 块，另外 46% 的墨
+   *  散在 58 块里。前者认得出、后者认不出，而 top 把两者排在同一边。 */
+  private fun dustPct(mask: IntArray?, w: Int, h: Int, s: Scratch): Int {
+    if (mask == null) return -1
+    val total = w * h
+    var ink = 0
+    for (i in 0 until total) if ((mask[i] ushr 24) > 0) ink++
+    if (ink == 0) return -1
+    val minArea = maxOf(1, ink / 100)
+    // 复用 Scratch 那两份（跑在这里的只有 [measure] 之后的尾巴，`visited` / `queue` 已经没人要了）——
+    // 每次合成新分配 300KB 是白花的，这条链跑在桌面的图标加载线程上。
+    val seen = s.visited; val q = s.queue
+    seen.fill(0, 0, total)
+    var dust = 0
+    for (start in 0 until total) {
+      if ((mask[start] ushr 24) == 0 || seen[start] != 0.toByte()) continue
+      var head = 0; var tail = 0
+      q[tail++] = start; seen[start] = 1
+      while (head < tail) {
+        val c = q[head++]
+        val cy = c / w; val cx = c - cy * w
+        fun push(j: Int) {
+          if ((mask[j] ushr 24) > 0 && seen[j] == 0.toByte()) { seen[j] = 1; q[tail++] = j }
+        }
+        if (cx > 0) push(c - 1)
+        if (cx < w - 1) push(c + 1)
+        if (cy > 0) push(c - w)
+        if (cy < h - 1) push(c + w)
+      }
+      if (tail < minArea) dust += tail
+    }
+    return dust * 100 / ink
   }
 
   private fun picksRef(w: Int, h: Int, ramp: Output, ref: Output): Boolean {
@@ -2135,6 +2188,8 @@ internal object MonochromeMask {
     val carrierN = if (tonal == null) carrierPocket(out, pixels, w, h, box, s) else 0
     val sep = separation(out, w, h, box, s)
     val fill = st.kept.toFloat() / boxArea
+    // 渣率只属于"切背景那一遍"：别的那些遍交的是没切的成品，量它没有意义（报 -1）。
+    val cutDust = if (cutPlate && tonal != null) dustPct(out, w, h, s) else -1
     return Output(
       out, fill, st.hole, st.largest, st.components, st.smallShare, softShare(st, box),
       "票=${s.voteErase}抹/${s.voteRaise}抬/${s.voteHits}块 带占=${s.bandSolid * 100 / 255} 底占=${pct(ground.share)} H=${ground.hyp} 族=${ground.families} 底厚=${ground.thick}" +
@@ -2218,11 +2273,15 @@ internal object MonochromeMask {
           //   **4** = 格子之间凑不出相邻对（`pairs == 0`，等于"这张没有纹理可量"）；
           //   **0** = **有 null 出口没插桩** —— 真机第一读就落到这里 1509 行，就是漏了 4 号那条。
           //   ⚠ 今后给 `tonalClass` 加 `return null`，**必须同时给一个新编号**，否则它会悄悄混进 0。
-          (if (tonal == null && tonalSeen == null) " 调未算=${tonalWhy[0]}" else ""),
+          (if (tonal == null && tonalSeen == null) " 调未算=${tonalWhy[0]}" else "") +
+          // 【渣】**加在整串最末尾**：这一遍交出去的墨里，"占墨 <1% 的小块"占了几成（见 [dustPct]）。
+          //   只有切背景那一遍报，其余报 -1（"没量"与"量到 0"要分得开）。
+          (if (cutDust < 0) "" else " 渣=$cutDust"),
       ground.hyp,
       s.h0why,
       s.veto,
-      plateInked
+      plateInked,
+      cutDust
     )
   }
 
