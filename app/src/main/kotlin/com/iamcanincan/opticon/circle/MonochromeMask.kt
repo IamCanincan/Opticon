@@ -103,6 +103,23 @@ internal object MonochromeMask {
    *  低于它说明这一族本来就没上几格墨（多数图只是边缘抗锯齿），不必动 —— 44 张里有 40 张
    *  就是这一类，白改。 */
   private const val RIM_KILL_MIN_PCT = 5
+  /** **按线条分割**时判「这一格是线」的黑帽阈值（Lab L，0..100）：`3x3 邻域最亮 - 自己 > 它` 就算线。
+   *  6 是量出来的 —— kazumi 在 6 时线占 8.7%、分量 93 个；抬到 10 线就断，
+   *  边界连通区会把整幅画都吃掉（一个分量 90.9%），分割就没意义了。 */
+  private const val LINE_BLACKHAT = 6
+  /** 边界连通区（按线分割后「外面那一整块」）占画布的下限 / 上限（%）。
+   *  下限：它必须是**主导的那块**（主人：「面积大」）；
+   *  上限：整张都是它 = 这张没有结构，一刀下去把图标整个抹掉（美团 / 钉钉 / B站 那种 `块面积=100%`）。 */
+  private const val BORDER_MIN_PCT = 50
+  private const val BORDER_MAX_PCT = 95
+  /** 边界连通区的平均 L 下限 —— 它得是**浅的**（底），不是压着外圈的深色主体。 */
+  private const val BORDER_L_MIN = 80
+  /** 边界连通区上的墨要占画布百分之几才值得动（少于它说明这块本来就没上几格墨）。 */
+  private const val BORDER_INK_MIN_PCT = 5
+  /** 边界连通区上的墨**也得是浅的**：与这块自己的平均 L 相差不超过这个数。
+   *  kazumi 块 L=94.1、块上的墨 L=87.5（差 6.6）⇒ 浅的墨 = 被误当成墨的底，退掉；
+   *  深信服 aTrust 块 L=85.4、墨 L=60.5（差 24.9）⇒ 深墨 = 真主体，一格不动。 */
+  private const val BORDER_INK_L_GAP = 15
   /** 归零之后**至少要剩**多少墨（占画布百分之几）。低于它就说明归掉的是**主体**不是底
    *  —— `oss.krtirtho.spotube` 那张整幅一个颜色，一刀下去 `框内 0.91→0.02`，图标整个没了。 */
   private const val RIM_KEEP_MIN_PCT = 4
@@ -872,6 +889,10 @@ internal object MonochromeMask {
      *  动 `plate` 会把整张的参照色场换掉（实测易班 `框内 0.24→0.08`）。 */
     var rimDomOn = false
     var rimKill = 0
+    /** 「按线条分割」那一刀开没开火（见 [cutBorderRegion]）。0 = 门槛没过，一格没动。 */
+    var borderOn = false
+    /** 那一刀退掉了几格墨。 */
+    var borderKill = 0
     /** 两道门都过了才为真：环族上墨够多（≥[RIM_KILL_MIN_PCT]）且归零后还剩够多（≥[RIM_KEEP_MIN_PCT]）。 */
     var rimKillOn = false
     var rimDomColor = 0
@@ -1000,8 +1021,24 @@ internal object MonochromeMask {
     //   第一版把切背景直接写进交付循环，7 张（金山文档/高德/谷歌翻译/美的/拼多多/学信网/WebAPK）
     //   当场被搬回满幅支 —— 满幅那一边被切干净之后，「参照的淡膜更低」不再成立。
     //   拼多多 `中 0.08→0.19、α 232→205` 就是代价，而它本来是对的。
-    val ramp = buildOnce(pixels, w, h, plateIsLayer, false, under, plateIsSubject = plateIsSubject)
-    if (!ramp.report.contains("调=1")) return ramp          // 本来就走参照那一支，不必算第二遍
+    val ramp = buildOnce(pixels, w, h, plateIsLayer, false, under, plateIsSubject = plateIsSubject,
+      cutBorder = false)
+    if (!ramp.report.contains("调=1")) {
+      // 参照支。**「按线条分割」那一刀也走同一套"两支各交一遍再按成品选"** —— 理由是量出来的：
+      //   易班被切掉之后，后面的 `stretchMark` / `measure` 又把墨补回来，净效果
+      //   `框内 0.24→0.09` 而 `字均 178→116`、`淡 0.01→0.16`（**更虚**）。
+      //   所以不切的那一遍先**探**（报告里写 `线割=待`），只有"切完不比现在虚"才换。
+      //   判据只用一条：**淡不许上升**（[Output.soft]）——
+      //   · kazumi  `淡 0.00→0.00`  ⇒ 换（`框内 0.18→0.07`、`字均 238→239`，正是主人要的"去干净"）
+      //   · 易班    `淡 0.01→0.16`  ⇒ 不换
+      //   · 闲鱼    `淡 0.02→0.04`  ⇒ 不换
+      //   ⚠ 不能顺手要求 `框内` 不降：这一刀的本意就是**把覆盖率降下来**（头发退成底），
+      //     拿它当闸等于把这一刀自己否决掉。
+      if (!ramp.report.contains("线割=待")) return ramp
+      val cut = buildOnce(pixels, w, h, plateIsLayer, false, under, plateIsSubject = plateIsSubject,
+        cutBorder = true)
+      return if (cut.soft <= ramp.soft) cut else ramp
+    }
     val s = checkNotNull(pool.get())
     // 【SepTone】先按**没挪过**的参照交付一遍（`sepOff`）—— 那一遍的成品与上一轮（这一刀还不存在时）
     //   逐字节相同，所以"选支"这一件事与改动前**完全同口径**。这一刀真开火、且选中的正是参照那一支，
@@ -1010,10 +1047,21 @@ internal object MonochromeMask {
     //   bridge/despeckle 也会改这张掩码（钉钉实测淡膜 1%→0%，恰好卡在 `r < s` 那条线上）——
     //   在它之前记下的数是**另一个口径**，2026-10-13 我自己就这么踩了一次（钉钉被搬去满幅）。
     //   ⚠ 代价：真开火的那几张多算一遍参照（`rec_model` 62 张里 6 张开火、2 张最终交付）。
-    val ref0 = buildOnce(pixels, w, h, plateIsLayer, true, under, sepOff = true, plateIsSubject = plateIsSubject)
+    //   ⚠ 这一遍也**不切**（`cutBorder = false`）：它是"选支"用的探针，必须与改动前逐字同口径。
+    //     第一版忘了这一条，易班的探针被切虚（`淡 0.01→0.16`），`picksRef` 当场把交付翻到满幅支 ——
+    //     `框内 0.24→0.09`、`字均 178→116`。与当初"切背景写进交付循环导致 7 张换支"是同一个错。
+    val ref0 = buildOnce(pixels, w, h, plateIsLayer, true, under, sepOff = true,
+      plateIsSubject = plateIsSubject, cutBorder = false)
     val useRef = picksRef(w, h, ramp, ref0)
-    if (useRef) return if (s.sepN <= 0) ref0 else buildOnce(pixels, w, h, plateIsLayer, true, under,
-      plateIsSubject = plateIsSubject)
+    if (useRef) {
+      val base = if (s.sepN <= 0) ref0 else buildOnce(pixels, w, h, plateIsLayer, true, under,
+        plateIsSubject = plateIsSubject, cutBorder = false)
+      // 参照支**选中之后**，这才按线条切（与上面"选中满幅之后才切背景"同一个先例）。
+      if (!base.report.contains("线割=待")) return base
+      val cut = buildOnce(pixels, w, h, plateIsLayer, true, under, plateIsSubject = plateIsSubject,
+        cutBorder = true)
+      return if (cut.soft <= base.soft) cut else base
+    }
     // 选中满幅那一支之后，**这才**把它的背景切掉（4.2 那段）。`plateInked == 0` = 这张的底
     // 本来一格墨都没拿到，切了等于没切 —— 直接交上面那一份，省一遍。
     if (ramp.plateInked == 0) return ramp
@@ -1170,7 +1218,10 @@ internal object MonochromeMask {
     plateIsSubject: Boolean = false,
     /** 满幅那一支要不要把 `plate[]` 判成底的格交成 0。**只有选支之后的交付那一遍才为真** ——
      *  理由写在 [build] 与 4.2 那两段（选支必须与改动前完全同口径）。 */
-    cutPlate: Boolean = false
+    cutPlate: Boolean = false,
+    /** 「按线条分割」那一刀要不要真退墨。`false` 只**探**会不会开火（报告里写 `线割=待`），
+     *  一格不动 —— 由 [build] 拿两支成品比过再决定，见那里的说明。 */
+    cutBorder: Boolean = true
   ): Output {
     val total = w * h
     if (total <= 0) return Output(IntArray(0), 0f, 0f, 0f, 0, 0f, 0f, "尺寸非法 → 空层")
@@ -1187,6 +1238,10 @@ internal object MonochromeMask {
     //   满幅那一支会拿着**上一张图**的块号去改这一张的像素（`applySepTone` 里那次 `sepN <= 0` 判断
     //   就成了摆设）。见 [applySepTone]。
     s.sepN = 0; s.sepApplied = 0
+    // 「按线条分割」那一刀的两个计数同理：满幅那一支压根不跑它，而两支共用同一个 [Scratch] ——
+    //   不清零的话满幅那一支会把**上一张图**的"线割=开/23762"打进自己的报告里（实测易班就是这样：
+    //   交付明明是满幅支，报告却说线割开火，追了半天才发现是残留）。
+    s.borderOn = false; s.borderKill = 0
 
     // 0) 每个像素的 Lab 只算一次：后面每一轮洪泛、每一次距离都只是查表 + 一次开方。
     for (i in 0 until total) {
@@ -1606,6 +1661,12 @@ internal object MonochromeMask {
         }
       }
     }
+    // 4.1) **按线条分割，把「边界连通的那一整块」退成底**（主人 2026-10-18：「按照线条来分」）。
+    //   上一版用的是"环族 + 放宽 ΔE"，结果 kazumi 剩下那半片头发（离白 ΔE 40–49）永远够不着 ——
+    //   因为它和脸（50–59）**只差 1~10、且相邻像素连续过渡**，颜色阈值分不开。
+    //   换成"线当墙、按连通分量分块"之后，判据回到主人的原话：**占着外圈且面积大的那块是底**。
+    //   细节与五道门见 [cutBorderRegion]。
+    if (tonal == null) cutBorderRegion(s, pixels, w, h, out, cutBorder)
     // 4.15) **环上过半的那一族，整族交 0**（主人 2026-10-18 对 kazumi 的判词：
     //   「头发应作底，因为头发部分连接圆圈的弧线长且面积大」，并且「渐变多的可以放宽色度」）。
     //   现场 kazumi：环上 100% 是纯白（背景），而头发 #C0D890 是一片浅黄绿的大块（占画布 24%），
@@ -2110,6 +2171,8 @@ internal object MonochromeMask {
         " 带补=${bands.first}/${bands.second}(${bands.third}拒) 带内残=$bfN/${if (bfN == 0) 0 else bfSum / bfN}" +
         // 【环族】「环上单一族过半」这条判据开没开火。0 = 没开（这张的环上没有一支族过半）。
         (if (s.rimDomOn) " 环族=开#" + String.format(java.util.Locale.ROOT, "%06X", s.rimDomColor and 0xFFFFFF) else " 环族=关") + " 归零=${s.rimKill}" +
+        // 【线割】「按线条分割」那一刀开没开火、退了几格墨。不开 = 五道门没过（这张不是线稿/底不够浅）。
+        (if (!s.borderOn) " 线割=关" else if (s.borderKill > 0) " 线割=开/${s.borderKill}" else " 线割=待") +
         // 满幅插画那一支开了就把三个判据数报上；**没开一个字符都不加** —— 这两列在整串末尾，
         // 前面所有列的列位一个不动（`res.sh` 按列号读，这条规矩上面已经写过两次）。
         (if (tonal == null) "" else " 调=1 纹理=${tonal.tex} 主色=${tonal.flat} 跨=${tonal.span}" +
@@ -5306,6 +5369,114 @@ internal object MonochromeMask {
 
   private fun inBand(x: Int, y: Int, box: Rect, band: Int): Boolean =
     x - box.left < band || box.right - x <= band || y - box.top < band || box.bottom - y <= band
+
+  /**
+   * **按线条分割，把「边界连通的那一整块」退成底**（主人 2026-10-18：「按照线条来分」）。
+   *
+   * 为什么不是颜色阈值：kazumi 剩下的墨离白 ΔE 40–49、脸 50–59，**两个区间只差 1~10 且相邻像素连续过渡**，
+   * 阈值调哪儿都不对（40 剩半片头发、46 连脸一起吃、区域生长没有硬边可停 —— 六条路都试过，见 devlog）。
+   * 而**线稿的线是真边界**：把线当墙、对剩下的像素做连通分量，头发和脸自然分在两块里。
+   *
+   * 判据（主人的原话，两条）：**这一块占着外圈（弧长长）且面积大** ⇒ 它是底。
+   * 落到代码就是「**从画布边界漫进来的那一块**」—— 线围出来的其它块都漫不到边界。
+   *
+   * 五道门，全部是量出来的（62 张语料上跑出来的边界值）：
+   *  ① 面积 ≥ [BORDER_MIN_PCT]：它得是主导的那块；
+   *  ② 面积 ≤ [BORDER_MAX_PCT]：整张都是它 = 没有结构（美团 / 钉钉 / B站 `块面积=100%`），一刀下去图标全没；
+   *  ③ 平均 L ≥ [BORDER_L_MIN]：它得是浅的（底），不是压着外圈的深色主体；
+   *  ④ 块上的墨 ≥ [BORDER_INK_MIN_PCT] 画布：少于它说明这块本来就没上墨，白改；
+   *  ⑤ 块上的墨**也得是浅的**（与块自己的平均 L 差 ≤ [BORDER_INK_L_GAP]）——
+   *     深信服 aTrust 块 L=85.4 但墨 L=60.5（真主体），这一关挡住；kazumi 块 94.1 / 墨 87.5，过。
+   *  外加一条与 4.15 共用的**保底**：退完还得剩 ≥ [RIM_KEEP_MIN_PCT] 画布的墨（否则退掉的是图标本身）。
+   *
+   * ⚠ **不动 `plate`**：动 `plate` 会把整张的参照色场换掉（易班 `框内 0.24→0.08`，试过）。
+   */
+  private fun cutBorderRegion(s: Scratch, pixels: IntArray, w: Int, h: Int, out: IntArray,
+    apply: Boolean) {
+    val total = w * h
+    s.borderOn = false; s.borderKill = 0
+    // ① 线 = 黑帽：3x3 邻域最亮 - 自己 > LINE_BLACKHAT。
+    //   对平滑渐变天然免疫（邻域最亮与自己几乎相同），只对"比周围明显暗的细线"响应；
+    //   而且能吃到**整根线**（不是只吃两侧边缘 —— 边缘梯度会让线的芯漏掉，4 邻接顺着芯就漏过去了）。
+    val wall = ByteArray(total)
+    for (y in 0 until h) {
+      val row = y * w
+      for (x in 0 until w) {
+        val i = row + x
+        if (Color.alpha(pixels[i]) < A_SOLID) { wall[i] = 1; continue }
+        val c = s.labL[i].toInt()
+        var mx = c
+        val y0 = if (y > 0) y - 1 else 0
+        val y1 = if (y < h - 1) y + 1 else h - 1
+        val x0 = if (x > 0) x - 1 else 0
+        val x1 = if (x < w - 1) x + 1 else w - 1
+        for (yy in y0..y1) {
+          val r = yy * w
+          for (xx in x0..x1) {
+            val j = r + xx
+            if (Color.alpha(pixels[j]) < A_SOLID) continue
+            val l = s.labL[j].toInt()
+            if (l > mx) mx = l
+          }
+        }
+        if (mx - c > LINE_BLACKHAT shl 6) wall[i] = 1
+      }
+    }
+    // ② 从边界漫进来（4 邻接、跳过线）
+    val seen = ByteArray(total)
+    val q = IntArray(total)
+    var head = 0; var tail = 0
+    fun push(i: Int) {
+      if (wall[i].toInt() != 0 || seen[i].toInt() != 0) return
+      seen[i] = 1; q[tail++] = i
+    }
+    for (x in 0 until w) { push(x); push((h - 1) * w + x) }
+    for (y in 0 until h) { push(y * w); push(y * w + w - 1) }
+    // ⓪ **必须从画布边漫进来**（这块里含"背景边距"），不是只贴轮廓环。
+    //   量出来的分界：kazumi 的白边距连到画布边 → 那块是"白底 + 头发"，退掉是对的；
+    //   易班的背景是透明的，浅色那半是**画面内容**（和深色那半一起构成画面），
+    //   只贴轮廓环就退 → `框内 0.24→0.09`、`字均 178→116`、`淡 0.01→0.16`（被我们弄坏）。
+    if (tail == 0) {
+      // 画布边全是透明（图标有透明边距）—— 改从**轮廓环**种（不透明且四邻有非不透明）。
+      // 没有背景边距 = 这张的轮廓本身就是形状，不存在"可以退掉的底" —— 直接放弃。
+      // （不是"改从轮廓环种"：那样会把易班那类双色插画的浅色半边当底退掉。）
+      return
+    }
+    while (head < tail) {
+      val c = q[head++]
+      val cy = c / w; val cx = c - cy * w
+      if (cx > 0) push(c - 1)
+      if (cx < w - 1) push(c + 1)
+      if (cy > 0) push(c - w)
+      if (cy < h - 1) push(c + w)
+    }
+    if (tail == 0) return
+    // ③ 这块的账
+    var sumL = 0L
+    var ink = 0
+    var inkL = 0L
+    for (k in 0 until tail) {
+      val i = q[k]
+      sumL += s.labL[i].toInt()
+      if (out[i] ushr 24 != 0) { ink++; inkL += s.labL[i].toInt() }
+    }
+    val meanL = sumL.toDouble() / tail / 64.0
+    if (tail * 100 < total * BORDER_MIN_PCT || tail * 100 > total * BORDER_MAX_PCT) return
+    if (meanL < BORDER_L_MIN) return
+    if (ink * 100 < total * BORDER_INK_MIN_PCT) return
+    if (inkL.toDouble() / ink / 64.0 < meanL - BORDER_INK_L_GAP) return
+    var inkAll = 0
+    for (i in 0 until total) if (out[i] ushr 24 != 0) inkAll++
+    if ((inkAll - ink) * 100 < total * RIM_KEEP_MIN_PCT) return
+    // ④ 退墨（`apply=false` 的那一遍只探"会不会开火"，一格不动 —— 见 [build] 的两支比成品）
+    s.borderOn = true
+    if (!apply) return
+    for (k in 0 until tail) {
+      val i = q[k]
+      if (out[i] ushr 24 == 0) continue
+      out[i] = 0; s.borderKill++
+    }
+  }
 
   /** 四邻域里有没有**墨**（不是底的那一侧）。贴着墨 = 这一格是某条笔画自己的抗锯齿边缘。 */
   /**
