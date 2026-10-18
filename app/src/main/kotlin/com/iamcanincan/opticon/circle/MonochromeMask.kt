@@ -108,10 +108,6 @@ internal object MonochromeMask {
    *  边界连通区会把整幅画都吃掉（一个分量 90.9%），分割就没意义了。 */
   private const val LINE_BLACKHAT = 6
 
-  /** 线芯的"薄"上限（步）：离最近一个空格不超过它，才算坐在线芯上、有资格往外发边（见 [softEdge]）。
-   *  扫描线量到 kazumi 的线芯是 2~3 格宽；实心块（眼睛那种）内部十几格，发不出边。 */
-  private const val LINE_THIN_MAX = 2
-
   /** 局部反差下限（Lab L）：3×3 里最亮减最暗不到它，就认为这一片根本没有"线 vs 底"，跳过。
    *  不是拍的：量到的斜坡格局部范围是 **109**（212−103），而平滑渐变里 3×3 范围只有 2~5 ——
    *  8~50 之间取哪个数结论都一样。 */
@@ -5502,40 +5498,27 @@ internal object MonochromeMask {
    *  而头发里每一格都满足这两条 —— ΔE 是整数 ×64 量化的，渐变里相邻两格常常**相等** ⇒ 比值 1
    *  ⇒ 满墨 ⇒ `框内 0.07→0.18`，头发整片回来。
    *
-   *  这一版换两处，都不再用"离底多远"：
-   *  ① **资格 = 结构**：只有坐在**薄墨**里的那一格才算线芯，才有资格往外发边。
-   *     薄 = 到最近一个"没墨的格"不超过 [LINE_THIN_MAX] 步（多源 BFS，从所有空格同时往里涨）。
-   *     扫描线量到线芯是 2~3 格宽 ⇒ 薄；眼睛那种实心块内部厚 ⇒ 不发边。
+   *  这一版靠两条，都不再用"离底多远"：
+   *  ① **只补"现在一格墨都没有"的空格**，而且整把刀只在**参照支 + 线割已开火**时上场
+   *     （见 [build] 里 `tonal == null && edge && s.borderKill > 0`）。
+   *     ⚠ 这里原来还有一道"线芯得薄"的闸（多源 BFS 量 `deep`，上限 `LINE_THIN_MAX = 2`），
+   *     **2026-10-19 量下来它恒开不了火**：一个空格的墨邻居"到最近空格的距离"**按定义就是 1**，
+   *     永远在门内 —— 把上限改成 99，全语料 82 张**逐格零变化**（`_harness/DiffInk`）。已删。
+   *     ⇒ 真正挡住洪水的是 ② 与"只补空格"，不是这道；注释当时写的"实心块内部厚、发不出边"是错的。
    *  ② **浓度 = 局部对比度**，不是全局离底：`覆盖率 = (3×3 里最亮的 L − 这格的 L) / (最亮 − 最暗)`。
    *     斜坡格上：最亮那侧就是底、最暗那侧就是芯，比值正是源自己的覆盖率（量过的那条线：
    *     `(212−185)/(212−103) = 0.25`）。而**渐变底里这个比值天然是 0**（3×3 内最亮≈最暗），
    *     所以它没有"把底请回来"这条路 —— 上一版那把尺子有，这把没有。
    *     分母小于 [EDGE_LOCAL_MIN] 就跳过：那意味着这一片根本没有"线 vs 底"的局部反差。
+   *     ⚠ 同一天扫过这一条：16→12→8→2 全语料只多补 146/228/253 格，**且全部落在 kazumi 一张上**，
+   *     其余 81 张一格没变 —— 所以它也不是"接断口"的瓶颈，别指望放宽它能救 云闪付/点评 那一族
+   *     （那几张 `线割=关` 或 `调=1`，这一把刀**压根没上场**）。
    *
    *  两遍走（先算后写）：单遍边算边写会让刚补的格继续喂下一格，一条 3px 的线会被自己养粗。
    *  @return 补了几格。 */
   private fun softEdge(s: Scratch, pixels: IntArray, w: Int, h: Int, out: IntArray): Int {
     val total = w * h
-    // ① 薄墨图：从所有"没墨的格"同时往里 BFS，`deep[i]` = 这一格到最近空格要跨几步（没墨 = 0）
-    val deep = IntArray(total)
-    val q = IntArray(total)
-    var head = 0
-    var tail = 0
-    for (i in 0 until total) {
-      if ((out[i] ushr 24) == 0) { deep[i] = 0; q[tail++] = i } else deep[i] = -1
-    }
-    while (head < tail) {
-      val c = q[head++]
-      if (deep[c] >= LINE_THIN_MAX) continue                 // 再往里就不是"线芯"了
-      val d = deep[c] + 1
-      val cy = c / w; val cx = c - cy * w
-      fun push(j: Int) { if (deep[j] < 0) { deep[j] = d; q[tail++] = j } }
-      if (cx > 0) push(c - 1)
-      if (cx < w - 1) push(c + 1)
-      if (cy > 0) push(c - w)
-      if (cy < h - 1) push(c + w)
-    }
-    // ② 每一空格：八邻里找"最浓的那位薄墨邻居"，按局部对比度给它一份覆盖率
+    // 每个空格：八邻里取"最浓的那位邻居"，按 ② 的局部对比度给它一份覆盖率
     val add = IntArray(total)
     var n = 0
     for (y in 0 until h) {
@@ -5555,7 +5538,6 @@ internal object MonochromeMask {
             val nx = x + dx
             if (nx < 0 || nx >= w) continue
             val j = nrow + nx
-            if (deep[j] < 1 || deep[j] > LINE_THIN_MAX) continue   // 不是线芯（太厚，或压根没墨）
             val a = out[j] ushr 24
             if (a > bestA) { bestA = a; bestJ = j }
           }
