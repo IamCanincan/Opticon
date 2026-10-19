@@ -1478,7 +1478,10 @@ private fun hookSynthesizedMonochrome(xposed: XposedInterface) {
             Log.d(TAG, "Mono: 自带单色层，透传 #$n 是谁=$who mono=${original.javaClass.simpleName}" +
               " 尺寸=${original.intrinsicWidth}x${original.intrinsicHeight}")
           }
-          return@intercept original
+          // 例外名单：见 [SKIP_SELF_MONO]。`who` 的形态是 `包名/类型/入口名`，所以按前缀配。
+          if (SKIP_SELF_MONO.any { who.startsWith("$it/") }) {
+            Log.d(TAG, "Mono: $who 的自带单色层**不透传**（彩色 logo 冒充剪影），改走我们的合成")
+          } else return@intercept original
         }
         val self = chain.thisObject as? AdaptiveIconDrawable
         if (self == null) {
@@ -1512,6 +1515,27 @@ private val monoAskedPkg: MutableSet<String> =
 
 /** 上限只是防刷屏：一个抽屉几百个包，超过之后剩下的只数不报（`Mono: 自带单色层，透传 #N` 那个总数还在涨）。 */
 private const val MONO_ASKED_PKG_MAX = 400
+
+/** 例外名单：**把整幅彩色 logo 声明成 `<monochrome>` 的应用** —— 这一条不透传，改走我们的合成。
+ *
+ * 为什么必须有这条：`com.fbclient.app` 的 `ic_launcher_round` 里 `<monochrome>` 与 `<foreground>`
+ * 同为 `@0x7f080150`，而那份资源是一张**彩色 logo**（粉蓝鸟 + "FLYINGBIRD" 字样，432²，35.3% 实心）。
+ * 桌面拿它去出自己的主题图标，屏幕上就是一块实心方块：装机实测 `mono_icon` **93.7% 有墨 / 79.3% 全实**；
+ * 同一张前景层走我们的 `build()` 交出的是 **12.4% 有墨 / 4.1% 全实** 的能认剪影。
+ *
+ * 为什么写成名单而不是判据（今天量完的六条都不够用，别再来一轮）：
+ *  · 「`mono` 与 `foreground` 同一份」：**131 个包里 23 个都这样**（grok / discord / chatgpt / twitter /
+ *    spotify / xhs …），它们屏上 9.6~25.2% 全正常 ⇒ 这条会把 22 个好的一起改掉；
+ *  · 那一层自己的**不透明覆盖率**：飞鸟 37.3%，而 xhs **94.0%**、kimichat 62.5%、termux.x11 64.1% 都正常；
+ *  · 那一层的**平均亮度**：飞鸟 96.3，而 pixez **100.0**、localsend **100.0** 都正常；
+ *  · 彩度 / 色相：62 张应用自画层里 4 张是合法彩色（主题图标只取 alpha，颜色会被盖掉）。
+ *  ⇒ 没有一条能在**交出去之前**把飞鸟和那 22 张分开。
+ *
+ * ⚠ 桌面那两条合成入口**一次都没走**（`generateMono` 与 `MonochromeIconFactory.wrap` 都挂上了、
+ *   整轮零调用），所以这不是"桌面算错"，是我们透传的那张图本身就不是剪影。
+ * **重开条件**：出现第二张同样的（自带 `<monochrome>` 其实是全彩 logo、屏上一块实心）——
+ *   那时名单里有两个样本，才值得回头再找一次判据。 */
+private val SKIP_SELF_MONO = setOf("com.fbclient.app")
 
 private fun classOf(name: String, classLoader: ClassLoader): Class<*>? =
   runCatching { Class.forName(name, true, classLoader) }.getOrNull()

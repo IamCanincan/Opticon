@@ -907,7 +907,14 @@ internal object MonochromeSynth {
       fam[k] = (fam[k] ?: 0) + 1
     }
     if (solid == 0) return 0
-    return (fam.maxByOrNull { it.value }?.value ?: 0) * 100 / px.size
+    // ⚠ **分子只数实心格，分母就必须是实心格**（主人 2026-10-19「灰底不行」查到的根）。
+    //   原来这里除的是 `px.size`（整张画布）：前景层里那 58% 的空气被算进分母，飞鸟那张
+    //   近白实心盘占**不透明格 83.0%**、占**画布却只剩 29.3%** —— 于是够不到 35% 那条线，
+    //   装机就对模型说"这层里不许有底"，那块白盘没有归属，被整片交成淡墨 = 屏幕上一层浅灰膜
+    //   （`底占=0.03 盘实=0/50208 淡=0.86`）。与 2026-10-11 spotube 同族，只是这次是**分母**把它压在线下。
+    //   换成实心分母后飞鸟 29.3→83.0，翻到"这层里有底"那一侧；语料里 25 张走这条路的
+    //   前景层都是**整幅不透明**（实心=画布），这一改对它们**一个百分点都不动**。
+    return (fam.maxByOrNull { it.value }?.value ?: 0) * 100 / solid
   }
 
   private fun rasterizeLayers(source: AdaptiveIconDrawable, edge: Int): Bitmap? {
