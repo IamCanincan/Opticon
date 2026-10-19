@@ -1466,10 +1466,16 @@ private fun hookSynthesizedMonochrome(xposed: XposedInterface) {
         //   它是唯一能区分"桌面没问我们"与"问了、我们按硬规则透传"的手段。
         val original = chain.proceed() as? Drawable
         if (original != null) {
-          // 限流：前 6 次 + 之后每 100 次。
+          // ⚠ 限流**不能是抽样**（前 6 次 + 每 100 次那一版）：要回答的问题是
+          //   「桌面有没有就 `com.fbclient.app` 问过我们」，而一个按次数采样的记录**结构上答不了它** ——
+          //   飞鸟要是排在第 47 次，那条路就永远看不见。改成**按包首次命中就打一行**。
+          //   飞鸟那一案的两种可能（桌面压根没问 / 问了、我们按硬规则透传）从此一眼可分。
+          val self0 = chain.thisObject as? AdaptiveIconDrawable
+          val who = self0?.let { IconNames.of(it) } ?: "?"
           val n = monoAsked.incrementAndGet()
-          if (n <= 6 || n % 100 == 0) {
-            Log.d(TAG, "Mono: 自带单色层，透传 #$n mono=${original.javaClass.simpleName}" +
+          val first = who != "?" && monoAskedPkg.size < MONO_ASKED_PKG_MAX && monoAskedPkg.add(who)
+          if (first || n <= 6) {
+            Log.d(TAG, "Mono: 自带单色层，透传 #$n 是谁=$who mono=${original.javaClass.simpleName}" +
               " 尺寸=${original.intrinsicWidth}x${original.intrinsicHeight}")
           }
           return@intercept original
@@ -1499,6 +1505,13 @@ private val fellThrough = AtomicInteger(0)
 
 /** 桌面问了多少次"这图标有自带单色层吗"、我们答了"有，透传"（见 [hookSynthesizedMonochrome] 的诊断）。 */
 private val monoAsked = AtomicInteger(0)
+
+/** 已经为哪些包打过这行了 —— 一个包一行，不是抽样（抽样答不了"飞鸟到底有没有被问过"）。 */
+private val monoAskedPkg: MutableSet<String> =
+  java.util.Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+
+/** 上限只是防刷屏：一个抽屉几百个包，超过之后剩下的只数不报（`Mono: 自带单色层，透传 #N` 那个总数还在涨）。 */
+private const val MONO_ASKED_PKG_MAX = 400
 
 private fun classOf(name: String, classLoader: ClassLoader): Class<*>? =
   runCatching { Class.forName(name, true, classLoader) }.getOrNull()
