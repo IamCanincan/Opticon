@@ -1041,6 +1041,11 @@ internal object MonochromeMask {
     //   拼多多 `中 0.08→0.19、α 232→205` 就是代价，而它本来是对的。
     val ramp = buildOnce(pixels, w, h, plateIsLayer, false, under, plateIsSubject = plateIsSubject,
       cutBorder = false)
+    val s = checkNotNull(pool.get())
+    // 【底云】见 [plateCloudErase]。⚠ 与【广色度】同一条规矩：**只施加在交付的那几份成品上**，
+    //   挑支用的 `ramp` / `cut` / `ref0` 一律不过 —— 四道守卫（`meanAlpha` / `渣` / `largest` /
+    //   `components`）读的就是掩码本身，刀先进比较，守卫就是被自己改过的数喂的。
+    fun cloud(o: Output) = plateCloudErase(o, pixels, s, w, h)
     if (!ramp.report.contains("调=1")) {
       // 参照支。**「按线条分割」那一刀也走同一套"两支各交一遍再按成品选"** —— 理由是量出来的：
       //   易班被切掉之后，后面的 `stretchMark` / `measure` 又把墨补回来，净效果
@@ -1052,13 +1057,12 @@ internal object MonochromeMask {
       //   · 闲鱼    `淡 0.02→0.04`  ⇒ 不换
       //   ⚠ 不能顺手要求 `框内` 不降：这一刀的本意就是**把覆盖率降下来**（头发退成底），
       //     拿它当闸等于把这一刀自己否决掉。
-      if (!ramp.report.contains("线割=待")) return ramp
+      if (!ramp.report.contains("线割=待")) return cloud(ramp)
       val cut = buildOnce(pixels, w, h, plateIsLayer, false, under, plateIsSubject = plateIsSubject,
         cutBorder = true)
-      return if (cut.soft > ramp.soft) ramp else buildOnce(pixels, w, h, plateIsLayer, false, under,
-        plateIsSubject = plateIsSubject, cutBorder = true, edge = true)
+      return cloud(if (cut.soft > ramp.soft) ramp else buildOnce(pixels, w, h, plateIsLayer, false, under,
+        plateIsSubject = plateIsSubject, cutBorder = true, edge = true))
     }
-    val s = checkNotNull(pool.get())
     // 【SepTone】先按**没挪过**的参照交付一遍（`sepOff`）—— 那一遍的成品与上一轮（这一刀还不存在时）
     //   逐字节相同，所以"选支"这一件事与改动前**完全同口径**。这一刀真开火、且选中的正是参照那一支，
     //   才再算一遍带挪档的来交付。
@@ -1076,11 +1080,11 @@ internal object MonochromeMask {
       val base = if (s.sepN <= 0) ref0 else buildOnce(pixels, w, h, plateIsLayer, true, under,
         plateIsSubject = plateIsSubject, cutBorder = false)
       // 参照支**选中之后**，这才按线条切（与上面"选中满幅之后才切背景"同一个先例）。
-      if (!base.report.contains("线割=待")) return base
+      if (!base.report.contains("线割=待")) return cloud(base)
       val cut = buildOnce(pixels, w, h, plateIsLayer, true, under, plateIsSubject = plateIsSubject,
         cutBorder = true)
-      return if (cut.soft > base.soft) base else buildOnce(pixels, w, h, plateIsLayer, true, under,
-        plateIsSubject = plateIsSubject, cutBorder = true, edge = true)
+      return cloud(if (cut.soft > base.soft) base else buildOnce(pixels, w, h, plateIsLayer, true, under,
+        plateIsSubject = plateIsSubject, cutBorder = true, edge = true))
     }
     // 选中满幅那一支之后，**这才**把它的背景切掉（4.2 那段）。`plateInked == 0` = 这张的底
     // 本来一格墨都没拿到，切了等于没切 —— 走"不切"那一份。
@@ -1089,8 +1093,8 @@ internal object MonochromeMask {
     //   掩码本身，抬顶先进比较，守卫就是被自己改过的数喂的（本仓在"新刀加进比较之内"上栽过三次；
     //   2026-10-19 易班正是这样被抬虚之后翻了支）。
     //   ⚠ 代价：满幅这一支每张都多算一遍。桌面按内容缓存，多出来的是**一次性**的（与 `edge` 同法记账）。
-    fun deliver(didCut: Boolean) = buildOnce(pixels, w, h, plateIsLayer, false, under,
-      plateIsSubject = plateIsSubject, cutPlate = didCut, wide = true)
+    fun deliver(didCut: Boolean) = cloud(buildOnce(pixels, w, h, plateIsLayer, false, under,
+      plateIsSubject = plateIsSubject, cutPlate = didCut, wide = true))
     if (ramp.plateInked == 0) return deliver(false)
     val cut = buildOnce(pixels, w, h, plateIsLayer, false, under, plateIsSubject = plateIsSubject,
       cutPlate = true)
@@ -1118,6 +1122,124 @@ internal object MonochromeMask {
     if (cut.components > ramp.components * 2 + 4) return deliver(false)
     return deliver(true)
   }
+
+  /** 一格 Lab 落在"底云"的哪只格子里：L 两档一档、a 与 b 各四档一档（Lab 是 ×64 定点，见 [labChannel]）。 */
+  private fun cloudBin(s: Scratch, i: Int): Int {
+    val l = (s.labL[i].toInt() / 64 / 2).coerceIn(0, 63)
+    val a = (s.labA[i].toInt() / 64 / 4 + 32).coerceIn(0, 63)
+    val b = (s.labB[i].toInt() / 64 / 4 + 32).coerceIn(0, 63)
+    return (l shl 12) or (a shl 6) or b
+  }
+
+  /**
+   * 【底云】把**底自己用过的颜色**里、能从底走过来的那片淡墨抹平。
+   *
+   * ## 为什么这根轴活着，而前面十五条都死了
+   * 前面每一条问的都是"离某个参照**多远**"（离本地场 / 离全局底面 / 离实墨 / 离底色相 / 身边有没有边），
+   * malody 底部那两道楔形在每一条上都和主体的面重叠 —— 份额那条更是死在"一字不差"上
+   * （malody 底簇占淡墨 6.3% vs feimo 5.8%）。这一条问的不是距离，是**集合归属**：
+   * **这块淡墨的颜色，底已经用过了没有。** 用过了，它就没有"新颜色"可主张。
+   * （malody 楔形的彩度中位 39.5 / 底 40.4，色角中位 -68.6° / 底 -68.4° —— 它就是底自己变暗。）
+   *
+   * ## 三条缺一不可，每一条都是被一张具体的图逼出来的
+   * 1. **颜色云**：Lab 打格，一格要被底用过 ≥[CLOUD_MIN_PERMILLE]‰ 才算"底用过的颜色"
+   *    （JPEG 撒出来的稀格子不算）。只有这一条：malody 楔形擦到 1,144/1,874 格，
+   *    但工商银行 26.9% / 潮新闻 42.8% 的墨量一起没 —— 擦穿的是它们**自己的主体面**。
+   * 2. **走得到**（从底出发做区域生长，只踩"底用过的颜色"）：主体的面哪怕颜色和底撞车，
+   *    被自己轮廓围住就穿不进去。⚠ 实测这一条**没能**救回工行/潮新闻（它们的面与底之间有缝可走），
+   *    而 300px 看图判下来那两张**恰恰是擦对了**（圆里的灰方盘、斜贯整张的灰带都是底）。
+   * 3. **离底均色 ≤ [CLOUD_L_MAX] L\***：只有 1+2 会把 malody 的两条腿啃出白色缺口（那几处金属面
+   *    的颜色确实等于底）。加上这条之后缺口没了（4,140 → 1,683 格，楔形仍 1,125 格）。
+   *    ⚠ 它同时把"看得见的那片"留下了：malody 的灰**不会因此消失**，这一条保的是别把腿啃穿。
+   * 再加一道 [CLOUD_MIN_INK_DIST]：贴着实墨两三格是**边灰**，那是 `softEdge` 的活，不归这把刀。
+   *
+   * ## 射程（`rec_model` 64 张，edge=384）
+   * **29/64 张会被擦到**，但绝大多数在 1% 墨量以下；超过 2% 的十张：
+   * farsee 41.7 / 潮新闻 37.2 / 泰尔 31.2 / xbud 30.8 / 工商 26.9 / malody 6.1 / 京东 4.0 /
+   * 交管 3.3 / 闲鱼 2.7 / 驾考 2.5（%）。看图分两类：**工商、潮新闻、京东、xbud 是"底灰场被擦干净、
+   * 主体一格没动"**；**farsee 底下那组灰手柄、泰尔表盘那段浅弧尾会没** —— 主人 2026-10-19 晚
+   * 对着 300px 对照图判过：**「这两个代价没关系」**。
+   * ⚠ 与【广色度】同一条规矩：只施加在**交付**那几份成品上（[build] 里的 `cloud(...)`），
+   *   挑支用的 `ramp` / `cut` / `ref0` 一律不过 —— 四道守卫读的就是掩码本身。
+   * ⚠ 报告里的 `淡/框内/字均` 采在**擦之前**（那一列本来就是 buildOnce 的口径），
+   *   这一刀的量另起一列 `底云=N` 记在行尾，别拿前者当"擦完之后的统计"读。
+   */
+  private fun plateCloudErase(o: Output, src: IntArray, s: Scratch, w: Int, h: Int): Output {
+    val mask = o.mask ?: return o
+    val n = w * h
+    if (s.labL.size < n) return o
+    val ink = IntArray(n) { (mask[it] ushr 24) and 0xff }
+    val opaque = BooleanArray(n) { ((src[it] ushr 24) and 0xff) == 255 }
+    val cloud = HashMap<Int, Int>()
+    var plateN = 0
+    var plateL = 0.0
+    for (i in 0 until n) if (opaque[i] && ink[i] == 0) {
+      plateN++; plateL += s.labL[i].toInt() / 64.0; cloud.merge(cloudBin(s, i), 1) { a, b -> a + b }
+    }
+    // 底不足 2,000 格 = 这张压根没有"底"可言（整张都是主体），不开火。
+    if (plateN < CLOUD_MIN_PLATE_CELLS) return o
+    val meanL = plateL / plateN
+    // 一只 Lab 格子要被底用过至少 CLOUD_MIN_PERMILLE（千分比）才算"底用过的颜色"
+    val minCount = maxOf(CLOUD_MIN_CELLS, plateN * CLOUD_MIN_PERMILLE / 1000)
+    val used = HashSet<Int>((cloud.size * 2).coerceAtLeast(64))
+    for ((b, c) in cloud) if (c >= minCount) used.add(b)
+    if (used.isEmpty()) return o
+    // 离实墨几格：只当"边灰不许碰"那一道用。⚠ 试过再拿它当**洪泛的墙**（不许穿主体的光晕），
+    //   量下来不分离：halo=3/5 时工行 26.9%→25.5%/17.1% 而 malody 19.1%→17.3%/13.1% —— 两边一起降，
+    //   没有哪条线能把"底的一片灰"和"主体的平滑面"分开。所以这里只留 `dist` 一处用途。
+    val q = IntArray(n)
+    var hd = 0; var tl = 0
+    val dist = IntArray(n) { -1 }
+    for (i in 0 until n) if (ink[i] >= CLOUD_FILM_MAX) { dist[i] = 0; q[tl++] = i }
+    while (hd < tl) {
+      val c = q[hd++]; val cy = c / w; val cx = c - cy * w
+      for (dy in -1..1) { val ny = cy + dy; if (ny < 0 || ny >= h) continue
+        for (dx in -1..1) { if (dx == 0 && dy == 0) continue; val nx = cx + dx
+          if (nx < 0 || nx >= w) continue; val j = ny * w + nx
+          if (dist[j] < 0) { dist[j] = dist[c] + 1; q[tl++] = j } } }
+    }
+    val pass = BooleanArray(n) { i ->
+      if (!opaque[i] || ink[i] >= CLOUD_FILM_MAX) false
+      else if (ink[i] == 0) true
+      else used.contains(cloudBin(s, i)) &&
+        Math.abs(s.labL[i].toInt() / 64.0 - meanL) <= CLOUD_L_MAX
+    }
+    hd = 0; tl = 0
+    val reach = BooleanArray(n)
+    for (i in 0 until n) if (opaque[i] && ink[i] == 0) { reach[i] = true; q[tl++] = i }
+    while (hd < tl) {
+      val c = q[hd++]; val cy = c / w; val cx = c - cy * w
+      for (dy in -1..1) { val ny = cy + dy; if (ny < 0 || ny >= h) continue
+        for (dx in -1..1) { if (dx == 0 && dy == 0) continue; val nx = cx + dx
+          if (nx < 0 || nx >= w) continue; val j = ny * w + nx
+          if (!reach[j] && pass[j]) { reach[j] = true; q[tl++] = j } } }
+    }
+    var erased = 0
+    for (i in 0 until n) {
+      if (!reach[i] || !opaque[i]) continue
+      val a = ink[i]
+      if (a <= 0 || a >= CLOUD_FILM_MAX) continue
+      if (dist[i] in 0 until CLOUD_MIN_INK_DIST) continue
+      mask[i] = 0; erased++
+    }
+    if (erased == 0) return o
+    // `Output` 不是 data class（构造点全是位置参数，改它不值当），所以这一列只能整份重摆一遍。
+    return Output(o.mask, o.boxFill, o.hole, o.largest, o.components, o.smallShare, o.soft,
+      "${o.report} 底云=$erased", o.hyp, o.h0why, o.veto, o.plateInked, o.dust)
+  }
+
+  /** 淡墨的上界 —— 与全仓 `淡(<200)` 同一个口径：过了这条线就是实墨，不归这把刀。 */
+  private const val CLOUD_FILM_MAX = 200
+  /** "底用过的颜色"的最低出现率（千分比）。数与对照图见 [plateCloudErase]。 */
+  private const val CLOUD_MIN_PERMILLE = 1
+  /** 绝对下限：小图上 1‰ 不到一格，光看千分比会让低分辨率自己换口径。 */
+  private const val CLOUD_MIN_CELLS = 150
+  /** 离实墨几格以内不擦（边灰归 `softEdge`）。与"承载"那几把刀同一个口径。 */
+  private const val CLOUD_MIN_INK_DIST = 3
+  /** 离**底的平均亮度**超过这么多 L\* 就不算"底自己变暗"（保 malody 的腿不被啃穿）。 */
+  private const val CLOUD_L_MAX = 12.0
+  /** 底不足这么多格 = 这张没有底可言，整把刀不开。 */
+  private const val CLOUD_MIN_PLATE_CELLS = 2000
 
   /**
    * 【SepTone】把"源色差得开、交付却撞成同一浓度"的那一块挪开 —— **在 [buildOnce] 的最后一步施加**。
