@@ -18,6 +18,8 @@ import android.content.pm.ProviderInfo
 import android.content.pm.ResolveInfo
 import android.content.pm.ServiceInfo
 import android.content.res.Resources
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.Drawable
 import android.os.Build
@@ -1485,10 +1487,12 @@ private fun hookSynthesizedMonochrome(xposed: XposedInterface) {
             Log.d(TAG, "Mono: 自带单色层，透传 #$n 是谁=$who mono=${original.javaClass.simpleName}" +
               " 尺寸=${original.intrinsicWidth}x${original.intrinsicHeight}")
           }
-          // 例外名单：见 [SKIP_SELF_MONO]。`who` 的形态是 `包名/类型/入口名`，所以按前缀配。
-          if (SKIP_SELF_MONO.any { who.startsWith("$it/") }) {
-            Log.d(TAG, "Mono: $who 的自带单色层**不透传**（彩色 logo 冒充剪影），改走我们的合成")
-          } else return@intercept original
+          // 判据：见 [monoLayerIsWholePlate]。`who` 只用于打这一行，不参与决定。
+          if (!monoLayerIsWholePlate(original)) return@intercept original
+          // 桌面每画一次图标都会问一次 `getMonochrome`，这一行不按包限流就是把日志刷爆。
+          if (monoVetoPkg.size < MONO_ASKED_PKG_MAX && monoVetoPkg.add(who)) {
+            Log.d(TAG, "Mono: $who 的自带单色层**不透传**（可见圆里一格透明都没有 = 交出去必是一块饼），改走我们的合成")
+          }
         }
         val self = chain.thisObject as? AdaptiveIconDrawable
         if (self == null) {
@@ -1520,29 +1524,66 @@ private val monoAsked = AtomicInteger(0)
 private val monoAskedPkg: MutableSet<String> =
   java.util.Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
 
+/** 已经为哪些包报过「不透传，改走合成」那一行，理由与 [monoAskedPkg] 同（一个包一行，不是抽样）。 */
+private val monoVetoPkg: MutableSet<String> =
+  java.util.Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+
 /** 上限只是防刷屏：一个抽屉几百个包，超过之后剩下的只数不报（`Mono: 自带单色层，透传 #N` 那个总数还在涨）。 */
 private const val MONO_ASKED_PKG_MAX = 400
 
-/** 例外名单：**把整幅彩色 logo 声明成 `<monochrome>` 的应用** —— 这一条不透传，改走我们的合成。
+/**
+ * 自画单色层在**可见圆**里有没有一格是透明的。一格都没有 ⇒ 主题图标根本没有"底"，
+ * 交出去必然是一块实心饼 —— 这一条不是拟合出来的阈值，是算术：主题图标 = 底色盘 + 这一层的 alpha，
+ * 层里没有一个透明格，屏幕上就没有任何东西是背景。
  *
- * 为什么必须有这条：`com.fbclient.app` 的 `ic_launcher_round` 里 `<monochrome>` 与 `<foreground>`
- * 同为 `@0x7f080150`，而那份资源是一张**彩色 logo**（粉蓝鸟 + "FLYINGBIRD" 字样，432²，35.3% 实心）。
- * 桌面拿它去出自己的主题图标，屏幕上就是一块实心方块：装机实测 `mono_icon` **93.7% 有墨 / 79.3% 全实**；
- * 同一张前景层走我们的 `build()` 交出的是 **12.4% 有墨 / 4.1% 全实** 的能认剪影。
+ * ## 两个已知案（都在这条上取满值）
+ *  · `com.fbclient.app`：`<monochrome>` 与 `<foreground>` 同为 `@0x7f080150`，那张前景层
+ *    **可见圆里 100.0% 有墨 / 100.0% 全实**；装机实测屏上 `mono_icon` 93.7% 有墨 / 79.3% 全实 = 一块方块。
+ *  · `org.lineageos.etar`：同一份（别名），可见圆 **100.0%**，屏上 94.3% 有墨。
+ *    换我们合成之后是 7.7% 墨的日历剪影（`30` 认得出来）。
  *
- * 为什么写成名单而不是判据（今天量完的六条都不够用，别再来一轮）：
- *  · 「`mono` 与 `foreground` 同一份」：**131 个包里 23 个都这样**（grok / discord / chatgpt / twitter /
- *    spotify / xhs …），它们屏上 9.6~25.2% 全正常 ⇒ 这条会把 22 个好的一起改掉；
- *  · 那一层自己的**不透明覆盖率**：飞鸟 37.3%，而 xhs **94.0%**、kimichat 62.5%、termux.x11 64.1% 都正常；
- *  · 那一层的**平均亮度**：飞鸟 96.3，而 pixez **100.0**、localsend **100.0** 都正常；
- *  · 彩度 / 色相：62 张应用自画层里 4 张是合法彩色（主题图标只取 alpha，颜色会被盖掉）。
- *  ⇒ 没有一条能在**交出去之前**把飞鸟和那 22 张分开。
+ * ## 为什么这条活着，而 10-19 那轮量死的六条不活
+ * 那六条里最接近的是「那一层自己的不透明覆盖率」，飞鸟 37.3% / xhs 94.0% —— 分不开。**窗取错了**：
+ * 自适应图标的画布是 108dp，桌面只画中央 66dp 那个圆，四角本来就在遮罩外，按整张画布量等于
+ * 把一堆恒为 0 的格子算进分母。同一张飞鸟层按**可见圆**量是 **100.0%**，而 63 对配对里
+ * 其余全部 ≤ **89.0%**（outlook 89.0 / youtube 84.4 / discord 77.6 / spotify 70.9 / kimi 57.1）——
+ * 判据与金标准之间 11 个点的余量，不是贴着画的线。
+ * 「`mono` 与 `foreground` 同一份」那条也仍然分不开（23 张别名，只有这两张坏），所以**不看别名，只看这一层**。
  *
- * ⚠ 桌面那两条合成入口**一次都没走**（`generateMono` 与 `MonochromeIconFactory.wrap` 都挂上了、
- *   整轮零调用），所以这不是"桌面算错"，是我们透传的那张图本身就不是剪影。
- * **重开条件**：出现第二张同样的（自带 `<monochrome>` 其实是全彩 logo、屏上一块实心）——
- *   那时名单里有两个样本，才值得回头再找一次判据。 */
-private val SKIP_SELF_MONO = setOf("com.fbclient.app")
+ * ⚠ 探针是 128² 重采样：小于约 4px 的洞会被抹平 ⇒ 只会**多**开火，不会漏。而"只有 4px 透明"的一层
+ *   交出去本来就是一块饼，所以这个方向的误差是良性的。
+ */
+private fun monoLayerIsWholePlate(d: Drawable): Boolean {
+  val key = d.constantState ?: return probeWholePlate(d)
+  monoPlateCache[key]?.let { return it }
+  val v = probeWholePlate(d)
+  if (monoPlateCache.size >= MONO_PROBE_MAX) monoPlateCache.clear()
+  monoPlateCache[key] = v
+  return v
+}
+
+private val monoPlateCache = WeakHashMap<Drawable.ConstantState, Boolean>()
+
+private const val MONO_PROBE_MAX = 512
+
+/** 画到 [MonoVeto.EDGE]² 上取一份 alpha 栅格，判定交给纯函数 [MonoVeto.wholePlate]（判据台量的就是它）。
+ *  任何一步取不到都答"不是饼"（保守：照旧透传）。 */
+private fun probeWholePlate(d: Drawable): Boolean = runCatching {
+  if (d.intrinsicWidth <= 0 || d.intrinsicHeight <= 0) return@runCatching false
+  val e = MonoVeto.EDGE
+  val bmp = Bitmap.createBitmap(e, e, Bitmap.Config.ARGB_8888)
+  val old = d.bounds
+  try {
+    d.setBounds(0, 0, e, e)
+    d.draw(Canvas(bmp))
+  } finally {
+    d.setBounds(old)
+  }
+  val px = IntArray(e * e)
+  bmp.getPixels(px, 0, e, 0, 0, e, e)
+  bmp.recycle()
+  MonoVeto.wholePlate(px, e)
+}.getOrDefault(false)
 
 private fun classOf(name: String, classLoader: ClassLoader): Class<*>? =
   runCatching { Class.forName(name, true, classLoader) }.getOrNull()

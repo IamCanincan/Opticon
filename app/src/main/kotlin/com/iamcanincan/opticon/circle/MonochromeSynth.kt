@@ -418,8 +418,7 @@ internal object MonochromeSynth {
       //   · `com.google.android.apps.bard`：改后整颗四角星干净上墨，改前星里多一块深灰楔形伪影（看图判的）。
       val plateSubject = winMeasured?.polaritySubject == true
       // 【主形】按包开闸（名单与"为什么不能全局"见 [MonochromeMask.TRIM_PKGS]）。
-      //   `label` 的第一段就是 `IconNames.of(source)` = `包名/类型/入口名`，所以按前缀配 ——
-      //   与 [SKIP_SELF_MONO] 同一个形状。
+      //   `label` 的第一段就是 `IconNames.of(source)` = `包名/类型/入口名`，所以按 `"$it/"` 前缀配。
       val trimOn = MonochromeMask.TRIM_PKGS.any { label.startsWith("$it/") }
       val out = MonochromeMask.build(pxIn, edge, edge, plateLayer, underIn, plateSubject,
         trimSubject = trimOn)
