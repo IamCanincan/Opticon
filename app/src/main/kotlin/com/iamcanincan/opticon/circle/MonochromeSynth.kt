@@ -417,7 +417,12 @@ internal object MonochromeSynth {
       //   · `org.localsend.localsend_app`：新旧掩码**逐格相同**（它两条口径都落到 H3 同一个产物）；
       //   · `com.google.android.apps.bard`：改后整颗四角星干净上墨，改前星里多一块深灰楔形伪影（看图判的）。
       val plateSubject = winMeasured?.polaritySubject == true
-      val out = MonochromeMask.build(pxIn, edge, edge, plateLayer, underIn, plateSubject)
+      // 【主形】按包开闸（名单与"为什么不能全局"见 [MonochromeMask.TRIM_PKGS]）。
+      //   `label` 的第一段就是 `IconNames.of(source)` = `包名/类型/入口名`，所以按前缀配 ——
+      //   与 [SKIP_SELF_MONO] 同一个形状。
+      val trimOn = MonochromeMask.TRIM_PKGS.any { label.startsWith("$it/") }
+      val out = MonochromeMask.build(pxIn, edge, edge, plateLayer, underIn, plateSubject,
+        trimSubject = trimOn)
       // H0 的射程跟着记：见 [noteSynthesized] 那条汇总为什么带它。
       noteH0(out.h0why)
       noteVeto(out.veto)

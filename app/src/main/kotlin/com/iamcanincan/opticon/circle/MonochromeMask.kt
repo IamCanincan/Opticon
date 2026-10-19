@@ -1033,7 +1033,7 @@ internal object MonochromeMask {
    *   真机 logcat 里 237 次合成**全部**是 384 档，所以这一条现在不上屏；但 `learnEdge`
    *   学到更大尺寸会重压，那时它就成了。 */
   fun build(pixels: IntArray, w: Int, h: Int, plateIsLayer: Boolean = false,
-    under: IntArray? = null, plateIsSubject: Boolean = false): Output {
+    under: IntArray? = null, plateIsSubject: Boolean = false, trimSubject: Boolean = false): Output {
     // ⚠ 这一遍**不切背景**，`picksRef` 拿到的就是"这一刀还不存在时"的那份成品 —— 与 SepTone
     //   那条 `sepOff` 同一个先例：**选支这件事必须与改动前完全同口径**。
     //   第一版把切背景直接写进交付循环，7 张（金山文档/高德/谷歌翻译/美的/拼多多/学信网/WebAPK）
@@ -1045,7 +1045,8 @@ internal object MonochromeMask {
     // 【底云】见 [plateCloudErase]。⚠ 与【广色度】同一条规矩：**只施加在交付的那几份成品上**，
     //   挑支用的 `ramp` / `cut` / `ref0` 一律不过 —— 四道守卫（`meanAlpha` / `渣` / `largest` /
     //   `components`）读的就是掩码本身，刀先进比较，守卫就是被自己改过的数喂的。
-    fun cloud(o: Output) = plateCloudErase(o, pixels, s, w, h)
+    fun cloud(o: Output) = if (!trimSubject) plateCloudErase(o, pixels, s, w, h)
+      else trim(plateCloudErase(o, pixels, s, w, h), w, h)
     if (!ramp.report.contains("调=1")) {
       // 参照支。**「按线条分割」那一刀也走同一套"两支各交一遍再按成品选"** —— 理由是量出来的：
       //   易班被切掉之后，后面的 `stretchMark` / `measure` 又把墨补回来，净效果
@@ -1130,6 +1131,164 @@ internal object MonochromeMask {
     val b = (s.labB[i].toInt() / 64 / 4 + 32).coerceIn(0, 63)
     return (l shl 12) or (a shl 6) or b
   }
+
+  /**
+   * 【主形】主人 2026-10-19 深夜两句话一起给的：一条方向、一条尺 ——
+   * 「其实可以**只采取一部分特征鲜明的图案作为图标的主体**，不必太过较真，但是**得顺眼**」
+   * 与「**不要有毛刺和锯齿**」。
+   *
+   * ## 规则是拓扑，不是颜色
+   * 核心 = 交付里最实的那批格（α ≥ [TRIM_CORE]），那正是"特征鲜明"的部分。
+   * 从画布边界出发、**只踩非核心**做洪泛 ⇒ 走得到的淡墨 = **露在核心轮廓之外**（拖出来的次级件、
+   * 倒影、飘带）→ 擦；走不到的 = 被核心围住的洞 → **留**。所以 nutstore 那颗橡果的身子安全
+   * （它被自己那圈深色轮廓围着）—— 这条与「中间调=细节」不冲突，被围住的层次一格都不动。
+   * 贴着实墨 [TRIM_MIN_INK_DIST] 格以内不碰：那是边灰，归 `softEdge`。
+   *
+   * ## 毛刺那条闸管住了一半，管不住另一半 ⇒ 所以这把刀按包开
+   * 单独开全局会把 bilibili 的字标啃成描边、把易班的熊头掏成线稿、**把 uu远程的箭头擦剩半个**。
+   * 坏样本里有一类的共同点正是主人那句新话的形状：**边被啃毛了**。于是拿它当闸 ——
+   * [burr] = 墨格朝"不是墨"方向暴露的边数 ÷ √墨格数（与尺度无关），
+   * **改后抬过 [TRIM_JAG_MAX] 就整张退回**，不做局部取舍。全语料 64 张摊开，这条线自己把两类分开了：
+   *   过闸：潮新闻 −13.8 / 泰尔 −7.1 / 云闪付 −5.5 / 高德 −4.0 / 微博 −2.9 / **malody +0.55** /
+   *        京东 −0.16 / 支付宝 −0.48 / 贴吧 −0.07；
+   *   退回：bilibili +4.2 / 驾考 +10.0 / 易班 +15.3 / zyddz +20.6 / 王者 +21.7 / 吉星派对 +29.7。
+   * ⚠ **但闸对"整块平滑消失"是瞎的**：开全局实测 38 张落地，`com.netease.uuremote` 的箭头少了半个
+   * （墨格 12,111→6,411，抬升只有 +5.4 侥幸过闸）、`com.azure.authenticator` 的小人只剩一个头（+1.8）。
+   * 两道补救都量过、都死（浓度上限 ≤127 把 malody 的收益一起带走；与【底云】AND 之后 malody 只剩 1,013 格）。
+   * ⇒ 名单与重开条件见 [TRIM_PKGS]：**"这块中墨是次级件还是 logo 的一半"不在像素里。**
+   *
+   * ## 已知没做完的两件（下一轮从这里接，别从头想）
+   * 1. **割完还剩四块小脚**：malody 落地后是"黑 V + 四块孤立实心脚"（那几块 α≥200，本规则不动核心）。
+   *    试过补一条"留下的实心碎件够不到最大块两成就一并退掉"，结果**全语料 0 张开火** —— 因为下面这条。
+   * 2. ⚠ **[burr] 这把尺本身是坏的**：`周长 / √面积` 只在"形状不变、只换尺度"时不变；
+   *    **整块删掉**一块面积时，面积掉了、剩下的轮廓没同比掉，这个数**自己抬起来** ——
+   *    于是它把"少了一大块"和"边变毛了"混成同一个读数，补刀一开就把每一张都顶成"退回"。
+   *    要的量是**与面积无关的形状粗糙度**（例如等周比 `周长² / 面积`，或对边界串做凹凸角计数），
+   *    换过来之后这两件一起重测。
+   *
+   * ## 只收拾自己割开的沿口
+   * [tidy] 限定在离割线 [TRIM_BAND] 格以内。全局修边会去动这张刀**根本没碰过**的形状，那是另一件事。
+   * ⚠ 与【广色度】【底云】同一条规矩：只施加在**交付**那几份成品上（[build] 里 `cloud(...)` 之内），
+   *   挑支用的 `ramp` / `cut` / `ref0` 一律不过。
+   */
+  private fun trim(o: Output, w: Int, h: Int): Output {
+    val mask = o.mask ?: return o
+    val n = w * h
+    val al = IntArray(n) { (mask[it] ushr 24) and 0xff }
+    var coreN = 0
+    val core = BooleanArray(n) { i -> if (al[i] >= TRIM_CORE) { coreN++; true } else false }
+    if (coreN == 0) return o
+    val q = IntArray(n)
+    var hd = 0; var tl = 0
+    val out = BooleanArray(n)
+    for (i in 0 until n) { val x = i % w; val y = i / w
+      if ((x == 0 || y == 0 || x == w - 1 || y == h - 1) && !core[i]) { out[i] = true; q[tl++] = i } }
+    while (hd < tl) {
+      val c = q[hd++]; val cy = c / w; val cx = c - cy * w
+      for (dy in -1..1) { val ny = cy + dy; if (ny < 0 || ny >= h) continue
+        for (dx in -1..1) { if (dx == 0 && dy == 0) continue; val nx = cx + dx
+          if (nx < 0 || nx >= w) continue; val j = ny * w + nx
+          if (!out[j] && !core[j]) { out[j] = true; q[tl++] = j } } }
+    }
+    hd = 0; tl = 0
+    val dist = IntArray(n) { -1 }
+    for (i in 0 until n) if (core[i]) { dist[i] = 0; q[tl++] = i }
+    while (hd < tl) {
+      val c = q[hd++]; val cy = c / w; val cx = c - cy * w
+      for (dy in -1..1) { val ny = cy + dy; if (ny < 0 || ny >= h) continue
+        for (dx in -1..1) { if (dx == 0 && dy == 0) continue; val nx = cx + dx
+          if (nx < 0 || nx >= w) continue; val j = ny * w + nx
+          if (dist[j] < 0) { dist[j] = dist[c] + 1; q[tl++] = j } } }
+    }
+    val cut = BooleanArray(n)
+    var nc = 0
+    for (i in 0 until n) {
+      val a = al[i]
+      if (a <= 0 || core[i] || !out[i]) continue
+      if (dist[i] in 0 until TRIM_MIN_INK_DIST) continue
+      cut[i] = true; nc++
+    }
+    if (nc == 0) return o
+    val before = burr(al, w, h)
+    val next = IntArray(n) { i -> if (cut[i]) 0 else al[i] }
+    tidy(next, cut, w, h)
+    val after = burr(next, w, h)
+    // ⚠ **整张退回**，不是"少擦一点"：沿口一旦啃毛，少擦几格并不会让它变齐 ——
+    //   要么干净地简化，要么原样不动。这条是主人那句"不要毛刺和锯齿"的直接翻译。
+    if (after - before > TRIM_JAG_MAX) return o
+    for (i in 0 until n) mask[i] = if (next[i] == 0) 0 else (next[i] shl 24) or 0x00FFFFFF
+    return Output(mask, o.boxFill, o.hole, o.largest, o.components, o.smallShare, o.soft,
+      "${o.report} 主形=$nc", o.hyp, o.h0why, o.veto, o.plateInked, o.dust)
+  }
+
+  /** 毛刺尺：墨格朝"不是墨"方向暴露的边数 ÷ √墨格数。光滑轮廓这个数小且稳定，被啃毛会抬起来。 */
+  private fun burr(al: IntArray, w: Int, h: Int): Double {
+    val n = w * h
+    var ink = 0L; var peri = 0L
+    for (i in 0 until n) {
+      if (al[i] <= 0) continue
+      ink++; val cy = i / w; val cx = i - cy * w
+      if (cy == 0 || al[i - w] <= 0) peri++
+      if (cy == h - 1 || al[i + w] <= 0) peri++
+      if (cx == 0 || al[i - 1] <= 0) peri++
+      if (cx == w - 1 || al[i + 1] <= 0) peri++
+    }
+    return if (ink == 0L) 0.0 else peri / Math.sqrt(ink.toDouble())
+  }
+
+  /** 只收拾割口：离割线 [TRIM_BAND] 格以内，单格毛刺抹掉、一格洞按邻域均值填平（不拍成实心）。 */
+  private fun tidy(al: IntArray, cut: BooleanArray, w: Int, h: Int) {
+    val n = w * h
+    val d = IntArray(n) { -1 }
+    val q = IntArray(n); var hd = 0; var tl = 0
+    for (i in 0 until n) if (cut[i]) { d[i] = 0; q[tl++] = i }
+    while (hd < tl) {
+      val c = q[hd++]; val cy = c / w; val cx = c - cy * w
+      for (dy in -1..1) { val ny = cy + dy; if (ny < 0 || ny >= h) continue
+        for (dx in -1..1) { if (dx == 0 && dy == 0) continue; val nx = cx + dx
+          if (nx < 0 || nx >= w) continue; val j = ny * w + nx
+          if (d[j] < 0 && d[c] < TRIM_BAND) { d[j] = d[c] + 1; q[tl++] = j } } }
+    }
+    val src = al.copyOf()
+    for (i in 0 until n) {
+      if (d[i] < 0 || d[i] > TRIM_BAND) continue
+      val cy = i / w; val cx = i - cy * w
+      var cnt = 0; var nb = 0; var sum = 0L
+      for (dy in -1..1) { val ny = cy + dy; if (ny < 0 || ny >= h) continue
+        for (dx in -1..1) { if (dx == 0 && dy == 0) continue; val nx = cx + dx
+          if (nx < 0 || nx >= w) continue
+          val j = ny * w + nx; cnt++; if (src[j] > 0) { nb++; sum += src[j] } } }
+      if (src[i] > 0 && nb <= 1) al[i] = 0
+      else if (src[i] == 0 && nb == cnt && cnt >= 6) al[i] = (sum / cnt).toInt().coerceAtLeast(1)
+    }
+  }
+
+  private const val TRIM_CORE = 200
+  private const val TRIM_MIN_INK_DIST = 3
+  /** 毛刺抬升的上限，超过就整张退回。数与两侧名单见 [trim] 的"为什么它能全局落地"那一段。 */
+  private const val TRIM_JAG_MAX = 1.0
+  private const val TRIM_BAND = 2
+
+  /**
+   * 【主形】开着的包（机制见 [trim]；配法在调用点：`label` 的第一段是 `包名/类型/入口名`，
+   * 按 `"$it/"` 前缀配，与 `SKIP_SELF_MONO` 同一个形状）。**默认只有 malody。**
+   *
+   * ## 为什么这把刀按包、而【底云】可以全局
+   * 【底云】只吃"底已经用过的那个颜色"，实测最狠的一张也只动淡的那头、实心带一格不碰；
+   * 【主形】吃的是**露在主体轮廓之外的所有淡中墨**，那就包括"logo 自己有一半是中间调"的写法。
+   * 2026-10-19 深夜全语料 64 张开全局实测：38 张落地，其中
+   * **`com.netease.uuremote` 的箭头被啃掉一半（墨格 12,111→6,411）、`com.azure.authenticator` 的小人只剩一个头** ——
+   * 都是**平滑地整块消失**，所以毛刺那条闸（+1.0）**结构上抓不到它们**。
+   * 两道补救都量过、都死：
+   *   · 浓度上限 ≤127 → malody 的腿本来就是 α>127 的中墨，收益一起没了（≤63/≤95 同样）；
+   *   · 与【底云】AND（只擦"既是底的颜色、又露在轮廓外"）→ malody 从 11,054 格掉到 1,013 格，又变回"只清外圈"。
+   * ⇒ 结论：**"这块中墨是次级件还是 logo 的一半"不在像素里。** 所以它是例外，不是通用判据。
+   *
+   * ## 重开条件
+   * 出现一根能分开"uu远程那半个箭头"与"malody 那两条腿"的轴（不是浓度、不是颜色云、不是毛刺、
+   * 不是最大块、不是外接框 —— 这五条今天全量过）。在那之前，往这张表里加包 = 必须逐张出改前/改后图给人看。
+   */
+  internal val TRIM_PKGS = setOf("me.mugzone.emiria")
 
   /**
    * 【底云】把**底自己用过的颜色**里、能从底走过来的那片淡墨抹平。
