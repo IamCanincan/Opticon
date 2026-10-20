@@ -1568,18 +1568,21 @@ private val monoPlateCache = WeakHashMap<Drawable.ConstantState, Boolean>()
 private const val MONO_PROBE_MAX = 512
 
 /** 画到 [MonoVeto.EDGE]² 上取一份 alpha 栅格，判定交给纯函数 [MonoVeto.wholePlate]（判据台量的就是它）。
- *  任何一步取不到都答"不是饼"（保守：照旧透传）。 */
+ *
+ * ⚠ **必须在副本上画**（2026-10-20 装机量出来的）：`original` 是桌面**之后还要拿去画**的那一个，
+ *   在它身上 `setBounds` + `draw` 会把它画脏 —— 第一次装机对照就见到 **18 张快捷方式的 `mono_icon`
+ *   逐字节变了**，而这 18 张一张都没被判据改道（开火的只有飞鸟与 etar）。应用图标不动、
+ *   快捷方式全动 = 这一族是矢量/图层 drawable，被探针改过一次尺寸就留了痕。
+ *   量具自己不能是 actor。
+ *
+ * 任何一步取不到都答"不是饼"（保守：照旧透传）。 */
 private fun probeWholePlate(d: Drawable): Boolean = runCatching {
-  if (d.intrinsicWidth <= 0 || d.intrinsicHeight <= 0) return@runCatching false
   val e = MonoVeto.EDGE
+  val copy = d.constantState?.newDrawable() ?: return@runCatching false
+  if (copy.intrinsicWidth <= 0 || copy.intrinsicHeight <= 0) return@runCatching false
   val bmp = Bitmap.createBitmap(e, e, Bitmap.Config.ARGB_8888)
-  val old = d.bounds
-  try {
-    d.setBounds(0, 0, e, e)
-    d.draw(Canvas(bmp))
-  } finally {
-    d.setBounds(old)
-  }
+  copy.setBounds(0, 0, e, e)
+  copy.draw(Canvas(bmp))
   val px = IntArray(e * e)
   bmp.getPixels(px, 0, e, 0, 0, e, e)
   bmp.recycle()
