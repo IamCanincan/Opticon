@@ -1690,10 +1690,12 @@ internal object IconNames {
    *  （Bitmap 66 / Vector 23 / Layer 6），而 B 类那几张"只剩虚线框"恰好全是快捷方式
    *  （`com.xunmeng.pinduoduo_one_click_search`、京东 #134/#135/#136）—— 想给它们开刀，
    *  先得让它们能被配上名。
-   * ⚠ 但 `pm:` 这一支**没有入口名**，所以它只能"整包一起开"，没法只挑其中一个快捷方式。
+   * ⚠ 另记一条限制：`pm:` 这一支**没有入口名**，所以它只能"整包一起开"，没法只挑其中一个快捷方式。
+   *
+   * 算式本身在 [IconLabel]（纯函数，判据台编得进去，尺是 `_harness/VetoKt.kt` 那四条控制）——
+   * 这里只是转发，**同一个值不许在两处定义**。
    */
-  fun matchesPkg(label: String, pkg: String): Boolean =
-    label.startsWith("$pkg/") || label == "pm:$pkg" || label.startsWith("pm:$pkg/")
+  fun matchesPkg(label: String, pkg: String): Boolean = IconLabel.matchesPkg(label, pkg)
 
   /** 命中就返回 `包名/类型/入口名`，认不出返回 `?`。 */
   @Synchronized
