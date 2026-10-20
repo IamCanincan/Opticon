@@ -193,6 +193,10 @@ java -cp out;stubs_out;<stdlib> harness.ReplayKt ../_dump.txt captured   # 重�
     `实255=10.8%` —— **库里的彩色 blob 不是钩子收到的那张 drawable**（与 10-16 那条
     「`loadIcon()` 抓的是活动图标、桌面画的是应用图标」同族，换了一根轴）。
     拿 `.src.png` 下结论前必须先做**形状级**核对，`componentName` 相同不算。
+- 🔑 **给判据台加旗，第一次跑必须先证明它"印了东西"**：`--probe` 第一版把判据写成
+  `args.contains("--probe")`，而实际传的是 `--probe=76,140,300,5` ⇒ 恒 false，整台子一条都不打，
+  **输出和"这一族一张都没有"长得一模一样**。规矩：`grep -a -c '〔旗名〕' 输出` 要 > 0，
+  **先看有没有行，再看数**（`-a` 不能省，见下条）。同一处写法在 `--feet` 里也改了。
 - **真源摊表两件（2026-10-20 加，都不入库）** —— `sh run.sh harness.GhostSweepKtKt --out=<tsv> <logcat…>`
   把**留存 logcat 里所有 `what=src` 分片**重组、逐张跑仓里那份 `MonochromeMask`，出一张 33 栏的表
   （输入侧｜判据侧｜交付侧，并把**设备自己那一趟的读数并排**打出来）；
