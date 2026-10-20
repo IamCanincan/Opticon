@@ -1469,7 +1469,8 @@ private fun hookSynthesizedMonochrome(xposed: XposedInterface) {
         //   运行时每一层各自 inflate，`同实例` 与 `同状态` 7 条采样**全是 false** —— 与本轮删掉的
         //   `LINE_THIN_MAX` 同一类假闸，已移除。别再往"对象同一"上押判据。
         //   触发它的案子还在：`com.fbclient.app`(FlyingBird-Lite) 的 `<monochrome>` 与 `<foreground>`
-        //   在 XML 里都是 `@0x7f08014f`，屏幕上 76.6% 全实 = 一个方块，而同一张前景层走我们 `build()`
+        //   在 XML 里都是 `@0x7f080150`（2026-10-20 重量更正，原来这条写的是 `…014f`），屏幕上 76.6% 全实
+        //   = 一个方块，而同一张前景层走我们 `build()`
         //   交出的是 9% 墨的正确剪影。要治它得先搞清桌面读的是哪条路（它同时引用了
         //   `getMonochrome` 与 `getLayer(LAYER_*)`），所以下面这条透传诊断**留着** ——
         //   它是唯一能区分"桌面没问我们"与"问了、我们按硬规则透传"的手段。
