@@ -1221,20 +1221,10 @@ internal object MonochromeMask {
       "${o.report} 主形=$nc", o.hyp, o.h0why, o.veto, o.plateInked, o.dust)
   }
 
-  /** 毛刺尺：墨格朝"不是墨"方向暴露的边数 ÷ √墨格数。光滑轮廓这个数小且稳定，被啃毛会抬起来。 */
-  private fun burr(al: IntArray, w: Int, h: Int): Double {
-    val n = w * h
-    var ink = 0L; var peri = 0L
-    for (i in 0 until n) {
-      if (al[i] <= 0) continue
-      ink++; val cy = i / w; val cx = i - cy * w
-      if (cy == 0 || al[i - w] <= 0) peri++
-      if (cy == h - 1 || al[i + w] <= 0) peri++
-      if (cx == 0 || al[i - 1] <= 0) peri++
-      if (cx == w - 1 || al[i + 1] <= 0) peri++
-    }
-    return if (ink == 0L) 0.0 else peri / Math.sqrt(ink.toDouble())
-  }
+  /** 毛刺尺：墨格朝"不是墨"方向暴露的边数 ÷ √墨格数。光滑轮廓这个数小且稳定，被啃毛会抬起来。
+   *  ⚠ 这把尺**已知是坏的**（整块删面积时它自己抬起来，把"少了一大块"读成"边变毛了"，见 [IconRough] 头）
+   *  —— 这里只转发：算式与它的替代者同在 [IconRough]，判据台 `BurrKt` 两把一起量，不许在这儿再抄一份。 */
+  private fun burr(al: IntArray, w: Int, h: Int): Double = IconRough.jag(al, w, h)
 
   /** 只收拾割口：离割线 [TRIM_BAND] 格以内，单格毛刺抹掉、一格洞按邻域均值填平（不拍成实心）。 */
   private fun tidy(al: IntArray, cut: BooleanArray, w: Int, h: Int) {
