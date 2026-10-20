@@ -17,4 +17,17 @@ internal object IconLabel {
 
   fun matchesPkg(label: String, pkg: String): Boolean =
     label.startsWith("$pkg/") || label == "pm:$pkg" || label.startsWith("pm:$pkg/")
+
+  /**
+   * 快捷方式那条口子的标签怎么拼 —— 剥出来的理由与 [matchesPkg] 同一条：算式要编得进判据台才有尺。
+   *
+   * `id` 就是 `ShortcutInfo.getId()`，它与桌面库 `app_icons.db.componentName` 斜杠后面那一段**同形**
+   * （`com.cainiao.wireless/shortcuts_identity_code` ↔ `pm:com.cainiao.wireless/shortcuts_identity_code`），
+   * 所以这一支带上 id 之后，**日志行与上屏那一张能逐张配对**。
+   * 拿不到包名 → 返回空串（调用方 [packageFromArgs] 会当作"这一支没认出来"继续往下找，不登记空名）。
+   */
+  fun shortcutLabel(pkg: String?, id: String?): String =
+    if (pkg.isNullOrEmpty()) ""
+    else if (id.isNullOrEmpty()) "pm:$pkg"
+    else "pm:$pkg/$id"
 }

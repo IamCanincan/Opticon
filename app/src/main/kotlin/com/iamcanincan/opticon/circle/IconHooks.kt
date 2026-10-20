@@ -17,6 +17,7 @@ import android.content.pm.PackageItemInfo
 import android.content.pm.ProviderInfo
 import android.content.pm.ResolveInfo
 import android.content.pm.ServiceInfo
+import android.content.pm.ShortcutInfo
 import android.content.res.Resources
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -1690,9 +1691,11 @@ internal object IconNames {
    *  （Bitmap 66 / Vector 23 / Layer 6），而 B 类那几张"只剩虚线框"恰好全是快捷方式
    *  （`com.xunmeng.pinduoduo_one_click_search`、京东 #134/#135/#136）—— 想给它们开刀，
    *  先得让它们能被配上名。
-   * ⚠ 另记一条限制：`pm:` 这一支**没有入口名**，所以它只能"整包一起开"，没法只挑其中一个快捷方式。
+   * ✅ 那条限制在 2026-10-20 同日松开：快捷方式现在登记成 **`pm:包名/快捷方式id`**
+   *  （见 [IconLabel.shortcutLabel]），id 与桌面库 `componentName` 斜杠后那一段同形
+   *  ⇒ 既能只挑其中一个快捷方式开刀，也能把日志行与上屏那一张逐张配上对。
    *
-   * 算式本身在 [IconLabel]（纯函数，判据台编得进去，尺是 `_harness/VetoKt.kt` 那四条控制）——
+   * 算式本身在 [IconLabel]（纯函数，判据台编得进去，尺是 `_harness/VetoKt.kt` 那批控制）——
    * 这里只是转发，**同一个值不许在两处定义**。
    */
   fun matchesPkg(label: String, pkg: String): Boolean = IconLabel.matchesPkg(label, pkg)
@@ -1804,11 +1807,27 @@ private fun String.isHostSystemResource(): Boolean =
  * `PackageManager.getApplicationIcon` / `loadItemIcon` 这类**没有 resId** 的入口，
  * 能用的标识就只有包名本身。够用了：报一个应用名就能捞到它那一行。
  *
- * 注意别走极端：这里只读**公开字段**（`packageName`），不为凑名字去反射猜别人的字段布局。
+ * 注意别走极端：这里只读**公开字段/公开 getter**（`packageName`、`ShortcutInfo.getPackage()/getId()`），
+ * 不为凑名字去反射猜别人的字段布局。
+ *
+ * 🔴 **2026-10-20 补 `ShortcutInfo` 这一支，因为旧代码对它返回空串**：
+ * `LauncherApps.getShortcutIconDrawable` 在现代系统上的签名是 `(ShortcutInfo, UserHandle)`
+ * （`getShortcutIcon(String, String, UserHandle)` 那一支才是"参数表里有包名"），
+ * 而 `ShortcutInfo` 既不是 `PackageItemInfo` 也不是 `String` ⇒ 三个分支全不匹配 ⇒ 登记成空串。
+ * 装机证据：今天那份 logcat（2802 行 `Mono:`）里 **`pm:` 一行都没有** —— 分不清是"这一趟快捷方式
+ * 全走缓存没渲染"还是"渲染了但登记成空串"。**这一支补上之后，下一次渲染能当场分辨这两种**。
+ * 顺带把 `pm:` 那一支从"只能整包一起开"松开：带上快捷方式 id 之后，标签形状
+ * `pm:包名/id` 与桌面库 `app_icons.db.componentName`（`包名/id`）**同形**，
+ * 日志行与上屏那一张从此可以逐张配对（这是"快捷方式到底吃的是哪张图"那条账的前提）。
  */
 private fun packageFromArgs(args: List<Any?>): String {
   for (a in args) {
     when (a) {
+      // 快捷方式那一支：`getPackage()` 在 Kotlin 里是关键字，只能带反引号取。
+      is ShortcutInfo -> {
+        val nm = IconLabel.shortcutLabel(a.`package`, a.id)
+        if (nm.isNotEmpty()) return nm
+      }
       is PackageItemInfo -> return "pm:${a.packageName}"      // ApplicationInfo / ComponentInfo…
       is ResolveInfo -> if (a.activityInfo?.packageName != null) return "pm:${a.activityInfo.packageName}"
       is String -> if (a.contains('.')) return "pm:$a"        // getApplicationIcon(String pkg)
