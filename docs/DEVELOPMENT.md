@@ -225,6 +225,25 @@ java -cp out;stubs_out;<stdlib> harness.ReplayKt ../_dump.txt captured   # 重�
     而闸门全绿。`_grey_mut.cjs` 第四条变异就是打这个：总量一位不动、只有 `fade` 响。
   - **自洽检查是白拿的**：两列定义上就是 `greyBad` 的严格划分 ⇒ 拼不回总量 = 有一列被改坏 ⇒ 退 2 不判绿。
   - 跑变异：`node _grey_mut.cjs`（六条，每条都自证命中行数 + 文件真的变了）。
+- 🔑 **两种变异是两档东西，不许混着引用（2026-10-21）**
+  - **账本级**（`_grey_mut.cjs` / `_flatmut.cjs` / `_regressmut.cjs`）改的是 `bench/reg/*.txt` 里的**数**，
+    证的是"**裁判机器读得懂更差的数**"。它证不了那道闸还连着真刀。
+  - **语义级** `node _semanticmut.cjs --case=N` 改的是**生产源码那一行**（重编、重跑一整台），
+    证的是"**这道闸还有牙**"。三条硬保险：目标文件有未提交改动就拒绝、`finally` 里逐字节还原、
+    开工先扫 `cand/semanticmut/` 有没有上一具尸体。证过的闸记在 `bench/semanticmut.txt`，
+    `_gateaudit.cjs` 读的是这份账**而不是用例名单** —— **用例写了没跑不等于证过了**。
+  - ⚠ **语义变异的第一个发现通常不是"闸是假的"，是"闸走的输入通道比装机窄"**。第九闸现量：
+    `AirInkKt` 用 3 参 `build(src, w, h)`，那一句**顺手**把 `plateIsLayer` 钉成 false，于是"地板"那一刀
+    （真机 10/62 张走这条路）从没被它量过 —— 把历史坏代码重放回去，`0 / 98`、退码 0。
+- **判据台的输入构造只许有一份：`_harness/Inputs.kt` 的 `cases(dir, edge, inset, fgAll)`**（2026-10-21 抽出）。
+  它给的是 `src` / `isFg` / `plateLayer` / `under` **四样一起**，`index.tsv` 那两位、`_modelbg` 优先、
+  分母剔 `preview` 与 `modelbg` 的纪律都写在原处。另起一台自己抄 = 已经交过两次假结论
+  （2026-09-29 那 4 张 192² 语料；2026-10-19 `FaintShotKt` 抄漏 `plateLayer`/`under`，两张图"一格没变"）。
+  - 抽完后 `MaskBench` 的 `bench_384.txt` **除计时列外 2007 行逐字节相同** —— 这类重构的验收线就是这个，
+    不是"跑通了"。`under` 用 `by lazy`：保住 `量一张` 那根 ms 尺的口径（`t0` 在 `src` 之后、`under` 之前）。
+- ⚠ **注释里"某闸读到 0"不等于"这闸拦下过这次改动"**。`MonochromeMask` 地板那段写的
+  "第九闸 0/219 钉住这件事"钉的是**修好之后**，我把它读成"抓住过"，于是把这道闸记成了有活证据。
+  引用旧注释时要写成"读到 0"还是"变红过"，两者不能互换。
 - **`--feet`（补刀射程台，2026-10-20）** —— `sh run.sh harness.MaskBenchKt --edge=384 --feet rec_model > bench/feet.txt`
   再 `node _feet.cjs`。它在**生产掩码产物**上量"删掉 <1/5 最大块的孤立实心件"动几张、删哪几块，
   每张多打一行 `〔补刀〕件=… 最大=… 实心=… 候选件=… 隙0/8/16=… +N格@x0,y0-x1,y1`。
