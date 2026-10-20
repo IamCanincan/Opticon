@@ -151,6 +151,16 @@ internal object MonoDump {
     // 其余 4 张（azure / tieba / openlist / 元宝 / 拼多多）上面已经在名单里了。
     "com.netease.uuremote", "com.termux", "com.microsoft.xboxone.smartglass",
     "org.chromium.webapk", "com.example.appui",
+    // 2026-10-20「淡线一族」这一轮：把宿主 `cacheDir` 里我们**亲手交出去的 238 张掩码**摊开，
+    // 均α 落在 2~10 的有 **80 张**、`α=255` 一格都没有的 **15 张**（`_harness/_a8dist.cjs`）。
+    // 这一族里绝大多数是**动态快捷方式/部件**，而它们以前一张像素都没回来过 ——
+    // 与 10-01 那条"点名的 12 张里 8 张从来不在名单上"是同一个错法的另一侧。
+    // ⚠ 只补**淡的那几个包**（`com.cainiao.wireless` 那张 `identity_code` 均α 1.39 是代表样本），
+    //   不补全族：预算 2400KB 抢的是全设备共享的 logd（见 [BUDGET_KB] 那段）。
+    // 要回答的问题只有一个：**"细淡线"是我们判底判错，还是源本来就淡** —— 没有 `what=src` 就分不开。
+    "com.cainiao.wireless", "com.dianping.v1", "com.spotify.music", "com.coolapk.market",
+    "com.openai.chatgpt", "com.absinthe.libchecker", "com.taobao.idlefish",
+    "com.microsoft.office.outlook", "com.autonavi.minimap",
   )
 
   fun watched(label: String): Boolean = WATCH.any { label.contains(it) }
