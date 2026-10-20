@@ -97,6 +97,12 @@ internal object MonoCache {
   /** 写失败的警告只放行前 3 条（清过 cacheDir 之后每个图标都会失败一次，那不该刷屏）。 */
   private var writeWarned = 0
 
+  /** 归属索引文件名（见 [noteOwner]）。与掩码同目录，但 [sweep] 既不删它也不计进预算。 */
+  private const val OWNER_INDEX = "index.tsv"
+
+  /** 本进程已经记过归属的 (键, 边长)：一次会话里同一张会被 bind 上百次，只记第一遍。 */
+  private val seenOwner = HashSet<String>()
+
   /** 内容键：见 [MonoKey.keyOf]，那六样就是掩码的全部输入。 */
   fun keyOf(
     px: IntArray, under: IntArray?, edge: Int, adaptive: Boolean, flatten: Boolean, circle: Boolean,
@@ -128,15 +134,20 @@ internal object MonoCache {
     return Entry(loaded, loaded.byteCount.toLong(), FROM_DISK)
   }
 
-  /** 记下这一张。[mask] 为 null 时只进内存（磁盘只存真掩码，见类文档的负缓存那段）。 */
+  /**
+   * 记下这一张。[mask] 为 null 时只进内存（磁盘只存真掩码，见类文档的负缓存那段）。
+   *
+   * [label] 只用来写归属索引（见 [OWNER_INDEX]），**不参与键、不参与判定** —— 所以默认空串，
+   * 传不传都不会改变任何一张掩码的像素。
+   */
   @Synchronized
-  fun store(key: Long, edge: Int, mask: Bitmap?) {
+  fun store(key: Long, edge: Int, mask: Bitmap?, label: String = "") {
     if (mask == null) {
       put(key, null, "")
       return
     }
     put(key, mask, "")
-    writeDisk(key, edge, mask)
+    writeDisk(key, edge, mask, label)
   }
 
   private fun put(key: Long, mask: Bitmap?, from: String) {
@@ -233,7 +244,7 @@ internal object MonoCache {
     return mask
   }
 
-  private fun writeDisk(key: Long, edge: Int, mask: Bitmap) {
+  private fun writeDisk(key: Long, edge: Int, mask: Bitmap, label: String) {
     val d = dir() ?: return
     val to = File(d, name(key, edge))
     if (to.exists()) return
@@ -246,7 +257,7 @@ internal object MonoCache {
     // 同目录 rename 是原子的，于是 [readDisk] 要么看见完整的、要么根本看不见。
     val tmp = File(d, to.name + ".tmp")
     val ok = runCatching { tmp.writeBytes(bytes); tmp.renameTo(to) }.getOrDefault(false)
-    if (!ok) {
+    if (ok) noteOwner(d, key, edge, label) else {
       runCatching { tmp.delete() }
       // ⚠ 忘掉这个目录，下一张重新解析：`cacheDir` 会被系统或用户清掉，而抓住一个已经不存在的
       //   路径不放 = 这个进程余下每一次写都抛 → **每个图标一行警告**。清缓存不是故障，是常态。
@@ -259,6 +270,29 @@ internal object MonoCache {
     }
   }
 
+  /**
+   * 归属索引：`<键>\t<边长>\t<标签>` 一行一行追加到同目录的 [OWNER_INDEX]。
+   *
+   * ## 为什么要有它
+   * `键=` 是**纯内容哈希**（[MonoKey.keyOf] 那六样里没有身份），所以一把键可以属于多个组件；
+   * 而桌面库 `app_icons.db` **没有资源名列** ⇒ 想回答"缓存里这张是谁的"，
+   * 以前只有一个来源：清图标缓存那一次当场抓到的 logcat（`_delivery.cjs`）。
+   * 那个窗口会滚 —— 今天量过一次：1,449 行 `Mono:` 里 937 行的标签是资源名形式，配不上组件。
+   * ⇒ 让缓存自己带上归属，**离线随时能查**，不用再花主人一次手势。
+   *
+   * ## 三条约束
+   * · **不参与判定**：只写不读，任何一张掩码的像素与它无关；`label` 为空就整行不写。
+   * · **每进程每键一次**：`seenOwner` 挡住重复（一次会话里同一张会被 bind 上百次）。
+   * · **失败静默**：这是诊断数据，不值得为它冒任何一次异常或日志刷屏；写不进就什么也不做。
+   *   跨进程 append 不锁（桌面可能多个 profile 同时在写），最坏是两行交错 —— 读的一方
+   *   （`_harness/_owner.cjs`）按"切出来正好三段"过滤，混行的那一截直接丢。
+   */
+  private fun noteOwner(d: File, key: Long, edge: Int, label: String) {
+    if (label.isEmpty() || label == "?") return
+    if (!seenOwner.add("$key:$edge")) return
+    runCatching { File(d, OWNER_INDEX).appendText("${MonoKey.hex(key)}\t$edge\t$label\n") }
+  }
+
   /** 按最旧删到上限以下。删失败（别的进程正拿着）就当没发生，下一轮再试。 */
   private fun sweep(d: File) {
     val kids = runCatching { d.listFiles() }.getOrNull() ?: return
@@ -267,6 +301,9 @@ internal object MonoCache {
     for (k in kids) {
       if (k.name.endsWith(".tmp")) { runCatching { k.delete() }; continue }
       if (!k.isFile) continue
+      // ⚠ 归属索引**不删也不计进体积**：它不是掩码，被按最旧删掉就等于把"这张是谁的"又扔回
+      //   那个会滚的 logcat 窗口；而它一行才几十字节，计进预算只会挤掉真掩码。
+      if (k.name == OWNER_INDEX) continue
       total += k.length()
       files.add(k)
     }

@@ -481,7 +481,8 @@ internal object MonochromeSynth {
       if (placed !== alpha) alpha.recycle()
       // 存的是**交出去那一张**（几何与位置都在里面了），不是模型刚算完的那张 ——
       // 命中时返回的必须与屏幕上的是同一个东西，否则「判据吃的那张」与「屏上那张」又分家。
-      MonoCache.store(key, edge, placed)
+      // `label` 只进归属索引（[MonoCache.noteOwner]），不参与键、不参与判定。
+      MonoCache.store(key, edge, placed, label)
       placed
     }.onFailure {
       // ⚠ 这一条不能省：上面整个块包在 runCatching 里，任何异常都会被 `getOrNull()` 变成一个
