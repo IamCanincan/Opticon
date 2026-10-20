@@ -1679,10 +1679,25 @@ internal object IconNames {
     drawable.constantState?.let { byState[it] = name }
   }
 
+  /**
+   * 按包配一条 `label`。**两种形式都必须认**：
+   *  · `包名/类型/入口名` —— 走 `Resources.getDrawable*` 那几条口子解出来的资源名；
+   *  · `pm:包名` —— PackageManager / `LauncherApps.getShortcutIconDrawable` 那几条口子里参数表
+   *    只有包名（见 [packageFromArgs]），根本没有资源可问。
+   *
+   * ⚠ 2026-10-20 之前这里只写第一种，于是**所有快捷方式对任何按包开的刀永久隐形**：
+   *  一条判据 `label.startsWith("包名/")` 对 `pm:包名` 恒为假。装机量出来 `?` 里 95% 是非自适应
+   *  （Bitmap 66 / Vector 23 / Layer 6），而 B 类那几张"只剩虚线框"恰好全是快捷方式
+   *  （`com.xunmeng.pinduoduo_one_click_search`、京东 #134/#135/#136）—— 想给它们开刀，
+   *  先得让它们能被配上名。
+   * ⚠ 但 `pm:` 这一支**没有入口名**，所以它只能"整包一起开"，没法只挑其中一个快捷方式。
+   */
+  fun matchesPkg(label: String, pkg: String): Boolean =
+    label.startsWith("$pkg/") || label == "pm:$pkg" || label.startsWith("pm:$pkg/")
+
   /** 命中就返回 `包名/类型/入口名`，认不出返回 `?`。 */
   @Synchronized
-  fun of(icon: Drawable): String {
-    byDrawable[icon]?.let { return it }
+  fun of(icon: Drawable): String {    byDrawable[icon]?.let { return it }
     icon.constantState?.let { byState[it] }?.let { return it }
     if (icon is AdaptiveIconDrawable) {
       val fg = icon.foreground
