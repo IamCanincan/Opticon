@@ -1575,14 +1575,12 @@ internal object MonochromeMask {
     val total = w * h
     if (total <= 0) return Output(IntArray(0), 0f, 0f, 0f, 0, 0f, 0f, "尺寸非法 → 空层")
     val box = contentBounds(pixels, w, h)
-      // ⚠ **交 `null`（判据不成立，桌面走它自己那条路），不交一张全空的掩码。**
-      //   真机留存日志里这一支共 60 次，每一次都是「名字解析不出的 `GradientDrawable`、整张透明」，
-      //   而交空掩码的观感就是**图标没了**（那张 `键=dac950aa832c26f4` 的 `.a8` 逐字节 = 8 字节头 + 384² 全零）。
-      //   输入本来一个像素都没有，我们没有任何东西可画 —— 这时候"做一张"比"不做"坏。
-      //   射程已量：判据台 `rec_model` 64 张里 `空层` **0 次**、对表 `blank=0` ⇒
-      //   **这一改对所有闸门是零射程**，只在输入整张透明时生效。为什么 null 是合法出口见
-      //   [MonochromeSynth] 那条负缓存（`mask == null` → 照旧交 null 给桌面走它自己的路）。
-      ?: return Output(null, 0f, 0f, 0f, 0, 0f, 0f, "整张透明 → 判据不成立，交回桌面")
+      // ⚠ **这里曾经改成过 `Output(null, …)`（"交回桌面"），被兼容性台当场拦下**（`PASS 62→58 / FAIL 6→10`，
+      //   红的全是具名夹具 `整张透明`）：那条契约是 `CompatKt` 里 `wantsEmpty = true` **故意钉的**，
+      //   不是漏看的旧 bug。改它需要一次真机观察（交回 null 之后桌面到底画什么），而我没有，所以撤回。
+      //   另：真机上这一支 60 次全是「名字解析不出的 `GradientDrawable`、整张透明」，
+      //   交出的是一张逐字节全零的掩码（屏幕上等于图标没了）—— 那是**已知代价**，见 KNOWN-LIMITS。
+      ?: return Output(IntArray(total), 0f, 0f, 0f, 0, 0f, 0f, "整张透明 → 空层")
     val boxArea = box.width().toLong() * box.height()
     val band = (minOf(box.width(), box.height()) / RING_BAND_DIV).coerceIn(2, 8)
     val g = if (minOf(box.width(), box.height()) >= FIELD_MIN_SIDE) FIELD_GRID else FIELD_GRID_MIN
