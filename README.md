@@ -152,7 +152,9 @@ cd _harness && node _croprange.cjs D:/tmp/lc.txt   # 退码 0=两头都对 / 1=�
 退码 `2` 是**没测到**（模块没重启 / 屏没亮 / 抓错段），不是"没问题"。
 没有 `_harness/` 时的裸查法：`adb logcat -d -s Opticon | grep -c "裁圆按磁贴挡下"` 要 ≥ 1，
 且 `grep -a "裁圆新开"` 里要同时有**桌面与 SystemUI 两户**（这一走必到）。**设置那一户 0 行是正常的**：
-它被注入了，但上面那一走不经它的取图标路径 —— 想量它得另外打开设置里带图标的那一页（应用列表 / 通知设置）。
+它被注入了，但上面那一走不经它的取图标路径 —— 自己驱动就能量到，不用请人动手：
+`adb shell am start -a android.settings.MANAGE_APPLICATIONS_SETTINGS` 之后再 grep，
+2026-10-21 实测打出 `裁圆新开 host=com.android.settings` + 12 行 `clip`（三户齐）。
 2026-10-21 实测：8 个"通道×宿主"开火、磁贴挡下 2 次，且 `PM.loadItemIcon` 同一通道先被挡下又新开
 ⇒ 分得开的是调用方，不是通道名。
 这台守卫自己也被变异测过（`node _croprangemut.cjs`：五条，含一条负对照，每条自证样本真被改过）。
