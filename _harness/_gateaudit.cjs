@@ -98,7 +98,9 @@ for (const g of gates) {
   g.d = (cls.map(ktFile).filter(Boolean).concat(scripts).join(', ')) || '—';
 }
 const by = tier => gates.filter(g => g.tier === tier);
-// ⚠ 分母要说得清：`gates.length` 是**段数**，里头有扫描段（`3/7 语料`）不判定，`8/8` 有两段同号。
+// ⚠ 分母要说得清：`gates.length` 是**段数**，`8/8` 有两段同号，而"扫描段"那一档是**会清零的**
+//   （2026-10-21 唯一那段不判定的是 `3/7 语料`；2026-10-22 它的判定被抽进 `corpusgate.sh` 之后就成了判定闸）。
+//   所以别把"扫描段 N"当恒等式读 —— 要看的是 `什么都没有 0`。
 //   2026-10-21 之前这行印的是"16 段"，而回归台报 18 道 —— 差的那两段（`7/7 肉眼账`、`8/8 没图标账`）
 //   是表头正则漏的（见上面那条注释），**两道真闸长期不在审计里**。
 console.log(`regress.sh 里 ${gates.length} 段 = 判定闸 ${gates.length - by('扫描').length} + 扫描段 ${by('扫描').length}：` +
