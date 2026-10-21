@@ -181,10 +181,8 @@ private fun install(xposed: XposedInterface, classLoader: ClassLoader, packageNa
 private fun installHooks(xposed: XposedInterface, classLoader: ClassLoader, packageName: String) {
   // 给 `clip from=… host=…` 那一行用的：本进程是谁。装配时置一次，热路径不查。
   clipHost = packageName
-  cropThisHost = packageName in CROP_HOSTS
-  // 名单外的宿主里，那几条点名放开的通道照样裁（见 [EXTRA_CROP_CHANNELS] 那段：SystemUI 的
-  // 通知行应用图标就是这一类 —— 射程的粒度是"界面/通道"，不是"进程"）。
-  cropChannels = EXTRA_CROP_CHANNELS[packageName] ?: emptySet()
+  // 射程不再有宿主名单（2026-10-21）：默认全裁，只排快速设置那一路 —— 判据在
+  // `CircleIconDrawable.clipToCircle`，"谁开始被裁"的账在那边的 `noteCrop`。
   if (!hookIconLoaders(xposed, classLoader)) {
     Log.w(TAG, "No icon loader is found, nothing is hooked")
     return
@@ -282,59 +280,18 @@ private fun isLauncher(packageName: String) =
     packageName == "com.google.android.apps.nexuslauncher"
 
 /**
- * **强制裁圆的射程**：只有这里的宿主真的裁。名单外的进程照样挂钩子（标记 id、单色合成
- * 那些通道不受影响），但 `clipToCircle` 原样把图交回去。
+ * **强制裁圆的射程（2026-10-21 起：默认全裁，只排快速设置那一路）**
+ * 主人原话：「裁圆算法应只排除快速设置的磁贴，别的应做到全覆盖」。
  *
- * 定这一条是因为主人 2026-10-17 连着两次点同一个方向：先是快速设置里一块磁贴的**前景图层**
- * 被名字判据当成应用图标裁了（`…/mipmap/ic_launcher_quicktile_foreground`），挡住那一条之后
- * 他说「快速设置预览界面**还是有影响**」—— 那一页 SystemUI 里现量 40 次包装走的
- * **全是正门**（`PM.loadItemIcon` 23 次 + 标记 id 17 次），不是判据宽窄的问题：
- * **强制裁圆管的是桌面那一联，不该管快速设置的磁贴。**
+ * 这里**不再有一份宿主名单** —— 判据与理由都在 `CircleIconDrawable.clipToCircle`
+ * 与那边的 `TILE_CALLERS` / `calledByQuickSettings`（磁贴与通知行在框架里汇到同一个出口，
+ * 只有调用方分得开），"谁开始被裁"的账在那边的 `noteCrop`。
+ * 旧的两份名单（`CROP_HOSTS` / `EXTRA_CROP_CHANNELS`）随这次改版删掉了，
+ * 它们的教训留在 `docs/devlog/2026-10-16.md` 第十七段与今天那一段。
  *
- * ⚠ **这份名单是"作用域十条减去 systemui"，不是"我挑几个界面"**：他报的只有 SystemUI，
- *   所以其余九条一位没动 —— 分享弹窗 / 权限页 / wellbeing 今天该裁的照旧裁。
- *   写成白名单而不是黑名单，是因为新增作用域时**默认不裁**才是安全的一侧
- *   （多裁 = 静默改掉别人界面的形状，少裁 = 那一行"未启用"日志会喊）。
- * ⚠ **加新宿主 / 改 `scope.list` 时必须同步这里**，否则那条通道在新宿主上是静默关的；
- *   现象与"功能没生效"一模一样。与 `scope.list` / `ConfigProvider.TRUSTED_PACKAGES` /
- *   界面 `IconScreen.ScopeItem` 是**几张不同名单**：前两张管"注不注入、读不读得到配置"，
- *   这张只管"裁不裁形状"。
+ * ⚠ **剩下唯一的"不裁"来自配置**：作用域（哪些进程被注入）是主人在模块界面里选的，
+ *   README「模块」页那条说了 —— **没被注入的进程永远不裁**，这不是代码能补的。
  */
-private val CROP_HOSTS = setOf(
-  "com.android.settings",
-  "com.google.android.settings.intelligence",
-  "com.google.android.apps.nexuslauncher",
-  "com.android.launcher3",
-  // ↓ 这三条不是桌面的 UI，但今天本来就裁着，主人没报过 —— 一位不动（见上面那条 ⚠）
-  "com.android.intentresolver",
-  "com.android.permissioncontroller",
-  "com.google.android.apps.wellbeing",
-  // system_server：启动画面 / 框架自己那几张图从这里出，同样保持现状
-  "android",
-  "system",
-)
-
-/**
- * **名单外的宿主里，单独放行的通道**（按"哪条通道"收，不按"哪个进程"收）。
- *
- * 为什么要有这一张：把 SystemUI 整个踢出 [CROP_HOSTS] 确实修好了快速设置，但同一刀把
- * **通知行那个应用图标**也关了 —— 主人 2026-10-17 的原话是「快速设置是搞干净了，
- * 但是我通知的应用图标是要裁圆的」。一个进程里两件事，说明射程的粒度不该是进程。
- *
- * 🔴 **第一版按通道分，量出来分不开**（16:45 那一轮装机现量）：通知行的应用图标
- *   走 `ApplicationInfo.loadUnbadgedIcon` → `loadUnbadgedItemIcon` → `APM.getDrawable(pkg,resid,appInfo)`，
- *   而**磁贴那条 `loadItemIcon` 内部第一件事就是回 `loadUnbadgedItemIcon`**
- *   （framework dex `1f6df0`；两条路在框架里汇到同一个出口）。放开 `PM.getApplicationIcon`
- *   之后 SystemUI 只裁到 1 张，通知栏那位主人说「还是不行」。
- *   ⇒ 真正分得开的是**调用方**，规则在 `CircleIconDrawable.calledByNotificationRow`
- *   （只认 `com.android.systemui.statusbar.notification.*` 发起的那几次）。
- * ⚠ 这一张留着，但**它不是通知行的那条通道**：它是"名单外宿主里点名要裁的正门"。
- *   今天这一条真机裁到的是 SystemUI 自己调 `getApplicationIcon` 的那几张（媒体/前台服务那类），
- *   与通知行互补。要再加通道，先拿那一行"通道×调用方"的账证明它取的是**应用图标**。
- */
-private val EXTRA_CROP_CHANNELS = mapOf(
-  "com.android.systemui" to setOf("PM.getApplicationIcon", "PM.getApplicationIconAsUser"),
-)
 
 /**
  * 桌面自己数据目录的根路径。

@@ -139,18 +139,24 @@ Hooked com.android.settings
 
 **通知小图标**：出现 `patched <包名> 2->1` 就是替换成功了（图标类型从「资源」变成「位图」）。
 
-**通知行的应用图标有没有在裁**（射程第 3 层，见上面「管哪些界面」）—— 装机后跑一条：
+**射程两头有没有坏**（2026-10-21 起默认全裁、只排磁贴，见上面「管哪些界面」）—— 装机后跑一条：
 
 ```bash
-cd _harness && node _notifyguard.cjs        # 退码 0=在裁 / 1=前缀失配 / 2=这一轮没测到
+adb logcat -d -s Opticon > D:/tmp/lc.txt      # 之前先拉两次通知栏 + 一次快速设置（含编辑/预览页）
+cd _harness && node _croprange.cjs D:/tmp/lc.txt   # 退码 0=两头都对 / 1=磁贴没挡住 或 宿主没覆盖 / 2=这轮没测到
 ```
 
-它读的是「通道 × 调用方」那本账，三种读数**只有第一种算过**：
-`1` 说明 SystemUI 改了包名/类名（会把现在那个类名点名打出来，填回
-`CircleIconDrawable.NOTIFY_CALLER` 即可）；`2` 说明这一轮通知行根本没重新绑过
-（屏幕没亮、没拉通知栏、或 SystemUI 没重启）—— **那是没测到，不是没问题**。
-没有 `_harness/` 时的裸查法：`adb logcat -d -s Opticon | grep -c "clip from=.*host=com.android.systemui"` 要 ≥ 1。
-变异测过这台子（`node _notifyguardmut.cjs`：真日志绿 / 造一条改了名的红 / 抽掉 SystemUI 行报"没测到"）。
+它读两本账：`裁圆新开 host=… 通道=…`（谁开始被裁）与 `裁圆按磁贴挡下 …`（磁贴确实被排除了）。
+退码 `1` 有两种可能，**守卫故意不二选一**：① 这一轮没真打开快速设置；② `TILE_CALLERS` 那条前缀
+被 OTA 改了（那就是磁贴正在被裁）—— 判别方法是看 SystemUI 有没有裁过东西。
+退码 `2` 是**没测到**（模块没重启 / 屏没亮 / 抓错段），不是"没问题"。
+没有 `_harness/` 时的裸查法：`adb logcat -d -s Opticon | grep -c "裁圆按磁贴挡下"` 要 ≥ 1，
+且 `grep -a "裁圆新开"` 里要同时有**桌面与 SystemUI 两户**（这一走必到）。**设置那一户 0 行是正常的**：
+它被注入了，但上面那一走不经它的取图标路径 —— 想量它得另外打开设置里带图标的那一页（应用列表 / 通知设置）。
+2026-10-21 实测：8 个"通道×宿主"开火、磁贴挡下 2 次，且 `PM.loadItemIcon` 同一通道先被挡下又新开
+⇒ 分得开的是调用方，不是通道名。
+这台守卫自己也被变异测过（`node _croprangemut.cjs`：五条，含一条负对照，每条自证样本真被改过）。
+旧的 `_notifyguard.cjs` 随"通知行按调用方放行"那条规则一起退休 —— 现在通知行是默认行为，不需要放行。
 
 **桌面主题图标（强制取色）**：每张未适配的图标一行判据，行首带**包名/资源名**，报一个应用名
 就能 grep 到它那一行；每 40 张一行汇总。
@@ -291,30 +297,39 @@ cc/top/小片/空洞/淡/色驱`），逐字段解释见判据台 `_harness/Self
 
 ### 管哪些界面（射程）
 
-「裁圆」这个功能名指的是**桌面与设置那一联**，不是"屏幕上所有图标"。射程由三层决定：
+**默认全裁，只排快速设置那一路**（2026-10-21 定：「裁圆算法应只排除快速设置的磁贴，别的应做到全覆盖」）。
+旧版这里是"白名单宿主 + 名单外按调用方放行"，那两层都已经删掉 —— 判据只有一处：
 
-1. **宿主名单** `IconHooks.CROP_HOSTS` = 作用域十条**减去** `com.android.systemui`。名单外的进程
-   照样挂钩子（标记 id、单色合成那些通道不受影响），但形状**原样交回**。
-2. **名单外点名放行的通道** `EXTRA_CROP_CHANNELS`：今天只有 SystemUI 的 `PM.getApplicationIcon`。
-3. **名单外按调用方放行**：SystemUI 里凡是 `com.android.systemui.statusbar.notification.*`
-   发起的取图标都裁 —— 这一条管的是**通知行左侧那颗应用图标**。
+1. **排除**：`CircleIconDrawable.TILE_CALLERS = com.android.systemui.qs.`，按**调用方**判
+   （`calledByQuickSettings`，堆栈只在 SystemUI 里读，别的过程读了白读）。
+   这一族在真机上盖住：磁贴本体（`qs.tiles` 217 个类）、**编辑/预览页**（`qs.tiles.dialog` 90）、
+   新面板（`qs.panels.*` / `qs.pipeline.*`）、第三方磁贴宿主（`qs.external` 59）——
+   数是从这台机器的 `SystemUI.apk` 三个 dex 里扫出来的（`node _qsfind.cjs D:/tmp/systemui.apk`）。
+2. **第二道**（防御性、不承重）：system_server 打标记时本来就跳过 `BIND_QUICK_SETTINGS_TILE` 的
+   `ServiceInfo`，所以磁贴自己的图标 id 也不会被标记。
 
-⚠ **为什么第 3 层必须是"调用方"而不是"通道"**（2026-10-17 从这台机器的 framework dex 里读出来的）：
-通知行的应用图标走 `ApplicationInfo.loadUnbadgedIcon` → `loadUnbadgedItemIcon` →
-`APM.getDrawable(pkg, resid, appInfo)`，而快速设置磁贴走的 `loadItemIcon`
-**内部第一件事就是回 `loadUnbadgedItemIcon`**（`1f6df0`）—— 两条路在框架里**汇到同一个出口**，
-通道名分不开它们。真机读数（17:03 那一轮，同一份日志）：
+⚠ **为什么必须按"调用方"而不是按"通道"**（2026-10-17 从这台机器的 framework dex 读出来的）：
+通知行的应用图标走 `loadUnbadgedIcon → loadUnbadgedItemIcon → APM.getDrawable`，而磁贴走的
+`loadItemIcon` **内部第一件事就是回 `loadUnbadgedItemIcon`**（`1f6df0`）—— 两条路在框架里
+**汇到同一个出口**，通道名分不开它们。
 
+🔴 **代价写在明处**：现在**每一个被注入的进程**都裁，包括第三方 app 里显示 app 图标的界面
+（作用域是你在管理器里选的，见「模块」页；**没注入的进程永远不裁，代码补不了**）。
+哪一户裁坏了，拿日志里那行 `裁圆新开 host=… 通道=…` 点名，往 `TILE_CALLERS` 旁边加排除，
+**不要回去改默认值** —— 漏一户看得见、能点名、可排除；多一户只是形状变了。
+
+**装机后必跑守卫**（它守的是"两头都别偷偷坏"）：
+
+```sh
+# 先走一遍：下拉两次通知栏 → 下拉一次快速设置（顺手打开编辑/预览页）→ 回桌面
+adb logcat -d -s Opticon > D:/tmp/lc.txt
+cd _harness && node _croprange.cjs D:/tmp/lc.txt
+# 退码 0 = 两头都对；1 = 磁贴一次都没挡下（没打开面板 或 前缀漂了）／宿主没被覆盖；2 = 这一轮没测到
 ```
-裁圆放行(按调用方) … Resources.getDrawable·标记id ← 通知行        ← 通知栏 4 张裁了
-裁圆挡住 … PM.loadItemIcon ← …IconAndNameCustomRepository$getCustomTileData$2   ← 快速设置预览页
-裁圆挡住 … Resources.getDrawable·标记id ← …SplashscreenContentDrawer            ← 启动画面
-裁圆挡住 … PM.loadItemIcon ← …FgsManagerControllerImpl$updateAppItemsLocked$2   ← 「正在运行的应用」
-```
 
-⚠ **第 3 层是对 SystemUI 类名的依赖**：OTA 把那个包改名，通知行的图标会**静默不裁**
-（现象与"功能没生效"一模一样）。挡住的那一行会点名"是谁在取"，所以查的时候
-`adb logcat -s Opticon | grep 裁圆挡住` 一眼就能看出是名单没覆盖还是通道变了。
+`⚪ 没测到` 与 `✅ 通过` 是两种读数，**守卫不许把前者报成后者**；这台守卫自己也有变异测
+（`node _croprangemut.cjs`：五条，含一条负对照，每条都自证样本真被改过）。
+旧的 `_notifyguard.cjs`（守"通知行还在不在裁"）随那条规则一起退休 —— 现在通知行是默认行为。
 
 ### 开关关掉时
 

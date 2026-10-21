@@ -485,105 +485,85 @@ private val clipLogLeft = AtomicInteger(CLIP_LOG_LIMIT)
 var clipHost: String = "?"
 
 /**
- * 本宿主该不该裁。**默认不裁**（fail-closed）—— 装配时由 [IconHooks] 按包名置位，
- * 名单见那边的 `CROP_HOSTS`。
+ * 射程（**2026-10-21 主人定：「裁圆算法应只排除快速设置的磁贴，别的应做到全覆盖」**）：
+ * **默认全裁，只排快速设置那一路**（宿主名只用于日志，见上面那行 [clipHost]）。
  *
- * ⚠ 为什么把默认设成"不裁"而不是"裁"：这条通道挂在**每个被注入的进程**的框架图标入口上
- *   （`Resources.getDrawable*` / `PackageManager.loadItemIcon`），默认裁就等于默认改了
- *   所有系统界面的图标形状。主人 2026-10-17 连着两次点的正是这件事 —— 第一次是快速设置里
- *   一块磁贴的**前景图层**被当应用图标裁了，第二次是「快速设置预览界面还是有影响」，
- *   而那一页走的两条通道（`PM.loadItemIcon` 23 次 / 标记 id 17 次）**都是"本该裁"的正门**，
- *   说明剩下的不是判据宽窄，是**射程**：强制裁圆管的是桌面与设置那两联，不该管 SystemUI。
- * 代价说清楚：走默认这条路的新宿主（比如以后加的第三个桌面）会**静默不裁**，
- *   现象与"功能没生效"一模一样 —— 所以下面那几行"未启用"总账是必需的，不是啰嗦。
+ * ⚠ **这一条把原来的"白名单宿主"整个翻过来了。** 旧设计是 fail-closed：`CROP_HOSTS` 名单外
+ *   整个进程不裁，只有 SystemUI 按调用方放行通知行那几次（`_notifyguard.cjs` 守的就是那条前缀）。
+ *   翻过来的理由不是"旧设计错了"，是它的**代价不对称**：漏一户 = 屏幕上有个方的，主人一句
+ *   「别的应做到全覆盖」就把判据定死了；而多一户 = 某个界面里本来方的图变圆，看得见、说得清、
+ *   可以点名排除 —— 所以下面那几行"谁被挡了"的账是必需的，不是啰嗦。
+ * 🔴 **代价写在明处**：作用域内的**每一个进程**现在都裁（第三方 app 里显示 app 图标的那些界面也是）。
+ *   哪一户裁坏了，拿 `裁圆` 那行日志的 `host=` 点名，往 [TILE_CALLERS] 那族旁边加排除，
+ *   **不要回去改默认值**。
  */
-@Volatile
-var cropThisHost: Boolean = false
-
 /**
- * 名单外宿主里**点名放行**的那几条通道（装配时由 `IconHooks.EXTRA_CROP_CHANNELS` 置一次）。
- * 空集 = 这个进程整个不裁，与只有 [cropThisHost] 时一模一样。
+ * 快速设置那一路的**调用方前缀**（不是通道名 —— 通道名分不开，见 [calledByQuickSettings]）。
+ * 只有一条，但它是**扫出来的**而不是猜的：2026-10-21 从这台机器的 `SystemUI.apk` 三个 dex 里
+ * 数过命名空间（`node _qsfind.cjs D:/tmp/systemui.apk`）—— `qs.tiles` 217、`qs.tiles.dialog` 90
+ * （= 主人点的"预览界面"那一页）、`qs.panels.*`、`qs.pipeline.*`、`qs.external` 59（第三方磁贴的宿主）
+ * **全都在 `com.android.systemui.qs.` 底下**，所以一条前缀盖住整族。
+ * ⚠ 第三方磁贴的 `TileService` 如果在**它自己进程**里取图标，这一条看不见（那边不读堆栈，见
+ *   [calledByQuickSettings] 那行的成本说明）—— 那种现象出现时先加日志再谈规则，不要提前扩面。
  */
-@Volatile
-var cropChannels: Set<String> = emptySet()
+private const val TILE_CALLERS = "com.android.systemui.qs."
 
-/**
- * 名单外的宿主**该不该进名单**，只有一个凭据：那一次取图标是**谁**在取、取了几次。
- *
- * 为什么现在要这一截（2026-10-17 主人第二报之后）：把 SystemUI 踢出名单确实修好了快速设置，
- * 但同一刀把**通知行那个应用图标**的裁圆也关了 —— 他的原话是「我通知的应用图标是要裁圆的」。
- * 而旧日志根本读不出这两件事怎么分开：`clip` 那 40 行额度**开机就被 SystemUI 烧光**
- * （`PM.loadItemIcon` 23 + 标记 id 17），通知行是**之后**才画的，一行不剩。
- * ⇒ 名单只能按"哪个界面"收，不能按"哪个进程"收 —— 这一截就是那把尺。
- *
- * 成本：只在**名单外**那条路上跑（今天唯一一户是 SystemUI），且
- *  ① 取堆栈只在累计表没满 64 项时付一次；
- *  ② 总账每 [SKIP_DUMP_EVERY] 次被挡才打一行，最多打 [SKIP_DUMP_MAX] 行。
- */
-private const val SKIP_DUMP_EVERY = 40L
-private const val SKIP_DUMP_MAX = 20L
-private val skipTally = java.util.concurrent.ConcurrentHashMap<String, Int>()
-private val skipCount = java.util.concurrent.atomic.AtomicLong(0)
-private val skipDumps = java.util.concurrent.atomic.AtomicLong(0)
-
-/**
- * 只留框架/应用自己的帧。
- * ⚠ **不许按"我们自己的前缀"滤**：release 包里 R8 把我们的类改成 `he.a` / `dz`，
- *   那条过滤一条都滤不掉（本仓 10-17 刚为这个改过一次通道名的写法）。
- *   反过来按"要谁"滤是稳的：调用方必然是 `android.*` / `com.android.*`。
- */
-private fun callerHint(): String =
-  Thread.currentThread().stackTrace.asSequence()
-    .map { it.className }
-    .filter { it.startsWith("com.android.") || it.startsWith("android.") }
-    .take(3)
-    .joinToString("<-") { it.substringAfterLast('.') }
-
-private fun noteSkip(from: String) {
-  val key = "$from ← " + callerHint()
-  skipTally.merge(key, 1) { a, b -> a + b }
-  val n = skipCount.incrementAndGet()
-  if (skipTally.size <= SKIP_PAIR_MAX && skipTally[key] == 1) {
-    // **每一对"通道×调用方"第一次出现就打一行**：这是量"该不该放行"的原始数据，
-    // 攒够 40 次才打的旧写法在 SystemUI 这种低量宿主上永远打不出来（16:45 那一轮就是 0 行）。
-    Log.d(TAG, "裁圆挡住 host=$clipHost 第$n 次：$key")
-  }
-  if (n % SKIP_DUMP_EVERY == 0L && skipDumps.getAndIncrement() < SKIP_DUMP_MAX) {
-    val rows = skipTally.entries.sortedByDescending { it.value }.take(8)
-      .joinToString(" ; ") { "${it.key} ×${it.value}" }
-    Log.d(TAG, "裁圆未在本宿主启用 host=$clipHost 累计挡下 $n 次，通道×调用方 top：" + rows)
-  }
-}
-
-/** [noteSkip] 的对数上限：超过就不再取堆栈（表满了说明这一轮的账已经够了）。 */
-private const val SKIP_PAIR_MAX = 64
-
-/**
- * SystemUI 里"这条通道是不是**通知行**在取应用图标"。
- *
- * 为什么必须按调用方分（2026-10-17 从这台机器的 framework dex 里读出来的，不是猜的）：
- * 通知行的应用图标是 `statusbar.notification.row.icon.AppIconProviderImpl.fetchAppIconBitmapInfo`
- * → `ApplicationInfo.loadUnbadgedIcon(pm)` → `PackageItemInfo` 那份实现
- * → `PackageManager.loadUnbadgedItemIcon` → `APM.getDrawable(pkg, resid, appInfo)`；
- * 而快速设置的磁贴走 `loadItemIcon` —— **`loadItemIcon` 内部第一件事就是回 `loadUnbadgedItemIcon`**
- * （dex `1f6df0` 那一条）。两条路在框架里**汇到同一个出口**，所以通道名分不开它们，
- * 只有"是谁调的"分得开。
- */
-private fun calledByNotificationRow(): Boolean {
-  // 堆栈只在 SystemUI 里读：别的新宿主将来落到这条判据上时，先按"挡住"处理（少裁比多裁好收拾）。
-  if (clipHost != SYSTEMUI_HOST) return false
-  return Thread.currentThread().stackTrace.any { it.className.startsWith(NOTIFY_CALLER) }
-}
-
+/** 只在 SystemUI 里读堆栈：磁贴界面只可能由它画，别的过程读了白读（`stackTrace` 一次是微秒级，
+ *  而这处每个图标都要过一次 —— 本仓为"只报数的列也要量 ms/张"撤回过一整把尺）。 */
 private const val SYSTEMUI_HOST = "com.android.systemui"
 
-private const val NOTIFY_CALLER = "com.android.systemui.statusbar.notification."
+/**
+ * 「这一次是不是快速设置在取图标」。
+ *
+ * 为什么必须按**调用方**分，而不是按通道（2026-10-17 从这台机器的 framework dex 里读出来的）：
+ * 通知行的应用图标是 `statusbar.notification.row.icon.AppIconProviderImpl.fetchAppIconBitmapInfo`
+ * → `ApplicationInfo.loadUnbadgedIcon` → `PackageManager.loadUnbadgedItemIcon` → `APM.getDrawable`；
+ * 而磁贴走 `loadItemIcon`，**它内部第一件事就是回 `loadUnbadgedItemIcon`**（dex `1f6df0`）——
+ * 两条路在框架里**汇到同一个出口**，通道名分不开它们，只有"是谁调的"分得开。
+ */
+private fun calledByQuickSettings(): Boolean {
+  if (clipHost != SYSTEMUI_HOST) return false
+  return Thread.currentThread().stackTrace.any { it.className.startsWith(TILE_CALLERS) }
+}
 
-/** 按调用方放行时打的账：键里不再取堆栈（上面那条判据已经读过一次了）。 */
-private fun noteAllow(from: String) {
-  val key = "$from ← 通知行(按调用方放行)"
+/**
+ * 挡下一次时进账。**"没挡下"与"没东西可挡"是两件事**：这道判据失效（AOSP 改了类名、
+ * OTA 把 `qs.` 挪走）的现象正是"磁贴被裁了"，所以既要有挡下的账，也要在收尾时报
+ * "这一轮 SystemUI 里裁了几张、挡了几次"（见 [noteTileSkip] 与 `IconHooks` 的收尾汇总）。
+ */
+private fun noteTileSkip(from: String) {
+  val key = "$from ← 磁贴(按调用方挡住)"
   skipTally.merge(key, 1) { a, b -> a + b }
-  if (skipTally[key] == 1) Log.d(TAG, "裁圆放行(按调用方) host=$clipHost：$key")
+  if (skipTally[key] == 1) Log.d(TAG, "裁圆按磁贴挡下 host=$clipHost：$key")
+}
+
+/**
+ * **射程的账**（2026-10-21 随"默认全裁"改版）。
+ *
+ * 为什么方向反了：旧账记的是"**挡住谁**"（白名单时代，名单外全被挡，得留下"该不该放它进来"的原始数据）。
+ * 默认全裁之后，坏的一户的现象是"某个界面的图本来方的是圆的"，要回答的是**"到底哪些界面开始裁了"** ——
+ * 所以这本账记 `通道 × 宿主` 的第一次与总量。没有它，"全覆盖"这三个字就只能靠信。
+ * ⚠ 每个「通道×宿主」**第一次**必打一行（低量宿主攒够 N 次才打的写法在这仓里翻过车：
+ *   SystemUI 那一轮就是 0 行）；总账每 [RANGE_DUMP_EVERY] 次打一行，最多 [RANGE_DUMP_MAX] 行。
+ * 成本：一次 `ConcurrentHashMap.merge`，**不取堆栈**（堆栈只在 SystemUI 那一判里读一次）。
+ */
+private const val RANGE_DUMP_EVERY = 200L
+private const val RANGE_DUMP_MAX = 20L
+private val skipTally = java.util.concurrent.ConcurrentHashMap<String, Int>()
+private val cropTally = java.util.concurrent.ConcurrentHashMap<String, Int>()
+private val cropCount = java.util.concurrent.atomic.AtomicLong(0)
+private val cropDumps = java.util.concurrent.atomic.AtomicLong(0)
+
+private fun noteCrop(from: String) {
+  val key = "$from ← $clipHost"
+  cropTally.merge(key, 1) { a, b -> a + b }
+  if (cropTally[key] == 1) Log.d(TAG, "裁圆新开 host=$clipHost 通道=$from（第一次）")
+  val n = cropCount.incrementAndGet()
+  if (n % RANGE_DUMP_EVERY == 0L && cropDumps.getAndIncrement() < RANGE_DUMP_MAX) {
+    val rows = cropTally.entries.sortedByDescending { it.value }.take(8)
+      .joinToString(" ; ") { "${it.key} ×${it.value}" }
+    Log.d(TAG, "裁圆累计 $n 次，通道×宿主 top：$rows")
+  }
 }
 
 /**
@@ -605,15 +585,13 @@ private fun noteAllow(from: String) {
 fun clipToCircle(icon: Drawable, from: String): Drawable {
   // 配置按 TTL 重读，所以界面里关掉开关后很快生效，不用重启进程。
   if (!ModuleRuntime.options().circleEnabled) return icon
-  // 射程：名单里的宿主全裁；名单外的先看点名放行的通道，再看"是不是通知行在取应用图标"
-  // —— SystemUI 里磁贴与通知行在框架内**汇到同一个出口**，只有调用方分得开（见 [calledByNotificationRow]）。
-  if (!cropThisHost && from !in cropChannels) {
-    if (!calledByNotificationRow()) {
-      noteSkip(from)
-      return icon
-    }
-    noteAllow(from)
+  // 射程（2026-10-21 起）：**默认全裁，唯一的排除是快速设置那一路**。
+  // 磁贴与通知行在框架里汇到同一个出口，只有调用方分得开（见 [calledByQuickSettings]）。
+  if (calledByQuickSettings()) {
+    noteTileSkip(from)
+    return icon
   }
+  noteCrop(from)
   if (clipLogLeft.decrementAndGet() >= 0) {
     Log.d(TAG, "clip from=$from host=$clipHost : ${icon.javaClass.simpleName} " +
       "${icon.intrinsicWidth}x${icon.intrinsicHeight}")
