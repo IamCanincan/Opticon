@@ -68,6 +68,14 @@ for (const g of gates) {
     for (const cand of [stem + '_mut.cjs', '_' + stem.replace(/^_/, '') + '_mut.cjs', stem + 'mut.cjs'])
       if (has(cand)) { hard.push(cand + ' 存在'); break; }
   }
+  // ⚠ 2026-10-21 补的一档：**判定本体被抽成 `.sh` 文件**的那些段（`namedfloor.sh` / `selftestgate.sh` /
+  //   `corpusgate.sh`），它的变异台叫 `_Xmut.cjs`，而闸体里只有一行 `. ./X.sh` —— 只扫 `node …` 就永远配不上，
+  //   于是"刚给它做过四条变异证明"的段又被列成"什么都没有"。所以顺 source 关系也配一次。
+  for (const m of body.matchAll(/(?:^|\s)\.\s+\.\/([A-Za-z0-9_-]+)\.sh/g)) {
+    const stem = m[1];
+    for (const cand of [`_${stem}_mut.cjs`, `${stem}_mut.cjs`])
+      if (has(cand)) { hard.push(cand + ' 存在（配 ' + stem + '.sh）'); break; }
+  }
   for (const c of cls) {
     const f = ktFile(c);
     if (!f) { soft.push(`${c} 源文件没找到(?)`); continue; }
@@ -79,6 +87,8 @@ for (const g of gates) {
   // `语义` 排在最前一档：它否证的正是本仓反复栽的那种瞎 —— **闸走的输入通道比装机窄**
   // （第九闸 2026-10-21：3 参 `build` 顺手把 `plateIsLayer` 钉成 false，地板那一刀从没被量过）。
   // "驱动里有自证失败串"和"今天真响过"都盖不住那一种。
+  // ⚠ 别拿 `语义 N` 去和账本行数对：账本 `bench/semanticmut.txt` 是 6 条，而这里数的是**段** ——
+  //   `8/8` 有两个号、`9/9` 有一个号，加错看着像"多证了一条"。
   if (semOf(g)) g.tier = '语义', g.ev = semOf(g);
   else if (hard.length) g.tier = '脚本', g.ev = hard.join('、');
   else if (live.has(g.no)) g.tier = '活证据', g.ev = '今天真的响过：' + live.get(g.no);
