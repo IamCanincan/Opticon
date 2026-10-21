@@ -54,6 +54,16 @@ rm -f bench/reg/*.txt
 rm -f bench/reg/yard_dump.tsv
 
 echo "== 1/7 编译 =="
+# **先扫 shell 雷**：双引号包反引号 = 命令替换。这条不是洁癖 —— 2026-10-21 我给这一段补"缺语料要说句话"的门，
+# 门里那句 `echo "… sh audit.sh …"`（反引号）把 `audit.sh` **真的执行了**，回归台没停住，反而去 pull 了手机。
+# 缺 node 就明说没查，不许装成查过（本仓那一族：0 命中常常是仪器读不了，不是没有）。
+if command -v node >/dev/null 2>&1; then
+  SB=0; node _shbacktick.cjs . > /dev/null 2>&1 || SB=$?
+  [ "$SB" = "0" ] || { echo "!! .sh 里有「双引号包反引号」的行 —— 那会被执行，不是排版；见 _shbacktick.cjs 的输出"; exit 1; }
+  echo "   shell 雷 0 处 ✓"
+else
+  echo "   ⚠ 这台没有 node —— shell 雷这一项**没查**（不是查过且干净）"
+fi
 sh build.sh > /dev/null 2>&1
 E=$(grep -cE "error:" _kt.log || true)
 [ "$E" != "0" ] && { echo "!! 编译有 $E 个 error，先修它"; exit 1; }
@@ -89,10 +99,10 @@ echo "== 3/7 语料（边长 $EDGES）=="
 #   `set -e` 直接把整机掐死在表头后面，新机器上看到的就是一片黑（退码 1，但没话说）。
 #   缺什么、怎么重建，必须在缺的那一刻说清楚。
 if [ ! -d "$CORPUS" ] || [ "$(ls "$CORPUS"/*.png 2>/dev/null | wc -l)" -lt 1 ]; then
-  echo "!! 语料 $CORPUS/ 不在或空 —— 这一台子跑的必须是**真图标**，不许退回任何自造样本。"
-  echo "   重建：连着那台手机 `sh audit.sh` 抓一轮 → `node _mkruntime.cjs <抓取目录> corpus_runtime` → `node _mkrec_model.cjs`。"
-  echo "   另三份：`rec_blank/` 在库里（真机事故那 34 张，不可复现）；`plate_model/`、`yard_model/` 的重建路径**没核实**，"
-  echo "   缺它们时第 16 闸与第 5 闸会各自明说没跑。全都在 → 再跑一次这条。"
+  echo '!! 语料 '"$CORPUS"'/ 不在或空 —— 这一台子跑的必须是**真图标**，不许退回任何自造样本。'
+  echo '   重建：连着那台手机 sh audit.sh 抓一轮 → node _mkruntime.cjs <抓取目录> corpus_runtime → node _mkrec_model.cjs。'
+  echo '   另三份：rec_blank/ 在库里（真机事故那 34 张，不可复现）；plate_model/、yard_model/ 的重建路径**没核实**，'
+  echo '   缺它们时第 16 闸与第 5 闸会各自明说没跑。全都在 → 再跑一次这条。'
   exit 1
 fi
 for e in $(echo $EDGES | tr ',' ' '); do
@@ -141,7 +151,7 @@ YARN=$(grep -oE "^YARD n=[0-9]+" bench/reg/yard.txt | grep -oE "[0-9]+$")
 if [ "${FGN:-0}" = "0" ]; then
   echo "!! 对表台这一轮**一张装机输入都没吃**（$YARDDIR 里没有 *_model.png，或 index 没有 modelFile 列）——"
   echo "   那它退回 *_fg.png / 合成图口径：乙类两边差 1.5 倍构图，iouMed 会虚高或虚低都说不清"
-  echo "   （`GeoKt` 量过底案：mono↔fg 0.939、mono↔model 0.175）。"
+  echo '   （GeoKt 量过底案：mono↔fg 0.939、mono↔model 0.175）。'
   echo "   换 YARDDIR= 指向同时有 *_mono.png 与 *_model.png 的那轮抓取，别把这一项当过了。"; exit 1
 fi
 echo "   对表口径：$FGN/$YARN 张吃的是装机那一张（_model.png，输出换算回可见区后对表）"
@@ -438,7 +448,7 @@ else
   [ "$XSRC" != "0" ] && { echo "!! 跨 canvas 账自己判了不通过（退码 $XSRC：类漂移或开窗=0），见 bench/reg/crossedge.txt"; tail -8 bench/reg/crossedge.txt; exit 1; }
   [ "$NEWXS" = "$OLDXS" ] || {
     echo "!! 跨 canvas 的读数动了："; echo "   基线 $OLDXS"; echo "   这轮 $NEWXS"
-    echo "   逐张对照见 bench/reg/crossedge.txt（`~` 那几行是数层，`!!` 是类漂移）；"
+    echo '   逐张对照见 bench/reg/crossedge.txt（~ 那几行是数层，!! 是类漂移）；'
     echo "   同一张在两个尺寸上长得不一样 = 屏幕上桌面与抽屉不一致，认账也要看清是谁进出再 --update"; exit 1; }
   echo "   $NEWXS —— 与基线逐字相同"
 fi
