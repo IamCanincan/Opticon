@@ -14,23 +14,32 @@
 // ⚠ **退码 0 只有在 `配对>0` 时才算话**（本仓那一族："0 命中"常常是仪器读不了，不是没有）。
 // ⚠ 彩色那两行是**限流**的（`BOX_LOG_LIMIT=200`，每实例一次），判据行按内容走 —— 所以
 //   "只有彩色行没有判据行"是**正常**的（自带单色层的应用根本不上模型）；反过来才是账。
-const fs = require('fs');
+const fs = require('fs'), path = require('path');
 
 // 彩色那支的两条出口（`CircleIconDrawable.measureWindow`）：plate = `裁了只剩`，内切 = `裁了还剩`。
-// ⚠ 交替必须写 `(只剩|还剩)`：第一版写成 `(剩|还剩)`，于是 **plate 那一支一条都没配上线**
-//   （真机打的是 `裁了只剩`），而内切那一支照配 —— 这台子当场把"两本账都读不出"判成"没配对"。
-//   三条控制（相同→0 / 差 1 个点→1 / 没配对→2）就是为抓这个而设的，它**第一次跑就抓到了**。
-const COLOUR = /裁圆外框: (\S+).*?（扫描 (\d+)x(\d+)）裁了(只剩|还剩) (\d+)%/;
+// ⚠ 两处**只有真日志能教**的写法，第一版都踩了：
+//   ① 交替必须写 `(只剩|还剩)`（写成 `(剩|还剩)` ⇒ plate 那一支一条都配不上）；
+//   ② `）` 与 `裁了只剩` 之间**有一个空格**（那条消息是 `…（扫描 …）" + " 裁了只剩 …"` 两段拼的，
+//      内切那一支没有空格）⇒ 不写 `\s*` 就是**plate 这一支整条瞎**。
+//   而这两条错都在"报 0 命中"底下藏着：第一版对着真日志跑，报的是"彩色行 0 包 / 没配对"（退码 2），
+//   看起来像"今天没有 plate 档图标"，其实当天真机上就有 `com.eg.android.AlipayGphone` 那一条。
+//   ⇒ 三条控制的样本现在**逐字从 2026-10-21 的真日志里抠**，不再由我自己编（对着源文件验探针 ≠ 对着容器验）。
+const COLOUR = /裁圆外框: (\S+).*?（扫描 (\d+)x(\d+)）\s*裁了(只剩|还剩) (\d+)%/;
 const ENTRY = /入口=([^\s，]+)/;
 // 判据行拆成三段各配各的（以前一条大正则里带 `\S+?` + 可选尾巴，`几何=缩1.42× 档=plate` 那种
 // 中间还有空格的读数**一条都配不上** —— 于是判据侧恒 0 行，这台子会永远报"没配对"）。
-const DIAG_HEAD = /Mono: diag#\d+ edge=(\d+) sig=(\S+) (\S+)/;
+// ⚠ 标签**不在 sig 后面**：真机两种形状都要认 ——
+//   `diag#N edge=… sig=… 键=… <标签> …`（重算）与 `diag#N edge=… 键=… <标签> … 缓存=内存`（命中，没有 sig）。
+//   第一版按 `sig=(\S+) (\S+)` 取标签，于是每个包都被登记成 `键=201d9f888acef19b` ——
+//   配对恒 0，而这正是"控制1 能数到"那一条要抓的：**探针瞎了，报出来像"今天没数据"**。
+const DIAG_HEAD = /Mono: diag#\d+ edge=(\d+)(?: sig=\S+)?(?: 键=\S+)? (\S+)/;
 const DIAG_POL = /接管=(开|关) 判剩(\d+)% 入口=([^\s]+)/;
 const DIAG_GEO = /几何=(\S+)/;
 
 function parse(text) {
   const colour = new Map();   // pkg → {pct, plate, scan, entry}
-  const mono = new Map();     // pkg → {pct, entry, edge, geo, edgeOnly}
+  const mono = new Map();     // pkg → [{pct, entry, edge, geo}]
+  let notJudged = 0;          // 带 `Mono: diag#` 前缀但**没重算**的行（命中 / 重诊断）
   for (const line of text.split(/\r?\n/)) {
     let m = COLOUR.exec(line);
     if (m) {
@@ -42,8 +51,15 @@ function parse(text) {
     }
     m = DIAG_HEAD.exec(line);
     if (!m) continue;
+    // ⚠ **只配真重算过的那一行**。`Mono: diag#` 这个前缀底下有三种行：
+    //   ① 重算行（`… → 已交出掩码 几何=… 接管=… 判剩=…`）—— 只有它有极性读数；
+    //   ② 命中行（`… → 直接交缓存里那张（未重算）`）—— 没重算就没有判据，缺 `判剩` 是**对的**；
+    //   ③ 重诊断行（直方图 / ASCII 那一段，没有 `→` 出口）。
+    //   第一版三种都当判据行收，于是真日志上凭空报出 **21 行"彩色是 plate 而判据行没窗口"** ——
+    //   那是我把"没重算"读成了"两本账不一致"。
+    if (!/→ (已交出掩码|判据不成立)/.test(line)) { notJudged++; continue; }
     const pol = DIAG_POL.exec(line);
-    const p = pkgOf(m[3]);
+    const p = pkgOf(m[2]);
     // 同一个包会有好几张（快捷方式 / 多尺寸）：**只要有一行不等就算不等**，所以收进数组。
     if (!mono.has(p)) mono.set(p, []);
     mono.get(p).push({
@@ -51,7 +67,7 @@ function parse(text) {
       geo: (DIAG_GEO.exec(line) || [, '-'])[1],
     });
   }
-  return { colour, mono };
+  return { colour, mono, notJudged };
 }
 
 /** 标签两种形式都要认（`包名/类型/入口名` 与 `pm:包名`）—— 与生产 `IconNames.matchesPkg` 同一口径。 */
@@ -61,7 +77,7 @@ function pkgOf(label) {
 }
 
 function judge(text, tag) {
-  const { colour, mono } = parse(text);
+  const { colour, mono, notJudged } = parse(text);
   let pair = 0, bad = 0, noWindow = 0;
   for (const [pkg, c] of colour) {
     const rows = mono.get(pkg);
@@ -80,30 +96,46 @@ function judge(text, tag) {
       }
     }
   }
-  console.log(`${tag} 配对 ${pair} 行｜不等 ${bad} 行｜彩色是 plate 档而判据行没窗口 ${noWindow} 行｜彩色行 ${colour.size} 包 / 判据行 ${mono.size} 包`);
+  console.log(`${tag} 配对 ${pair} 行｜不等 ${bad} 行｜彩色是 plate 档而判据行没窗口 ${noWindow} 行｜彩色行 ${colour.size} 包 / 判据行 ${mono.size} 包 / 没重算的 diag 行 ${notJudged} 行（不参与配对）`);
   if (bad || noWindow) return 1;
   if (!pair) return 2;
   return 0;
 }
 
-// ── 三条控制：这台子必须先证明自己读得懂"相同/不同/没配对" ──
-const FIX_SAME = [
-  'D/Opticon: 裁圆外框: org.mewx.wenku8/BitmapDrawable/ic_launcher 画布 192x192 图案 150x170（扫描 128x128）裁了只剩 55%（<60%） → 不裁、缩进圆里 body/far=0.90 放 1.42×，圆内补白 入口=keep',
-  'D/Opticon: Mono: diag#7 edge=384 sig=abcdef123456 org.mewx.wenku8/BitmapDrawable/ic_launcher H=2 底占=0.00 框内=0.93 → 已交出掩码 几何=缩1.42× 档=plate 接管=开 判剩55% 入口=keep',
-].join('\n');
-// 就是真机那个 contacts 形状：彩色 50 / 判据 49 —— 差 1 个点，正是这一刀要消灭的那一种
-const FIX_BAD = FIX_SAME.replace('判剩55%', '判剩49%').replace(/wenku8/g, 'com.android.contacts');
-const FIX_NOPAIR = 'D/Opticon: 裁圆外框: a.b/BitmapDrawable/ic_launcher 画布 96x96 图案 90x90（扫描 128x128）裁了还剩 71% 不透明圆盘 r=63.0 → 放 1.02×\n';
-
-const arg = process.argv[2];
-if (arg === '--selftest') {
-  const got = [judge(FIX_SAME, '[控制1 相同]'), judge(FIX_BAD, '[控制2 差1点]'), judge(FIX_NOPAIR, '[控制3 没配对]')];
-  const want = [0, 1, 2];
+// ── 四条控制：这台子必须先证明自己读得懂"能数到 / 相同 / 不同 / 没配对" ──
+// ⚠ 样本**不是我自己编的**，是从 2026-10-21 真机日志里抠出来的三行（`bench/twobook_sample.txt`：
+//   `com.eg.android.AlipayGphone/drawable/appicon_push` 那条彩色 plate 行 + 它两条判据行，
+//   两本账都是 `0%`、入口都是 `keep+spiky`）。第一版的样本是我按"我以为日志长什么样"写的，
+//   于是三条控制全绿、而对着真日志跑**一条都配不上**（`）` 后面那个空格）——
+//   这就是"对着源文件验探针 ≠ 对着容器验"，本仓写过，今天又写一次。
+const SAMPLE = path.join(__dirname, 'bench', 'twobook_sample.txt');
+if (!fs.existsSync(SAMPLE)) {
+  console.log(`!! 没有 ${SAMPLE} —— 控制没有真样本可用（不许退回我自己编的字符串）`);
+  process.exit(2);
+}
+const real = fs.readFileSync(SAMPLE, 'utf8');
+const colourLine = (real.match(/^[^\n]*裁圆外框[^\n]*$/) || [''])[0];
+const withPair = (pct) => real.replace(/判剩(\d+)%/g, `判剩${pct}%`);
+const controls = [
+  // ① **能数到非零**：拿真样本跑，配对必须 ≥1（这一条专抓"探针瞎了报 0 命中"）
+  [judge(real, '[控制1 能数到]'), 0, '真样本配不上对（探针瞎了）'],
+  // ② 相同 → 0
+  [judge(withPair('0'), '[控制2 相同]'), 0, '把两边改成相同却还判红'],
+  // ③ 只差 1 个点 → 1（就是 contacts 那一种）
+  [judge(withPair('1'), '[控制3 差1点]'), 1, '差 1 个点读不出来'],
+  // ④ 只有彩色行、没有判据行 → 2（"没配对"必须与"通过"分得开）
+  [judge(colourLine, '[控制4 没配对]'), 2, '没配对被读成了通过'],
+];
+if (process.argv[2] === '--selftest') {
+  const want = [0, 0, 1, 2];
   let wrong = 0;
-  for (let i = 0; i < got.length; i++) if (got[i] !== want[i]) { wrong++; console.log(`!! 控制${i + 1} 退码 ${got[i]}，应为 ${want[i]} —— 这台子读不出${['相同', '不等', '没配对'][i]}`); }
-  console.log(wrong ? `!! ${wrong}/3 条控制不过` : '三条控制全过 ✓（相同→0 / 差 1 个点→1 / 没配对→2）');
+  for (let i = 0; i < controls.length; i++) {
+    if (controls[i][0] !== want[i]) { wrong++; console.log(`!! 控制${i + 1} 退码 ${controls[i][0]}，应为 ${want[i]} —— ${controls[i][2]}`); }
+  }
+  console.log(wrong ? `!! ${wrong}/4 条控制不过` : '四条控制全过 ✓（能数到→0 / 相同→0 / 差 1 个点→1 / 没配对→2）');
   process.exit(wrong ? 1 : 0);
 }
-if (!arg) { console.log('用法: node _twobook.cjs <logcat 文件> | --selftest'); process.exit(2); }
+const arg = process.argv[2];
+if (!arg || arg === '--help') { console.log('用法: node _twobook.cjs <logcat 文件> | --selftest'); process.exit(2); }
 if (!fs.existsSync(arg)) { console.log(`!! 没有 ${arg}`); process.exit(2); }
 process.exit(judge(fs.readFileSync(arg, 'utf8'), '两本账'));

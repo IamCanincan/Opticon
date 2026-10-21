@@ -75,6 +75,10 @@ signing.properties
 !/_harness/bench/*_floor.txt
 !/_harness/bench/gate_evidence.txt
 !/_harness/bench/semanticmut.txt
+# `_twobook.cjs` 四条控制的**真日志样本**（3 行，2026-10-21 从设备 logcat 抠的）。
+# 为什么它必须在库里：控制样本一旦回到"我自己编的字符串"，这台子就又回到
+# "对着源文件验探针"那个错法上（它第一次跑就是这么瞎的：`）` 后面那个空格）。
+!/_harness/bench/twobook_sample.txt
 !/_harness/bench/reg/
 /_harness/bench/reg/*
 !/_harness/bench/reg/*.pin
