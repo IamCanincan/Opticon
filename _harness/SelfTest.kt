@@ -639,6 +639,29 @@ fun main() {
       r3 == 1.0, "32×8 在 32×16 上=$r3")
   }
 
+  // ── 第三十四组：**量测格子只有一个来源**（2026-10-21，两本账合成一本）──
+  //     `IconCropWindow.scanSize` 以前抄在 `MaskedDrawable.measureWindow` 里，染色那支没有份 ——
+  //     于是同一条 `PLATE_SUBJECT_MIN=50` 在彩色那本账上标定、由判据那本账去比（装机差 3 个点）。
+  //     这三条钉的是**格子本身**：改坏算式，第 19 闸（`TwoAcctKt`）与这三条一起红。
+  run {
+    val sq = com.iamcanincan.opticon.circle.IconCropWindow.scanSize(192, 192, false)
+    val small = com.iamcanincan.opticon.circle.IconCropWindow.scanSize(96, 96, false)
+    val smallC = com.iamcanincan.opticon.circle.IconCropWindow.scanSize(96, 96, true)
+    val unknown = com.iamcanincan.opticon.circle.IconCropWindow.scanSize(1, 1, true)
+    val wide = com.iamcanincan.opticon.circle.IconCropWindow.scanSize(240, 160, false)
+    val none = com.iamcanincan.opticon.circle.IconCropWindow.scanSize(0, 0, true)
+    println("         量测格子  192²→$sq 96²→$small（canonical 96²→$smallC）尺寸不知→$unknown 240×160→$wide 0×0→$none")
+    check("量测格子：192² 降到长边 128（彩色与染色现在共用这一个数）", sq == (128 to 128), "192²→$sq")
+    check("量测格子：96² **不放大**（min(1f,…) 那一支），而 canonical 的同一张要撑到 128 —— " +
+      "两条分岔就在这一个数上，把它写成无条件 128 会连带改掉老式小图的档位",
+      small == (96 to 96) && smallC == (128 to 128), "96²→$small／canonical→$smallC")
+    check("量测格子：固有尺寸不知的（自适应）按 canonical 撑到 128²", unknown == (128 to 128), "→$unknown")
+    check("量测格子：非方形等比降（240×160 → 128×85，不是 128×128 —— 拉成正方就是通知那族犯过的错）",
+      wide.first == 128 && wide.second == 85, "240×160→$wide")
+    check("量测格子：尺寸不成立时给 0×0（调用方自己兜，不许算出 0 以下的格子）",
+      none == (0 to 0), "0×0→$none")
+  }
+
   println(if (failed == 0) "全部通过" else "!! $failed 条不成立")
 }
 

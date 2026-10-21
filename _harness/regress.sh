@@ -449,6 +449,42 @@ node _flat.cjs > bench/reg/flatink.txt || FLAT_RC=$?
 head -7 bench/reg/flatink.txt
 [ "$FLAT_RC" = "0" ] || { echo "!! 平块坡数涨了（或地板/输入坏了）—— 见上面"; exit 1; }
 
+# —— 第十九闸：**两本账一本账**（2026-10-21，极性的取数从"判据那一本"改回"彩色那一本"）。
+# 为什么必须单列（现量，不是推断）：`PLATE_SUBJECT_MIN=50` 这条线是在**彩色那行 `裁了只剩`** 上标定的
+#   （wenku8 真机 55%），却一直由判据那一本去比（量喂进模型那张、还多卡一道 `GEO_ZOOM_CAP`）。
+#   两本账装机现量差 **3 个点**：wenku8 55→52、`com.android.contacts` 彩色 **50** / 判据 **49** ——
+#   只差 1 个点，同一个模块就会对同一张图给两个答案（彩色把那块缩进圆里保住、染色把它当底摘掉）。
+#   而**前十八闸没有一条看着这根缝**：第十六闸钉的是判据那一本的开火集/波及集。
+# 钉的是**集合与散布**：两本口径各自的开火集（`开火集=` / `老开火集=`）+ 三条支各自的
+#   「差≥3 / 差≥5 / 极性翻 / 档翻 / 最大差」+ `fgNear`。
+# ⚠ `fgNear` 是这台子**自己看得见多少**（只给前景层那一支里、老口径够得着 40% 的张数，现量 0）：
+#   没有这一位，"极性翻 0 张"分不清是**不会翻**还是**语料里没有候选**（本仓那族：空跑当通过）。
+# ⚠ 这一闸现在的绿 = **波及面为空**，不是"这条缝不重要"。它买的是那条 1 个点的结构缝；
+#   而非自适应那一支 55↔52 的**采样**漂移离线复现不了（语料只有 384 那一张），
+#   装机由 `_twobook.cjs` 逐包核（`判剩=` 必须等于彩色那行的 `裁了只剩`，不等就非零退出）。
+echo "== 19/19 两本账一本账 =="
+# ⚠ 对照语料 `twobook_ctrl/`（`node _mk_twobook_ctrl.cjs` 造的，1.3 KB，**可复现所以入库**）：
+#   真语料那 132 张上极性翻 **0 张**，这道闸对"把取数退回判据那一本"这个变异**不会响** ——
+#   那一张两本账判定本来就相反（判据 55% 开火 / 彩色恒满幅不开火），`flip=1` 才是这台子的牙。
+#   缺它就等于把闸退回空跑，所以缺了**直接不跑**，不许悄悄少一份分母。
+[ -d twobook_ctrl ] || { echo "!! 缺对照语料 twobook_ctrl/ —— 第 19 闸会退回空跑（先 node _mk_twobook_ctrl.cjs）"; exit 1; }
+TARC=0
+run harness.TwoAcctKtKt "$CORPUS" "$PLATECORPUS" twobook_ctrl > bench/reg/twoacct.txt || TARC=$?
+grep -q '^2A ' bench/reg/twoacct.txt || {
+  echo "!! 两本账没出数 —— 驱动或语料坏了（它自己那几行在下面）"; tail -6 bench/reg/twoacct.txt; exit 1; }
+NEWT=$(grep '^2A ' bench/reg/twoacct.txt)
+if [ -n "$UPDATE" ]; then
+  echo "$NEWT" > bench/reg/twoacct.pin; echo "   --update：已把这一轮钉成新基线 $NEWT"
+else
+  OLDT=$(cat bench/reg/twoacct.pin 2>/dev/null)
+  [ -z "$OLDT" ] && { echo "!! 没有 bench/reg/twoacct.pin —— 没基线不算过（先 sh regress.sh --update 钉一次）"; exit 1; }
+  [ "$TARC" != "0" ] && { echo "!! 两本账自己判了不通过（退码 $TARC，最常见是「两本口径都没开火」）"; tail -2 bench/reg/twoacct.txt; exit 1; }
+  [ "$NEWT" = "$OLDT" ] || {
+    echo "!! 两本账的读数动了："; echo "   基线 $OLDT"; echo "   这轮 $NEWT"
+    echo "   逐张对照见 bench/reg/twoacct.txt（开火集进出 = 极性的归属变了，是要上屏的行为变化）"; exit 1; }
+  echo "   $NEWT —— 与基线逐字相同"
+fi
+
 # == 8/8 「自画单色层是一块饼」那条闸的射程账（2026-10-19 深夜加）==
 # 它管的不是像素，是**别改谁的图**：63 张真自画层里只许开火 etar 那一张，飞鸟（不在语料里，
 # 从 `_two/` 喂进去）必须开火 —— 名单已删，它靠的就是这条判据。三条控制里有一条专量"窗"：

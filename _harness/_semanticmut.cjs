@@ -20,6 +20,8 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const ROOT = path.resolve(__dirname, '..');
 const MASK = 'app/src/main/kotlin/com/iamcanincan/opticon/circle/MonochromeMask.kt';
+// 第十九闸那把刀落在 `IconCropWindow.kt`（极性取数口 `polarityOf` 搬进这里，才量得到）。
+const CROP = 'app/src/main/kotlin/com/iamcanincan/opticon/circle/IconCropWindow.kt';
 const NOTIFY = 'app/src/main/kotlin/com/iamcanincan/opticon/notify/IconBitmap.kt';
 const KEEP = path.join(__dirname, 'cand', 'semanticmut');
 // ⚠ 日志**不走 stdout**：一台 18 段的输出有十几 MB，`spawnSync` 默认 maxBuffer 到顶会**杀掉子进程**，
@@ -137,6 +139,24 @@ const CASES = [
     to: '        if (iw <= 0 || ih <= 0 || iw == ih || iw != ih) return intArrayOf(0, 0, size, size)\n',
     gateCmd: 'run harness.SelfTestKt > bench/reg/selftest_raw_mut.txt || true; ' +
       '. ./selftestgate.sh; selftest_gate bench/reg/selftest_raw_mut.txt _mut'
+  },
+  {
+    // 第十九闸：**极性读哪一本账**这件事必须有刀级证据（2026-10-21）。
+    no: '19', gate: '19/19 两本账一本账', file: CROP,
+    why: '把 `polarityOf` 从"读第一参数（彩色那一本）"改成"读第二参数（判据那一本）"—— ' +
+      '这就是把这一刀**整条退回老口径**，而生产调用点一个字都不用动（`MonochromeSynth` 那行不在台子的' +
+      '编译清单里，所以取数口才要做成这个函数）。现场读数：对照语料 `twobook_ctrl/` 那一张' +
+      '（384² 透明底 + 280×196 实心横条 = 0.70 宽高比）两本账判定本来就相反 —— ' +
+      '判据那一本 `keep≈55%` 过 plate 且 ≥50 ⇒ 开火；彩色那一本被纯色盘铺满 ⇒ 恒满幅 ⇒ 不开火。' +
+      '⇒ 退回老口径后 `开火集` 多出那一张、`flip` 从 1 变 0 ⇒ pin 逐字不同 ⇒ 这一闸红 ✓。' +
+      '⚠ 为什么非得自己造一张：`rec_model`+`plate_model` 那 132 张上极性翻 **0 张**、' +
+      '`只给前景层` 那一支连"够得着 40%"的候选都是 **0 张**（`fgNear=0`）—— 拿真语料钉的这道闸' +
+      '对这个变异**不会响**，而"空跑的闸"长得和"通过的闸"一模一样（本仓那一族）。',
+    from: '  internal fun polarityOf(colour: Window?, measured: Window?): Boolean =\n    colour?.polaritySubject == true\n',
+    to: '  internal fun polarityOf(colour: Window?, measured: Window?): Boolean =\n    measured?.polaritySubject == true\n',
+    edges: '384',
+    gateCmd: 'run harness.TwoAcctKtKt rec_model plate_model twobook_ctrl > bench/reg/twoacct_mut.txt || exit 9; ' +
+      '[ "$(grep "^2A " bench/reg/twoacct_mut.txt)" = "$(cat bench/reg/twoacct.pin)" ]'
   }
 ];
 

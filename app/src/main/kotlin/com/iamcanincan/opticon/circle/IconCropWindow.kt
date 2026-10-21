@@ -7,14 +7,20 @@ import kotlin.math.sqrt
  * 「图案实际占的那块」= 裁圆的裁剪窗口，也是取色那一路要照着重排的那个窗口。
  *
  * ## 为什么单独一个文件、而且是**纯函数**
- * 这条判据有**两个消费方**，注意它们量的**不是同一张**：
+ * 这条判据有**两个消费方**，2026-10-21 起它们**分的不再是"哪一本账"，而是"管哪件事"**：
  *  - [MaskedDrawable]：彩色那支，量的是整个图标光栅化到 [SCAN_EDGE]（自适应图标的子层按 1.5 倍
  *    铺出去、裁掉四边 —— `AdaptiveIconDrawable.draw()` 的画法），桌面上那个圆里的内容是它裁的；
- *  - [MonochromeSynth]：染色那支，量的是**喂给模型的那一张**（`raster` 的像素），把已经算好的剪影
- *    按它自己的窗口搬到位（只搬位置、只改尺寸，不动浓度）。
- * ⚠ **两档口径的倍数差约 1.5 倍，不能互相对表**：同一张元宝，彩色侧 `→ 满幅（不放大）`，染色侧
- *   `切2.23×`；2026-10-14 到 15 那晚我三次拿一档的数去改另一档的门槛，每次都返工。装机上以真机
- *   那一档为准（判据行末 `几何=`），离线 `_model.png` 量的数只对染色那档成立。
+ *  - [MonochromeSynth]：染色那支，**两件事两本账，别再说成一本**：
+ *    · **几何**（墨搬到多大）量的是**喂给模型的那一张**（`raster` 的像素，`measure` 走 [GEO_ZOOM_CAP]）；
+ *    · **极性**（那块大色块是不是图案）量的是**彩色那一张**（`MonochromeSynth.colourWindow`，
+ *      同一套 [scanSize] 格子、同样不卡上限）—— 因为 [PLATE_SUBJECT_MIN] 那条线本来就是在
+ *      彩色那行 `裁了只剩` 上标定的。
+ * 🔴 **以前极性也读"喂进模型那一张"，于是同一个模块对同一张图能有两个数**：装机现量差 3 个点
+ *   （wenku8 彩色 55 / 判据 52、`com.android.contacts` 彩色 50 / 判据 49 —— 只差 1 个点就翻）。
+ * ⚠ **两档口径的倍数差约 1.5 倍，不能互相对表**（这一条只对**几何**那本还成立）：同一张元宝，彩色侧
+ *   `→ 满幅（不放大）`，染色侧 `切2.23×`；2026-10-14 到 15 那晚我三次拿一档的数去改另一档的门槛，
+ *   每次都返工。装机上以真机那一档为准（判据行末 `几何=`），离线 `_model.png` 量的数只对染色那档成立。
+ *   而判据行上的 `判剩=` **现在必须等于彩色那行的 `裁了只剩`**，装机后由 `_harness/_twobook.cjs` 逐包核。
  * 这里刻意不碰 `Bitmap` / `Drawable`：判据台（`_harness/`）编不动 Android 那两个类，
  * 只有纯函数才能被台子直接拿去量 —— 一条判据能不能改，取决于有没有台子能量它。
  *
@@ -36,11 +42,48 @@ internal object IconCropWindow {
    */
   internal val scanEdge: Int get() = SCAN_EDGE
 
+  /**
+   * 彩色那支的**量测格子**：一张 `iw×ih` 的 drawable 要落到哪张格子上量（长边最多 [SCAN_EDGE]，
+   * `canonical` = 固有尺寸不知道的（自适应）一律撑到 [SCAN_EDGE]，与"这次画多大"解耦）。
+   *
+   * 🔴 **为什么把这段式子从 `MaskedDrawable.measureWindow` 搬进来（2026-10-21）**：
+   * `PLATE_SUBJECT_MIN = 50` 这条线是**在彩色那本账上标定的**（wenku8 真机 `裁了只剩 55%`），
+   * 而极性判据读的是**判据那一本**（量喂进模型那张）—— 同一张图两本账装机现量能差 3 个点
+   * （wenku8 55→52、contacts 50→49，只差 1 个点就会两边各给一个答案）。
+   * 极性改成读彩色那一本之后，**格子也必须一样**，否则只是把两本账换了个名字。
+   * 搬进这里 = 彩色与染色共用一份，而且台子（`_harness/build.sh`）编得动这个文件、编不动那两个。
+   *
+   * @return `0 to 0` = 尺寸不知道（调用方自己按 `canonical` 兜），非正数不许往下传。
+   */
+  internal fun scanSize(iw: Int, ih: Int, canonical: Boolean): Pair<Int, Int> {
+    if (iw <= 0 || ih <= 0) return 0 to 0
+    val shrink = if (canonical) SCAN_EDGE.toFloat() / maxOf(iw, ih)
+    else minOf(1f, SCAN_EDGE.toFloat() / maxOf(iw, ih))
+    return maxOf(1, (iw * shrink).roundToInt()) to maxOf(1, (ih * shrink).roundToInt())
+  }
+
   /** 那条线换算成百分数，只给日志用（同理：别让调用方自己写 60）。 */
   internal val keepRatioPercent: Int get() = (KEEP_RATIO * 100f).roundToInt()
 
   /** spiky 那条线（圆盘半径 / 外框半径）也露给判据台 —— 第十七闸的"近线带"要在**生产这份**上量，不许台子里再抄一个 0.80。 */
   internal val coverBoxFloor: Float get() = COVER_BOX_FLOOR
+
+  /**
+   * **极性的取数口只许在这里**（2026-10-21，两本账合成一本）：这一位**读第一个参数**，
+   * 而第一个参数按装机那条链永远是**彩色那一本账**量出来的窗口（`MonochromeSynth.colourWindow`）。
+   *
+   * 为什么把"读哪一本"做成一个函数而不是在调用点直接写 `winColour?.polaritySubject`：
+   * `MonochromeSynth.kt` **不在 `_harness/build.sh` 的编译清单里**（它吃 Android），
+   * 所以接线接在那边 = 第 19 闸量不到它 —— 这正是第十六闸当初"闸测的是手抄副本"那一族。
+   * 搬进这里之后，变异台把参数顺序换一下（= 把极性退回判据那一本）第 19 闸当场红，
+   * 因为有对照语料 `twobook_ctrl/` 那一张**两本账的判定本来就不同**（前景层那张够 50、
+   * 整图标那张恒满幅）。
+   *
+   * ⚠ 第二个参数**现在不参与判断**，它存在是为了让台子能把"退回老口径"这件事写成一次参数交换。
+   *   别把它读进式子里 —— 那等于两本账又合成不了。
+   */
+  internal fun polarityOf(colour: Window?, measured: Window?): Boolean =
+    colour?.polaritySubject == true
 
   /**
    * 裁圆判"这块大色块是要整块保住的图案"的那条线：**缩进圆里那一档，且按圆裁下去还剩到这么多%**。
@@ -51,12 +94,15 @@ internal object IconCropWindow {
    * **整本书成墨、书签是镂空**（主人原话：「就是整本书成墨、书签是镂空，继续吧」）。
    *
    * ⚠ 线摆在 **50**，依据是真机 plate 档那四张"裁了只剩"：wenku8 **55** / contacts 三张 **49** /
-   *   mipush **32** / easytier **0** —— 50 上面只有 wenku8 一张。⚠ **那是彩色侧的读数。**
-   *   2026-10-16 装机第一次按**判据侧**逐张量（判据行新增的 `判剩=`）：wenku8 **52**、
-   *   contacts **49 / 49 / 47**、kodi 72、mipush 32、easytier 0 —— 两侧最大漂移 **3 个点**。
-   *   🔴 **所以空档不是原先记的 6 个点，是 3 个点**（52 vs 49），而 contacts 差 **1 个点**就翻。
-   *   线不动（现在仍是 wenku8 独占、主人没发话），但下次真机多出一张 50~55% 的，这条会连它一起翻；
-   *   **届时摊分布要摊判据侧那一本**，别拿彩色那行的数对表。
+   *   mipush **32** / easytier **0**。
+   * 🔴 **这条线自始至终是在彩色那本账上标的，可它一直由判据那一本去比** —— 2026-10-16 装机第一次
+   *   逐张量才发现两侧对不上：wenku8 **55→52**、contacts **49 / 49 / 47**、kodi 72、mipush 32、easytier 0，
+   *   最大漂移 **3 个点**，**空档因此不是原先记的 6 个点而是 3 个点**（52 vs 49），contacts 差 **1 个点**就翻。
+   *   ✅ **2026-10-21 已并成一本**：极性的取数改到彩色那一张、那一套格子（`MonochromeSynth.colourWindow`
+   *   + [scanSize]），所以**这条线又回到它标定时那本账上了**。波及面离线现量 `TwoAcctKt`（132 张）：
+   *   **判定翻 0 张**（wenku8 两支都 ≥50、`只给前景层` 那一支彩色恒满幅 = 从没开过火），
+   *   这一刀收的是那条 1 个点的缝，不是任何一张现图。
+   *   ⚠ 今后摊这条线的分布只有一本可摊；装机对表 = `node _harness/_twobook.cjs <logcat>`（不等就非零）。
    *
    * ⚠⚠ **这条线上还挂着一位前提：`!spiky`（2026-10-16，Kodi「还是整块上色了」）。**
    *   `plate` 档有**两条入口**（见 [COVER_BOX_FLOOR]）：`keep`（"圆会咬掉一大块形状"，`keepPct < 60`）

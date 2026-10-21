@@ -332,9 +332,12 @@ internal object MonochromeSynth {
       val circle = ModuleRuntime.options().circleEnabled
       // 「只给前景层」= 自适应且背景是纯色盘（`flatten` = false）。见上面那条。
       val fgOnly = adaptive && !flatten
-      // 窗口**照量**（`plateSubject` 那一档还要用它，见下），搬不搬由 `win` 定。
+      // 窗口**照量**（几何那一档与日志还要用它，见下），搬不搬由 `win` 定。
       val winMeasured = if (circle) IconCropWindow.measure(pixels, edge) else null
       val win = if (fgOnly) null else winMeasured
+      // 极性的取数（彩色那一本账）**不在这里算**：它要额外画一张，而这一趟在 `MonoCache.lookup` 之前 ——
+      // 命中那条路今天也要付钱就白付了（真机一次重启 1594 次 bind、只有 209 种内容）。
+      // 它只在缓存未命中之后、`plateSubject` 那一段现算。见下面 🔴 那段。
       // `!flatten` 且是自适应 = 交给这里的**只有前景层**，那张盘在背景层里（桌面自己补）。
       // 把这件事告诉模型：这一张里不许有"实心的一块当底" —— 混元那半个太极就是这么丢的。
       // ⚠ `flatten` 那一路（背景是一张真 drawable）**另起一张只画背景层的**，作为 `under` 一起交
@@ -401,9 +404,13 @@ internal object MonochromeSynth {
         else IconCropWindow.reframe(underPx, edge, edge, win, tOff, tOff, tSide, tSide)
       // 裁圆把这张判成"裁不动、整幅缩进圆里、还剩一半以上" → 那块大色块是**图案**，
       // 不是板。极性必须与彩色同意的档位一致，否则同一个模块对同一张图给两个答案。
-      // ⚠ 量的是 `winMeasured` 而不是 `win`：这一档问的是"**量出来的窗口**判成哪一档"，
-      //   与"搬不搬"无关 —— 「只给前景层」那一支现在不搬（`win` 为空），但它量出来的档位照旧。
-      // ⚠ **`!winMeasured.spiky` 这一道不能省**（2026-10-16，Kodi「还是整块上色了」）：本条原话是
+      // 🔴 **读的是 `winColour`（彩色那一本账），不是 `winMeasured`（2026-10-21，两本账合成一本）**：
+      //   这条 `50` 是在彩色那行 `裁了只剩` 上标定的（wenku8 真机 55%），却一直由判据那一本去比 ——
+      //   同一张图两本账装机现量能差 **3 个点**（wenku8 55→52、`com.android.contacts` 彩色 50 / 判据 49），
+      //   **只差 1 个点就会两边各给一个答案**：彩色把那块当图案缩进圆里保住、染色把它当底摘掉。
+      //   "一个模块两套主张"正是这条判据当初要消灭的东西，而它自己留了最后一套。见 [colourWindow]。
+      // ⚠ `winMeasured` 没有退役：它管的是**几何**（搬不搬、`几何=` 那一截），那是另一个问题，口径一字未动。
+      // ⚠ **`!spiky` 这一道不能省**（2026-10-16，Kodi「还是整块上色了」）：本条原话是
       //   「彩色那支判这张是"裁不动、整幅缩进圆里、**裁了只剩这么点**" —— 这块大色块是**要被整块保住的
       //   图案**」，它依据的是 **keep 入口**（圆会咬掉一大块形状）。`plate` 档现在有**两条入口**，
       //   另一条 `spiky`（"圆盘比外框小太多"）说的是**几何**、对像素归属一个主张都没有 —— 极性跟着它走
@@ -416,7 +423,13 @@ internal object MonochromeSynth {
       //   `plate && keepPct>=50` 一共 **6 行 / 2 个图标**（Bard、LocalSend），其中 spiky 的就是这 2 个 ——
       //   · `org.localsend.localsend_app`：新旧掩码**逐格相同**（它两条口径都落到 H3 同一个产物）；
       //   · `com.google.android.apps.bard`：改后整颗四角星干净上墨，改前星里多一块深灰楔形伪影（看图判的）。
-      val plateSubject = winMeasured?.polaritySubject == true
+      // ── **极性读的是彩色那一本账**（2026-10-21，两本账合成一本）──
+      // 画这一张的成本放在**缓存未命中之后**：命中那条路（真机一次重启 1594 次 bind / 209 种内容）
+      // 已经交出现成掩码，不该再付一次绘制。量具口径见 [colourWindow]。
+      val winColour = if (circle) colourWindow(source, fgOnly) else null
+      // 取数口在 [IconCropWindow.polarityOf]（不在这里写式子）：那个文件在台子的编译清单里，
+      // 这里没有 —— 写在这里，第 19 闸就退回"量具看不见生产"那一族（第十六闸的同一课）。
+      val plateSubject = IconCropWindow.polarityOf(winColour, winMeasured)
       // 【主形】按包开闸（名单与"为什么不能全局"见 [MonochromeMask.TRIM_PKGS]）。
       //   `label` 的第一段是 `IconNames.of(source)`，两种形式都要认（`包名/类型/入口名` 与
       //   `pm:包名`）—— 只配前一种的话，快捷方式那一批永远开不了火，见 [IconNames.matchesPkg]。
@@ -429,7 +442,7 @@ internal object MonochromeSynth {
       // 指纹打在判据行上：解不出包名的那一批（快捷方式）在日志里都叫 `?`，没有这个数
       // 就对不上"哪一行判据是哪一个带回来的 PNG"。见 [MonoDump.sigOf]。
       val sig = MonoDump.sigOf(pxIn, edge, edge)
-      val id = noteBranch(edge, sig, label, out, win, key, winMeasured, plateSubject)
+      val id = noteBranch(edge, sig, label, out, win, key, winMeasured, winColour, plateSubject)
       val isWatched = MonoDump.watched(label)
       // ⚠ **变体标记必须进带回来的那个名字。** 桌面会把**同一张图标按不同尺寸再画一遍**：
       //   真机实测（`live2.txt`，2026-10-11 20:34–21:39）translate 在 `edge=384` 下有两种前景层
@@ -586,12 +599,12 @@ internal object MonochromeSynth {
    */
   private fun noteBranch(
     edge: Int, sig: String, label: String, out: MonochromeMask.Output, win: IconCropWindow.Window?,
-    key: Long, measured: IconCropWindow.Window?, subject: Boolean,
+    key: Long, measured: IconCropWindow.Window?, colour: IconCropWindow.Window?, subject: Boolean,
   ): Int {
     val n = diagnosed.incrementAndGet()
     Log.d(TAG, "Mono: diag#$n edge=$edge sig=$sig 键=${MonoKey.hex(key)} $label ${out.report} → " +
       (if (out.mask != null) "已交出掩码" else "判据不成立，放弃合成") + geoTag(win, measured) +
-      polarityTag(measured, subject))
+      polarityTag(colour, subject))
     return n
   }
 
@@ -602,13 +615,14 @@ internal object MonochromeSynth {
    *   （`MonochromeMask.polarity()` 那套翻不翻色，2026-10-16 全量检查时它**业务侧已零调用者**，
    *   装机永远打不出那一行）。同名两义会让人把"盘被整块保住"读成"这张要翻色"。
    *
-   * 为什么必须打在**这一行**、不能只看彩色侧那行 `裁圆外框`（2026-10-16 装机第一读抓到的）：
-   * 两边的 `keepPct` 不是同一个量 —— 彩色那行量的是 `icon.draw()` 出来的那张，
-   * 这一档量的是喂进模型的 `pixels`（[winMeasured]，`IconCropWindow.of(pixels, edge, edge)`）。
-   * 真机现例：`com.android.contacts` 那三张快捷方式彩色侧读 **50%**（正好压在 `PLATE_SUBJECT_MIN` 上），
-   * 而它判据行是 `拦=0` —— 极性**没开**。拿彩色那行的 50 去断言"这张被接管了"就是错的，
-   * 我当场差点这么写进日志。
-   * ⚠ 所以"哪条入口 fired"这个问题只有这一行能答；`拦=0` 时也能看出是**没过 50** 还是**被 spiky 挡下**。
+   * 🔴 **`判剩=` 现在就是彩色那行 `裁了只剩` 的同一个数**（2026-10-21，两本账合成一本）：
+   *   这一档以前量 `pixels`（喂进模型那张），而 `PLATE_SUBJECT_MIN=50` 是在彩色那本账上标定的，
+   *   两本账装机现量差 3 个点（wenku8 55→52、contacts 50→49）—— 只差 1 个点就两边各给一个答案。
+   *   取数改到 [colourWindow] 之后，**这两行必须逐包相等**；不等就是量具坏了，
+   *   装机后由 `node _harness/_twobook.cjs <logcat>` 一条命令判（不等就非零退出）。
+   *   ⚠ **旧日志的这一格与新日志不可对表**（同一个字段名换过一本账，本仓为这件事点过四次名）。
+   * 为什么仍打在**这一行**而不是只看彩色那行：这一行还带 `入口=`（plate 档两条入口只有这里分得开），
+   *   而"某张有没有被接管"必须和它的判据行在同一条里读出来 —— 跨两行 join 就是本仓吃过的那次串台。
    */
   private fun polarityTag(w: IconCropWindow.Window?, subject: Boolean): String {
     if (w == null || !w.plate) return if (subject) " 接管=开" else ""
@@ -855,7 +869,10 @@ internal object MonochromeSynth {
    *
    * 通知侧没这个问题：那边是「拿一个图标画一次就扔」，同一个 drawable 不会被反复画。
    */
-  private fun rasterize(target: Drawable, edge: Int): Bitmap? {
+  private fun rasterize(target: Drawable, edge: Int): Bitmap? = rasterize(target, edge, edge)
+
+  /** 同 [rasterize]，但画布是 `w×h`（彩色那本账的格子不一定是正方形，见 [IconCropWindow.scanSize]）。 */
+  private fun rasterize(target: Drawable, w: Int, h: Int): Bitmap? {
     val saved = Rect(target.bounds)
     // ⚠ target 自己就是 AdaptiveIconDrawable 时，光栅化它等于**顺带改了它两个子层的 bounds**：
     //   `AdaptiveIconDrawable.draw()` → `updateLayerBoundsInternal()` 会按这次的 bounds 重算
@@ -868,8 +885,8 @@ internal object MonochromeSynth {
     val savedBackground = background?.let { Rect(it.bounds) }
     val savedForeground = foreground?.let { Rect(it.bounds) }
     return try {
-      val bmp = Bitmap.createBitmap(edge, edge, Bitmap.Config.ARGB_8888)
-      target.setBounds(0, 0, edge, edge)
+      val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+      target.setBounds(0, 0, w, h)
       target.draw(Canvas(bmp))
       bmp
     } finally {
@@ -880,6 +897,48 @@ internal object MonochromeSynth {
       if (background != null && savedBackground != null) background.bounds = savedBackground
       if (foreground != null && savedForeground != null) foreground.bounds = savedForeground
       target.bounds = saved
+    }
+  }
+
+  /**
+   * **彩色那一本账**：把这张图标按 [MaskedDrawable] 的画法与格子量一遍，取它的窗口。
+   *
+   * 与判据那一本（[IconCropWindow.measure] 吃 `pixels`）的三处不同，全都是为了**逐字对上彩色那行**：
+   *  · **画的是 `source`**（整张图标：盘 + 前景，`AdaptiveIconDrawable.draw()` 的视口画法），
+   *    不是喂进模型那一张（前景层 / 平铺层）；
+   *  · **格子是 [IconCropWindow.scanSize]**（长边 128），不是 `edge`(384) 再降采样 ——
+   *    同一张 drawable 画到 128 与画到 384 再 nearest 回 128 不是一张图，装机现量差 3 个点；
+   *  · **走 [IconCropWindow.of] 而不是 [IconCropWindow.measure]**：`GEO_ZOOM_CAP` 管的是"染色的墨搬不搬"，
+   *    彩色那本账从来不卡它（`CircleIconDrawable` 也调 `of`），卡了就又变成两本账。
+   *
+   * 同一套格子还有个结构上的好处：`IconCropWindow` 那层按**格子内容哈希**缓存窗口，
+   * 彩色已经量过的图标在这里直接命中、拿回**同一个 `Window` 对象** —— 两本账不再是两个数。
+   *
+   * ⚠ **只给前景层那一支（`fgOnly`）不画**：背景是纯色盘，盘把整张画布铺满 → 彩色那本账**恒判满幅**
+   *   （`TwoAcctKt` 在 132 张上现量：这一支一张窗口都拿不到）。恒判 = 不必画，画它是白花一次绘制。
+   * ⚠ 异常**不许冒到 [render] 的 `runCatching`**：那会把整趟合成吞成 null，屏幕上=图标消失。
+   *   量不到就交 null（= 不接管极性 = 这次改动之前的默认行为）。
+   * ⚠ **残余的一处不完全同格**（诚实记一笔）：彩色那支在"固有尺寸不知道"那一档是按**当时画布**
+   *   （`width`/`height`）算格子的，而这里没有画布 —— 传 `1 to 1` 走 canonical，得到正方形 128²。
+   *   画布是方的（桌面上就是方的）时两边逐字相同；万一哪天出现**非方画布**的自适应槽位，
+   *   那一张的格子会差在长短边上，装机对表（`_twobook.cjs`）会当场报出来，不会静默。
+   */
+  private fun colourWindow(source: Drawable, fgOnly: Boolean): IconCropWindow.Window? {
+    if (fgOnly) return null
+    val iw = source.intrinsicWidth
+    val ih = source.intrinsicHeight
+    // 固有尺寸不知道的（自适应）按彩色那支的做法撑到长边 128（`1 to 1` 走 canonical 那一路）。
+    val (w, h) = if (iw > 0 && ih > 0) IconCropWindow.scanSize(iw, ih, false)
+    else IconCropWindow.scanSize(1, 1, true)
+    val bmp = runCatching { rasterize(source, w, h) }.getOrNull() ?: return null
+    return try {
+      val px = IntArray(w * h)
+      bmp.getPixels(px, 0, w, 0, 0, w, h)
+      runCatching { IconCropWindow.of(px, w, h) }.getOrNull()
+    } catch (t: Throwable) {
+      null
+    } finally {
+      bmp.recycle()
     }
   }
 

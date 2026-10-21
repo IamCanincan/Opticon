@@ -370,12 +370,10 @@ private class MaskedDrawable(private val icon: Drawable) : Drawable() {
    */
   private fun measureWindow(iw: Int, ih: Int, canonical: Boolean): IconCropWindow.Window? {
     if (iw <= 0 || ih <= 0) return null
-    // 固有尺寸未知的（自适应图标）一律量到那个边长：与"这次画多大"解耦
-    val edge = IconCropWindow.scanEdge
-    val shrink = if (canonical) edge.toFloat() / maxOf(iw, ih)
-    else minOf(1f, edge.toFloat() / maxOf(iw, ih))
-    val sw = maxOf(1, (iw * shrink).roundToInt())
-    val sh = maxOf(1, (ih * shrink).roundToInt())
+    // 固有尺寸未知的（自适应图标）一律量到那个边长：与"这次画多大"解耦。
+    // ⚠ 这套格子现在由 [IconCropWindow.scanSize] **单一定义**：染色那一支的**极性**也读它
+    //   （`MonochromeSynth.colourWindow`，2026-10-21 两本账合成一本），这里再抄一遍就是两个数。
+    val (sw, sh) = IconCropWindow.scanSize(iw, ih, canonical)
     val scratch = Bitmap.createBitmap(sw, sh, Bitmap.Config.ARGB_8888)
     Canvas(scratch).also {
       icon.setBounds(0, 0, sw, sh)

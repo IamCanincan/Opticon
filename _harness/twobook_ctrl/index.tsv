@@ -1,0 +1,2 @@
+pkg	label	file	edge	sig	cls	fg	bg	mono	kb	fgAlpha	bgAlpha	monoFile	monoAlpha	bgColor	fgFile	bgFile	modelFile	modelBgFile
+ctrl.fgonlybar	对照横条	ctrl.fgonlybar_ic_launcher_aaaa0000bbbb.png	384	aaaa0000bbbb	AdaptiveIconDrawable	-	-	无	-	-	-	-	-	#FF808080	-	-	ctrl.fgonlybar_ic_launcher_aaaa0000bbbb.png	-
