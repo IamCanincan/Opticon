@@ -161,6 +161,26 @@ java -cp out;stubs_out;<stdlib> harness.ReplayKt ../_dump.txt captured   # 重�
   （shell 先 `mkdir` 过就先 `rmdir`，否则整轮 EACCES 写不进去）。
   随货的 `index.tsv` 里 `cls`/`fg`/`bg` 三列是 drawable 类名（vector 还是 bitmap），`mono` 列是
   **这个应用自带单色层与否** —— 自带的那一半按硬规则根本不进模型，算覆盖率时别混进分母。
+  - **第二档 `mode=shortcut`（2026-10-22）：抓「长按图标弹出来的那一排」快捷方式图标。**
+    为什么要有：语料此前**只有启动图标**，极性那一刀离线量到"翻 0 张"、真机却翻了两张快捷方式
+    （`com.android.contacts/drawable/logo_quick_contacts_*`，彩色 50 / 旧判据 49）。跑法多一步 PC 侧出清单：
+    ```sh
+    adb shell dumpsys shortcut > _harness/cand/shot.txt
+    node _harness/_shotdump.cjs _harness/cand/shot.txt --logs=<真机 logcat> --marker=_harness/cand/marker.txt
+    adb push _harness/cand/marker.txt /sdcard/Android/data/com.iamcanincan.opticon/files/corpus_request.txt
+    adb shell content query --uri content://com.iamcanincan.opticon.config
+    adb pull /sdcard/Android/data/com.iamcanincan.opticon/files/corpus_shortcuts D:/tmp/corpus_shots
+    node _harness/_mkrec_model.cjs D:/tmp/corpus_shots _harness/shortcut_model
+    ```
+    ⚠ **为什么清单在 PC 上生成**：第一版让应用自己枚举（`PackageManager.getXml` 读 manifest `<shortcut>`），
+    真机跑回来是 **129 个包里 0 个声明**，而同一台机器 `dumpsys shortcut` 里有 **124 张资源图标** ——
+    通道选错，不是这台机器没有这一类。
+    ⚠ **`dumpsys` 也不是全的**：真机翻的那两张 `logo_quick_contacts_*` 在 dump 里出现 **0 次**，
+    所以清单还有第二种来源 —— 从**我们自己的判据行**回填 `res=<包>/<类型>/<资源名>`（设备侧按名字解回 id）。
+    覆盖边界（说死，别当整类）：`bitmap=`（运行时发布、落在 `/data/system_ce/.../shortcut_service/bitmaps/`）
+    与 `iconUri=` 那两类**这一档拿不到**；`pm:包名/id` 那种动态快捷方式**没有资源名**，也解不出来。
+    本机这一轮：清单 188 条 → 解出 186 → 建成语料 **183 张**（自适应 52 / 老式 131），
+    已进第 16、19 闸的分母（第 16 闸 `近线带` 从 1 涨到 3、开火集从 1 涨到 3 —— 涨的正是真机翻的那两张）。
 - **`YardKt`（对表台）** —— 台子里**唯一一把不是我们自己定的尺子**。真机上 61/122 应用自带设计师
   亲手画的单色层，那是「彩色图标 → 人认为正确的遮罩」的成对样本（同一张图、同一个 384 口径）。
   两边都按「`alpha≥128` 的格数 / 整幅」算墨占比再取差：**`n=61 中位 2.1 点、平均 11.9 点`**。

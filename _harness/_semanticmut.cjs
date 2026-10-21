@@ -155,7 +155,11 @@ const CASES = [
     from: '  internal fun polarityOf(colour: Window?, measured: Window?): Boolean =\n    colour?.polaritySubject == true\n',
     to: '  internal fun polarityOf(colour: Window?, measured: Window?): Boolean =\n    measured?.polaritySubject == true\n',
     edges: '384',
-    gateCmd: 'run harness.TwoAcctKtKt rec_model plate_model twobook_ctrl > bench/reg/twoacct_mut.txt || exit 9; ' +
+    gateCmd: 'run harness.TwoAcctKtKt rec_model plate_model shortcut_model twobook_ctrl > bench/reg/twoacct_mut.txt; ' +
+      // ⚠ 退码分两种，不许混：**没出机器行 = 量具坏了（9）**，出了机器行但与基线不同 = 这一闸红了（1）。
+      //   第一版写成 `run … || exit 9`，于是"台子自己判红"（语义不变量那条就是设计来判红的）
+      //   被吞成"量具坏了"，这一条当场变成"没证过"。
+      'grep -q "^2A " bench/reg/twoacct_mut.txt || exit 9; ' +
       '[ "$(grep "^2A " bench/reg/twoacct_mut.txt)" = "$(cat bench/reg/twoacct.pin)" ]'
   }
 ];
@@ -345,7 +349,14 @@ for (const c of active) {
     fs.writeFileSync(abs, before);
     if (fs.readFileSync(abs, 'utf8') !== before) { console.error(`!! 还原没成功：${c.file} 请手工检查`); process.exit(3); }
     fs.rmSync(path.join(KEEP, c.no + '.orig'), { force: true });
-    console.log('    （生产已逐字节还原）');
+    // 🔴 **还原了源码，必须把 `out/` 也重编一遍** —— 2026-10-22 现量：这一台子过去只还原 `.kt`，
+    //   字节码留在**变异后**的状态。我随后跑第 19 闸重钉基线，量的就是那份变异后的 class，
+    //   于是钉进 `twoacct.pin` 的是"变异世界里的答案"（对照语料那张的极性归属整个反过来）；
+    //   下一次 `regress.sh`（它第 1 段自己重编）当场判红 —— **闸是对的，基线是我错的**。
+    //   规矩：`out/` 与源码不许分家；谁改了源码，跑完就得把类也带回原样。
+    const rb = sh('sh', ['build.sh']);
+    if (rb.status !== 0) console.error('!! 还原后重编 `out/` 失败 —— 现在库里躺的可能是变异后的字节码，别拿它钉基线');
+    else console.log('    （生产已逐字节还原，`out/` 已按还原后的源码重编）');
   }
 }
 console.log(bad ? `\n!! ${bad} 条用例没能证明那一道闸有牙` : '\n全部用例都让对应的闸红了');

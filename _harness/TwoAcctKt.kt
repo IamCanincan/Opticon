@@ -44,6 +44,7 @@ fun main(args: Array<String>) {
   var n = 0
   val b = HashMap<String, IntArray>()   // 每支：[张数, 差≥3, 差≥5, 极性翻, 档翻, 最大差]
   var flip = 0; var entryFlip = 0; var colourNull = 0; var bothWin = 0; var fgNear = 0; var gridSplit = 0
+  var inviolations = 0
   val firedNew = ArrayList<String>(); val firedOld = ArrayList<String>(); val flips = ArrayList<String>()
   for (d in dirs) {
     val underByFile = HashMap<String, Boolean>()
@@ -93,6 +94,17 @@ fun main(args: Array<String>) {
       //  谁把 `polarityOf` 的第二参数读进式子（或把调用点换顺序），`开火集` 与 `翻名单` 当场动。
       val old = IconCropWindow.polarityOf(wm, wc)
       val new = IconCropWindow.polarityOf(wc, wm)
+      // 🔴 **语义不变量（不靠 pin，靠构造）**：`只给前景层` 那一支彩色那本账**按构造恒 null**
+      //   （纯色盘铺满整张画布），所以那一张的 `new` 必须是 false。它要是 true，只有两种可能：
+      //   ① 取数口读的不是第一参数（生产被改坏）；② **`out/` 是变异后台留下的旧字节码**。
+      //   ②今天真发生过：`_semanticmut --case=19` 只还原源码不重编，我随后重钉基线量的就是变异后的类，
+      //   钉出来的方向整个反过来 —— 下一次回归台当场判红（闸是对的，基线是错的）。
+      //   所以这条**先于**任何基线比较：它红了就不许拿这一轮的数去钉任何东西。
+      if (branch == "只给前景层" && new) {
+        inviolations++
+        println("!! 不变量破了：${stem(c.file)} 在「只给前景层」这一支拿到了彩色口径的极性" +
+          " —— 取数口读错参数，或 `out/` 是变异后的旧类（先 sh build.sh 再跑）")
+      }
       // **这台子自己看得见多少**：只有前景层那一支是两本账**结构性**分岔的地方（彩色那本恒满幅），
       // 所以报"离开口径还差几张"—— 老口径在那一支上 plate&&!spiky 且 `keepPct ≥ 50−10` 的张数。
       // 没有这一位，"极性翻 0 张"就分不清是**不会翻**还是**语料里根本没有候选**（本仓那一族：空跑当通过）。
@@ -123,12 +135,16 @@ fun main(args: Array<String>) {
     "格子分岔 $gridSplit 张（canonical 与不 canonical 给出不同格子的张数 = 0 ⇒ 这份语料量不到那一支）")
   println("钉的是 **$acct 口径的开火集**（老=$firedOld 张 / 新=$firedNew 张）：${firedNew.sorted()}")
   if (flips.isNotEmpty()) println("翻的名单：${flips.joinToString(" / ")}")
-  println("2A n=$n acct=$acct flip=$flip colourNull=$colourNull bothWin=$bothWin entryFlip=$entryFlip fgNear=$fgNear 格子分岔=$gridSplit " +
+  println("2A n=$n acct=$acct flip=$flip colourNull=$colourNull bothWin=$bothWin entryFlip=$entryFlip fgNear=$fgNear 格子分岔=$gridSplit 不变量=$inviolations " +
     "开火集=[${fired.sorted().joinToString(",")}] 老开火集=[${firedOld.sorted().joinToString(",")}] " +
     "分支=" + b.toList().sortedBy { it.first }.joinToString(",") { (k, v) ->
       "$k:${v[0]}张/差≥3=${v[1]}/差≥5=${v[2]}/极性翻=${v[3]}/档翻=${v[4]}/最大差=${v[5]}" } +
     " 翻名单=[${flips.joinToString(",")}]")
   // 自证：这台子若一张都没开火，它就没在比任何东西（同 PlateSubKt 那条纪律）。
+  if (inviolations > 0) {
+    println("!! 语义不变量破了 $inviolations 处 —— 这一轮的数**不许拿去钉基线**（先 `sh build.sh` 重编再跑）")
+    kotlin.system.exitProcess(1)
+  }
   if (fired.isEmpty()) { println("!! $acct 口径一张都没开火 —— 这台子什么都没比"); kotlin.system.exitProcess(1) }
 }
 

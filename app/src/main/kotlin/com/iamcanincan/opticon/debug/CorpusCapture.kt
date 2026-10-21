@@ -53,6 +53,8 @@ internal object CorpusCapture {
   /** 标记文件名；内容可带 `edge=<n>`、`pkg=<子串>` 两行，空文件 = 全量 + 默认边长。 */
   private const val REQUEST = "corpus_request.txt"
   private const val DIR = "corpus"
+  /** 快捷方式那一档的输出目录（与启动图标那份**分开**，见 [capture] 上面那段）。 */
+  private const val SHOT_DIR = "corpus_shortcuts"
   private const val DEFAULT_EDGE = 384
   private const val MIN_EDGE = 64
   private const val MAX_EDGE = 512
@@ -114,10 +116,25 @@ internal object CorpusCapture {
     val edge = Regex("edge\\s*=\\s*(\\d+)").find(body)?.groupValues?.get(1)?.toIntOrNull()
       ?.coerceIn(MIN_EDGE, MAX_EDGE) ?: DEFAULT_EDGE
     val filter = Regex("pkg\\s*=\\s*(\\S+)").find(body)?.groupValues?.get(1).orEmpty()
+    // `mode=` 第三档（2026-10-21 加）：`launch`（默认 = 历史行为）/ `shortcut` / `both`。
+    // 为什么要分档：语料一直是**只有启动图标**那一类，而极性那一刀在 132 张上量到"翻 0 张"、
+    // 真机却翻了两张**长按快捷方式**（`com.android.contacts/drawable/logo_quick_contacts_*`）——
+    // 缺的就是这一类。默认档不动，是为了**不把已有基线一次冲掉**（换分母 = 换实验）。
+    val mode = Regex("mode\\s*=\\s*(\\S+)").find(body)?.groupValues?.get(1)?.lowercase().orEmpty()
+    // 快捷方式清单（由 PC 侧生成，见 [roundShots] 上面那段）。两种写法都认：
+    //   `shot=<包名>/<资源 id>`      —— 从 `dumpsys shortcut` 直接抄 ShortcutService 记着的那个 id；
+    //   `res=<包名>/<类型>/<资源名>` —— 从**我们自己打的日志**回填：ShortcutService 的 dump 里
+    //     压根没有那批（真机现量：`logo_quick_contacts_*` 在 dump 里 **0 次**，可它两张就是翻了极性），
+    //     而我们的判据行带着完整 `包/类型/资源名`，所以在设备上按名字解回 id 再画。
+    val shots = Regex("shot\\s*=\\s*(\\S+?)/(\\d+)").findAll(body)
+      .map { ShotRef(it.groupValues[1], it.groupValues[2].toInt(), null, null) }.toMutableList()
+    Regex("res\\s*=\\s*(\\S+?)/(\\w+)/(\\S+)").findAll(body).forEach {
+      shots += ShotRef(it.groupValues[1], 0, it.groupValues[2], it.groupValues[3])
+    }
     busy = true
-    Log.d(TAG, "Corpus: 认领标记 edge=$edge filter=\"$filter\"")
+    Log.d(TAG, "Corpus: 认领标记 edge=$edge filter=\"$filter\" mode=${mode.ifEmpty { "launch" }} 清单=${shots.size} 条")
     Thread {
-      val skipped = runCatching { capture(context, edge, filter) }.fold(
+      val skipped = runCatching { capture(context, edge, filter, mode, shots) }.fold(
         onSuccess = { it },
         onFailure = {
           Log.w(TAG, "Corpus: 抓取崩了 ${it.javaClass.simpleName}: ${it.message}")
@@ -129,87 +146,178 @@ internal object CorpusCapture {
     }.start()
   }
 
-  /** 抓一轮，返回跳过的包数。 */
-  private fun capture(context: Context, edge: Int, filter: String): Int {
+  /**
+   * 抓一轮，返回跳过的张数。两档**各落一个目录**：
+   *  · `corpus/` = 启动图标（历史那一份，默认档，行为一字不动）
+   *  · `corpus_shortcuts/` = **长按快捷方式**（manifest 里那批 `<shortcut>`，2026-10-21 新补的一类）
+   *
+   * 🔴 为什么要补这一档：极性那一刀离线量的是 `rec_model`+`plate_model` 共 132 张 —— **全是启动图标**，
+   * 结论"翻 0 张"；装机真机却翻了两张 `com.android.contacts/drawable/logo_quick_contacts_*`（长按快捷方式）。
+   * 也就是说"离线 0 变化"从来不是"屏幕上 0 变化"，它只是"我覆盖的那一批里没有"。这一档补的就是那一批。
+   * ⚠ 两档**不混进同一张 index**：换分母 = 换实验，混了以后十几道闸的基线一起动，读不出是谁变的。
+   */
+  /** 清单里的一条引用：给了 id 就直接用，没给就按 `类型/资源名` 在属主包里解。 */
+  private data class ShotRef(val pkg: String, val resId: Int, val type: String?, val name: String?)
+
+  private fun capture(context: Context, edge: Int, filter: String, mode: String,
+                      shots: List<ShotRef>): Int {
     val pm = context.packageManager
-    val dir = File(context.getExternalFilesDir(null), DIR)
-    if (!dir.isDirectory && !dir.mkdirs()) {
-      Log.w(TAG, "Corpus: 建不出目录 ${dir.absolutePath}")
+    val root = context.getExternalFilesDir(null) ?: return -1
+    val m = mode.ifEmpty { "launch" }
+    var skipped = 0
+    var rounds = 0
+    if (m == "launch" || m == "both") { skipped += roundLaunch(pm, File(root, DIR), edge, filter); rounds++ }
+    if (m == "shortcut" || m == "both") { skipped += roundShots(pm, File(root, SHOT_DIR), edge, shots); rounds++ }
+    if (rounds == 0) {
+      // 要说出来，不能静默回 0：`mode=` 打错一个字母，读起来就和"这台机器上一张都没抓到"一模一样。
+      Log.w(TAG, "Corpus: mode=\"$mode\" 两档都不认（launch / shortcut / both）—— 这一轮**没跑**")
       return -1
     }
+    return skipped
+  }
+
+  /** 索引表头 —— 两档同一份列序（新列只许加在行尾，按列号读的脚本才不用重算）。 */
+  private fun indexHeader(): StringBuilder = StringBuilder(
+    "pkg\tlabel\tfile\tedge\tsig\tcls\tfg\tbg\tmono\tkb\t" +
+      "fgAlpha\tbgAlpha\tmonoFile\tmonoAlpha\tbgColor\tfgFile\tbgFile\tmodelFile\tmodelBgFile\n")
+
+  /** 目录必须由本应用自己建（adb 先建过的话属主是 shell，往里写是 EACCES —— 见文件头那条）。 */
+  private fun ensureDir(dir: File): Boolean {
+    if (dir.isDirectory) return true
+    val ok = runCatching { dir.mkdirs() }.getOrDefault(false)
+    if (!ok) Log.w(TAG, "Corpus: 建不出目录 ${dir.absolutePath}")
+    return ok
+  }
+
+  private fun finish(dir: File, index: StringBuilder, filter: String, written: Int, skipped: Int) {
+    val indexFile = if (filter.isEmpty()) "index.tsv" else "index_${sanitize(filter)}.tsv"
+    runCatching { File(dir, indexFile).writeBytes(index.toString().toByteArray()) }
+      .onFailure { Log.w(TAG, "Corpus: 索引写不进去 —— ${it.javaClass.simpleName}: ${it.message}") }
+    Log.d(TAG, "Corpus: 写了 $written 张 / 跳过 $skipped / 索引 ${dir.name}/$indexFile")
+  }
+
+  /** 启动图标那一档（= 历史行为）。 */
+  private fun roundLaunch(pm: PackageManager, dir: File, edge: Int, filter: String): Int {
+    if (!ensureDir(dir)) return -1
     val entries = launchable(pm, filter)
     if (entries.isEmpty()) {
       Log.w(TAG, "Corpus: 一个包都没匹配上（filter=\"$filter\"）")
       return -1
     }
     Log.d(TAG, "Corpus: 开始 ${entries.size} 个包 edge=$edge → ${dir.absolutePath}")
-    val index = StringBuilder("pkg\tlabel\tfile\tedge\tsig\tcls\tfg\tbg\tmono\tkb\t" +
-      "fgAlpha\tbgAlpha\tmonoFile\tmonoAlpha\tbgColor\tfgFile\tbgFile\tmodelFile\tmodelBgFile\n")
+    val index = indexHeader()
     var written = 0
     var skipped = 0
     for (info in entries) {
       val pkg = info.packageName
       val drawable = runCatching { pm.getApplicationIcon(info) }.getOrNull()
-      val bmp = drawable?.let { runCatching { rasterModel(it, edge) }.getOrNull() }
-      if (drawable == null || bmp == null) {
-        skipped++
-        Log.w(TAG, "Corpus: 跳过 $pkg（取不到图标或画不出）")
-        continue
-      }
-      // 像素先取出来算指纹，再压 PNG —— 指纹口径必须与 [MonoDump.sigOf] 完全一致，
-      // 否则同一个图标在两份语料里长成两个名字，"这张已经在台上了"就判不出来。
-      val pixels = IntArray(edge * edge)
-      bmp.getPixels(pixels, 0, edge, 0, 0, edge, edge)
-      val sig = MonoDump.sigOf(pixels, edge, edge)
-      val bytes = png(bmp)
-      bmp.recycle()
-      val file = "${sanitize(pkg)}_${resName(pm, info)}_$sig.png"
-      val writeError = runCatching { File(dir, file).writeBytes(bytes) }.exceptionOrNull()
-      if (writeError != null) {
-        skipped++
-        Log.w(TAG, "Corpus: 写不进 $file —— ${writeError.javaClass.simpleName}: ${writeError.message}")
-        continue
-      }
-      // **自带单色层的那 61 张，把设计师画的那一层也原样带回来** —— 那是「彩色图标 → 正确遮罩」
-      // 的免费标注对（同一张图、同一个 384 口径，一边彩色一边人画的墨）。模型从来没对着它们量过，
-      // 而这是唯一能把"像不像"从我的口味变成可对表数字的东西。文件名带同一个 `sig`，配对靠它。
-      val mono = dumpMono(dir, drawable, edge, pkg, resName(pm, info), sig)
-      // ⚠ **上面那张 `file` 是合成图，不是模型看到的图。** 自适应图标在运行时只把
-      //   **前景层**交给模型（`MonochromeSynth` 取 `source.foreground`），而盘在背景层里 ——
-      //   真机 91 个自适应图标的前景层**中位 74% 是透明**，也就是说合成图里那一大块实心的盘，
-      //   模型从来没见过。审计线一直对着合成图打分，等于给一个运行时不存在的输入挑毛病
-      //   （2026-10-06 发现；`MonoDump` 那条通道没这个问题，它带的就是模型吃进去的那一张）。
-      //   所以这里**另存一张 `_fg.png` = 前景层**，文件名与合成图同 `sig`，配对靠它。
-      val fgFile = dumpForeground(dir, drawable, edge, file)
+      if (dumpOne(dir, index, pkg, label(pm, info), resName(pm, info), drawable, edge)) written++ else skipped++
+      if (written % PROGRESS_EVERY == 0 && written > 0) Log.d(TAG, "Corpus: 已写 $written/${entries.size} 张（跳过 $skipped）")
+    }
+    finish(dir, index, filter, written, skipped)
+    return skipped
+  }
+
+  /**
+   * **快捷方式那一档：按 PC 侧给来的清单抓。**
+   *
+   * 清单从哪来：`node _harness/_shotdump.cjs <(adb shell dumpsys shortcut) --marker …` ——
+   * `dumpsys shortcut` 是 ShortcutService 自己的权威名单（静态 + 动态都在里面，图标以资源 id 记着），
+   * 而**应用侧枚举不到它**：第一版走 `PackageManager.getXml()` 去读 manifest `<shortcut>`，
+   * 真机跑回来是「129 个包里 0 个声明」，可同一台机器的 dump 里有 **124 条资源图标** ——
+   * 那是通道选错，不是这台机器没有这一类。所以名单在 PC 上生成、写进标记文件，这里只管画图。
+   *
+   * ⚠ 覆盖边界要说清：清单里只有**资源 id 形式**的图标解得出来（122 张 / 59 个包）；
+   *   `bitmap=`（应用运行时发布、落在 `/data/system_ce/.../shortcut_service/bitmaps/`，45 条）
+   *   与 `iconUri=`（4 条）这一档**拿不到**。所以这一档补的是"这一类里能离线抓到的那部分"，
+   *   不许说成整类覆盖。
+   */
+  private fun roundShots(pm: PackageManager, dir: File, edge: Int, shots: List<ShotRef>): Int {
+    if (shots.isEmpty()) {
+      // 空清单**不能**长得像"抓完了，0 张"：那正是本仓骂过四次的静默失效。
+      Log.w(TAG, "Corpus: mode=shortcut 但清单是空的（标记文件读不到？还是 PC 侧没带 --marker？）—— 这一档**没跑**")
+      return -1
+    }
+    if (!ensureDir(dir)) return -1
+    val index = indexHeader()
+    var written = 0
+    var skipped = 0
+    var ok2 = 0
+    for (s in shots) {
+      val info = runCatching { pm.getApplicationInfo(s.pkg, 0) }.getOrNull()
+      if (info == null) { skipped++; continue }
+      val res = runCatching { pm.getResourcesForApplication(info) }.getOrNull()
+      // 按名字解的那一路：解不出来（包被更新过、资源名是运行时拼的）就跳过并计入 skipped ——
+      // 不猜一个相近的资源，那会把语料喂成另一张图（`乙类被喂错图` 那笔账）。
+      val resId = if (s.resId != 0) s.resId
+        else runCatching { res?.getIdentifier(s.name, s.type, s.pkg) ?: 0 }.getOrDefault(0)
+      val d = if (resId == 0) null else res?.let { runCatching { it.getDrawable(resId, null) }.getOrNull() }
+      if (d == null) { skipped++; continue }
+      ok2++
+      val name = runCatching { res!!.getResourceEntryName(resId) }.getOrDefault("0x" + resId.toString(16))
+      if (dumpOne(dir, index, s.pkg, "${s.pkg} 快捷方式 $name", name, d, edge)) written++ else skipped++
+    }
+    Log.d(TAG, "Corpus: 快捷方式档 —— 清单 ${shots.size} 条，解出图标 $ok2 张，写 $written / 跳 $skipped")
+    finish(dir, index, "", written, skipped)
+    return skipped
+  }
+
+  /**
+   * 一张 drawable → 语料里那一行（合成图 + `_fg`/`_bg`/`_model`/自带单色层，全按装机口径）。
+   * 返回 false = 这一张没画出来或写不进去（调用方计入跳过）。
+   */
+  private fun dumpOne(dir: File, index: StringBuilder, pkg: String, who: String, res: String,
+                      drawable: Drawable?, edge: Int): Boolean {
+    val bmp = drawable?.let { runCatching { rasterModel(it, edge) }.getOrNull() }
+    if (drawable == null || bmp == null) {
+      Log.w(TAG, "Corpus: 跳过 $pkg/$res（取不到图标或画不出）")
+      return false
+    }
+    // 像素先取出来算指纹，再压 PNG —— 指纹口径必须与 [MonoDump.sigOf] 完全一致，
+    // 否则同一个图标在两份语料里长成两个名字，"这张已经在台上了"就判不出来。
+    val pixels = IntArray(edge * edge)
+    bmp.getPixels(pixels, 0, edge, 0, 0, edge, edge)
+    val sig = MonoDump.sigOf(pixels, edge, edge)
+    val bytes = png(bmp)
+    bmp.recycle()
+    // 文件名只用 **ASCII 那几段**（包名 + 资源名 + 指纹），中文标签只进 index 的 `label` 列：
+    // `sanitize` 认 `isLetterOrDigit`，CJK 也算"字母"，会把「邮件」这种直接写进文件名 ——
+    // 而下游那些脚本（`_mkrec_model.cjs`、`_named.cjs`）是按文件名配对的，这台机的控制台又是 GBK。
+    val file = "${sanitize(pkg)}_${sanitize(res)}_$sig.png"
+    val writeError = runCatching { File(dir, file).writeBytes(bytes) }.exceptionOrNull()
+    if (writeError != null) {
+      Log.w(TAG, "Corpus: 写不进 $file —— ${writeError.javaClass.simpleName}: ${writeError.message}")
+      return false
+    }
+    // **自带单色层的那批，把设计师画的那一层也原样带回来** —— 那是「彩色图标 → 正确遮罩」
+    // 的免费标注对（同一张图、同一个 384 口径，一边彩色一边人画的墨）。文件名带同一个 `sig`，配对靠它。
+    val mono = dumpMono(dir, drawable, edge, pkg, res, sig)
+    // ⚠ **上面那张 `file` 是合成图，不是模型看到的图。** 自适应图标在运行时只把
+    //   **前景层**交给模型（`MonochromeSynth` 取 `source.foreground`），而盘在背景层里 ——
+    //   真机 91 个自适应图标的前景层**中位 74% 是透明**，也就是说合成图里那一大块实心的盘，
+    //   模型从来没见过。审计线一直对着合成图打分，等于给一个运行时不存在的输入挑毛病
+    //   （2026-10-06 发现；`MonoDump` 那条通道没这个问题，它带的就是模型吃进去的那一张）。
+    //   所以这里**另存一张 `_fg.png` = 前景层**，文件名与合成图同 `sig`，配对靠它。
+    val fgFile = dumpForeground(dir, drawable, edge, file)
     // **新列一律加在行尾**（`bgFile` 是第 17 列）：老列的位置一个都不动，
     // 按列号读的脚本（`_chan3.cjs`、`_screen2.cjs`、`YardKt`）才不用重算 —— 这条规矩
     // 与 `ConfigProvider` 那处"写侧按位置、读侧按列名"的教训同一个来源。
     val bgFile = dumpBackground(dir, drawable, edge, file)
-      // ⚠ **新列一律加在行尾**（这里是第 18、19 列）：老列的位置一个都不动，
-      //   按列号读的脚本才不用重算 —— 与 `ConfigProvider` 那条"写侧按位置、读侧按列名"同一来源。
-      val model = dumpModelInput(dir, drawable, edge, file)
-      index.append(
-        listOf(
-          pkg, label(pm, info), file, edge, sig, drawable.javaClass.simpleName,
-          // ⚠ 顺序是**前景在前**（表头 `fg bg`）：`layerName(…, true)` 取的是 background，
-          //   第一版把两列写反了 —— 类名列反了不会有人发现，正是这类"看起来有数、其实是错的"。
-          layerName(drawable, false), layerName(drawable, true), shipsMono(drawable),
-          bytes.size / 1024,
-          // —— 以下五列一律**加在行尾**：老列的位置一个都不动，按列号读的脚本才不用重算。
-          // 前景层与单色层的 alpha 分布：这一列回答的是"平台其实已经把图形与盘分开给了我们，
-          // 我们为什么要从合成图里把它猜回来"（见 README「更通用的路」那条）。
-          alphaStat(drawable, edge, false), alphaStat(drawable, edge, true),
-          mono.first, mono.second, bgColor(drawable, edge), fgFile, bgFile, model.first, model.second,
-        ).joinToString("\t")
-      ).append('\n')
-      written++
-      if (written % PROGRESS_EVERY == 0) Log.d(TAG, "Corpus: 已写 $written/${entries.size} 张（跳过 $skipped）")
-    }
-    val indexFile = if (filter.isEmpty()) "index.tsv" else "index_${sanitize(filter)}.tsv"
-    runCatching { File(dir, indexFile).writeBytes(index.toString().toByteArray()) }
-      .onFailure { Log.w(TAG, "Corpus: 索引写不进去 —— ${it.javaClass.simpleName}: ${it.message}") }
-    Log.d(TAG, "Corpus: 写了 $written 张 / 跳过 $skipped / 索引 $indexFile")
-    return skipped
+    val model = dumpModelInput(dir, drawable, edge, file)
+    index.append(
+      listOf(
+        pkg, who, file, edge, sig, drawable.javaClass.simpleName,
+        // ⚠ 顺序是**前景在前**（表头 `fg bg`）：`layerName(…, true)` 取的是 background，
+        //   第一版把两列写反了 —— 类名列反了不会有人发现，正是这类"看起来有数、其实是错的"。
+        layerName(drawable, false), layerName(drawable, true), shipsMono(drawable),
+        bytes.size / 1024,
+        // 前景层与单色层的 alpha 分布：这一列回答的是"平台其实已经把图形与盘分开给了我们，
+        // 我们为什么要从合成图里把它猜回来"（见 README「更通用的路」那条）。
+        alphaStat(drawable, edge, false), alphaStat(drawable, edge, true),
+        mono.first, mono.second, bgColor(drawable, edge), fgFile, bgFile, model.first, model.second,
+      ).joinToString("\t")
+    ).append('\n')
+    return true
   }
 
   /**

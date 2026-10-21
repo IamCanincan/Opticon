@@ -385,10 +385,15 @@ tail -4 bench/reg/monokey.txt
 #   一定动这两个集合，所以它一响就是真出事；两张集合都不许靠"数差不多"糊过去。
 echo "== 16/16 极性入口账 =="
 PLATECORPUS=${PLATECORPUS:-plate_model}
+# 快捷方式那一类（2026-10-22 加）：这一刀真机翻的两张就在这里面，而它在**别的三份语料里一张都没有**。
+# 少了这一档，第 16/19 闸的"近线带"就只有启动图标那一类 —— 那正是"离线说 0 变化、真机翻 2 张"的成因。
+SHOTCORPUS=${SHOTCORPUS:-shortcut_model}
 [ -d "$PLATECORPUS" ] || {
   echo "!! 语料 $PLATECORPUS/ 不在 —— 这一闸**不许**退回 rec_model 空跑（那正是它原本瞎掉的样子）"; exit 1; }
+[ -d "$SHOTCORPUS" ] || {
+  echo "!! 语料 $SHOTCORPUS/ 不在 —— 第 16/19 闸的分母会少了**快捷方式**那一类（重建见 .gitignore 那条注释）"; exit 1; }
 PSRC=0
-run harness.PlateSubKtKt "$PLATECORPUS" --min=50 > bench/reg/platesub.txt || PSRC=$?
+run harness.PlateSubKtKt "$PLATECORPUS" "$SHOTCORPUS" --min=50 > bench/reg/platesub.txt || PSRC=$?
 grep -q '^PS ' bench/reg/platesub.txt || {
   echo "!! 极性入口账没出数 —— 驱动或语料坏了（它自己那 3 行在下面）"; tail -3 bench/reg/platesub.txt; exit 1; }
 NEWPS=$(grep '^PS ' bench/reg/platesub.txt)
@@ -469,7 +474,7 @@ echo "== 19/19 两本账一本账 =="
 #   缺它就等于把闸退回空跑，所以缺了**直接不跑**，不许悄悄少一份分母。
 [ -d twobook_ctrl ] || { echo "!! 缺对照语料 twobook_ctrl/ —— 第 19 闸会退回空跑（先 node _mk_twobook_ctrl.cjs）"; exit 1; }
 TARC=0
-run harness.TwoAcctKtKt "$CORPUS" "$PLATECORPUS" twobook_ctrl > bench/reg/twoacct.txt || TARC=$?
+run harness.TwoAcctKtKt "$CORPUS" "$PLATECORPUS" "$SHOTCORPUS" twobook_ctrl > bench/reg/twoacct.txt || TARC=$?
 grep -q '^2A ' bench/reg/twoacct.txt || {
   echo "!! 两本账没出数 —— 驱动或语料坏了（它自己那几行在下面）"; tail -6 bench/reg/twoacct.txt; exit 1; }
 NEWT=$(grep '^2A ' bench/reg/twoacct.txt)
