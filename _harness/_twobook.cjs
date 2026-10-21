@@ -44,7 +44,7 @@ function parse(text) {
     let m = COLOUR.exec(line);
     if (m) {
       const e = ENTRY.exec(line);
-      colour.set(pkgOf(m[1]), {
+      colour.set(m[1], {
         pct: +m[5], plate: m[4] === '只剩', scan: m[2] + 'x' + m[3], entry: e ? e[1] : '-',
       });
       continue;
@@ -59,7 +59,7 @@ function parse(text) {
     //   那是我把"没重算"读成了"两本账不一致"。
     if (!/→ (已交出掩码|判据不成立)/.test(line)) { notJudged++; continue; }
     const pol = DIAG_POL.exec(line);
-    const p = pkgOf(m[2]);
+    const p = m[2];
     // 同一个包会有好几张（快捷方式 / 多尺寸）：**只要有一行不等就算不等**，所以收进数组。
     if (!mono.has(p)) mono.set(p, []);
     mono.get(p).push({
@@ -70,11 +70,13 @@ function parse(text) {
   return { colour, mono, notJudged };
 }
 
-/** 标签两种形式都要认（`包名/类型/入口名` 与 `pm:包名`）—— 与生产 `IconNames.matchesPkg` 同一口径。 */
-function pkgOf(label) {
-  if (label.startsWith('pm:')) return label.split('/')[0];
-  return label.split('/')[0];
-}
+/**
+ * ⚠ **配对键 = 整个标签**（`包名/类型/资源名` 或 `pm:包名/id`），**不是包名** ——
+ * 原来这里有个 `pkgOf()` 取第一段，真机上就错了：`com.android.contacts` 一个包下三张快捷方式，
+ * 彩色读数分别是 **50 / 50 / 49**，按包拼会把它们串成一对"49 ↔ 50"的**假不等**
+ * （第一版就是这么报的，差点让我把红灯交给一个不存在的问题）。
+ * 两边标签都出自生产同一个 `IconNames.of`，所以能逐张配；配不上就是真没成对，不许退成按包。
+ */
 
 function judge(text, tag) {
   const { colour, mono, notJudged } = parse(text);
