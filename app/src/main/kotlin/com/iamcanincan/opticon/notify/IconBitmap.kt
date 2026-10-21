@@ -12,8 +12,9 @@ import android.graphics.drawable.Icon
 import android.net.Uri
 import android.os.Build
 import androidx.core.content.res.ResourcesCompat
-import com.iamcanincan.opticon.runtime.MemberLookup
 import kotlin.math.roundToInt
+import com.iamcanincan.opticon.runtime.MemberLookup
+
 
 /**
  * 图标位图的取与造 —— **通知那半边**。
@@ -75,11 +76,46 @@ object IconBitmap {
     fun rasterize(drawable: Drawable, size: Int = ICON_EDGE): Bitmap {
         val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bmp)
-        val b = iconBounds(drawable.intrinsicWidth, drawable.intrinsicHeight, size)
+        val iw = drawable.intrinsicWidth
+        val ih = drawable.intrinsicHeight
+        val b = iconBounds(iw, ih, size)
+        noteBounds(iw, ih)
         drawable.setBounds(b[0], b[1], b[2], b[3])
         drawable.draw(canvas)
         return bmp
     }
+
+    /**
+     * 取框账（2026-10-21）：**没有它，这条改动装在机器上也无法证明** —— `iconBounds` 是纯函数，
+     * R8 会把名字改掉，dex 里也没有旧字面量可对。这里只统计**本进程**：一共取了几次框、
+     * 其中多少种源是非方形（非方形 = 以前会被拉成正方、现在等比 fit 的那一批）。
+     *
+     * ⚠ 这一份文件**不打日志**：判据台（`_harness/build.sh`）编的就是它，而它的源码清单里没有
+     *   `runtime/ModuleRuntime` —— 在这里调日志等于把性质台编译打断。所以这里只**造句子**，
+     *   由调用方（`SystemUiHooks`，那里才有日志通道）决定要不要印。
+     * @return 该印的时候返回一行文本，不该印的时候返回 null（30 秒一行，且计数没动也不印）。
+     */
+    fun boundsDump(): String? {
+        val n = boundsTotal.get()
+        if (n == 0L || n == lastDumpCount) return null
+        val now = System.currentTimeMillis()
+        if (now - lastDumpAt < 30_000L && lastDumpAt != 0L) return null
+        lastDumpAt = now; lastDumpCount = n
+        val kinds = stretchedKinds.size
+        return "通知取框 累计 $n 次，非方形源 $kinds 种" +
+          (if (kinds == 0) "" else "（${stretchedKinds.keys.joinToString(" ")}）")
+    }
+
+    /** 每取一次框记一笔（[rasterize] 调）。非方形按 `宽x高` 去重，量的是"几种形状"。 */
+    private fun noteBounds(iw: Int, ih: Int) {
+        boundsTotal.incrementAndGet()
+        if (iw > 0 && ih > 0 && iw != ih) stretchedKinds.put("${iw}x${ih}", true)
+    }
+
+    private val boundsTotal = java.util.concurrent.atomic.AtomicLong()
+    private val stretchedKinds = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+    @Volatile private var lastDumpAt = 0L
+    @Volatile private var lastDumpCount = 0L
 
     /**
      * 一张通知小图标该画在方形画布里的哪个框 —— `[left, top, right, bottom]`。
@@ -568,6 +604,32 @@ object IconBitmap {
         } else {
             context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
         }
+    }
+
+    /**
+     * 量一把这张小图标有多"大"：**墨外接框的长边 ÷ 画布长边**（α>0 算墨），返回 0..1。
+     *
+     * 为什么按长边、不按面积：状态栏槽位是固定 22dp 的 `fitCenter`，等比缩放后**长边贴边**，
+     * 所以观感大小就是这个比值（面积会把"窄"和"小"混成一个数 —— 本仓那条"混了相反两方向的总量会被一头换一头骗过去"）。
+     *
+     * 只在**去重后的每一种新形状**上算一次（调用方负责去重）：这一趟是 `w×h ≤ 9216` 格的一次扫描，
+     * 而通知刷新在 SystemUI 主线程上，不能每张都扫。
+     * 整张透明返回 `0.0`（那种交给第八闸盯着，这里不另立一本账）。
+     */
+    fun sizeRuler(bmp: Bitmap): Double {
+        val w = bmp.width
+        val h = bmp.height
+        if (w <= 0 || h <= 0) return 0.0
+        val px = IntArray(w * h)
+        bmp.getPixels(px, 0, w, 0, 0, w, h)
+        var x0 = w; var y0 = h; var x1 = -1; var y1 = -1
+        for (i in px.indices) {
+            if ((px[i] ushr 24) == 0) continue
+            val x = i % w; val y = i / w
+            if (x < x0) x0 = x; if (y < y0) y0 = y; if (x > x1) x1 = x; if (y > y1) y1 = y
+        }
+        if (x1 < 0) return 0.0
+        return maxOf(x1 - x0 + 1, y1 - y0 + 1).toDouble() / maxOf(w, h)
     }
 
     /**

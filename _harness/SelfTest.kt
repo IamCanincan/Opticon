@@ -612,6 +612,33 @@ fun main() {
       "fit 之后必须居中")
   }
 
+  // ── 33. 通知大小尺：先钉住**尺本身的定义**，再谈两列分布 ──
+  //     尺 = 墨外接框长边 ÷ 画布长边。为什么不是面积：槽位是 22dp 的 fitCenter，
+  //     一条 32×16 的画布上 32×8 的横条，观感就是"贴着上下限之间的满宽"，而面积只量到 1/4 ——
+  //     面积那把尺会把"扁"和"小"混成一个数（本仓那条"混了相反两方向的总量会被一头换一头骗过去"）。
+  run {
+    val cfg = android.graphics.Bitmap.Config.ARGB_8888
+    val empty = android.graphics.Bitmap.createBitmap(24, 24, cfg)
+    val strip = android.graphics.Bitmap.createBitmap(24, 24, cfg)
+    // 注意是 **12×12 的块**：先前写成 12×24 的竖条，它贴着上下边 ⇒ 长边比就是 1.0（尺没错，是我 expecting 0.5 想错了）
+    strip.setPixels(IntArray(12 * 12) { 0xFF102030.toInt() }, 0, 12, 0, 0, 12, 12)
+    val full = android.graphics.Bitmap.createBitmap(24, 24, cfg)
+    full.setPixels(IntArray(24 * 24) { 0xFF102030.toInt() }, 0, 24, 0, 0, 24, 24)
+    // 32×16 的画布上一条 32×8 的横带：按长边 = 1.00，按面积 = 0.25 —— 这一张就是两把尺的分岔口
+    val bar = android.graphics.Bitmap.createBitmap(32, 16, cfg)
+    bar.setPixels(IntArray(32 * 8) { 0xFF102030.toInt() }, 0, 32, 0, 0, 32, 8)
+    val r0 = com.iamcanincan.opticon.notify.IconBitmap.sizeRuler(empty)
+    val r1 = com.iamcanincan.opticon.notify.IconBitmap.sizeRuler(strip)
+    val r2 = com.iamcanincan.opticon.notify.IconBitmap.sizeRuler(full)
+    val r3 = com.iamcanincan.opticon.notify.IconBitmap.sizeRuler(bar)
+    println("         通知大小尺  空=$r0 半块=$r1 满=$r2 扁带(32×8/32×16)=$r3")
+    check("通知大小尺：整张透明 = 0（这一族由第八闸盯，不在这里另立账）", r0 == 0.0, "空=$r0")
+    check("通知大小尺：满幅 = 1、12×12 的块 = 0.5（长边比，量的是观感大小）",
+      r2 == 1.0 && r1 == 0.5, "满=$r2 半=$r1")
+    check("通知大小尺：扁带按**长边**算 = 1（按面积会是 0.25 —— 那把尺把『扁』和『小』混成一个数）",
+      r3 == 1.0, "32×8 在 32×16 上=$r3")
+  }
+
   println(if (failed == 0) "全部通过" else "!! $failed 条不成立")
 }
 
