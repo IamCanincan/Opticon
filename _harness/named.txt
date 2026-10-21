@@ -1,0 +1,30 @@
+# 主人报的缺陷账，**逐字照抄**（2026-10-06，`D:\Github Repositories\新建 文本文档.txt`）。
+#
+# 为什么单独存一份：这是这台机器上唯一一份**不是模型自己口径**的判据 —— 前 14 项指标量的都是
+# "离我自己的定义多远"，这一份量的是"离屏幕上的眼睛多远"。以后每一刀都要能对这张表跑一遍，
+# 不能再靠主人一张一张报（他的原话：「你得把算法变得通用，不然每次又要一个一个报给你问题」）。
+#
+# 列：包名 <TAB> 现象（逐字） <TAB> 族
+# 族是我归的，三类：
+#   missing   该在的东西没了 —— 模型把墨判成了底（**这一族占了大半**）
+#   stroke    线条本身不对：毛刺 / 中断 / 不清晰 / 没画出来
+#   tonal     过渡不对：该渐变的地方生硬、或过渡糊成一团
+com.azure.authenticator	没盾	missing
+com.cainiao.wireless	上色奇怪	tonal
+cn.com.zjol	上色不全	missing
+com.google.android.apps.translate	半边没有	missing
+com.autonavi.minimap	线条不对	stroke
+com.handsgo.jiakao.android	线条不清晰	stroke
+com.jingdong.app.mall	头顶没了	missing
+com.xunmeng.pinduoduo	白色部分没了	missing
+com.cnspeedtest.globalspeed	过渡不清晰	tonal
+com.sony.songpal.mdr	颜色过度生硬	tonal
+me.ele	右下角线条没画	stroke
+com.sina.weibo	颜色过渡部分生硬	tonal
+com.yiban.app	线条有毛刺和中断	stroke
+com.yiban.app	青色带子与熊有粘连，蓝色和白色没有分界	merge
+# ⚠ 上一行是**一句话两件事**：粘连那一半有尺（台账 H = `BridgeKt` 的 Δ），
+#   「蓝白没有分界」那一半 2026-10-13 已裁定为**硬边界**（README 已知取舍）——
+#   两块都被判成底时那道边在单通道里无处安放，六种框法全框错，不再试第七种。
+com.tencent.hunyuan.app.chat	只有半个太极	missing
+com.wuba.zhuanzhuan	"不"没了	missing

@@ -53,3 +53,34 @@ signing.properties
 # 仓库文档（那三类分别在 src/、docs/devlog/、docs/），是**本地工作产物**，
 # 而 `git add -A` 会把它一起卷进提交 —— 所以按目录整条挡掉。
 /.trae/
+
+# ⚠ 2026-10-21：把**裁判**从上面那条 `/_*/` 里捞出来入库。
+#   理由：`_harness/` 里躺着一整套判据 —— 18 道闸、所有 `*_mut` 变异台、`baseline.json`、各档底线
+#   （`*_floor.txt` / `*.pin` / 两份证据账本）。`/_*/` 让它们**只活在这台机器上**，
+#   于是台账里引用的每一条证物换机就不可重跑 —— 这台有过换机那天整套接线断掉的案底。
+#   只捞"能重跑判定"的那部分；继续留在本机的：抓回来的 logcat dump（单个最大 221 MB）、
+#   `.apk`、`out/`/`stubs_out/`、`cand/`、以及能自己重建的语料目录。
+#   ⚠ 唯一进来的语料是 `rec_blank/`：那 34 张是 2026-10-08 真机事故从日志里 `_undump.cjs` 捞回来的，
+#     **没了就是没了**（第八闸的阳性对照全靠它）。
+!/_harness/
+/_harness/*
+!/_harness/*.sh
+!/_harness/*.cjs
+!/_harness/*.kt
+!/_harness/*.ps1
+!/_harness/named.txt
+!/_harness/bench/
+/_harness/bench/*
+!/_harness/bench/baseline.json
+!/_harness/bench/*_floor.txt
+!/_harness/bench/gate_evidence.txt
+!/_harness/bench/semanticmut.txt
+!/_harness/bench/reg/
+/_harness/bench/reg/*
+!/_harness/bench/reg/*.pin
+!/_harness/rec_blank/
+# ⚠ 这两份是 `MonochromeMask.kt` 在某个提交上的**旧快照**（本机 diff 用的），它们一进库，
+#   以后 grep 一个生产常数就可能命中副本并读出一个不属于任何版本的数 ——
+#   本仓为"闸测的是手抄副本"栽过两次，副本就别再入库。
+/_harness/_mask_*.kt
+!/_harness/README.md
