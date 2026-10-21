@@ -84,3 +84,7 @@ signing.properties
 #   本仓为"闸测的是手抄副本"栽过两次，副本就别再入库。
 /_harness/_mask_*.kt
 !/_harness/README.md
+# ⚠ 2026-10-21 现量：上面那条白名单**漏了 `stubs/`**（手写的 `android.graphics` 桩件，34 KB 的 `.java`），
+#   而 `build.sh` 第一行就要 `find stubs -name "*.java"` —— 干净克隆里编不起来，
+#   "换机也能重跑判定"那句话当场被自己的验收否掉。目录白名单要跟着**编译输入的清单**核，不是跟着扩展名核。
+!/_harness/stubs/
