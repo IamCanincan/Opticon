@@ -468,27 +468,14 @@ head -7 bench/reg/flatink.txt
 #   而非自适应那一支 55↔52 的**采样**漂移离线复现不了（语料只有 384 那一张），
 #   装机由 `_twobook.cjs` 逐包核（`判剩=` 必须等于彩色那行的 `裁了只剩`，不等就非零退出）。
 echo "== 19/19 两本账一本账 =="
-# ⚠ 对照语料 `twobook_ctrl/`（`node _mk_twobook_ctrl.cjs` 造的，1.3 KB，**可复现所以入库**）：
-#   真语料那 132 张上极性翻 **0 张**，这道闸对"把取数退回判据那一本"这个变异**不会响** ——
-#   那一张两本账判定本来就相反（判据 55% 开火 / 彩色恒满幅不开火），`flip=1` 才是这台子的牙。
-#   缺它就等于把闸退回空跑，所以缺了**直接不跑**，不许悄悄少一份分母。
-[ -d twobook_ctrl ] || { echo "!! 缺对照语料 twobook_ctrl/ —— 第 19 闸会退回空跑（先 node _mk_twobook_ctrl.cjs）"; exit 1; }
-TARC=0
-run harness.TwoAcctKtKt "$CORPUS" "$PLATECORPUS" "$SHOTCORPUS" twobook_ctrl > bench/reg/twoacct.txt || TARC=$?
-grep -q '^2A ' bench/reg/twoacct.txt || {
-  echo "!! 两本账没出数 —— 驱动或语料坏了（它自己那几行在下面）"; tail -6 bench/reg/twoacct.txt; exit 1; }
-NEWT=$(grep '^2A ' bench/reg/twoacct.txt)
-if [ -n "$UPDATE" ]; then
-  echo "$NEWT" > bench/reg/twoacct.pin; echo "   --update：已把这一轮钉成新基线 $NEWT"
-else
-  OLDT=$(cat bench/reg/twoacct.pin 2>/dev/null)
-  [ -z "$OLDT" ] && { echo "!! 没有 bench/reg/twoacct.pin —— 没基线不算过（先 sh regress.sh --update 钉一次）"; exit 1; }
-  [ "$TARC" != "0" ] && { echo "!! 两本账自己判了不通过（退码 $TARC，最常见是「两本口径都没开火」）"; tail -2 bench/reg/twoacct.txt; exit 1; }
-  [ "$NEWT" = "$OLDT" ] || {
-    echo "!! 两本账的读数动了："; echo "   基线 $OLDT"; echo "   这轮 $NEWT"
-    echo "   逐张对照见 bench/reg/twoacct.txt（开火集进出 = 极性的归属变了，是要上屏的行为变化）"; exit 1; }
-  echo "   $NEWT —— 与基线逐字相同"
-fi
+# 这一闸**跑两档**（384 + `--edge=96`），两份 pin：`twoacct.pin` / `twoacct96.pin`。
+# 驱动是 `run harness.TwoAcctKtKt`（`_harness/TwoAcctKt.kt`），分母四份：`rec_model plate_model shortcut_model twobook_ctrl`。
+# 判定本体**只有一份**：`twobookgate.sh`（回归台与变异台 `_semanticmut.cjs` 调同一段代码，
+#   照 `namedfloor.sh` / `selftestgate.sh` / `corpusgate.sh` 那三段的先例）。
+# 为什么必须抽出去：这一闸除了"与 pin 逐字相同"还有**两条不看基线**的当场断言
+#   （96 档 `格子分岔` 不许是 0、96 与 384 的极性归属一字不差）。内联在这里时变异台只能再抄一遍
+#   "跑台子 + 比 pin"，那证的是**抄的那半** —— 新加的两条它一条也没证过（2026-10-22 现修，见用例 21）。
+. ./twobookgate.sh; twobook_gate || exit 1
 
 # —— 第廿闸：**自画层接管账**（2026-10-22，主人问"能不能全覆盖，尤其飞鸟那种"查出来的洞）。
 # 第 8 闸只管**该不该接管**；这一闸管**接管之后交出去的是什么**。

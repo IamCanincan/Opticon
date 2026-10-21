@@ -158,10 +158,9 @@ const CASES = [
     to: '  internal fun polarityOf(colour: Window?, measured: Window?): Boolean =\n    measured?.polaritySubject == true\n',
     edges: '384',
     // ⚠ 这条链里**不写 `exit`**（原因写在用例 20 那条的注释里，同一处坑）；
-    //   `grep -q` 只负责"机器行在不在"这一格信号，判红仍由后面那句字符串比对给出。
-    gateCmd: 'run harness.TwoAcctKtKt rec_model plate_model shortcut_model twobook_ctrl > bench/reg/twoacct_mut.txt 2>&1; ' +
-      'grep -q "^2A " bench/reg/twoacct_mut.txt; ' +
-      '[ "$(grep "^2A " bench/reg/twoacct_mut.txt)" = "$(cat bench/reg/twoacct.pin)" ]'
+    //   2026-10-22 改成**直接调真闸本体** `twobookgate.sh` —— 以前这里自己抄了一遍"跑台子 + 比 pin"，
+    //   于是它证的是抄的那半：第 19 闸后来加的两条不看基线的断言（96 档分岔/归属），抄的那份一条都没有。
+    gateCmd: '. ./twobookgate.sh; twobook_gate _mut'
   },
   {
     // 第 20 闸 + 第 8 闸：**自画层该不该接管**这条判据必须有刀级证据（2026-10-22）。
@@ -183,6 +182,22 @@ const CASES = [
       'run harness.AdaptKtKt adapted_model > bench/reg/adapt_mut.txt 2>&1; ' +
       '[ "$(grep "^VETO " bench/reg/veto_mut.txt)" = "$(cat bench/reg/veto.pin)" ] && ' +
       '[ "$(grep "^ADAPT " bench/reg/adapt_mut.txt)" = "$(cat bench/reg/adapt.pin)" ]'
+  },
+  {
+    // 第 19 闸 96 档：**两条不看基线的断言**必须有牙（2026-10-22）。
+    // 第 19 闸的**第二条**证据（用例号 21 ≠ 闸号 19：账本第一列要写闸号，`_gateaudit.cjs` 才认领得到）。
+    no: '21', gateNo: '19', gate: '19/19 两本账一本账（96 档格子分岔）', file: CROP,
+    why: '把 `scanSize` 的 canonical 支并进"不放大"那一支（听起来像好心简化：两本账本来就说是同一把尺了）。' +
+      '现场读数：384 档两条式子给的都是 128²，**一个字都不会变**；只有边长压到 `SCAN_EDGE` 之下才分岔' +
+      '（96 档 canonical=128² vs 合并后=96²，现量 **113 张**）。⇒ 只钉 384 的写法对这一刀**完全 blind**：' +
+      '384 pin 逐字相同、开火集相同、六段回归全绿，而装机上"桌面用小一档尺寸问单色层"那条路已经换了一把尺。' +
+      '⇒ 合并后 96 档 `格子分岔` 从 113 变 **0** ⇒ 真闸本体那句「0 分岔分不清不会分岔和没得分岔，不许当通过」红 ✓' +
+      '（负对照：不改生产时 `twobook_gate _mut` 必须退 0，这台子会先跑它）。',
+    from: '    val shrink = if (canonical) SCAN_EDGE.toFloat() / maxOf(iw, ih)\n' +
+      '    else minOf(1f, SCAN_EDGE.toFloat() / maxOf(iw, ih))\n',
+    to: '    val shrink = minOf(1f, SCAN_EDGE.toFloat() / maxOf(iw, ih))\n',
+    edges: '384',
+    gateCmd: '. ./twobookgate.sh; twobook_gate _mut'
   }
 ];
 
@@ -216,12 +231,19 @@ function dirty(rel) {
 /**
  * 把"这一道闸被一次真·生产变异证出有牙"记进账本，供 `_gateaudit.cjs` 读。
  * ⚠ **审计读的是这份账，不是本文件的用例名单** —— 用例写了没跑不等于证过了。
- * 每道闸只留最近一条（这是量具的读数表，不是变更历史；历史写在 devlog 里）。
+ * 一条证据一行；同一道闸可以有多行（它证过的每一件是不同的事），重跑同一条只顶掉它自己那一行。
+ *   ⚠ `_gateaudit.cjs` 的 `SEM` 是 Map，**同一闸号后写的盖掉先写的**（它只取 `why` 给档位配一句读数），
+ *   而它数的是**段**，所以同一闸多一行不会把段数吹多。历史写在 devlog 里。
  */
 function noteEvidence(no, stage, why) {
   const f = path.join(__dirname, 'bench', 'semanticmut.txt');
   fs.mkdirSync(path.dirname(f), { recursive: true });
-  const rest = (fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split(/\r?\n/) : []).filter(l => !l.startsWith(no + '\t'));
+  // ⚠ **账本键 = 闸号**（`_gateaudit.cjs` 按它认领那一段），**去重看"同一条证据"**（闸号 + `stage` 两段都一样才顶掉）——
+  //   一道闸可以有多条证据（第 19 闸：用例 19 证"读哪一本"、用例 21 证"96 档分岔不许是 0"），
+  //   以前只按闸号去重会把前一条顶掉，而这两条说的是两件不同的事；只按用例号去重又会在**同一道闸**的两行里
+  //   留下没人认领的旧读数。审计那侧数的是**段**，同一闸多一行不改变它的档位。
+  const rest = (fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split(/\r?\n/) : [])
+    .filter(l => !(l.startsWith(no + '\t') && (l.split('\t')[2] || '') === stage));
   const d = new Date();
   const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   rest.push([no, day, stage, why].join('\t'));
@@ -301,10 +323,13 @@ if (process.argv.includes('--redge')) {
   for (const c of CASES) {
     const f = path.join(KEEP, c.no + '.log');
     if (!fs.existsSync(f)) { console.log(`   用例 ${c.no}：没有 ${f}，跳过`); continue; }
+    // ⚠ `gateCmd` 那一类**日志里没有 `== X ==` 表头**（它只跑那一道闸，退码就是判词）⇒ 不能凭旧日志重新归因。
+    //   以前这里会印一句"停在（没有表头）"，看着像那三条证明又失效了 —— 要重证就重跑 `--case=<号>`。
+    if (c.gateCmd) { console.log(`   用例 ${c.no}：gateCmd 那一类只留退码、不留表头 ⇒ 这里不重新归因（要重证：node _semanticmut.cjs --case=${c.no}）`); continue; }
     const red = stopStage(fs.readFileSync(f, 'utf8'));
-    if (red.stage && red.stage.indexOf(c.no + '/') === 0) {
+    if (red.stage && red.stage.indexOf((c.gateNo || c.no) + '/') === 0) {
       console.log(`   用例 ${c.no} ✅ 红在该红的那一段：${red.stage}\n       ${red.line}`);
-      noteEvidence(c.no, red.stage, c.why); n++;
+      noteEvidence(c.gateNo || c.no, red.stage, c.why); n++;
     } else console.log(`   用例 ${c.no} ⚠ 这台子停在「${red.stage || '(没有表头)'}」，不是 ${c.gate}`);
   }
   console.log(`   重新归因：${n} 条记进 bench/semanticmut.txt`);
@@ -371,9 +396,9 @@ for (const c of active) {
       console.log(`    ⚠ 退码 ${rc} = 量具自己没跑成（不是这一闸红了）—— 先看上面的报错，再重跑`);
       bad++;
     }
-    else if (red.stage && red.stage.indexOf(c.no + '/') === 0) {
+    else if (red.stage && red.stage.indexOf((c.gateNo || c.no) + '/') === 0) {
       console.log(`    ✅ 红了，而且红在该红的那一段：${red.stage}\n       ${red.line}`);
-      noteEvidence(c.no, red.stage, c.why);
+      noteEvidence(c.gateNo || c.no, red.stage, c.why);
     } else {
       // ⚠ **这一支以前不算 `bad`**，于是末尾那句"全部用例都让对应的闸红了"是**假的**。
       //   2026-10-21 那一轮三条用例没有一条真正证到位（9 归因错段、10 量具被我自己编辑打断退了 127、
