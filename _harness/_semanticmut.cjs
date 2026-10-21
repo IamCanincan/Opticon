@@ -22,6 +22,8 @@ const ROOT = path.resolve(__dirname, '..');
 const MASK = 'app/src/main/kotlin/com/iamcanincan/opticon/circle/MonochromeMask.kt';
 // 第十九闸那把刀落在 `IconCropWindow.kt`（极性取数口 `polarityOf` 搬进这里，才量得到）。
 const CROP = 'app/src/main/kotlin/com/iamcanincan/opticon/circle/IconCropWindow.kt';
+// 第二十/八闸那把刀落在 `MonoVeto.kt`（"自画层是不是一整块饼"这条判据本身）。
+const VETO = 'app/src/main/kotlin/com/iamcanincan/opticon/circle/MonoVeto.kt';
 const NOTIFY = 'app/src/main/kotlin/com/iamcanincan/opticon/notify/IconBitmap.kt';
 const KEEP = path.join(__dirname, 'cand', 'semanticmut');
 // ⚠ 日志**不走 stdout**：一台 18 段的输出有十几 MB，`spawnSync` 默认 maxBuffer 到顶会**杀掉子进程**，
@@ -155,12 +157,32 @@ const CASES = [
     from: '  internal fun polarityOf(colour: Window?, measured: Window?): Boolean =\n    colour?.polaritySubject == true\n',
     to: '  internal fun polarityOf(colour: Window?, measured: Window?): Boolean =\n    measured?.polaritySubject == true\n',
     edges: '384',
-    gateCmd: 'run harness.TwoAcctKtKt rec_model plate_model shortcut_model twobook_ctrl > bench/reg/twoacct_mut.txt; ' +
-      // ⚠ 退码分两种，不许混：**没出机器行 = 量具坏了（9）**，出了机器行但与基线不同 = 这一闸红了（1）。
-      //   第一版写成 `run … || exit 9`，于是"台子自己判红"（语义不变量那条就是设计来判红的）
-      //   被吞成"量具坏了"，这一条当场变成"没证过"。
-      'grep -q "^2A " bench/reg/twoacct_mut.txt || exit 9; ' +
+    // ⚠ 这条链里**不写 `exit`**（原因写在用例 20 那条的注释里，同一处坑）；
+    //   `grep -q` 只负责"机器行在不在"这一格信号，判红仍由后面那句字符串比对给出。
+    gateCmd: 'run harness.TwoAcctKtKt rec_model plate_model shortcut_model twobook_ctrl > bench/reg/twoacct_mut.txt 2>&1; ' +
+      'grep -q "^2A " bench/reg/twoacct_mut.txt; ' +
       '[ "$(grep "^2A " bench/reg/twoacct_mut.txt)" = "$(cat bench/reg/twoacct.pin)" ]'
+  },
+  {
+    // 第 20 闸 + 第 8 闸：**自画层该不该接管**这条判据必须有刀级证据（2026-10-22）。
+    no: '20', gate: '20/20 自画层接管账 + 8/8 自画层不透传账', file: VETO,
+    why: '把"可见圆里一格 α=0 都没有"放宽成"α≤8 也算透明"（听起来像给抗锯齿留余量的好心改法）。' +
+      '现场读数：这一类 67 张里现在只有 etar 与飞鸟开火，而近线带（覆盖率 95%~100%）= **0 张** —— ' +
+      '放宽这一个门槛就是"把两张本来该我们画的图交回桌面 ⇒ 屏幕上又是两块实心饼"。' +
+      '⇒ 两道闸一起红：第 8 闸 `fired` 集合变空、第 20 闸 `veto=0` 自己判"什么都没比"退 1。' +
+      '（第 20 闸是今天新立的：`_mkrec_model.cjs` 过去按 `mono=有 ⇒ 直通` 把这一整类剔出所有语料，' +
+      '于是"我们接管的那两张交出去长什么样"从来没有一把尺在看 —— 飞鸟的 `字均净 68` vs 中位 244 是第一次量到。）',
+    from: '        if (((px[row + x] ushr 24) and 0xff) == 0) return false\n',
+    to: '        if (((px[row + x] ushr 24) and 0xff) <= 8) return false\n',
+    edges: '384',
+    // ⚠ **一条 `exit` 都不许写**：这台子是 `gateCmd + '; echo $?'`，中途 `exit` 会让那句
+    //   永远不执行 ⇒ 退码读成 NaN ⇒ "拿不到退码 —— 这一条不算证过"（今天连撞两次：
+    //   第一次是 `|| exit 9` 把"台子自己判红"吞掉，第二次是变异后 VetoKt 不出机器行、`grep || exit 9` 先跑）。
+    //   判"量具坏"不需要 exit：机器行缺失 ⇒ 字符串比对自然不等 ⇒ 一样非零，而负对照会把它分开报出来。
+    gateCmd: 'run harness.VetoKtKt adapted_model --want=org.lineageos.etar,com.fbclient.app > bench/reg/veto_mut.txt 2>&1; ' +
+      'run harness.AdaptKtKt adapted_model > bench/reg/adapt_mut.txt 2>&1; ' +
+      '[ "$(grep "^VETO " bench/reg/veto_mut.txt)" = "$(cat bench/reg/veto.pin)" ] && ' +
+      '[ "$(grep "^ADAPT " bench/reg/adapt_mut.txt)" = "$(cat bench/reg/adapt.pin)" ]'
   }
 ];
 
@@ -236,7 +258,24 @@ function sweepCorpses() {
   }
 }
 
-const active = CASES.filter(c => !want || c.no === want);
+// 没有 `--case=` 时**只列清单、一条都不跑**。要全跑必须显式写 `--all`。
+// 为什么改（2026-10-22 现量）：原来这行是 `CASES.filter(c => !want || …)` —— 不带参数=**全跑**，
+// 而文件头写的是"列出所有用例，不跑"。我照注释敲了一次裸命令，它当场把 case 9 的变异写进
+// `MonochromeMask.kt` 并 `build.sh` 重编，而那时**另一台 `regress.sh` 正在跑** ——
+// 于是第 20 闸量到 `字均中位 243`（真值 244），判词 `EXIT=1`。一台假红，一台被污染。
+const active = want ? CASES.filter((c) => c.no === want) : (process.argv.includes('--all') ? CASES : []);
+if (!active.length && !RESTORE) {
+  CASES.forEach((c) => console.log(`  ${c.no}  ${c.gate}`));
+  console.log(want ? `!! 没有用例 ${want}` : '（只列清单：跑单条用 --case=N，全跑要显式 --all）');
+  process.exit(want ? 2 : 0);
+}
+// ⚠ **开工前先看有没有活人**：变异台会改生产源码并重编 `out/`，与任何在跑的判据台共用同一份类路径。
+//   本仓那句"两台量具踩同一张桌子"的另一种形态 —— 这次踩的是**源码与字节码**。
+if (!RESTORE && fs.existsSync(path.join(__dirname, 'bench', 'reg', '.running'))) {
+  const pid = (() => { try { return fs.readFileSync(path.join(__dirname, 'bench', 'reg', '.running'), 'utf8').trim(); } catch (e) { return '?'; } })();
+  console.error(`!! 有判据台正在跑（bench/reg/.running，pid ${pid}）—— 变异台会改生产源码并重编 out/，等它跑完`);
+  process.exit(3);
+}
 if (!active.length) {
   console.log('用例：'); CASES.forEach(c => console.log(`  --case=${c.no}  ${c.gate}  ${c.why}`));
   process.exit(0);

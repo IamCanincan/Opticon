@@ -490,17 +490,60 @@ else
   echo "   $NEWT —— 与基线逐字相同"
 fi
 
-# == 8/8 「自画单色层是一块饼」那条闸的射程账（2026-10-19 深夜加）==
-# 它管的不是像素，是**别改谁的图**：63 张真自画层里只许开火 etar 那一张，飞鸟（不在语料里，
-# 从 `_two/` 喂进去）必须开火 —— 名单已删，它靠的就是这条判据。三条控制里有一条专量"窗"：
-# 拿整张画布当窗的写法会在那一条上红。
+# —— 第廿闸：**自画层接管账**（2026-10-22，主人问"能不能全覆盖，尤其飞鸟那种"查出来的洞）。
+# 第 8 闸只管**该不该接管**；这一闸管**接管之后交出去的是什么**。
+# 为什么必须单列（现量，不是推断）：`_mkrec_model.cjs` 过去按 `mono=有 ⇒ 直通、不上模型` 把
+#   **自带单色层那一整类**从所有语料里剔掉（本机 129 张里有 67 张），可第 8 闸的 veto 恰恰从这批里
+#   挑走 2 张改由我们画（etar、飞鸟）⇒ **我们接管的那两张的输出，之前不在任何一把尺的分母里**。
+#   飞鸟这次量到的数：`字均净 68` vs 这一类中位 `244` —— 笔画只有同类三分之一粗，
+#   这就是主人看见的"字标被啃"。有数之后才谈该不该为它开刀。
+# ⚠ 这些中位数**不是收益表**：这一类没有对岸（设计师那一层就是那块饼），所以钉它是为了
+#   "别把接管的那两张画得更坏"，不是为了"越小越好"。
+echo "== 20/20 自画层接管账 =="
+[ -d adapted_model ] || { echo "!! 缺 adapted_model/ —— 这一闸没有分母（建法见第 8 闸那段）"; exit 1; }
+ARC=0
+run harness.AdaptKtKt adapted_model > bench/reg/adapt.txt 2>&1 || ARC=$?
+grep -q '^ADAPT ' bench/reg/adapt.txt || {
+  echo "!! 自画层接管账没出机器行 —— 驱动或语料坏了"; tail -6 bench/reg/adapt.txt; exit 1; }
+NEWA=$(grep '^ADAPT ' bench/reg/adapt.txt)
+if [ -n "$UPDATE" ]; then
+  echo "$NEWA" > bench/reg/adapt.pin; echo "   --update：已把这一轮钉成新基线 $NEWA"
+else
+  OLDA=$(cat bench/reg/adapt.pin 2>/dev/null)
+  [ -z "$OLDA" ] && { echo "!! 没有 bench/reg/adapt.pin —— 没基线不算过（先 sh regress.sh --update 钉一次）"; exit 1; }
+  [ "$ARC" != "0" ] && { echo "!! 这一闸自己判了不通过（退码 $ARC，最常见是分母空或 veto 一张都不开火）"; tail -4 bench/reg/adapt.txt; exit 1; }
+  [ "$NEWA" = "$OLDA" ] || {
+    echo "!! 自画层接管的读数动了："; echo "   基线 $OLDA"; echo "   这轮 $NEWA"
+    echo "   接管名单进出 = 有图标从'交回桌面'变成'我们画'（或反过来）；中位动 = 浓度/笔画被改"; exit 1; }
+  echo "   ${NEWA%% 接管名单=*} —— 与基线逐字相同"
+fi
+
+# == 8/8 「自画单色层是一块饼」那条闸的射程账（2026-10-19 深夜加，2026-10-22 换分母）==
+# 它管的不是像素，是**别改谁的图**：这一类里只许开火"整块都是墨"的那几张（本机现量 etar + 飞鸟），
+# 其余 65 张交回桌面自己上色。三条控制里有一条专量"窗"：拿整张画布当窗的写法会在那一条上红。
 echo "== 8/8 自画层不透传账 =="
-sh run.sh harness.VetoKtKt corpus_audit3 --also=_two/com.fbclient.app_ic_launcher_foreground_flyingbird.png \
-  > bench/reg/veto.txt 2>&1 || { echo "!! 自画层射程与预期不符（要 = 只有 org.lineageos.etar，飞鸟要开火）";
-                                tail -10 bench/reg/veto.txt; exit 1; }
-grep -E "^OK" bench/reg/veto.txt || { echo "!! 这台子没出 OK 行 —— 它可能压根没跑到（见 bench/reg/veto.txt）";
-                                      tail -10 bench/reg/veto.txt; exit 1; }
-tail -1 bench/reg/veto.txt
+# ⚠ 2026-10-22 换分母：原来吃 `corpus_audit3`（**不在库里**）+ 一张手做的飞鸟 `_two/…`（**也不在库里**）
+#   ⇒ 干净克隆上这一闸根本跑不了，是一个静默的复现洞。现在吃 `adapted_model`（67 张，**在库里**）——
+#   那正是这一闸该管的整类：**应用自带单色层**的那一批（`_mkrec_model.cjs --only=adapted` 建的）。
+#   飞鸟这次是自己进的分母，不再靠 `--also=` 手喂。
+[ -d adapted_model ] || {
+  echo "!! 缺 adapted_model/ —— 自画层射程这一闸没有分母（重建：node _mkrec_model.cjs <抓取目录> adapted_model --only=adapted）"; exit 1; }
+VRC=0
+run harness.VetoKtKt adapted_model --want=org.lineageos.etar,com.fbclient.app > bench/reg/veto.txt 2>&1 || VRC=$?
+grep -q '^VETO ' bench/reg/veto.txt || {
+  echo "!! 自画层账没出机器行 —— 驱动或语料坏了（它自己那几行在下面）"; tail -8 bench/reg/veto.txt; exit 1; }
+NEWV=$(grep '^VETO ' bench/reg/veto.txt)
+if [ -n "$UPDATE" ]; then
+  echo "$NEWV" > bench/reg/veto.pin; echo "   --update：已把这一轮钉成新基线 $NEWV"
+else
+  OLDV=$(cat bench/reg/veto.pin 2>/dev/null)
+  [ -z "$OLDV" ] && { echo "!! 没有 bench/reg/veto.pin —— 没基线不算过（先 sh regress.sh --update 钉一次）"; exit 1; }
+  [ "$VRC" != "0" ] && { echo "!! 自画层账自己判了不通过（退码 $VRC），见 bench/reg/veto.txt"; tail -8 bench/reg/veto.txt; exit 1; }
+  [ "$NEWV" = "$OLDV" ] || {
+    echo "!! 自画层射程动了："; echo "   基线 $OLDV"; echo "   这轮 $NEWV"
+    echo "   开火集进出一张 = 有一张主题图标改由我们画（或交回去），逐张看图再认账"; exit 1; }
+  echo "   $NEWV —— 与基线逐字相同"
+fi
 
 # ⚠ **收尾自证：平色饼那本账到最后必须还是两条。**（2026-10-20：我加第 18 闸时把它的读数写成
 #   `bench/reg/flat.txt` —— 正是第 3 段在 `>>` 追加的那个文件 —— 于是在最后一步把别人的账本清空，

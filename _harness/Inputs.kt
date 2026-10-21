@@ -105,6 +105,10 @@ fun indexFlags(dir: File): Pair<HashMap<String, Boolean>, HashMap<String, Boolea
  * ⚠ 分母纪律：跳过 `*_preview.png`（判据台自己 `--shot` 出来的对照图，落进语料就会把 155 行
  *   掺成 42 行输出）和 `*_modelbg.png`（那是别人的 `under`，不是图标 —— 漏过这条 `rec_model`
  *   的 62 张会被数成 74 张）。
+ * ⚠ 2026-10-22 同一族**又长出来一次**：`adapted_model` 这一份里带着 `*_mono.png`（应用自画的单色层，
+ *   第 8 闸那把尺要的）与 `*_fg.png`/`*_bg.png`（子层），67 张图标被数成 **134** ——
+ *   分母翻倍而退码仍是 0。凡是"另一把尺要的附属图"存在同一个目录里的语料，都必须在这一处一起挡掉；
+ *   挡在 `cases()` 这一处（只有一份）而不是各台子自己 filter，否则下一份语料又漏。
  *
  * ⚠ 给的是 [Sequence]：**逐张现取**，一台跑到第 30 张崩了，前 29 行的输出还在；一次性 `List`
  *   会在打开任何输出之前把整份语料读完。
@@ -112,7 +116,8 @@ fun indexFlags(dir: File): Pair<HashMap<String, Boolean>, HashMap<String, Boolea
 fun cases(dir: File, edge: Int, inset: Boolean, fgAll: Boolean): Sequence<Case> {
   val (fgByFile, plateByLayer) = indexFlags(dir)
   return dir.listFiles()!!.filter { it.extension == "png" && !it.name.contains("preview") &&
-    !it.name.endsWith("_modelbg.png") }.sortedBy { it.name }.asSequence().map { f ->
+    !it.name.endsWith("_modelbg.png") && !it.name.endsWith("_mono.png") &&
+    !it.name.endsWith("_fg.png") && !it.name.endsWith("_bg.png") }.sortedBy { it.name }.asSequence().map { f ->
     Case(f, loadArgb(f.absolutePath, edge, inset), ImageIO.read(f).let { it.width to it.height },
       fgAll || fgByFile[f.name] == true, plateByLayer[f.name] == true, edge)
   }
