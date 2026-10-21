@@ -20,6 +20,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const ROOT = path.resolve(__dirname, '..');
 const MASK = 'app/src/main/kotlin/com/iamcanincan/opticon/circle/MonochromeMask.kt';
+const NOTIFY = 'app/src/main/kotlin/com/iamcanincan/opticon/notify/IconBitmap.kt';
 const KEEP = path.join(__dirname, 'cand', 'semanticmut');
 // ⚠ 日志**不走 stdout**：一台 18 段的输出有十几 MB，`spawnSync` 默认 maxBuffer 到顶会**杀掉子进程**，
 // 而那一刀正好落在某一段中间 —— 那种退码既不是"红"也不是"绿"。落盘再读。
@@ -123,6 +124,19 @@ const CASES = [
     gateCmd: 'run harness.MaskBenchKt --edge=384 rec_blank > bench/reg/blank_mut.txt || exit 9; ' +
       'node _blank.cjs 2 --in=bench/reg/blank_mut.txt:rec3u ' +
       '--floor="$(cat bench/blank_floor.txt 2>/dev/null || echo 0)" > bench/reg/blank_verdict_mut.txt'
+  },
+  {
+    // 第 2 道（性质台）此前只有"当天真的响过"那档证据；这条把**通知取框**那三行断言变成有刀级证据。
+    no: '2', gate: '2/7 性质台', file: NOTIFY,
+    why: '把 `iconBounds` 那条"方形/无固有尺寸才铺满"的守卫改成**永远铺满**（= 2026-10-21 之前的旧写法：' +
+      '非方形也 `setBounds(0,0,96,96)`）。现场读数：框架自己 91 张 `stat_*` PNG 里 **53 张画布非方形**' +
+      '（20×42 / 39×51 / 22×38 这一族），而状态栏槽位是固定 22dp + `fitCenter` —— ' +
+      '拉伸是 fitCenter 唯一吃不掉的一步，所以"大小不一 + 拉胖"就是它。' +
+      '⇒ 性质台第 32 条里"等比 fit"与"居中"那两条必须当场变红。',
+    from: '        if (iw <= 0 || ih <= 0 || iw == ih) return intArrayOf(0, 0, size, size)\n',
+    to: '        if (iw <= 0 || ih <= 0 || iw == ih || iw != ih) return intArrayOf(0, 0, size, size)\n',
+    gateCmd: 'run harness.SelfTestKt > bench/reg/selftest_raw_mut.txt || true; ' +
+      '. ./selftestgate.sh; selftest_gate bench/reg/selftest_raw_mut.txt _mut'
   }
 ];
 

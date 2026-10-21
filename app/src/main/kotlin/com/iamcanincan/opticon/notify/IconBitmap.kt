@@ -67,16 +67,44 @@ object IconBitmap {
     /**
      * 把 Drawable 画成指定边长的方形位图。
      *
-     * 关键点：显式调用 setBounds 而不是依赖 intrinsicWidth/Height。
-     * 自适应图标（AdaptiveIconDrawable）的固有尺寸常常是 -1，
-     * 依赖它就会算出非法尺寸、整条替换链路静默失效。
+     * 关键点：显式调用 setBounds 而不是依赖 intrinsicWidth/Height —— 自适应图标
+     * （AdaptiveIconDrawable）的固有尺寸常常是 -1，依赖它就会算出非法尺寸、整条替换链路静默失效。
+     * ⚠ 但**非方形有固有尺寸时不能拉成正方**：那一步由 [iconBounds] 等比 fit + 居中，
+     *   见那里的现场读数（框架自己 91 张状态栏 PNG 里 53 张是非方形）。
      */
     fun rasterize(drawable: Drawable, size: Int = ICON_EDGE): Bitmap {
         val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bmp)
-        drawable.setBounds(0, 0, size, size)
+        val b = iconBounds(drawable.intrinsicWidth, drawable.intrinsicHeight, size)
+        drawable.setBounds(b[0], b[1], b[2], b[3])
         drawable.draw(canvas)
         return bmp
+    }
+
+    /**
+     * 一张通知小图标该画在方形画布里的哪个框 —— `[left, top, right, bottom]`。
+     *
+     * 为什么这不是"顺手美化"：**状态栏那个槽位是固定的**（`dimen/status_bar_icon_size` 默认档 22dp，
+     * 本机 630dpi ⇒ ≈87px），而槽位是 `fitCenter` ⇒ 交出去的位图是 48 还是 96 会被同一个系数吃掉，
+     * **唯独"拉成正方形"吃不掉**：一条 20×42 的窄图形被拉到 96×96，再等比塞进槽位，
+     * 它就占满了整格 —— 观感就是"这个图标比别的大一圈、还被拉胖了"。
+     *
+     * 射程是量的，不是猜的（2026-10-21，`_noticink.cjs` 摊 framework-res 里的 `stat_*`）：
+     * **91 张 PNG 里 53 张画布非方形**（20×42 / 39×51 / 22×38 这类），矢量那 9 张只有 1 张非方形。
+     * 而本文件 [boundToIconEdge] 的注释早就写过「等比缩放，不是拉成正方形：把非方形图标拉变形
+     * 等于改了它的形状」—— 那一条只管位图载体，资源那条路一直在反着做。
+     *
+     * 方形（`iw == ih`）与**没有固有尺寸**（`<= 0`，AdaptiveIconDrawable 那类）两种情况
+     * 原样交回整幅 ⇒ 这一改对它们**一个像素都不动**，射程只在非方形那一批。
+     */
+    internal fun iconBounds(iw: Int, ih: Int, size: Int): IntArray {
+        if (iw <= 0 || ih <= 0 || iw == ih) return intArrayOf(0, 0, size, size)
+        val scale = size.toFloat() / maxOf(iw, ih)
+        val w = maxOf(1, (iw * scale).roundToInt())
+        val h = maxOf(1, (ih * scale).roundToInt())
+        val left = (size - w) / 2
+        val top = (size - h) / 2
+        return intArrayOf(left, top, left + w, top + h)
     }
 
     /** TYPE_RESOURCE 类型的 Icon 需要用正确的 Resources 解码，不能走 Drawable 兜底 */

@@ -591,6 +591,27 @@ fun main() {
       m != null && m.all { it == 0 }, r.report)
   }
 
+  // ── 32. 通知小图标：非方形**不许拉成正方形**（2026-10-21 现量：框架自己 91 张状态栏 PNG 里 53 张非方形）──
+  //     槽位是固定的 22dp + fitCenter，所以交付尺寸 48 还是 96 会被同一个系数吃掉，**唯独拉伸吃不掉**：
+  //     一条 20×42 被拉成 96×96 再 fitCenter，就占满整格 —— 观感是"这个大一圈、还胖"。
+  //     方形与无固有尺寸（AdaptiveIconDrawable 的 -1）两种必须**逐字节等于旧写法**（射程只落在非方形）。
+  run {
+    val square = com.iamcanincan.opticon.notify.IconBitmap.iconBounds(48, 48, 96)
+    val none = com.iamcanincan.opticon.notify.IconBitmap.iconBounds(-1, -1, 96)
+    val tall = com.iamcanincan.opticon.notify.IconBitmap.iconBounds(20, 42, 96)
+    val wide = com.iamcanincan.opticon.notify.IconBitmap.iconBounds(42, 20, 96)
+    println("         通知取框  方形=${square.joinToString()} 无尺寸=${none.joinToString()} 高窄=${tall.joinToString()} 扁宽=${wide.joinToString()}")
+    check("通知小图标：方形与无固有尺寸 → 与旧写法一致铺满整幅",
+      square.contentEquals(intArrayOf(0, 0, 96, 96)) && none.contentEquals(intArrayOf(0, 0, 96, 96)),
+      "方形/无尺寸不能动射程")
+    check("通知小图标：非方形 → 等比 fit 后长边贴满 96、短边按比例（不许拉成正方）",
+      tall[2] - tall[0] == 46 && tall[3] - tall[1] == 96 && wide[2] - wide[0] == 96 && wide[3] - wide[1] == 46,
+      "20×42 应成 46×96、42×20 应成 96×46")
+    check("通知小图标：非方形 → 居中（左右/上下留白相等，不许贴着一条边画）",
+      tall[0] == (96 - (tall[2] - tall[0])) / 2 && tall[1] == 0 && wide[0] == 0 && wide[1] == (96 - (wide[3] - wide[1])) / 2,
+      "fit 之后必须居中")
+  }
+
   println(if (failed == 0) "全部通过" else "!! $failed 条不成立")
 }
 

@@ -71,28 +71,11 @@ echo "   0 error"
 
 echo "== 2/7 性质台 =="
 run harness.SelfTestKt > bench/reg/selftest_raw.txt || true
-tail -1 bench/reg/selftest_raw.txt | tee bench/reg/selftest.txt
-# **闸门口径从「一条都不许红」改成「一条都不许新增红」。**
-# 为什么：2026-10-08 "只看跨度开火"那一版留下 3 条已知的红（钉在 `bench/selftest_floor.txt`），
-# 而这一闸要的是 `全部通过` 这个**字符串** —— 于是从那天起这一段**每次都 exit 1**，
-# 后面 3~8 闸（语料 / 单调性 / 对表 / 平色饼 / 兼容性 / 肉眼账 / 没图标账）**一次都没跑过**，
-# 而退出码看起来和"跑了、全绿"是同一种响法。红不是问题，**红把后面六道闸一起挡在门外**才是问题。
-grep -oE "FAIL  [^ ]+.*" bench/reg/selftest_raw.txt | sed -E 's/^FAIL  //; s/  \[.*//' | sort > bench/reg/selftest_red.txt
-sort bench/selftest_floor.txt > bench/reg/selftest_floor_sorted.txt
-NEW=$(comm -23 bench/reg/selftest_red.txt bench/reg/selftest_floor_sorted.txt)
-if [ -n "$NEW" ]; then
-  echo "!! 性质台有**新增**的红（不在底线名单里）："; echo "$NEW"; exit 1
-fi
-if [ ! -s bench/reg/selftest_red.txt ]; then
-  # 全绿是**这一闸能给出的最好答案**，不是装置故障。2026-10-11 才发现这一段把最好的结果判成红：
-  # 只查"红名单空"，不查它是不是**因为真全绿**才空 —— 于是最后两条红一旦被修掉，
-  # 这一闸就永远 exit 1，把 3~8 闸再次挡在门外（同一条坑，第二次踩，只是这次响的方向反了）。
-  grep -q "全部通过" bench/reg/selftest_raw.txt || {
-    echo "!! 性质台一条 FAIL 都没报，也没报「全部通过」—— 驱动坏了，不算过"; exit 1; }
-  echo "   红 0 条 —— 全绿（底线名单里那 $(wc -l < bench/selftest_floor.txt) 条也不欠了）"
-else
-  echo "   红 $(wc -l < bench/reg/selftest_red.txt) 条 = 底线 $(wc -l < bench/selftest_floor.txt) 条，无新增"
-fi
+# 判定本体在 `selftestgate.sh`（**只有一份**：语义变异台 `_semanticmut.cjs --case=2` 调的是同一段）。
+# 口径是「不许出现底线名单之外的**新红**」，不是「一条都不许红」—— 后者曾让这一段每次 exit 1，
+# 把 3~8 闸（语料/单调性/对表/平色饼/兼容性/肉眼账/没图标账）**一次都没跑过**四天。
+. ./selftestgate.sh
+selftest_gate bench/reg/selftest_raw.txt || exit 1
 
 echo "== 3/7 语料（边长 $EDGES）=="
 # ⚠ 2026-10-21 现量（干净克隆第一次跑）：这一段原先**没有入口门** —— 语料不在时 MaskBench 非零退出，
