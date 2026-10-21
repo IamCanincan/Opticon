@@ -85,6 +85,16 @@ else
 fi
 
 echo "== 3/7 语料（边长 $EDGES）=="
+# ⚠ 2026-10-21 现量（干净克隆第一次跑）：这一段原先**没有入口门** —— 语料不在时 MaskBench 非零退出，
+#   `set -e` 直接把整机掐死在表头后面，新机器上看到的就是一片黑（退码 1，但没话说）。
+#   缺什么、怎么重建，必须在缺的那一刻说清楚。
+if [ ! -d "$CORPUS" ] || [ "$(ls "$CORPUS"/*.png 2>/dev/null | wc -l)" -lt 1 ]; then
+  echo "!! 语料 $CORPUS/ 不在或空 —— 这一台子跑的必须是**真图标**，不许退回任何自造样本。"
+  echo "   重建：连着那台手机 `sh audit.sh` 抓一轮 → `node _mkruntime.cjs <抓取目录> corpus_runtime` → `node _mkrec_model.cjs`。"
+  echo "   另三份：`rec_blank/` 在库里（真机事故那 34 张，不可复现）；`plate_model/`、`yard_model/` 的重建路径**没核实**，"
+  echo "   缺它们时第 16 闸与第 5 闸会各自明说没跑。全都在 → 再跑一次这条。"
+  exit 1
+fi
 for e in $(echo $EDGES | tr ',' ' '); do
   run harness.MaskBenchKt --edge=$e "$CORPUS" > bench/reg/bench_$e.txt
   echo "   edge=$e → $(grep -c '^---' bench/reg/bench_$e.txt) 行"
