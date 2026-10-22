@@ -25,7 +25,14 @@ for (const raw of lines) {
   if (!cur) continue;
   let m;
   if ((m = l.match(/^iconRes=(\d+)\[([^\]]*)\], bitmapPath=(\S+), iconUri=(\S+)/))) {
-    cur.resId = +m[1]; cur.resName = m[2]; cur.bitmap = m[3] === 'null' ? null : m[3]; cur.uri = m[4] === 'null' ? null : m[4];
+    cur.resId = +m[1]; cur.resName = m[2]; cur.bitmap = m[3] === 'null' ? null : m[3];
+    // ⚠ **这里栽过一次**（2026-10-22）：dump 在 `iconUri=null` 后面直接接 `locusId=…`，**中间没有分隔**，
+    //   于是 `\S+` 把 `nulllocusId=LocusId[16_chars]}` 整块吞进来 —— 一句 `m[4] === 'null' ? null : m[4]`
+    //   就把 4 条"根本没有图标"的快捷方式数成了"uri 形式、这一档拿不到"。
+    //   规矩：**"拿不到的那一类"必须先证明它真的有一种形式**，`://` 在不在是唯一能认的证据。
+    const u = m[4];
+    cur.uri = (u === 'null' || !u.includes('://')) ? null : u;
+    cur.uriRaw = u;
   } else if ((m = l.match(/^shortLabel=([^,]*)(?:, resId=(\d+)\[([^\]]*)\])?/))) {
     cur.label = m[1] || (m[3] || '');
   } else if ((m = l.match(/^activity=ComponentInfo\{([^/]+)\/([^}]+)\}/))) {
@@ -43,12 +50,18 @@ console.log(`ShortcutInfo 块 ${shots.length} 条｜图标形式：` +
 console.log(`涉及包 ${new Set(shots.map(s => s.pkg)).size} 个`);
 // ⚠ **不按 flag 字母分类**：AOSP 那串 `[ImManIc-rStr]` 每一位代表什么，我第一版是猜的（猜成"第 3 位是 m"），
 //   结果数出"manifest 0 条"，而真机上明明有 —— 猜编码就是自造边界。
-//   对语料真正要紧的是**图标以什么形式存在**：资源 id 能从属主包的 Resources 解出来（我们抓得到），
-//   bitmap / uri 那两类在 /data/system 里或要 ContentResolver（这一档先不覆盖，报出来别当覆盖）。
+//   对语料真正要紧的是**图标以什么形式存在**，2026-10-22 的三种各有各的下落：
+//     res=    资源 id ⇒ 从属主包的 Resources 解出来（`shortcut_model` 那条路，抓得到）
+//     bitmap= ShortcutService **自己落盘**的 PNG（`/data/system_ce/0/shortcut_service/bitmaps/…`）
+//             ⇒ 2026-10-22 起由 `_shotbit.cjs` 接住，不再是覆盖洞
+//     uri=    真 `*://` 形式 ⇒ 要 ContentResolver 且多半要属主授权，**这一档仍然拿不到**
+//     none=   三种全没有 ⇒ 桌面只能退回**应用图标**，那一轮早就覆盖了，别记成"少了一张"
 const resShots = new Map();
 for (const s of shots.filter((x) => has(x) === 'res')) resShots.set(s.pkg + '|' + s.resId, s);
-console.log(`资源 id 形式的图标：**${resShots.size} 张不同的图**（去重后 = 这一档的语料分母）` +
-  `｜bitmap ${by.bitmap || 0} 条、uri ${by.uri || 0} 条**这一档拿不到**（记成覆盖边界，别说成整类）`);
+const cls = (k) => by[k] || 0;
+console.log(`资源 id 形式的图标：**${resShots.size} 张不同的图**（去重后 = shortcut_model 那一档的分母）` +
+  `｜bitmap=${cls('bitmap')} 条（已由 _shotbit.cjs 接住）` +
+  `｜uri=${cls('uri')} 条（真拿不到）｜none=${cls('none')} 条（本来就没有图标 ⇒ 退回应用图标）`);
 if (process.argv.includes('--list')) {
   let n = 0;
   for (const s of resShots.values()) { if (n++ < 12) console.log(`  ${s.pkg} ${s.resId} ${s.resName}  「${s.label}」 id=${s.id}`); }

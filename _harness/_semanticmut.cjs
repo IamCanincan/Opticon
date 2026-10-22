@@ -164,7 +164,7 @@ const CASES = [
   },
   {
     // 第 20 闸 + 第 8 闸：**自画层该不该接管**这条判据必须有刀级证据（2026-10-22）。
-    no: '20', gate: '20/20 自画层接管账 + 8/8 自画层不透传账', file: VETO,
+    no: '20', gateNo: ['20', '8'], gate: '20/20 自画层接管账 + 8/8 自画层不透传账', file: VETO,
     why: '把"可见圆里一格 α=0 都没有"放宽成"α≤8 也算透明"（听起来像给抗锯齿留余量的好心改法）。' +
       '现场读数：这一类 67 张里现在只有 etar 与飞鸟开火，而近线带（覆盖率 95%~100%）= **0 张** —— ' +
       '放宽这一个门槛就是"把两张本来该我们画的图交回桌面 ⇒ 屏幕上又是两块实心饼"。' +
@@ -234,6 +234,10 @@ function dirty(rel) {
  *   ⚠ `_gateaudit.cjs` 的 `SEM` 是 Map，**同一闸号后写的盖掉先写的**（它只取 `why` 给档位配一句读数），
  *   而它数的是**段**，所以同一闸多一行不会把段数吹多。历史写在 devlog 里。
  */
+// 一条证据可以记到**几道闸**名下：一条用例常常同时证两段（用例 20 既证第 8 闸的射程守卫、
+// 又证第 20 闸的"接管后交出去的是什么"）。以前只写一个键，另一段就在审计里落回 `脚本` ——
+// 那是往保守方向失真，但**失真仍然是失真**，读表的人会以为那一段没被生产变异碰过。
+const gateKeys = (c) => (c.gateNo === undefined ? [c.no] : [].concat(c.gateNo));
 function noteEvidence(no, stage, why) {
   const f = path.join(__dirname, 'bench', 'semanticmut.txt');
   fs.mkdirSync(path.dirname(f), { recursive: true });
@@ -326,9 +330,9 @@ if (process.argv.includes('--redge')) {
     //   以前这里会印一句"停在（没有表头）"，看着像那三条证明又失效了 —— 要重证就重跑 `--case=<号>`。
     if (c.gateCmd) { console.log(`   用例 ${c.no}：gateCmd 那一类只留退码、不留表头 ⇒ 这里不重新归因（要重证：node _semanticmut.cjs --case=${c.no}）`); continue; }
     const red = stopStage(fs.readFileSync(f, 'utf8'));
-    if (red.stage && red.stage.indexOf((c.gateNo || c.no) + '/') === 0) {
+    if (red.stage && red.stage.indexOf(gateKeys(c)[0] + '/') === 0) {
       console.log(`   用例 ${c.no} ✅ 红在该红的那一段：${red.stage}\n       ${red.line}`);
-      noteEvidence(c.gateNo || c.no, red.stage, c.why); n++;
+      gateKeys(c).forEach((g) => noteEvidence(g, red.stage, c.why)); n++;
     } else console.log(`   用例 ${c.no} ⚠ 这台子停在「${red.stage || '(没有表头)'}」，不是 ${c.gate}`);
   }
   console.log(`   重新归因：${n} 条记进 bench/semanticmut.txt`);
@@ -395,9 +399,9 @@ for (const c of active) {
       console.log(`    ⚠ 退码 ${rc} = 量具自己没跑成（不是这一闸红了）—— 先看上面的报错，再重跑`);
       bad++;
     }
-    else if (red.stage && red.stage.indexOf((c.gateNo || c.no) + '/') === 0) {
+    else if (red.stage && red.stage.indexOf(gateKeys(c)[0] + '/') === 0) {
       console.log(`    ✅ 红了，而且红在该红的那一段：${red.stage}\n       ${red.line}`);
-      noteEvidence(c.gateNo || c.no, red.stage, c.why);
+      gateKeys(c).forEach((g) => noteEvidence(g, red.stage, c.why));
     } else {
       // ⚠ **这一支以前不算 `bad`**，于是末尾那句"全部用例都让对应的闸红了"是**假的**。
       //   2026-10-21 那一轮三条用例没有一条真正证到位（9 归因错段、10 量具被我自己编辑打断退了 127、

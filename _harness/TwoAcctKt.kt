@@ -71,9 +71,13 @@ fun main(args: Array<String>) {
         else -> expandLayer(c.src, edge)
       }
       // **过生产同一个 [IconCropWindow.scanSize]**（彩色与染色共用那一个格子算式）。
-      // ⚠ 但要说清它**今天不承重**：这份语料 130 张是 384²、另两张 432²/192²，全都在 128 以上，
-      //   于是 canonical 与 `min(1f,…)` 两分支给出的格子**一模一样**（机器行里 `格子分岔=0` 就是这一位）。
-      //   它会在"语料里出现 <128 的小图"那天开始承重 —— 到那天这一位不再是 0，别现在就拿它当证据。
+      // ⚠ 这一位**只对 `canonical` 那一个参数敏感**（`isFg=false` 的图标两次调用同一个式子 ⇒ 恒不分岔）：
+      //   2026-10-22 加进 45 张 `bitmap=` 快捷方式（全在"非自适应"那一支）之后 `格子分岔` 一格没动，
+      //   不是它们"不会分岔"，而是**这一位压根不看那一支**。那一支的两本账对齐靠的是逐张的
+      //   「差≥3 / 差≥5 / 极性翻」，不是这一位 —— 别拿 `格子分岔` 当"全语料两本同格"的证据。
+      // ⚠ 还有一条要说明白：非自适应那一支里，台子是把源图先 resize 到 `edge` 再按同一个 `scanSize(edge,edge,…)`
+      //   算两本（生产那边彩色用的是 **intrinsic** 尺寸那张），所以那一支的"差=0"读成
+      //   **"重建的同一张图上两本口径一致"**，不是"生产上那两本在 45 张上一致"。
       val (sw, sh) = IconCropWindow.scanSize(edge, edge, c.isFg)
       val (swAlt, shAlt) = IconCropWindow.scanSize(edge, edge, false)
       if (sw != swAlt || sh != shAlt) gridSplit++

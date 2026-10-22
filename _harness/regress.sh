@@ -392,8 +392,17 @@ SHOTCORPUS=${SHOTCORPUS:-shortcut_model}
   echo "!! 语料 $PLATECORPUS/ 不在 —— 这一闸**不许**退回 rec_model 空跑（那正是它原本瞎掉的样子）"; exit 1; }
 [ -d "$SHOTCORPUS" ] || {
   echo "!! 语料 $SHOTCORPUS/ 不在 —— 第 16/19 闸的分母会少了**快捷方式**那一类（重建见 .gitignore 那条注释）"; exit 1; }
+# bitmap 形式那一类（2026-10-22 加）：ShortcutService 把应用交来的位图**自己落盘**在
+#   `/data/system_ce/0/shortcut_service/bitmaps/<包>/<时间戳>.png`，`_shotbit.cjs` 按 dump 里的
+#   `bitmapPath=` 接住 ⇒ 45 张。少了这一档，"快捷方式"分母就只有资源 id 那一半，
+#   而 dump 里 173 条快捷方式有 45 条（26%）是这一类 —— 现量，不是推测。
+SHOTBITCORPUS=${SHOTBITCORPUS:-shortcut_bit}
+[ -d "$SHOTBITCORPUS" ] || {
+  echo "!! 语料 $SHOTBITCORPUS/ 不在 —— 第 16/19 闸会少了 bitmap 形式那 45 张"
+  echo "   重建：adb shell dumpsys shortcut > dump.txt；adb exec-out 'toybox tar -c -C /data/system_ce/0/shortcut_service bitmaps' > bitmaps.tar（解开）"
+  echo "        node _shotbit.cjs dump.txt --src=<解开的目录> --out=$SHOTBITCORPUS"; exit 1; }
 PSRC=0
-run harness.PlateSubKtKt "$PLATECORPUS" "$SHOTCORPUS" --min=50 > bench/reg/platesub.txt || PSRC=$?
+run harness.PlateSubKtKt "$PLATECORPUS" "$SHOTCORPUS" "$SHOTBITCORPUS" --min=50 > bench/reg/platesub.txt || PSRC=$?
 grep -q '^PS ' bench/reg/platesub.txt || {
   echo "!! 极性入口账没出数 —— 驱动或语料坏了（它自己那 3 行在下面）"; tail -3 bench/reg/platesub.txt; exit 1; }
 NEWPS=$(grep '^PS ' bench/reg/platesub.txt)

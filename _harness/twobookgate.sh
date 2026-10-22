@@ -14,6 +14,7 @@ twobook_gate() {
   T_CORPUS="${CORPUS:-rec_model}"
   T_PLATE="${PLATECORPUS:-plate_model}"
   T_SHOT="${SHOTCORPUS:-shortcut_model}"
+  T_BIT="${SHOTBITCORPUS:-shortcut_bit}"
   T384="bench/reg/twoacct${SUF}.txt"
   T96="bench/reg/twoacct96${SUF}.txt"
   # ⚠ 对照语料 `twobook_ctrl/`（`node _mk_twobook_ctrl.cjs` 造的，1.3 KB，**可复现所以入库**）：
@@ -21,8 +22,13 @@ twobook_gate() {
   #   那一张两本账判定本来就相反（判据 55% 开火 / 彩色恒满幅不开火），`flip=1` 才是这台子的牙。
   #   缺它就等于把闸退回空跑，所以缺了**直接不跑**，不许悄悄少一份分母。
   [ -d twobook_ctrl ] || { echo "!! 缺对照语料 twobook_ctrl/ —— 第 19 闸会退回空跑（先 node _mk_twobook_ctrl.cjs）"; return 1; }
+  # 第 16 闸同一条纪律：`bitmap=` 那一类（45 张，ShortcutService 自己落盘的位图）必须在分母里，
+  #   否则"快捷方式"这一档只覆盖了资源 id 那一半（现量：dump 里 173 条有 45 条是 bitmap）。
+  [ -d "$T_BIT" ] || {
+    echo "!! 缺语料 $T_BIT/ —— 第 19 闸的快捷方式分母会少 bitmap 那一类（重建见 regress.sh 第 16 闸那句）"
+    return 1; }
   TARC=0
-  run harness.TwoAcctKtKt "$T_CORPUS" "$T_PLATE" "$T_SHOT" twobook_ctrl > "$T384" || TARC=$?
+  run harness.TwoAcctKtKt "$T_CORPUS" "$T_PLATE" "$T_SHOT" "$T_BIT" twobook_ctrl > "$T384" || TARC=$?
   grep -q '^2A ' "$T384" || {
     echo "!! 两本账没出数 —— 驱动或语料坏了（它自己那几行在下面）"; tail -6 "$T384"; return 1; }
   NEWT=$(grep '^2A ' "$T384")
@@ -31,7 +37,7 @@ twobook_gate() {
   #   现量 113 张分岔 —— 而**开火集 / 老开火集 / 三条支的差表 / 翻名单与 384 档一字不差**：
   #   这才把「取数换了本子、但不随档变」钉成一条当场可验的断言。只钉 384 = 把这条留在没被量的地方。
   TARC96=0
-  run harness.TwoAcctKtKt "$T_CORPUS" "$T_PLATE" "$T_SHOT" twobook_ctrl --edge=96 > "$T96" || TARC96=$?
+  run harness.TwoAcctKtKt "$T_CORPUS" "$T_PLATE" "$T_SHOT" "$T_BIT" twobook_ctrl --edge=96 > "$T96" || TARC96=$?
   grep -q '^2A ' "$T96" || {
     echo "!! 两本账 96 档没出数 —— 驱动或语料坏了（它自己那几行在下面）"; tail -6 "$T96"; return 1; }
   NEWT96=$(grep '^2A ' "$T96")

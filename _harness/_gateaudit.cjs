@@ -35,22 +35,31 @@ const central = has('_regressmut.cjs') ? '判定机器有 `_regressmut.cjs`（�
 // 账本级变异只证"裁判读得懂更差的数"；语义变异改的是**生产源码那一行**，证的是"这道闸还连着真刀"。
 // 审计里它算最高档，因为它否证的正是本仓反复栽的那种闸——**走的输入通道比装机窄**（第九闸 2026-10-21）。
 const SEM = has('bench/semanticmut.txt')
-  ? new Map([...fs.readFileSync('bench/semanticmut.txt', 'utf8').split(/\r?\n/)]
-    .filter(l => l.trim() && !l.startsWith('#'))
-    .map(l => l.split('\t'))
-    .filter(c => c.length >= 3 && /^[0-9]+$/.test(c[0]))
-    .map(c => [c[0], c[1] + ' 那一版把生产源码改坏之后，红在 ' + c[2]]))
+  ? (() => {
+      const m = new Map();
+      for (const l of fs.readFileSync('bench/semanticmut.txt', 'utf8').split(/\r?\n/)) {
+        if (!l.trim() || l.startsWith('#')) continue;
+        const c = l.split('\t');
+        if (c.length < 3 || !/^[0-9]+$/.test(c[0])) continue;
+        if (!m.has(c[0])) m.set(c[0], []);
+        m.get(c[0]).push({ day: c[1], stage: c[2] });
+      }
+      return m;
+    })()
   : new Map();
 // ⚠ 账本里的键是**闸号**（`9`、`10`、`12`），而 `g.no` 是表头里那个 `10/10` —— 直接 `SEM.has(g.no)`
 //   恒 false，三条刚证完的变异在审计里全部显示成"什么都没有"（2026-10-21 现量）。查之前先剥掉那半。
 const semOf = g => {
-  const v = SEM.get(g.no.split('/')[0]);
-  if (!v) return null;
-  // ⚠ **同一个号可以有两段**：`8/8 没图标账` 与 `8/8 自画层不透传账`（回归台里 `8/8` 出现了两次）。
-  //   只按键认领会让一条证据同时记到两段头上 —— 2026-10-21 现量：语义那档因此报成 7 而实际 6。
-  //   所以要**名字也对得上**才认领。
+  const rows = SEM.get(g.no.split('/')[0]);
+  if (!rows) return null;
+  // ⚠ **同一个号可以有两段，也可以有多行**（`8/8` 在回归台里出现两次；一条用例可以同时证两段）。
+  //   以前 `SEM` 是 `Map<号, 一句话>`，同号**后写盖先写** —— 2026-10-22 我把账本改成"一条证据一行"之后，
+  //   `8/8 没图标账` 那行被同日那条 `不透传` 顶掉，审计当场把它降成 `无`：**自己把自己改坏的一次**，
+  //   而且方向是"少认一档"，看着像保守、其实是漏报。现在逐行找**名字对得上的那一行**。
   const stem = g.name.split(/[（( 　]/)[0];
-  return stem.length >= 3 && v.includes(stem) ? v : null;
+  if (stem.length < 3) return null;
+  const hit = rows.find(r => r.stage.includes(stem));
+  return hit ? hit.day + ' 那一版把生产源码改坏之后，红在 ' + hit.stage : null;
 };
 /** `run harness.SelfTestKt` → SelfTest.kt；`harness.MonoKtKt` → MonoKt.kt */
 const ktFile = cls => {
