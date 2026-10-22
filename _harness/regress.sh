@@ -518,6 +518,24 @@ echo "== 8/8 自画层不透传账 =="
 echo "== 21/21 分母去向账 =="
 node _corpusmap.cjs || exit 1
 
+# —— 第廿二闸：**主体上墨账**（2026-10-22，主人验收时给的判据：「快捷方式都是主体上墨」）。
+# 这句是判据不是感想，而它此前**一把尺都没有**：第 16/19 闸管"哪本账说了算"，不管你把墨铺在哪；
+#   而"把整块盘也上墨"正是 2026-10-08 那次事故的形状（屏幕上多一块实心饼）。
+# 读数用 MaskBench 早就在印的 `框内`（墨的内容框 / 整幅）：只给主体 ⇒ 小；连盘一起上墨 ⇒ 逼近 1.0。
+# 🔴 结构性不变量只压 `shortcut_bit` 那 45 张：它们的**源**框内最大 0.69 ⇒ 交付里出现 ≥0.9 只能是铺了盘。
+#   `shortcut_model` 不受这条管 —— 它有 3 张满幅，而三张的源本身就是满幅图（Settings 电池磁贴 /
+#   Aperture 视频缩略图 / 一个 FCM 图），那是"主体占满整幅"，钉在 pin 里、变了要人看。
+echo "== 22/22 主体上墨账 =="
+INK_RC=0
+run harness.MaskBenchKt --edge=384 "$SHOTBITCORPUS" > bench/reg/ink_sh.txt 2>&1 || INK_RC=$?
+run harness.MaskBenchKt --edge=384 "$SHOTCORPUS" > bench/reg/ink_sm.txt 2>&1 || INK_RC=$?
+[ "$INK_RC" = "0" ] || { echo "!! MaskBench 没跑完（退码 $INK_RC）—— 缺读数不等于干净"; tail -3 bench/reg/ink_sh.txt; tail -3 bench/reg/ink_sm.txt; exit 1; }
+if [ -n "$UPDATE" ]; then
+  node _inkwhere.cjs --sh=bench/reg/ink_sh.txt --sm=bench/reg/ink_sm.txt --pin=bench/reg/inkwhere.pin --update || exit 1
+else
+  node _inkwhere.cjs --sh=bench/reg/ink_sh.txt --sm=bench/reg/ink_sm.txt --pin=bench/reg/inkwhere.pin || exit 1
+fi
+
 # ⚠ **收尾自证：平色饼那本账到最后必须还是两条。**（2026-10-20：我加第 18 闸时把它的读数写成
 #   `bench/reg/flat.txt` —— 正是第 3 段在 `>>` 追加的那个文件 —— 于是在最后一步把别人的账本清空，
 #   制造出 `平色饼分母 0（基线 124）` 这种**自己造的假退步**。第 3 段那道 `= 2` 的检查当时已经过了，
