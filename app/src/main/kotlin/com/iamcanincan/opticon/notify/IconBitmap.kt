@@ -820,11 +820,20 @@ object IconBitmap {
      * patched 是排查时唯一的「真的换了」凭据，报假阳性会让排查走错方向。
      */
     @SuppressLint("DiscouragedPrivateApi")
-    fun applySmallIcon(icon: Icon, notification: Notification): Boolean = runCatching {
-        val field = Notification::class.java.getDeclaredField("mSmallIcon")
-        field.isAccessible = true
-        field.set(notification, icon)
-        true
-    }.getOrDefault(false)
+    fun applySmallIcon(icon: Icon, notification: Notification): Boolean {
+        val field = smallIconField ?: return false
+        return MemberLookup.writeField(notification, field, icon)
+    }
+
+    /**
+     * `Notification.mSmallIcon` 的 [java.lang.reflect.Field]，**第一次调用时解析一次**。
+     *
+     * 这条在每条通知（含缓存命中）上都要跑；按名现查每次都要 `getDeclaredField`，
+     * 正是 `MemberLookup` 类文档里说的「两套入口」该走快的那一套。
+     * 解析失败（某些 ROM 改过这个字段）⇒ 返回 false，上层照旧不报 `patched`。
+     */
+    private val smallIconField: java.lang.reflect.Field? by lazy {
+        MemberLookup.findField(Notification::class.java, "mSmallIcon")
+    }
 
 }

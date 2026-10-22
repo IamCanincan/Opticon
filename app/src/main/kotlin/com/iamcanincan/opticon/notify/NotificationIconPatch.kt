@@ -4,6 +4,7 @@ import android.app.Notification
 import android.content.Context
 import android.graphics.drawable.Icon
 import android.os.Build
+import android.os.Bundle
 import android.service.notification.StatusBarNotification
 import java.util.Collections
 import kotlin.math.roundToInt
@@ -18,10 +19,30 @@ import com.iamcanincan.opticon.runtime.ModuleRuntime
  */
 object NotificationIconPatch {
 
-    fun patch(sbn: StatusBarNotification, context: Context) {
+    fun patch(sbn: StatusBarNotification, context: Context, source: String = "?") {
         try {
             val notification = sbn.notification ?: return
             val pkg = sbn.packageName
+            // **处理标记**（2026-10-22 深夜第二版）：两条钩子处理的是**同一份通知**，标记位随
+            //   `Notification.extras` 走 —— 行钩子 `inflateViews` 再把这份通知送进来时，一次
+            //   Bundle 查询就放过，不必 decode + 两趟 96² 全图扫描。
+            //   （先试过"按 Bitmap 引用认"，现量一次都没命中，才换成这个通知级的标记。）
+            //   只在"已经做过决定"的分支里写（换图成功 / 已适配 / 放弃，**含缓存命中那一支**）；
+            //   未解码与无兜底不写 —— 否则一次临时失败会把这份通知永久钉死。
+            val marked = notification.extras?.getBoolean(EXTRA_PATCHED, false) == true
+            // 入口账：来源（帖=onNotificationPosted / 行=inflateViews）+ 图标类型 + 标记在不在。
+            // 没有这一行，"行钩子有没有进来""标记有没有写进去"两件事都只能猜 ——
+            // 第一版的标记漏写就是靠它现撞的（帖与行是同一个对象、同一个 extras，却读到 false）。
+            // ⚠ **自己一份 64 条上限**，不占 `通知尺` 那 200 行的预算（否则长跑会把主账挤掉）。
+            val entryKey = "$source $pkg ${iconType(notification.smallIcon)} $marked"
+            if (entrySeen.size < ENTRY_MAX && entrySeen.putIfAbsent(entryKey, true) == null) {
+                ModuleRuntime.logI("通知补丁 入口 $source $pkg type=${iconType(notification.smallIcon)} 标记=$marked")
+            }
+            if (marked) {
+                markHits++
+                reportCache()
+                return
+            }
             // 每次处理通知都取一次当前选项（内部按 TTL 重读远程配置），
             // 所以界面里改了开关后，新通知立刻按新设置处理，不需要重启
             val options = ModuleRuntime.options()
@@ -60,16 +81,29 @@ object NotificationIconPatch {
 
 
     private fun forceMonochrome(smallIcon: Icon, notification: Notification, context: Context, pkg: String): Boolean {
-        // ① **缓存**（2026-10-22 深夜）：同一条通知每次更新都会重新进来，而结果只取决于（包, 资源）。
-        //   命中就把上次那个 Icon 装回去 —— 不重新解码、也不重新合成。
+        // ① **两级缓存**（2026-10-22 深夜第二版）：同一条通知每次更新都会重新进来，而结论只取决于（包, 资源）。
+        //   正向：我们已经造好的那张 Icon，命中直接装回 —— 不重新解码、也不重新合成。
+        //   负向：上次判成「已适配 / 放弃」的，这次**连解码都不做** —— 已适配是大多数
+        //   （framework 的 stat_* 与做过主题适配的应用），也恰好是更新最频繁的那批。
         val resId = runCatching { smallIcon.resId }.getOrDefault(0)
         val cacheKey = if (resId > 0) "$pkg:$resId" else null
         if (cacheKey != null) {
             val hit = shapeCache[cacheKey]
             if (hit != null) {
-                cacheHits++
+                shapeHits++
                 reportCache()
-                return IconBitmap.applySmallIcon(hit, notification)
+                // ⚠ **命中也要写标记**：不写的话，这条通知在行钩子那份副本里没有标记
+                //   （现撞：帖路径命中缓存 ⇒ 换上了 type=1 的图却没标记 ⇒ 行钩子照旧重扫两趟）。
+                val applied = IconBitmap.applySmallIcon(hit, notification)
+                if (applied) markPatched(notification)
+                return applied
+            }
+            if (skipCache.containsKey(cacheKey)) {
+                skipHits++
+                reportCache()
+                // 同上：结论是"不用动"，但"已经判过"这件事要让行钩子看得见。
+                markPatched(notification)
+                return false
             }
         }
         // 解不出来也要说话（每包一次）：这是本函数里**唯一没有账**的静默出口，
@@ -94,7 +128,10 @@ object NotificationIconPatch {
             val icon = Icon.createWithBitmap(shapedApp)
             if (cacheKey != null) shapeCache[cacheKey] = icon
             val ok = IconBitmap.applySmallIcon(icon, notification)
-            if (ok) noteRuler(pkg, "代用应用图标", bitmap, shapedApp)
+            if (ok) {
+                noteRuler(pkg, "代用应用图标", bitmap, shapedApp)
+                markPatched(notification)
+            }
             return ok
         }
         // ③ **字带对彩色图标同样生效**（2026-10-22 深夜改回）：旧流程把 `stripped` 当成
@@ -110,6 +147,8 @@ object NotificationIconPatch {
                     " resPkg=${runCatching { smallIcon.resPackage }.getOrNull()}" +
                     " ｜drawable=${runCatching { IconBitmap.describeResource(context, smallIcon) }.getOrNull()}")
             noteRuler(pkg, "已适配", bitmap, null)
+            if (cacheKey != null) skipCache[cacheKey] = true
+            markPatched(notification)
             return false
         }
         val base = stripped ?: bitmap
@@ -117,18 +156,34 @@ object NotificationIconPatch {
         val monochrome = if (ToneCheck.isGrayscale(base)) base else IconBitmap.monochrome(base)
         if (monochrome == null) {
             noteRuler(pkg, "放弃", bitmap, null)
+            if (cacheKey != null) skipCache[cacheKey] = true
+            markPatched(notification)
             return false
         }
         val shaped = IconBitmap.fitInk(monochrome, SIZE_TARGET) ?: monochrome
         val icon = Icon.createWithBitmap(shaped)
         if (cacheKey != null) shapeCache[cacheKey] = icon
         val applied = IconBitmap.applySmallIcon(icon, notification)
-        if (applied) noteRuler(pkg, if (stripped != null) "清理字带" else "被补", bitmap, shaped)
+        if (applied) {
+            noteRuler(pkg, if (stripped != null) "清理字带" else "被补", bitmap, shaped)
+            markPatched(notification)
+        }
         return applied
     }
 
     /**
-     * 形状缓存：键 = `包:资源id`（只对 RESOURCE 图标生效）；上限 32 个 Icon（96² 约 36 KB/个）。
+     * 在通知上写"本模块已处理"的标记（随 extras 一起被复制到行钩子那份副本里）。
+     * 写失败不影响图标本身 —— 只是下一次副本进来会重新判一遍（正确但慢一点）。
+     */
+    private fun markPatched(notification: Notification) {
+        runCatching {
+            val extras = notification.extras ?: Bundle().also { notification.extras = it }
+            extras.putBoolean(EXTRA_PATCHED, true)
+        }
+    }
+
+    /**
+     * 正向形状缓存：键 = `包:资源id`（只对 RESOURCE 图标生效）；上限 32 个 Icon（96² 约 36 KB/个）。
      *
      * ⚠ 必须同步：`IconBitmap.monochrome` 的注释里记着 SystemUI 的通知处理会并发进来，
      *   而 access-order 的 `LinkedHashMap.get` 本身会改链表。计数与"60 秒一行"只影响诊断，
@@ -142,16 +197,34 @@ object NotificationIconPatch {
             override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Icon>?): Boolean = size > 32
         }
     )
-    private var cacheHits = 0
+
+    /**
+     * 负向缓存：**上次的结论就是"什么都不用做"**（已适配 / 放弃）。
+     * 只存字符串，上限 256 条（≈10 KB）；与正向缓存同一套口径与同一条已知边界（键不含应用版本）。
+     * 为什么值得：已适配那一族恰好是更新最频繁的（常驻通知、媒体通知），而每次重判都要
+     * 解码 + 两趟 96² 扫描 —— 复判的是一个**不会再变**的结论。
+     */
+    private val skipCache = Collections.synchronizedMap(
+        object : LinkedHashMap<String, Boolean>(32, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Boolean>?): Boolean = size > 256
+        }
+    )
+
+    private var shapeHits = 0
+    private var skipHits = 0
+    private var markHits = 0
     private var cacheMisses = 0
     private var lastCacheReport = 0L
 
-    /** 缓存命中/未中的账：60 秒最多一行 —— 没有它，"优化了"与"没优化"在屏幕上分不出。 */
+    /** 缓存四档计数的账：60 秒最多一行 —— 没有它，"优化了"与"没优化"在屏幕上分不出。 */
     private fun reportCache() {
         val now = System.currentTimeMillis()
         if (now - lastCacheReport < 60_000) return
         lastCacheReport = now
-        ModuleRuntime.logI("通知补丁 缓存 命中=$cacheHits 未中=$cacheMisses 在册=${shapeCache.size}")
+        ModuleRuntime.logI(
+            "通知补丁 缓存 形状=$shapeHits 跳过=$skipHits 标记=$markHits 未中=$cacheMisses" +
+                " 在册=${shapeCache.size}/${skipCache.size}"
+        )
     }
 
     /**
@@ -185,5 +258,17 @@ object NotificationIconPatch {
      * 推到 1.0 会落到它的上边缘之外。已适配那一族**不经过**这个常数（见调用处）。
      */
     private const val SIZE_TARGET = 0.95f
+
+    /**
+     * 写在 `Notification.extras` 里的"已处理"标记。键带包名，避免和应用的 extras 撞名。
+     * 选 extras 而不是位图引用：现量两条钩子拿到的是**同一个通知对象**（同一个 extras），
+     * 而按位图引用认一次都没命中 —— 用通知级标记更贴近语义（"这份通知已经判过"），
+     * 也不依赖 Icon 内部怎么存位图。
+     */
+    private const val EXTRA_PATCHED = "com.iamcanincan.opticon.SMALL_ICON_PATCHED"
+
+    /** 入口账自己的上限：只占诊断，不和 `通知尺` 抢行数。 */
+    private const val ENTRY_MAX = 64
+    private val entrySeen = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
     private val rulerSeen = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 }

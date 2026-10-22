@@ -109,10 +109,10 @@ object SystemUiHooks {
      * 在**通知进来那一刻**把 `Notification.mSmallIcon` 换掉 —— 状态栏那排小图标和通知行
      * 之后都从同一个字段取值，所以一处改动两处都对。
      *
-     * 幂等：`NotificationIconPatch.patch` 对"已经是单色"的直接跳过（我们换上去的就是灰度），
-     * 所以它和行钩子同时存在时，第二条只交一次否定判断 —— 但**不是"几微秒"**：
-     * 那条路要先 decode，再跑 `stripTextBand` 与 `isGrayscale` 两趟全图扫描（96² 格）。
-     * 代价有界（每次行重绑一次），别按"几乎为零"去估它。
+     * 幂等：`NotificationIconPatch.patch` 在通知的 extras 里写"已处理"标记 —— 行钩子拿到的
+     * 是同一份通知，一次 Bundle 查询就放过。**没有标记的**（标记机制之前就在屏上的通知、
+     * 或我们在"未解码 / 无兜底"这类可重试分支上没写标记的）仍会走完整的 decode + 两趟
+     * 96² 扫描，代价有界（每次行重绑一次），别按"几乎为零"去估它。
      */
     private fun installNotificationPosted(module: XposedModule, classLoader: ClassLoader): Boolean {
         val cls = MemberLookup.findClass(NOTIFICATION_LISTENER, classLoader) ?: return false
@@ -131,7 +131,7 @@ object SystemUiHooks {
                             val target = runCatching {
                                 ctx.createPackageContext(sbn.packageName, Context.CONTEXT_IGNORE_SECURITY)
                             }.getOrDefault(ctx)
-                            NotificationIconPatch.patch(sbn, target)
+                            NotificationIconPatch.patch(sbn, target, "帖")
                         }
                     }.onFailure { ModuleRuntime.logE("onNotificationPosted patch failed", it) }
                     chain.proceed()
@@ -329,7 +329,7 @@ object SystemUiHooks {
                             Context.CONTEXT_IGNORE_SECURITY
                         )
                     }.getOrDefault(context)
-                    NotificationIconPatch.patch(sbn, targetContext)
+                    NotificationIconPatch.patch(sbn, targetContext, "行")
                 }.onFailure { ModuleRuntime.logE("inflateViews patch failed", it) }
             }
             chain.proceed()
