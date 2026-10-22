@@ -110,7 +110,9 @@ object SystemUiHooks {
      * 之后都从同一个字段取值，所以一处改动两处都对。
      *
      * 幂等：`NotificationIconPatch.patch` 对"已经是单色"的直接跳过（我们换上去的就是灰度），
-     * 所以它和行钩子同时存在时，第二条只是几微秒的否定判断。
+     * 所以它和行钩子同时存在时，第二条只交一次否定判断 —— 但**不是"几微秒"**：
+     * 那条路要先 decode，再跑 `stripTextBand` 与 `isGrayscale` 两趟全图扫描（96² 格）。
+     * 代价有界（每次行重绑一次），别按"几乎为零"去估它。
      */
     private fun installNotificationPosted(module: XposedModule, classLoader: ClassLoader): Boolean {
         val cls = MemberLookup.findClass(NOTIFICATION_LISTENER, classLoader) ?: return false

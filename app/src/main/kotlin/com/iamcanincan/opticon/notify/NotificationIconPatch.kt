@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.drawable.Icon
 import android.os.Build
 import android.service.notification.StatusBarNotification
+import java.util.Collections
 import kotlin.math.roundToInt
 import com.iamcanincan.opticon.runtime.ModuleRuntime
 
@@ -57,7 +58,20 @@ object NotificationIconPatch {
         return icon.type.toString()
     }
 
+
     private fun forceMonochrome(smallIcon: Icon, notification: Notification, context: Context, pkg: String): Boolean {
+        // ① **缓存**（2026-10-22 深夜）：同一条通知每次更新都会重新进来，而结果只取决于（包, 资源）。
+        //   命中就把上次那个 Icon 装回去 —— 不重新解码、也不重新合成。
+        val resId = runCatching { smallIcon.resId }.getOrDefault(0)
+        val cacheKey = if (resId > 0) "$pkg:$resId" else null
+        if (cacheKey != null) {
+            val hit = shapeCache[cacheKey]
+            if (hit != null) {
+                cacheHits++
+                reportCache()
+                return IconBitmap.applySmallIcon(hit, notification)
+            }
+        }
         // 解不出来也要说话（每包一次）：这是本函数里**唯一没有账**的静默出口，
         //   排查"这家的通知图标为什么没变"时，没有这一行就分不清"没跑""解不出""跳过了"。
         val bitmap = IconBitmap.decode(smallIcon, context) ?: run {
@@ -65,38 +79,34 @@ object NotificationIconPatch {
                 ModuleRuntime.logI("通知尺 未解码 首见 $pkg")
             return false
         }
-        // 已经是单色的就不用再压一遍 —— **但先看有没有"文字带"**（2026-10-22）：
-        //   flyingbirdlite 的小图标是"鸟 + 一行 FLYINGBIRD"，纯灰度 ⇒ 被当成"已适配"放过，
-        //   而那一行字在 22dp 上糊成一条灰带（主人报的"空出一块/一个小白点"）。
-        //   判据射程量过：框架 91 张 stat_* 一张都不命中，所以只在这一种形状上动手。
-        val stripped = IconBitmap.stripTextBand(bitmap)
-        // 🔴 **源退化**（2026-10-22，flyingbirdlite 现量）：有的应用把通知小图标交成 **1×1** 的位图，
-        //   系统把它撑满整格 ⇒ 屏幕上是一整块实心方块（主人报的"空出一块"）。这种源怎么处理都是块，
-        //   所以改用**这个应用自己的图标**顶上（单色化 + 归一到 0.95）。
+        cacheMisses++
+        // ② **源退化必须在任何形状处理之前判**（2026-10-22 深夜改回）：1×1 的源被 decode 撑成整格后，
+        //   颜色可能是彩的 —— 把它放进"彩色"分支就等于这一族没有兜底，屏幕上是整块实心色块。
         //   ⚠ 判据必须在**撑之前**取：`decode` 已经把 1×1 画成 96×96 了，事后量尺寸就全是一样大。
         val srcEdge = IconBitmap.resourceEdge(context, smallIcon)
-        if (bitmap.width <= 2 || bitmap.height <= 2 || (srcEdge in 0..2)) {
+        if (srcEdge in 0..2 || bitmap.width <= 2 || bitmap.height <= 2) {
             val app = runCatching { context.packageManager.getApplicationIcon(pkg) }.getOrNull()
-            if (app == null) {
-                noteRuler(pkg, "退化无兜底", bitmap, null)
-                return false
-            }
+            if (app == null) { noteRuler(pkg, "退化无兜底", bitmap, null); return false }
             val fromApp = IconBitmap.rasterize(app)
             val monoApp = if (ToneCheck.isGrayscale(fromApp)) fromApp else IconBitmap.monochrome(fromApp)
-            if (monoApp == null) {
-                noteRuler(pkg, "退化无兜底", bitmap, null)
-                return false
-            }
+            if (monoApp == null) { noteRuler(pkg, "退化无兜底", bitmap, null); return false }
             val shapedApp = IconBitmap.fitInk(monoApp, SIZE_TARGET) ?: monoApp
-            val okApp = IconBitmap.applySmallIcon(Icon.createWithBitmap(shapedApp), notification)
-            if (okApp) noteRuler(pkg, "代用应用图标", bitmap, shapedApp)
-            return okApp
+            val icon = Icon.createWithBitmap(shapedApp)
+            if (cacheKey != null) shapeCache[cacheKey] = icon
+            val ok = IconBitmap.applySmallIcon(icon, notification)
+            if (ok) noteRuler(pkg, "代用应用图标", bitmap, shapedApp)
+            return ok
         }
+        // ③ **字带对彩色图标同样生效**（2026-10-22 深夜改回）：旧流程把 `stripped` 当成
+        //   `monochrome` 的输入，彩色图标上的字带一样会被去掉；"彩色反正要走 monochrome"这句
+        //   只说明颜色会被重画，不说明字带会消失 —— 挪到颜色判断之后是可见行为变化，不是优化。
+        //   真正的热路径优化是第 ① 步的缓存：同一个（包, 资源）只扫这一次。
+        val stripped = IconBitmap.stripTextBand(bitmap)
         if (stripped == null && ToneCheck.isGrayscale(bitmap)) {
             // 诊断（每包一次）：把"字带判据"看到的几何打出来 —— 不打印就只能猜它为什么没命中。
             if (rulerSeen.size < RULER_MAX && rulerSeen.putIfAbsent("带诊断 $pkg", true) == null)
                 ModuleRuntime.logI("通知带诊断 $pkg ${IconBitmap.bandDebug(bitmap)}" +
-                    " ｜icon type=${iconType(smallIcon)} resId=${runCatching { smallIcon.resId }.getOrDefault(-1)}" +
+                    " ｜icon type=${iconType(smallIcon)} resId=$resId" +
                     " resPkg=${runCatching { smallIcon.resPackage }.getOrNull()}" +
                     " ｜drawable=${runCatching { IconBitmap.describeResource(context, smallIcon) }.getOrNull()}")
             noteRuler(pkg, "已适配", bitmap, null)
@@ -109,14 +119,39 @@ object NotificationIconPatch {
             noteRuler(pkg, "放弃", bitmap, null)
             return false
         }
-        // **大小归一（2026-10-22，主人"通知小图标的大小还是不太对"+"全都做了"）**：
-        //   只动"被补"这一族 —— 墨框长边缩到 [SIZE_TARGET]×画布、居中、等比。
-        //   目标 0.95 的来历：框架 `stat_*` 那 100 张的尺分布中位是 **0.949**（跨 0.40–1.00），
-        //   "和已适配的看着差不多大"只能按中位对。**已适配的被调用方提前 return 了，碰不到这里。**
         val shaped = IconBitmap.fitInk(monochrome, SIZE_TARGET) ?: monochrome
-        val applied = IconBitmap.applySmallIcon(Icon.createWithBitmap(shaped), notification)
+        val icon = Icon.createWithBitmap(shaped)
+        if (cacheKey != null) shapeCache[cacheKey] = icon
+        val applied = IconBitmap.applySmallIcon(icon, notification)
         if (applied) noteRuler(pkg, if (stripped != null) "清理字带" else "被补", bitmap, shaped)
         return applied
+    }
+
+    /**
+     * 形状缓存：键 = `包:资源id`（只对 RESOURCE 图标生效）；上限 32 个 Icon（96² 约 36 KB/个）。
+     *
+     * ⚠ 必须同步：`IconBitmap.monochrome` 的注释里记着 SystemUI 的通知处理会并发进来，
+     *   而 access-order 的 `LinkedHashMap.get` 本身会改链表。计数与"60 秒一行"只影响诊断，
+     *   但缓存结构被并发改坏会直接把通知路径打崩，所以整张表挂在一把锁上。
+     *
+     * 已知边界：键不含应用版本。应用更新后若复用同一个资源 id 而图变了，SystemUI 不重启
+     *   就会一直用旧图 —— 重启后自然消失；这条代价换的是"同一条通知每次刷新都不再重解码"。
+     */
+    private val shapeCache = Collections.synchronizedMap(
+        object : LinkedHashMap<String, Icon>(16, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Icon>?): Boolean = size > 32
+        }
+    )
+    private var cacheHits = 0
+    private var cacheMisses = 0
+    private var lastCacheReport = 0L
+
+    /** 缓存命中/未中的账：60 秒最多一行 —— 没有它，"优化了"与"没优化"在屏幕上分不出。 */
+    private fun reportCache() {
+        val now = System.currentTimeMillis()
+        if (now - lastCacheReport < 60_000) return
+        lastCacheReport = now
+        ModuleRuntime.logI("通知补丁 缓存 命中=$cacheHits 未中=$cacheMisses 在册=${shapeCache.size}")
     }
 
     /**
