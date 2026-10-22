@@ -78,6 +78,11 @@ fun main(args: Array<String>) {
       // ⚠ 还有一条要说明白：非自适应那一支里，台子是把源图先 resize 到 `edge` 再按同一个 `scanSize(edge,edge,…)`
       //   算两本（生产那边彩色用的是 **intrinsic** 尺寸那张），所以那一支的"差=0"读成
       //   **"重建的同一张图上两本口径一致"**，不是"生产上那两本在 45 张上一致"。
+      //   现量这个近似的代价：`shortcut_bit` 那 45 张**全是方形**，宽高中位 110、最小 70，
+      //   其中 **24 张 intrinsic ≤128** —— 生产上这 24 张的彩色那本确实拿自己的小格子去算，
+      //   而这一位（`格子分岔`）只看 `canonical` 那一个参数，对它们恒不响。
+      //   要把这一支量到"生产的几何"，得给台子加一条"按 `srcSize` 直接算彩色那本"的路径 ——
+      //   那会重钉第 19 闸两份 pin，且改的是**取数几何**而不是判据；没做，理由记在这儿。
       val (sw, sh) = IconCropWindow.scanSize(edge, edge, c.isFg)
       val (swAlt, shAlt) = IconCropWindow.scanSize(edge, edge, false)
       if (sw != swAlt || sh != shAlt) gridSplit++
