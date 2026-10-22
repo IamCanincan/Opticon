@@ -687,6 +687,43 @@ fun main() {
       "空图必须 null")
   }
 
+  // ── 32c. 通知小图标：**文字带**（2026-10-22，flyingbirdlite 那行 "FLYINGBIRD" 在 22dp 上糊成一条）
+  //     判据射程量过：框架 91 张 stat_* **0 命中**；下面三条钉住"该删的删、不该删的不动"。
+  run {
+    val cfg = android.graphics.Bitmap.Config.ARGB_8888
+    fun ink(c: android.graphics.Bitmap): Int {
+      val px = IntArray(c.width * c.height); c.getPixels(px, 0, c.width, 0, 0, c.width, c.height)
+      return px.count { ((it ushr 24) and 0xff) >= 128 }
+    }
+    // 主体：32×32 的块；字带：下面 4 个 6×6 的小块（分开的，像一行字）
+    val withBand = android.graphics.Bitmap.createBitmap(96, 96, cfg)
+    val row = IntArray(32) { 0xFF101010.toInt() }
+    for (j in 0 until 32) withBand.setPixels(row, 0, 32, 32, 20 + j, 32, 1)
+    for (k in 0 until 4) {
+      val cell = IntArray(6) { 0xFF101010.toInt() }
+      for (j in 0 until 6) withBand.setPixels(cell, 0, 6, 12 + k * 18, 64 + j, 6, 1)
+    }
+    val stripped = com.iamcanincan.opticon.notify.IconBitmap.stripTextBand(withBand)
+    check("文字带：主体 + 下面 4 个小块 ⇒ 只删那 4 块（主体一格不动）",
+      stripped != null && ink(stripped) == 32 * 32 && ink(withBand) == 32 * 32 + 4 * 36,
+      "原墨=${ink(withBand)} 去后=${stripped?.let { ink(it) }}")
+    // 并排的四根条（像信号格）：同一行、不成"带" ⇒ 不许动
+    val bars = android.graphics.Bitmap.createBitmap(96, 96, cfg)
+    for (k in 0 until 4) {
+      val cell = IntArray(8) { 0xFF101010.toInt() }
+      for (j in 0 until 20) bars.setPixels(cell, 0, 8, 10 + k * 20, 40 + j, 8, 1)
+    }
+    check("文字带：并排的条（信号格那种）⇒ 不动（返回 null）",
+      com.iamcanincan.opticon.notify.IconBitmap.stripTextBand(bars) == null, "不许把信号格当成字")
+    // 主体 + 下面**一条**横线（下载/上传图标那种）⇒ 只有 1 块，不够 3 块 ⇒ 不许动
+    val oneLine = android.graphics.Bitmap.createBitmap(96, 96, cfg)
+    for (j in 0 until 32) oneLine.setPixels(row, 0, 32, 32, 20 + j, 32, 1)
+    val line = IntArray(40) { 0xFF101010.toInt() }
+    for (j in 0 until 4) oneLine.setPixels(line, 0, 40, 28, 64 + j, 40, 1)
+    check("文字带：主体 + 下面一条横线 ⇒ 不动（下载/上传那两张就是这么被误伤过）",
+      com.iamcanincan.opticon.notify.IconBitmap.stripTextBand(oneLine) == null, "≥3 块那道门槛")
+  }
+
   // ── 第三十四组：**量测格子只有一个来源**（2026-10-21，两本账合成一本）──
   //     `IconCropWindow.scanSize` 以前抄在 `MaskedDrawable.measureWindow` 里，染色那支没有份 ——
   //     于是同一条 `PLATE_SUBJECT_MIN=50` 在彩色那本账上标定、由判据那本账去比（装机差 3 个点）。

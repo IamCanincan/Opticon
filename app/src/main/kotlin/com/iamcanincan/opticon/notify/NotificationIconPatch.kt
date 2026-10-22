@@ -58,14 +58,53 @@ object NotificationIconPatch {
     }
 
     private fun forceMonochrome(smallIcon: Icon, notification: Notification, context: Context, pkg: String): Boolean {
-        val bitmap = IconBitmap.decode(smallIcon, context) ?: return false
-        // 已经是单色的就不用再压一遍
-        if (ToneCheck.isGrayscale(bitmap)) {
+        // 解不出来也要说话（每包一次）：这是本函数里**唯一没有账**的静默出口，
+        //   排查"这家的通知图标为什么没变"时，没有这一行就分不清"没跑""解不出""跳过了"。
+        val bitmap = IconBitmap.decode(smallIcon, context) ?: run {
+            if (rulerSeen.size < RULER_MAX && rulerSeen.putIfAbsent("未解码 $pkg", true) == null)
+                ModuleRuntime.logI("通知尺 未解码 首见 $pkg")
+            return false
+        }
+        // 已经是单色的就不用再压一遍 —— **但先看有没有"文字带"**（2026-10-22）：
+        //   flyingbirdlite 的小图标是"鸟 + 一行 FLYINGBIRD"，纯灰度 ⇒ 被当成"已适配"放过，
+        //   而那一行字在 22dp 上糊成一条灰带（主人报的"空出一块/一个小白点"）。
+        //   判据射程量过：框架 91 张 stat_* 一张都不命中，所以只在这一种形状上动手。
+        val stripped = IconBitmap.stripTextBand(bitmap)
+        // 🔴 **源退化**（2026-10-22，flyingbirdlite 现量）：有的应用把通知小图标交成 **1×1** 的位图，
+        //   系统把它撑满整格 ⇒ 屏幕上是一整块实心方块（主人报的"空出一块"）。这种源怎么处理都是块，
+        //   所以改用**这个应用自己的图标**顶上（单色化 + 归一到 0.95）。
+        //   ⚠ 判据必须在**撑之前**取：`decode` 已经把 1×1 画成 96×96 了，事后量尺寸就全是一样大。
+        val srcEdge = IconBitmap.resourceEdge(context, smallIcon)
+        if (bitmap.width <= 2 || bitmap.height <= 2 || (srcEdge in 0..2)) {
+            val app = runCatching { context.packageManager.getApplicationIcon(pkg) }.getOrNull()
+            if (app == null) {
+                noteRuler(pkg, "退化无兜底", bitmap, null)
+                return false
+            }
+            val fromApp = IconBitmap.rasterize(app)
+            val monoApp = if (ToneCheck.isGrayscale(fromApp)) fromApp else IconBitmap.monochrome(fromApp)
+            if (monoApp == null) {
+                noteRuler(pkg, "退化无兜底", bitmap, null)
+                return false
+            }
+            val shapedApp = IconBitmap.fitInk(monoApp, SIZE_TARGET) ?: monoApp
+            val okApp = IconBitmap.applySmallIcon(Icon.createWithBitmap(shapedApp), notification)
+            if (okApp) noteRuler(pkg, "代用应用图标", bitmap, shapedApp)
+            return okApp
+        }
+        if (stripped == null && ToneCheck.isGrayscale(bitmap)) {
+            // 诊断（每包一次）：把"字带判据"看到的几何打出来 —— 不打印就只能猜它为什么没命中。
+            if (rulerSeen.size < RULER_MAX && rulerSeen.putIfAbsent("带诊断 $pkg", true) == null)
+                ModuleRuntime.logI("通知带诊断 $pkg ${IconBitmap.bandDebug(bitmap)}" +
+                    " ｜icon type=${iconType(smallIcon)} resId=${runCatching { smallIcon.resId }.getOrDefault(-1)}" +
+                    " resPkg=${runCatching { smallIcon.resPackage }.getOrNull()}" +
+                    " ｜drawable=${runCatching { IconBitmap.describeResource(context, smallIcon) }.getOrNull()}")
             noteRuler(pkg, "已适配", bitmap, null)
             return false
         }
+        val base = stripped ?: bitmap
         // 压不出像样的形状（全空/全满）就保持原样，别交一张更糟的图出去
-        val monochrome = IconBitmap.monochrome(bitmap)
+        val monochrome = if (ToneCheck.isGrayscale(base)) base else IconBitmap.monochrome(base)
         if (monochrome == null) {
             noteRuler(pkg, "放弃", bitmap, null)
             return false
@@ -76,7 +115,7 @@ object NotificationIconPatch {
         //   "和已适配的看着差不多大"只能按中位对。**已适配的被调用方提前 return 了，碰不到这里。**
         val shaped = IconBitmap.fitInk(monochrome, SIZE_TARGET) ?: monochrome
         val applied = IconBitmap.applySmallIcon(Icon.createWithBitmap(shaped), notification)
-        if (applied) noteRuler(pkg, "被补", bitmap, shaped)
+        if (applied) noteRuler(pkg, if (stripped != null) "清理字带" else "被补", bitmap, shaped)
         return applied
     }
 
@@ -89,7 +128,10 @@ object NotificationIconPatch {
      */
     private fun noteRuler(pkg: String, kind: String, src: android.graphics.Bitmap, out: android.graphics.Bitmap?) {
         if (rulerSeen.size >= RULER_MAX) return
-        val key = kind + " " + src.width + "x" + src.height
+        // ⚠ **键里必须带包名**（2026-10-22 现撞）：旧键是 `kind + 尺寸`，于是"已适配 96x96"被第一家的
+        //   那一行占住，后面**所有**同尺寸的应用都不再打印 —— 排查 flyingbirdlite 时账里根本没有它，
+        //   这一位就成了"看不出这家我们做了什么"。按包名记，每家一行。
+        val key = kind + " " + pkg + " " + src.width + "x" + src.height
         if (rulerSeen.putIfAbsent(key, true) != null) return
         val inPct = (IconBitmap.sizeRuler(src) * 100).roundToInt()
         val tail = if (out == null) "" else

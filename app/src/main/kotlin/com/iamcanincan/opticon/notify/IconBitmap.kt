@@ -635,6 +635,142 @@ object IconBitmap {
     }
 
     /**
+     * 去掉"文字带"：主体之外那一条**横贯整幅、但列方向有缝**的细带 ——
+     * 典型就是图标下面那行字（`flyingbirdlite` 的 「FLYINGBIRD」）。留着的后果不是"变小"，
+     * 而是**在 22dp 上糊成一条灰带**（实测把它的 96² 缩到 22px 看过）。
+     *
+     * 判据（2026-10-22 对着真图量的，96² 上）：字带占 **第 74~83 行**、横跨 x=1..95、
+     * 但每行只有 ~31 格有墨 ⇒ **列覆盖 ≈ 0.33**（字与字之间有空）。而"实心下划线"列覆盖是 1.0 ——
+     * 这就是下载/上传那两帧不被误伤的那道分界（它们就是"箭头 + 一条实线"）。
+     * `≥3 块` 那种写法在真机解出来的位图上会**漏**（字母挨在一起就成了一块），所以改判"几何 + 列覆盖"。
+     * 框架 91 张 `stat_*` 在这条判据下 **0 命中**。
+     *
+     * 命中 ⇒ 返回去掉那几行的**副本**；没命中 ⇒ `null`（调用方按原路走，一个像素都不动）。
+     */
+    fun stripTextBand(input: Bitmap): Bitmap? {
+        val w = input.width
+        val h = input.height
+        if (w <= 0 || h <= 0 || w * h > (1 shl 16)) return null
+        val px = IntArray(w * h)
+        input.getPixels(px, 0, w, 0, 0, w, h)
+        val on = BooleanArray(w * h) { ((px[it] ushr 24) and 0xff) >= MIN_SHAPE_ALPHA }
+        // ① 主块（最大连通块）的行范围 —— 只要 top/bot，不必收格子
+        val seen = BooleanArray(w * h)
+        val stack = IntArray(w * h)
+        var mainArea = 0; var mainTop = 0; var mainBot = 0
+        for (start in 0 until w * h) {
+            if (!on[start] || seen[start]) continue
+            var sp = 0; var n = 0; var top = h; var bot = -1
+            stack[sp++] = start; seen[start] = true
+            while (sp > 0) {
+                val c = stack[--sp]
+                n++
+                val y = c / w
+                if (y < top) top = y
+                if (y > bot) bot = y
+                val x = c - y * w
+                if (x > 0 && on[c - 1] && !seen[c - 1]) { seen[c - 1] = true; stack[sp++] = c - 1 }
+                if (x < w - 1 && on[c + 1] && !seen[c + 1]) { seen[c + 1] = true; stack[sp++] = c + 1 }
+                if (y > 0 && on[c - w] && !seen[c - w]) { seen[c - w] = true; stack[sp++] = c - w }
+                if (y < h - 1 && on[c + w] && !seen[c + w]) { seen[c + w] = true; stack[sp++] = c + w }
+            }
+            if (n > mainArea) { mainArea = n; mainTop = top; mainBot = bot }
+        }
+        if (mainArea == 0) return null
+        // ② 主块**之外**的行：取上、下两侧里"有墨的那一段"，各按判据试一次
+        val maxBandH = maxOf(2, (mainBot - mainTop + 1) * 30 / 100)
+        for (side in 0..1) {
+            val y0 = if (side == 0) 0 else mainBot + 1
+            val y1 = if (side == 0) mainTop - 1 else h - 1
+            if (y1 < y0) continue
+            var r0 = -1; var r1 = -1; var minX = w; var maxX = -1; var area = 0
+            for (y in y0..y1) for (x in 0 until w) {
+                if (!on[y * w + x]) continue
+                area++
+                if (r0 < 0) r0 = y
+                r1 = y
+                if (x < minX) minX = x
+                if (x > maxX) maxX = x
+            }
+            if (area == 0) continue
+            val bandH = r1 - r0 + 1
+            val bandW = maxX - minX + 1
+            if (bandH > maxBandH) continue
+            if (bandW * 100 < w * 60) continue              // 字横贯整幅；短横线不算
+            // ⚠ **墨密度**而不是"列覆盖"：真机解出来的位图经过缩放 + 抗锯齿，字与字之间的缝会被糊平，
+            //   列覆盖会一路涨到接近实线（2026-10-22 现撞：改成密度前这条在真机上**一次都没命中**）。
+            //   密度对糊更钝：字 ≈0.33、实线下划线 ≈1.0。
+            if (area * 100 > bandW * bandH * 60) continue    // 太实 = 是下划线，不是字
+            if (area * 100 < (mainArea + area) * 5) continue  // 太小 = 噪点，不动
+            if (area * 100 > mainArea * 150) continue         // 比主体还大 = 这不是"字带"
+            val out = px.copyOf()
+            for (y in r0..r1) for (x in 0 until w) out[y * w + x] = 0
+            val result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            result.setPixels(out, 0, w, 0, 0, w, h)
+            return result
+        }
+        return null
+    }
+
+    /** 诊断用：这条资源解出来的 drawable **是什么类、多大**（一句话，不含像素）。 */
+    fun describeResource(context: Context, icon: Icon): String = runCatching {
+        val d = ResourcesCompat.getDrawable(context.resources, icon.resId, null)
+        "${d?.javaClass?.simpleName} ${d?.intrinsicWidth}x${d?.intrinsicHeight}"
+    }.getOrElse { "err:${it.message}" }
+
+    /**
+     * 这条资源解出来的 drawable 的**最小固有边**（px）；解不出返回 -1。
+     *
+     * 为什么需要：有的应用把通知小图标交成 **1×1**（`flyingbirdlite` 现量：`drawable/ic` 在这个
+     * 包上下文里解出来就是 1×1）。`rasterize` 会把它撑满整格 ⇒ 屏幕上是一整块实心方块。
+     * **必须在撑之前判**——撑完就只剩一张 96×96、信息已经没了。
+     */
+    fun resourceEdge(context: Context, icon: Icon): Int = runCatching {
+        val d = ResourcesCompat.getDrawable(context.resources, icon.resId, null) ?: return -1
+        minOf(d.intrinsicWidth, d.intrinsicHeight)
+    }.getOrDefault(-1)
+
+    /** 诊断用：把 [stripTextBand] 看到的几何打出来（一条字符串），只在"已适配"那一支按包名打一次。 */
+    fun bandDebug(input: Bitmap): String {
+        val w = input.width; val h = input.height
+        if (w <= 0 || h <= 0 || w * h > (1 shl 16)) return "size ${w}x$h"
+        val px = IntArray(w * h)
+        input.getPixels(px, 0, w, 0, 0, w, h)
+        val on = BooleanArray(w * h) { ((px[it] ushr 24) and 0xff) >= MIN_SHAPE_ALPHA }
+        val seen = BooleanArray(w * h); val stack = IntArray(w * h)
+        var mainArea = 0; var mainTop = 0; var mainBot = 0; var comps = 0
+        for (start in 0 until w * h) {
+            if (!on[start] || seen[start]) continue
+            comps++
+            var sp = 0; var n = 0; var top = h; var bot = -1
+            stack[sp++] = start; seen[start] = true
+            while (sp > 0) {
+                val c = stack[--sp]; n++
+                val y = c / w
+                if (y < top) top = y
+                if (y > bot) bot = y
+                val x = c - y * w
+                if (x > 0 && on[c - 1] && !seen[c - 1]) { seen[c - 1] = true; stack[sp++] = c - 1 }
+                if (x < w - 1 && on[c + 1] && !seen[c + 1]) { seen[c + 1] = true; stack[sp++] = c + 1 }
+                if (y > 0 && on[c - w] && !seen[c - w]) { seen[c - w] = true; stack[sp++] = c - w }
+                if (y < h - 1 && on[c + w] && !seen[c + w]) { seen[c + w] = true; stack[sp++] = c + w }
+            }
+            if (n > mainArea) { mainArea = n; mainTop = top; mainBot = bot }
+        }
+        val below0 = mainBot + 1
+        var a = 0; var r0 = -1; var r1 = -1; var mnx = w; var mxx = -1
+        for (y in below0 until h) for (x in 0 until w) if (on[y * w + x]) {
+            a++; if (r0 < 0) r0 = y; r1 = y
+            if (x < mnx) mnx = x; if (x > mxx) mxx = x
+        }
+        val bw = if (mxx >= 0) mxx - mnx + 1 else 0
+        val bh = if (r1 >= 0) r1 - r0 + 1 else 0
+        val dens = if (bw > 0 && bh > 0) a.toDouble() / (bw * bh) else 0.0
+        return "size=${w}x$h comps=$comps main=${mainArea}@${mainTop}..${mainBot} 下带 area=$a ${bw}x${bh} 密度=${
+            "%.2f".format(dens)} 宽占比=${"%.2f".format(if (w > 0) bw.toDouble() / w else 0.0)}"
+    }
+
+    /**
      * 把**墨的外接框长边**缩到 `target × 画布长边`，等比、居中，画布边长保持 `max(w,h)`（方形）。
      *
      * 为什么需要它：槽位是 22dp 的 `fitCenter`，所以观感大小 = [sizeRuler] 那个比值。
