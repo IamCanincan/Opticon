@@ -26,6 +26,15 @@ const must = (cmd, args, cwd) => {
   if (r.rc !== 0) throw new Error(cmd + ' ' + args.join(' ') + ' 退 ' + r.rc + '：' + r.out.slice(0, 400));
   return r.out;
 };
+// 带着"距今 N 分钟"的时间提交 —— 锚用的是 `%ct`（committer date），所以两个都要给。
+function commit(msg, minsAgo, stageAll) {
+  if (stageAll !== false) must('git', ['add', '-A'], TMP);
+  const t = new Date(Date.now() - (minsAgo === undefined ? 0 : minsAgo * 60000)).toISOString();
+  const env = Object.assign({}, process.env, { GIT_AUTHOR_DATE: t, GIT_COMMITTER_DATE: t });
+  const r = spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', msg],
+    { cwd: TMP, encoding: 'utf8', env });
+  if (r.status !== 0) throw new Error('commit 失败：' + (r.stdout || '') + (r.stderr || ''));
+}
 const w = (rel, text) => {
   const p = path.join(TMP, ...rel.split('/'));
   fs.mkdirSync(path.dirname(p), { recursive: true });
@@ -53,8 +62,13 @@ function fresh(gateText) {
   w(SYNTH, 'class B\n');
   w('_harness/regress.sh', 'echo x\n');
   w('.gitignore', 'app/build/\n');            // APK 产物本来就不入库
-  must('git', ['add', '-A'], TMP);
-  must('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'base'], TMP);
+  // ⚠ **分两次提交**：先 `app/` 再 `_harness/`。闸现在也查"最近一次提交动过名单外那些"，
+  //   要是 base 那一次就把两份一起加进来，HEAD 的名单里就永远躺着 `MonochromeSynth.kt`
+  //   ⇒ 第 1 条"干净仓库 ⇒ 放行"会被它自己造的现场顶掉（**假红**，比假绿更会骗人，因为它每次都响）。
+  must('git', ['add', 'app', '.gitignore'], TMP);
+  commit('base: 生产源码', 240, false);
+  must('git', ['add', '_harness'], TMP);
+  commit('base: 判据台（HEAD 不含名单外的改动）', 200, false);
 }
 
 const SRC = 120;        // 改动发生在两小时前
@@ -82,7 +96,7 @@ const CASES = [
     why: '改过之后真跑过一次 gradle ⇒ 该放。这条否掉"逢改 synth 就拦"的另一种瞎。'
   },
   {
-    no: 5, name: '同上，但 APK 比改动**旧** ⇒ 拦（反面对照）', want: 1, need: '比改动旧',
+    no: 5, name: '同上，但 APK 比改动**旧** ⇒ 拦（反面对照）', want: 1, need: '不比它新',
     set() { w(SYNTH, 'class B4\n'); touch(SYNTH, SRC); w(APK, 'apk\n'); touch(APK, APK_OLD); },
     why: '⚠ 这条是**专门用来抓"只看 APK 在不在"的假实现**的：APK 明明存在，但它是上一版的。'
   },
@@ -100,6 +114,18 @@ const CASES = [
     no: 8, name: '清单被掏空（build.sh 里那几行没了）⇒ 退 2，不许读成放行', want: 2, need: '瞎',
     set() { w('_harness/build.sh', '# 清单被删掉的 build.sh\nkotlinc 什么都不编\n'); },
     why: '这条证的是**仪器自己**：解析成 0 份时那句"没碰到编不到的"会恒真 ⇒ 必须报 2，不能报 0。'
+  },
+  {
+    // 2026-10-22 自己抓出来的第二种现场：今天写完这道闸，回头一看 HEAD 里正躺着一份
+    //   00:51 提交、00:04 之后从来没进过 gradle 的生产源码（`debug/CorpusCapture.kt`）—— 只看工作树会漏掉它。
+    no: 9, name: '**已经提交**的那次改了名单外那份，APK 比那次提交旧 ⇒ 拦（并说"最近一次提交"）', want: 1, need: '最近一次提交',
+    set() { w(SYNTH, 'class B5\n'); commit('改了编不到的那份', 120); w(APK, 'apk\n'); touch(APK, 180); },
+    why: '工作树这时是**干净**的（改动已提交），只看 dirty 文件的闸会放行 ⇒ 这条证第二种现场真被看着。'
+  },
+  {
+    no: 10, name: '同上，但 APK 比那次提交**新** ⇒ 放行', want: 0,
+    set() { w(SYNTH, 'class B6\n'); commit('改了编不到的那份', 120); w(APK, 'apk\n'); touch(APK, 60); },
+    why: '提交之后真跑过一次打包 ⇒ 该放。这条否掉"逢提交过编不到的就永远拦"那种会把自己饿死的闸。'
   },
 ];
 
@@ -139,6 +165,21 @@ if (!realGate.includes(ANCHOR)) {
     `（必须 0；不是 0 就说明第 5 条没在测"新旧"）`);
   log.push(`=== 元对照 朴素闸（只看 APK 在不在）\n实际退码 ${n.rc}\n--- 输出 ---\n${n.out}\n`);
   if (!okMeta) bad++;
+}
+// ⚑ **元对照之二**：把"最近一次提交也查"那一半摘掉，第 9 条必须**假通过** ——
+//   今天这道闸本来就是为那种现场补的，它要是靠别的东西碰巧拦下来，第 9 条同样白测。
+const HEADLOOP = 'for f in $HFILES; do untouched "$f" || HUNCOV="$HUNCOV $f"; done';
+if (!realGate.includes(HEADLOOP)) {
+  console.log('!! 元对照之二开不了工：precommit.sh 里那句扫 HEAD 的循环原文变了 —— 先改这台子');
+  bad++;
+} else {
+  fresh(realGate.replace(HEADLOOP, ':'));
+  CASES[8].set();
+  const n2 = gate();
+  const ok2 = n2.rc === 0;
+  console.log(`${ok2 ? '✓ ' : '!!'} 元对照之二：摘掉"也查最近一次提交"之后，第 9 条退码 ${n2.rc}（必须 0）`);
+  log.push(`=== 元对照之二（不查 HEAD）\n实际退码 ${n2.rc}\n--- 输出 ---\n${n2.out}\n`);
+  if (!ok2) bad++;
 }
 fs.writeFileSync('D:/tmp/pcgate_out.txt', log.join('\n'));
 console.log(bad ? `\n!! ${bad} 条不成立 —— 完整现场：D:/tmp/pcgate、逐条输出 D:/tmp/pcgate_out.txt`
