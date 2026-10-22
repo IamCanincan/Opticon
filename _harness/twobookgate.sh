@@ -7,7 +7,17 @@
 # 用法：`. ./twobookgate.sh; twobook_gate [输出后缀]`
 #   退 0 = 这一闸过；非 0 = 红（红话说完）。后缀默认空，变异台传 `_mut` 以免覆盖活账本。
 #   语料可用环境变量 `CORPUS / PLATECORPUS / SHOTCORPUS` 覆盖，默认与 `regress.sh` 同三份。
-tb_own() { echo "$1" | awk '{i=index($0," 开火集="); print (i>0? substr($0,i) : "NOFIELD")}'; }
+tb_own() {
+  # ⚠ **只抠"归属"那几格**：`开火集` / `老开火集` / `翻名单`。
+  #   以前这句从 ` 开火集=` 一路抠到行尾，把 `分支=` 那张**差表**也裹进来了 —— 而差表量的正是
+  #   "两本账在这张图上差几个点"，它**本来就该随交付档变**（2026-10-22 现量：96 档非自适应那支
+  #   `差≥3=16 最大差=5`，384 档 `差≥3=0`），拿"归属不许动"去管它，等于把尺子读成违规。
+  echo "$1" | awk '{
+    i = index($0, " 开火集="); j = index($0, " 分支="); k = index($0, " 翻名单=")
+    if (i == 0 || j == 0 || k == 0) { print "NOFIELD"; exit }
+    printf "%s|%s", substr($0, i, j - i), substr($0, k)
+  }'
+}
 
 twobook_gate() {
   SUF="${1:-}"
@@ -48,7 +58,7 @@ twobook_gate() {
     echo "   这一档 0 分岔分不清「不会分岔」和「没得分岔」，不许当通过"; return 1;
   fi
   if [ "$(tb_own "$NEWT")" != "$(tb_own "$NEWT96")" ]; then
-    echo "!! 96 档与 384 档的极性归属不是同一批（该只有 格子分岔 / bothWin / colourNull 三个数动）"
+    echo "!! 96 档与 384 档的**极性归属**不是同一批（允许随档动的是 格子分岔 / 原生* / bothWin / colourNull / 分支差表）"
     echo "   384: $(tb_own "$NEWT")"; echo "   96 : $(tb_own "$NEWT96")"; return 1;
   fi
   if [ -n "$UPDATE" ]; then

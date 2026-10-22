@@ -44,6 +44,7 @@ fun main(args: Array<String>) {
   var n = 0
   val b = HashMap<String, IntArray>()   // 每支：[张数, 差≥3, 差≥5, 极性翻, 档翻, 最大差]
   var flip = 0; var entryFlip = 0; var colourNull = 0; var bothWin = 0; var fgNear = 0; var gridSplit = 0
+  var nativeN = 0; var nativeSplit = 0; var nativeSkip = 0
   var inviolations = 0
   val firedNew = ArrayList<String>(); val firedOld = ArrayList<String>(); val flips = ArrayList<String>()
   for (d in dirs) {
@@ -73,20 +74,25 @@ fun main(args: Array<String>) {
       // **过生产同一个 [IconCropWindow.scanSize]**（彩色与染色共用那一个格子算式）。
       // ⚠ 这一位**只对 `canonical` 那一个参数敏感**（`isFg=false` 的图标两次调用同一个式子 ⇒ 恒不分岔）：
       //   2026-10-22 加进 45 张 `bitmap=` 快捷方式（全在"非自适应"那一支）之后 `格子分岔` 一格没动，
-      //   不是它们"不会分岔"，而是**这一位压根不看那一支**。那一支的两本账对齐靠的是逐张的
-      //   「差≥3 / 差≥5 / 极性翻」，不是这一位 —— 别拿 `格子分岔` 当"全语料两本同格"的证据。
-      // ⚠ 还有一条要说明白：非自适应那一支里，台子是把源图先 resize 到 `edge` 再按同一个 `scanSize(edge,edge,…)`
-      //   算两本（生产那边彩色用的是 **intrinsic** 尺寸那张），所以那一支的"差=0"读成
-      //   **"重建的同一张图上两本口径一致"**，不是"生产上那两本在 45 张上一致"。
-      //   现量这个近似的代价：`shortcut_bit` 那 45 张**全是方形**，宽高中位 110、最小 70，
-      //   其中 **24 张 intrinsic ≤128** —— 生产上这 24 张的彩色那本确实拿自己的小格子去算，
-      //   而这一位（`格子分岔`）只看 `canonical` 那一个参数，对它们恒不响。
-      //   要把这一支量到"生产的几何"，得给台子加一条"按 `srcSize` 直接算彩色那本"的路径 ——
-      //   那会重钉第 19 闸两份 pin，且改的是**取数几何**而不是判据；没做，理由记在这儿。
+      //   不是它们"不会分岔"，而是**这一位压根不看那一支**。那一支对不对齐，看 `原生分岔=` 那一位。
       val (sw, sh) = IconCropWindow.scanSize(edge, edge, c.isFg)
       val (swAlt, shAlt) = IconCropWindow.scanSize(edge, edge, false)
       if (sw != swAlt || sh != shAlt) gridSplit++
-      val wc = colourPx?.let { IconCropWindow.of(resize(it, edge, sw, sh), sw, sh) }
+      // 🔴 **非自适应那一支按生产的几何算彩色那本**（2026-10-22 补）：生产那边是
+      //   `MaskedDrawable.measureWindow` 量 `icon.draw()` 落到视口那一张，格子 = `scanSize(intrinsic, false)` ——
+      //   intrinsic ≤ `SCAN_EDGE` 时**根本不缩**，拿的就是那张小原图。台子以前把源先 resample 到 `edge`
+      //   再算，于是 `shortcut_bit` 那种 110² 的小源被"长到 384 再量"，两本对表的几何与装机不一致。
+      //   读不到/非方形 ⇒ 退回旧的近似，并**数出来**（`原生退回=`），不许静默降级。
+      val nat = if (!c.isFg) nativeArgb(c.file) else null
+      val wc: IconCropWindow.Window? = if (nat != null) {
+        val (nw, nh) = IconCropWindow.scanSize(nat.second, nat.third, false)
+        nativeN++
+        if (nw != sw || nh != sh) nativeSplit++
+        IconCropWindow.of(resize(nat.first, nat.second, nw, nh), nw, nh)
+      } else {
+        if (!c.isFg) nativeSkip++
+        colourPx?.let { IconCropWindow.of(resize(it, edge, sw, sh), sw, sh) }
+      }
       n++; raw[0]++
       if (wc == null) colourNull++
       if (wm != null && wc != null) bothWin++
@@ -141,10 +147,13 @@ fun main(args: Array<String>) {
   val fired = if (acct == "mono") firedOld else firedNew
   println("扫过 $n 张｜极性翻 $flip 张｜彩色判满幅 $colourNull 张（两本都有窗口 $bothWin 张）｜档翻 $entryFlip 张｜" +
     "只给前景层那支里 老口径 plate&&!spiky 且 ≥40% 的 $fgNear 张（= 这台子离能翻还差几张）｜" +
-    "格子分岔 $gridSplit 张（canonical 与不 canonical 给出不同格子的张数 = 0 ⇒ 这份语料量不到那一支）")
+    "格子分岔 $gridSplit 张（canonical 与不 canonical 给出不同格子的张数，**只看 `isFg` 那一支**）｜" +
+    "非自适应那本按**生产几何**算：原生格子 $nativeN 张（与判据那本不同格子 $nativeSplit 张）" +
+    "、退回 edge 近似 $nativeSkip 张（非方形或读不到）")
   println("钉的是 **$acct 口径的开火集**（老=$firedOld 张 / 新=$firedNew 张）：${firedNew.sorted()}")
   if (flips.isNotEmpty()) println("翻的名单：${flips.joinToString(" / ")}")
-  println("2A n=$n acct=$acct flip=$flip colourNull=$colourNull bothWin=$bothWin entryFlip=$entryFlip fgNear=$fgNear 格子分岔=$gridSplit 不变量=$inviolations " +
+  println("2A n=$n acct=$acct flip=$flip colourNull=$colourNull bothWin=$bothWin entryFlip=$entryFlip fgNear=$fgNear 格子分岔=$gridSplit " +
+    "原生=$nativeN 原生分岔=$nativeSplit 原生退回=$nativeSkip 不变量=$inviolations " +
     "开火集=[${fired.sorted().joinToString(",")}] 老开火集=[${firedOld.sorted().joinToString(",")}] " +
     "分支=" + b.toList().sortedBy { it.first }.joinToString(",") { (k, v) ->
       "$k:${v[0]}张/差≥3=${v[1]}/差≥5=${v[2]}/极性翻=${v[3]}/档翻=${v[4]}/最大差=${v[5]}" } +
@@ -167,8 +176,20 @@ private fun kind(raw: IconCropWindow.Window?, win: IconCropWindow.Window?): Stri
 /** 去掉尾上那 12 位内容签名 —— 钉名单要的是同一张图的稳定身份（同 [PlateSubKt]）。 */
 private fun stem(f: File) = f.nameWithoutExtension.replace(Regex("_[0-9a-f]{12}$"), "")
 
-/** 就近降采样到 `sw×sh`（与 `IconCropWindow.of` 内部那一趟同一个式子，先降再交给判据）。 */
-private fun resize(px: IntArray, edge: Int, sw: Int, sh: Int): IntArray {
+/**
+ * 读文件**原生尺寸**的 ARGB（非自适应那本要用它 = 生产那边的 intrinsic）。
+ * 非方形 / 读不到 ⇒ 回 null，调用方退回 edge 近似并把这一张计入 `原生退回`（不许静默降级）。
+ */
+private fun nativeArgb(f: File): Triple<IntArray, Int, Int>? {
+  val img = runCatching { ImageIO.read(f) }.getOrNull() ?: return null
+  val iw = img.width; val ih = img.height
+  if (iw <= 0 || iw != ih) return null
+  val px = IntArray(iw * ih)
+  img.getRGB(0, 0, iw, ih, px, 0, iw)
+  return Triple(px, iw, ih)
+}
+
+/** 就近降采样到 `sw×sh`（与 `IconCropWindow.of` 内部那一趟同一个式子，先降再交给判据）。 */private fun resize(px: IntArray, edge: Int, sw: Int, sh: Int): IntArray {
   if (sw == edge && sh == edge) return px
   val out = IntArray(sw * sh)
   for (y in 0 until sh) {
