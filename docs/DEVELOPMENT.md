@@ -312,6 +312,14 @@ java -cp out;stubs_out;<stdlib> harness.ReplayKt ../_dump.txt captured   # 重�
     `twobookgate.sh`（第 19 闸，用例 19 + 21）、`adaptgate.sh`（第 8 与第 20 闸：用例 20 改生产那一行，
     `_adaptgate_mut.cjs` 六条改的是**分母在不在** —— 入口门是输入级的东西，语义变异台永远碰不到它）。
     用法一律 `. ./X.sh; x_gate [后缀]`，后缀让变异台把输出写到 `*_mut.txt`，**不许覆盖活账本**。
+  - ✅ **第 21 闸「分母去向账」**（2026-10-22，`node _corpusmap.cjs`）：这一闸不量像素，量的是
+    "某类图标到底在哪道闸的分母里"这句话**还查得动吗**。它把 `regress.sh` 与 `*gate.sh` 里的
+    `run`/`node` 参数**按变量展开**（`CORPUS=${CORPUS:-rec_model}` 与别名 `T_BIT="${SHOTBITCORPUS:-shortcut_bit}"` 都要认 ——
+    第一版没认 `="…"` 里那个引号，把 `shortcut_bit` 报成"没进第 19 闸"，是个**假警报**），
+    然后两头查：**新冒出一份"在册却没人吃"的语料 ⇒ 红；名单里那四条历史件不在了 ⇒ 也红**（理由随之作废）。
+    在册判据 = 有 `index.tsv` **且**被某份程序引用（不然我把历次量测的临时目录全报成漏，噪声会淹死真漏）。
+    控制台 `_corpusmap_mut.cjs`：四条 + 一条元对照（把那句退码摘掉，第 1 条必须假通过）。
+    现读：`13 份在册 / 9 份被吃`，`22 段 = 判定 22 + 扫描 0：语义 10 / 脚本 9 / 活证据 3 / 无 0`。
   - 第 19 闸的判定本体同样抽成了只有一份的 `_harness/twobookgate.sh`（`. ./twobookgate.sh; twobook_gate [后缀]`）：
     这一闸除了"与 pin 逐字相同"还有**两条不看基线**的当场断言，而变异台以前自己抄了一遍"跑台子 + 比 pin"，
     那两条它一条也没证过。
