@@ -177,11 +177,10 @@ const CASES = [
     // ⚠ **一条 `exit` 都不许写**：这台子是 `gateCmd + '; echo $?'`，中途 `exit` 会让那句
     //   永远不执行 ⇒ 退码读成 NaN ⇒ "拿不到退码 —— 这一条不算证过"（今天连撞两次：
     //   第一次是 `|| exit 9` 把"台子自己判红"吞掉，第二次是变异后 VetoKt 不出机器行、`grep || exit 9` 先跑）。
-    //   判"量具坏"不需要 exit：机器行缺失 ⇒ 字符串比对自然不等 ⇒ 一样非零，而负对照会把它分开报出来。
-    gateCmd: 'run harness.VetoKtKt adapted_model --want=org.lineageos.etar,com.fbclient.app > bench/reg/veto_mut.txt 2>&1; ' +
-      'run harness.AdaptKtKt adapted_model > bench/reg/adapt_mut.txt 2>&1; ' +
-      '[ "$(grep "^VETO " bench/reg/veto_mut.txt)" = "$(cat bench/reg/veto.pin)" ] && ' +
-      '[ "$(grep "^ADAPT " bench/reg/adapt_mut.txt)" = "$(cat bench/reg/adapt.pin)" ]'
+    //   2026-10-22 改成**直接调真闸本体** `adaptgate.sh`（与用例 19 同一刀）：以前这里自己抄了一遍
+    //   "跑台子 + 比 pin"，那证的是抄的那半 —— 那两段的入口门（缺 `adapted_model/`）与"没出机器行=驱动坏了"
+    //   一条也没证过。
+    gateCmd: '. ./adaptgate.sh; veto_gate _mut && adapt_gate _mut'
   },
   {
     // 第 19 闸 96 档：**两条不看基线的断言**必须有牙（2026-10-22）。

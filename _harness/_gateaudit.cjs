@@ -110,3 +110,14 @@ if (central) console.log(`   ${central}`);
 for (const tier of ['无', '注释', '活证据', '脚本', '语义'])
   for (const g of by(tier))
     console.log(`${tier.padEnd(4)} ${g.no.padEnd(7)} ${g.name.slice(0, 20).padEnd(22)} ${(g.ev || '—').slice(0, 74)}\n${' '.repeat(11)}跑：${g.d.slice(0, 96)}`);
+
+// ⚠ **上面这张表不是"所有闸"**：它只扫 `regress.sh` 里的段。判据台之外还有独立的闸，
+//   读这张表的人必须知道有几道不在表里（否则"21 段 / 无 0"会被当成全部账目）。
+//   这一段的每个 ✓/!! 都是**当场看过文件系统**的，不是抄的名字。
+const OUTSIDE = [
+  ['precommit.sh', '_precommit_mut.cjs', '编译 gate：判据台编不到的那些生产源码（提交前后都跑）'],
+];
+for (const [g, mut, what] of OUTSIDE) {
+  if (!has(g)) { console.log(`regress 之外 !! ${g} 不在了 —— 这张表漏报了一道闸`); continue; }
+  console.log(`regress 之外 ✓ ${g} —— ${what}` + (has(mut) ? `（自证台 ${mut}）` : '  !! **没有自证台**'));
+}

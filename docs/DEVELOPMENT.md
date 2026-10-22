@@ -293,6 +293,12 @@ java -cp out;stubs_out;<stdlib> harness.ReplayKt ../_dump.txt captured   # 重�
     `21 ≠ 19/19` 被记成"没能证明那一道闸有牙"。现在用例带 `gateNo`（账本第一列写**闸号**，
     `_gateaudit.cjs` 才认领得到），同一闸的几条证据**各留一行**（去重看"闸号 + 那一段"两件都对上才顶掉）。
     ⇒ 规矩：**"这台子说没牙"和"这道闸真没牙"是两个问题**；先看它停在哪儿、日志第一行是谁说的。
+  - ⚠⚠ **凡是"变异台自己抄一遍"的判定，证到的都只是抄的那半** —— 本仓这条今天走了第四遍（用例 19 抄"跑台子 + 比 pin"，于是第 19 闸后来加的**不看基线**断言一条也没证过）。
+    规矩：**判定本体抽成只有一份的 `*gate.sh`，回归台与变异台 `.` 同一段**。现在的清单（`grep -c` 现量，不是名单）：
+    `_harness/namedfloor.sh`（第七闸，`_namedfloor_mut.cjs` 五条）、`selftestgate.sh`（第二闸）、`corpusgate.sh`（第三段，`_corpusgate_mut.cjs` 四条）、
+    `twobookgate.sh`（第 19 闸，用例 19 + 21）、`adaptgate.sh`（第 8 与第 20 闸：用例 20 改生产那一行，
+    `_adaptgate_mut.cjs` 六条改的是**分母在不在** —— 入口门是输入级的东西，语义变异台永远碰不到它）。
+    用法一律 `. ./X.sh; x_gate [后缀]`，后缀让变异台把输出写到 `*_mut.txt`，**不许覆盖活账本**。
   - 第 19 闸的判定本体同样抽成了只有一份的 `_harness/twobookgate.sh`（`. ./twobookgate.sh; twobook_gate [后缀]`）：
     这一闸除了"与 pin 逐字相同"还有**两条不看基线**的当场断言，而变异台以前自己抄了一遍"跑台子 + 比 pin"，
     那两条它一条也没证过。
