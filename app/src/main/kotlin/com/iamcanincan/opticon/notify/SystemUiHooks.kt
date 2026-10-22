@@ -128,10 +128,12 @@ object SystemUiHooks {
                         val sbn = chain.args.firstOrNull { it is StatusBarNotification } as? StatusBarNotification
                         val ctx = ModuleRuntime.hostContext
                         if (sbn != null && ctx != null) {
-                            val target = runCatching {
-                                ctx.createPackageContext(sbn.packageName, Context.CONTEXT_IGNORE_SECURITY)
-                            }.getOrDefault(ctx)
-                            NotificationIconPatch.patch(sbn, target, "帖")
+                            // 目标上下文按需建：标记/缓存命中时 patch 根本不会碰这个 lambda。
+                            NotificationIconPatch.patch(sbn, "帖") {
+                                runCatching {
+                                    ctx.createPackageContext(sbn.packageName, Context.CONTEXT_IGNORE_SECURITY)
+                                }.getOrDefault(ctx)
+                            }
                         }
                     }.onFailure { ModuleRuntime.logE("onNotificationPosted patch failed", it) }
                     chain.proceed()
@@ -323,13 +325,14 @@ object SystemUiHooks {
                     // CONTEXT_IGNORE_SECURITY 留着不花成本：ActivityThread 是先算
                     // includeCode 再算 securityViolation，标准实现里这里已经用不上它，
                     // 但 ROM 侧的判断改没改我们说不好，留个保险丝。
-                    val targetContext = runCatching {
-                        context.createPackageContext(
-                            sbn.packageName,
-                            Context.CONTEXT_IGNORE_SECURITY
-                        )
-                    }.getOrDefault(context)
-                    NotificationIconPatch.patch(sbn, targetContext, "行")
+                    NotificationIconPatch.patch(sbn, "行") {
+                        runCatching {
+                            context.createPackageContext(
+                                sbn.packageName,
+                                Context.CONTEXT_IGNORE_SECURITY
+                            )
+                        }.getOrDefault(context)
+                    }
                 }.onFailure { ModuleRuntime.logE("inflateViews patch failed", it) }
             }
             chain.proceed()

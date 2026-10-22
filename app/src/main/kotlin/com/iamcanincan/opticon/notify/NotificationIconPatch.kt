@@ -19,13 +19,19 @@ import com.iamcanincan.opticon.runtime.ModuleRuntime
  */
 object NotificationIconPatch {
 
-    fun patch(sbn: StatusBarNotification, context: Context, source: String = "?") {
+    /**
+     * @param contextProvider **按需**创建目标应用的上下文（`createPackageContext` 本身不便宜）。
+     *   标记命中、缓存命中这两条路一次都不该为它付钱 —— 现量它曾经排在标记检查**之前**，
+     *   行钩子每次重绑都白建一个 Context。用提供者而不是现成 Context，就是把这笔钱挪到真正要解码时。
+     */
+    fun patch(sbn: StatusBarNotification, source: String, contextProvider: () -> Context) {
+        val p0 = System.nanoTime()
         try {
             val notification = sbn.notification ?: return
             val pkg = sbn.packageName
             // **处理标记**（2026-10-22 深夜第二版）：两条钩子处理的是**同一份通知**，标记位随
             //   `Notification.extras` 走 —— 行钩子 `inflateViews` 再把这份通知送进来时，一次
-            //   Bundle 查询就放过，不必 decode + 两趟 96² 全图扫描。
+            //   Bundle 查询就放过，不必 decode + 两趟 96² 全图扫描，也不必建目标上下文。
             //   （先试过"按 Bitmap 引用认"，现量一次都没命中，才换成这个通知级的标记。）
             //   只在"已经做过决定"的分支里写（换图成功 / 已适配 / 放弃，**含缓存命中那一支**）；
             //   未解码与无兜底不写 —— 否则一次临时失败会把这份通知永久钉死。
@@ -39,7 +45,11 @@ object NotificationIconPatch {
                 ModuleRuntime.logI("通知补丁 入口 $source $pkg type=${iconType(notification.smallIcon)} 标记=$marked")
             }
             if (marked) {
+                // 快路径单独计时：冷启动那几次首次处理是 ms 级，会把整段均值糊住。
+                // 这一格量的是**从 patch 进门到标记命中返回**（含入口账与 Bundle 查询）。
                 markHits++
+                fastNanos.addAndGet(System.nanoTime() - p0)
+                fastCalls.incrementAndGet()
                 reportCache()
                 return
             }
@@ -57,7 +67,11 @@ object NotificationIconPatch {
             //   且 forceMonochrome 里本来就有同一条 isGrayscale 检查。等于同一件事做两遍、
             //   还多解一次码。删的是重复，不是行为。
             // 只有真的换了才打日志；跳过的情况不打，免得日志里分不清「换了」和「没动」
-            if (forceMonochrome(smallIcon, notification, context, pkg)) {
+            val t0 = System.nanoTime()
+            val changed = forceMonochrome(smallIcon, notification, contextProvider, pkg)
+            workNanos.addAndGet(System.nanoTime() - t0)
+            workCalls.incrementAndGet()
+            if (changed) {
                 ModuleRuntime.logI("patched $pkg $beforeType->${iconType(notification.smallIcon)}")
             }
             // 取框账（30 秒最多一行）：这条改动装在机器上唯一能对外的凭据就在这一行里
@@ -80,7 +94,13 @@ object NotificationIconPatch {
     }
 
 
-    private fun forceMonochrome(smallIcon: Icon, notification: Notification, context: Context, pkg: String): Boolean {
+    private fun forceMonochrome(
+        smallIcon: Icon,
+        notification: Notification,
+        contextProvider: () -> Context,
+        pkg: String
+    ): Boolean {
+        val f0 = System.nanoTime()
         // ① **两级缓存**（2026-10-22 深夜第二版）：同一条通知每次更新都会重新进来，而结论只取决于（包, 资源）。
         //   正向：我们已经造好的那张 Icon，命中直接装回 —— 不重新解码、也不重新合成。
         //   负向：上次判成「已适配 / 放弃」的，这次**连解码都不做** —— 已适配是大多数
@@ -91,23 +111,29 @@ object NotificationIconPatch {
             val hit = shapeCache[cacheKey]
             if (hit != null) {
                 shapeHits++
-                reportCache()
                 // ⚠ **命中也要写标记**：不写的话，这条通知在行钩子那份副本里没有标记
                 //   （现撞：帖路径命中缓存 ⇒ 换上了 type=1 的图却没标记 ⇒ 行钩子照旧重扫两趟）。
                 val applied = IconBitmap.applySmallIcon(hit, notification)
                 if (applied) markPatched(notification)
+                fastNanos.addAndGet(System.nanoTime() - f0)
+                fastCalls.incrementAndGet()
+                reportCache()
                 return applied
             }
             if (skipCache.containsKey(cacheKey)) {
                 skipHits++
-                reportCache()
                 // 同上：结论是"不用动"，但"已经判过"这件事要让行钩子看得见。
                 markPatched(notification)
+                fastNanos.addAndGet(System.nanoTime() - f0)
+                fastCalls.incrementAndGet()
+                reportCache()
                 return false
             }
         }
         // 解不出来也要说话（每包一次）：这是本函数里**唯一没有账**的静默出口，
         //   排查"这家的通知图标为什么没变"时，没有这一行就分不清"没跑""解不出""跳过了"。
+        // ⚠ 目标上下文到这里才建：上面两条缓存命中都不需要它。
+        val context = contextProvider()
         val bitmap = IconBitmap.decode(smallIcon, context) ?: run {
             if (rulerSeen.size < RULER_MAX && rulerSeen.putIfAbsent("未解码 $pkg", true) == null)
                 ModuleRuntime.logI("通知尺 未解码 首见 $pkg")
@@ -216,14 +242,26 @@ object NotificationIconPatch {
     private var cacheMisses = 0
     private var lastCacheReport = 0L
 
-    /** 缓存四档计数的账：60 秒最多一行 —— 没有它，"优化了"与"没优化"在屏幕上分不出。 */
+    /** `forceMonochrome` 的累计耗时：没有这一格，"优化了"只能靠结构推断，没法看它到底落在多少µs。 */
+    private val workNanos = java.util.concurrent.atomic.AtomicLong()
+    private val workCalls = java.util.concurrent.atomic.AtomicLong()
+
+    /** 命中路径（标记 / 形状 / 跳过）单独计时：冷启动的首次处理是 ms 级，别和稳态混在一个均值里。 */
+    private val fastNanos = java.util.concurrent.atomic.AtomicLong()
+    private val fastCalls = java.util.concurrent.atomic.AtomicLong()
+
+    /** 缓存四档计数 + 实际耗时的账：60 秒最多一行 —— 没有它，"优化了"与"没优化"在屏幕上分不出。 */
     private fun reportCache() {
         val now = System.currentTimeMillis()
         if (now - lastCacheReport < 60_000) return
         lastCacheReport = now
+        val calls = workCalls.get()
+        val avgUs = if (calls == 0L) 0L else workNanos.get() / calls / 1000
+        val fast = fastCalls.get()
+        val fastUs = if (fast == 0L) 0L else fastNanos.get() / fast / 1000
         ModuleRuntime.logI(
             "通知补丁 缓存 形状=$shapeHits 跳过=$skipHits 标记=$markHits 未中=$cacheMisses" +
-                " 在册=${shapeCache.size}/${skipCache.size}"
+                " 均=${avgUs}µs($calls) 快=${fastUs}µs($fast) 在册=${shapeCache.size}/${skipCache.size}"
         )
     }
 
