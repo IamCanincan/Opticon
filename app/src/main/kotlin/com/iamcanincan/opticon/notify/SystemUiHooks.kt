@@ -32,6 +32,17 @@ object SystemUiHooks {
     private const val NOTIFICATION_ENTRY =
         "com.android.systemui.statusbar.notification.collection.NotificationEntry"
 
+    /**
+     * 通知**进来**的那一刻（2026-10-22 加）。
+     *
+     * 为什么非它不可：状态栏左上那一排小图标走的是 `StatusBarIconView`，**不是**通知行的 inflate ——
+     *   而且它在通知发布时就建好了，比"行 inflate"早。只挂行的话，状态栏那颗永远是原始图标
+     *   （flyingbirdlite 那个 1×1 就是这么在那里当"一整块"的）。在这里把 `Notification.mSmallIcon`
+     *   改掉，状态栏和通知行**拿到的是同一张**。
+     */
+    private const val NOTIFICATION_LISTENER =
+        "com.android.systemui.statusbar.NotificationListener"
+
     /** 已挂过的方法，防止框架重复回调时重复挂钩 */
     // 线程安全集合：安装路径虽然目前只走主线程，但框架的回调时机不由我们决定，
     // 用并发集合换掉 HashSet，避免万一并发时的静默数据损坏（零成本）。
@@ -52,7 +63,7 @@ object SystemUiHooks {
 
     /** 挂载前会逐个探测这些类是否存在，缺的会打进日志 */
     private val TARGET_CLASSES = listOf(
-        ROW_BINDER_MODERN, ROW_BINDER_LEGACY, NOTIFICATION_ENTRY
+        ROW_BINDER_MODERN, ROW_BINDER_LEGACY, NOTIFICATION_ENTRY, NOTIFICATION_LISTENER
     )
 
     /**
@@ -88,7 +99,50 @@ object SystemUiHooks {
      */
     fun install(module: XposedModule, classLoader: ClassLoader, quiet: Boolean = false): Boolean {
         if (!quiet) reportEnvironment(classLoader)
-        return installRowInflation(module, classLoader)
+        val row = installRowInflation(module, classLoader)
+        // 状态栏那一条（不依赖行钩子；行钩子没装上它也该装上）
+        val posted = installNotificationPosted(module, classLoader)
+        return row || posted
+    }
+
+    /**
+     * 在**通知进来那一刻**把 `Notification.mSmallIcon` 换掉 —— 状态栏那排小图标和通知行
+     * 之后都从同一个字段取值，所以一处改动两处都对。
+     *
+     * 幂等：`NotificationIconPatch.patch` 对"已经是单色"的直接跳过（我们换上去的就是灰度），
+     * 所以它和行钩子同时存在时，第二条只是几微秒的否定判断。
+     */
+    private fun installNotificationPosted(module: XposedModule, classLoader: ClassLoader): Boolean {
+        val cls = MemberLookup.findClass(NOTIFICATION_LISTENER, classLoader) ?: return false
+        var hooked = false
+        for (m in cls.declaredMethods) {
+            if (m.name != "onNotificationPosted") continue
+            if (m.parameterTypes.size != 2) continue
+            if (!StatusBarNotification::class.java.isAssignableFrom(m.parameterTypes[0])) continue
+            val ok = runCatching {
+                m.isAccessible = true
+                module.hook(m).setId("notify:posted").setExceptionMode(EXCEPTION_MODE).intercept { chain ->
+                    runCatching {
+                        val sbn = chain.args.firstOrNull { it is StatusBarNotification } as? StatusBarNotification
+                        val ctx = ModuleRuntime.hostContext
+                        if (sbn != null && ctx != null) {
+                            val target = runCatching {
+                                ctx.createPackageContext(sbn.packageName, Context.CONTEXT_IGNORE_SECURITY)
+                            }.getOrDefault(ctx)
+                            NotificationIconPatch.patch(sbn, target)
+                        }
+                    }.onFailure { ModuleRuntime.logE("onNotificationPosted patch failed", it) }
+                    chain.proceed()
+                }
+            }.onFailure { ModuleRuntime.logE("onNotificationPosted hook failed", it) }.isSuccess
+            if (ok) {
+                ModuleRuntime.logI(
+                    "notify: onNotificationPosted hooked (${m.parameterTypes.joinToString { it.simpleName }})"
+                )
+                hooked = true
+            }
+        }
+        return hooked
     }
 
     /** 装钩期成员解析的结果是否已经报过。只报一次：重试的那 19 轮解析的是同一批成员。 */
