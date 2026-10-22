@@ -639,6 +639,54 @@ fun main() {
       r3 == 1.0, "32×8 在 32×16 上=$r3")
   }
 
+  // ── 32b. 通知小图标：**被补那一族的归一**（2026-10-22，主人"大小还是不太对"+"全都做了"）──
+  //     目标 0.95 = 参照族（框架 stat_*，n=100）尺分布的中位 0.949。已适配那一族不经过这条路径。
+  run {
+    val cfg = android.graphics.Bitmap.Config.ARGB_8888
+    fun block(cw: Int, ch: Int, bw: Int, bh: Int, x: Int, y: Int): android.graphics.Bitmap {
+      val b = android.graphics.Bitmap.createBitmap(cw, ch, cfg)
+      val row = IntArray(bw) { 0xFF101010.toInt() }
+      for (j in 0 until bh) b.setPixels(row, 0, bw, x, y + j, bw, 1)
+      return b
+    }
+    fun bbox(b: android.graphics.Bitmap): IntArray {
+      val px = IntArray(b.width * b.height); b.getPixels(px, 0, b.width, 0, 0, b.width, b.height)
+      var x0 = b.width; var y0 = b.height; var x1 = -1; var y1 = -1
+      for (i in px.indices) {
+        if ((px[i] ushr 24) == 0) continue
+        val x = i % b.width; val y = i / b.width
+        if (x < x0) x0 = x; if (y < y0) y0 = y; if (x > x1) x1 = x; if (y > y1) y1 = y
+      }
+      return intArrayOf(x0, y0, x1 - x0 + 1, y1 - y0 + 1)
+    }
+    val small = block(64, 64, 16, 16, 5, 9)          // 尺 0.25、非中心
+    val r = com.iamcanincan.opticon.notify.IconBitmap.sizeRuler(small)
+    val f = com.iamcanincan.opticon.notify.IconBitmap.fitInk(small, 0.95f)!!
+    val rf = com.iamcanincan.opticon.notify.IconBitmap.sizeRuler(f)
+    val bf = bbox(f)
+    println("         通知归一  原尺=${"%.2f".format(r)} → 出尺=${"%.2f".format(rf)}  出框=${bf[2]}x${bf[3]} 画布=${f.width}x${f.height}")
+    check("通知归一：尺 0.25 的块 → 出图尺 ≈ 0.95（±1 格）", kotlin.math.abs(rf - 0.95) <= 1.0 / 64, "出尺=$rf")
+    // ⚠ 奇数留白做不到"左右完全相等"（61 在 64 里只能一边 1 一边 2）—— 判的是**居中的整数取整**，差 ≤1 格。
+    check("通知归一：方形墨块 → 出图墨框仍方形、且居中（两侧留白差 ≤1 格，整数取整的极限）",
+      kotlin.math.abs(bf[2] - bf[3]) <= 1 &&
+        kotlin.math.abs(bf[0] - (f.width - bf[0] - bf[2])) <= 1 &&
+        kotlin.math.abs(bf[1] - (f.height - bf[1] - bf[3])) <= 1,
+      "框=${bf[2]}x${bf[3]} @(${bf[0]},${bf[1]})")
+    val bar = block(64, 64, 24, 12, 20, 26)
+    val fb = com.iamcanincan.opticon.notify.IconBitmap.fitInk(bar, 0.95f)!!
+    val bb = bbox(fb)
+    check("通知归一：非方形墨（24×12）→ 长边贴 0.95、宽高比不变（2:1，不许拉正）",
+      kotlin.math.abs(com.iamcanincan.opticon.notify.IconBitmap.sizeRuler(fb) - 0.95) <= 1.0 / 64 &&
+        kotlin.math.abs(bb[2].toDouble() / bb[3] - 2.0) <= 0.1,
+      "出框=${bb[2]}x${bb[3]}")
+    val again = com.iamcanincan.opticon.notify.IconBitmap.fitInk(f, 0.95f)
+    check("通知归一：已经在 0.95 上的输入**原样交回**（不重画、逐字节相同 —— 重复处理不抖动）",
+      again === f, "同一对象=${again === f}")
+    check("通知归一：整张透明 → null（调用方按『放弃』走，不交空图）",
+      com.iamcanincan.opticon.notify.IconBitmap.fitInk(android.graphics.Bitmap.createBitmap(24, 24, cfg), 0.95f) == null,
+      "空图必须 null")
+  }
+
   // ── 第三十四组：**量测格子只有一个来源**（2026-10-21，两本账合成一本）──
   //     `IconCropWindow.scanSize` 以前抄在 `MaskedDrawable.measureWindow` 里，染色那支没有份 ——
   //     于是同一条 `PLATE_SUBJECT_MIN=50` 在彩色那本账上标定、由判据那本账去比（装机差 3 个点）。

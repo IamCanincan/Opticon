@@ -7,6 +7,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.Icon
 import android.net.Uri
@@ -630,6 +632,47 @@ object IconBitmap {
         }
         if (x1 < 0) return 0.0
         return maxOf(x1 - x0 + 1, y1 - y0 + 1).toDouble() / maxOf(w, h)
+    }
+
+    /**
+     * 把**墨的外接框长边**缩到 `target × 画布长边`，等比、居中，画布边长保持 `max(w,h)`（方形）。
+     *
+     * 为什么需要它：槽位是 22dp 的 `fitCenter`，所以观感大小 = [sizeRuler] 那个比值。
+     *   参照族（应用自己做好 / 框架 `stat_*`）那 100 张的尺分布是 **0.40–1.00、中位 0.949** ——
+     *   "看着差不多大"只能按**中位**对，不能按"占满整格"对（那会推到参照的上边缘之外）。
+     *   而这一刀**只给"被补"那一族用**：应用自己已经是单色的（`已适配`）一个像素都不许动。
+     *
+     * 幂等性：尺已经等于 target 的输入会原样返回（`scale≈1` 时直接返回输入，不重画）。
+     * 整张透明 / 尺寸非法 → `null`（调用方按"放弃"处理，别交一张空图出去）。
+     */
+    fun fitInk(input: Bitmap, target: Float): Bitmap? {
+        val w = input.width
+        val h = input.height
+        if (w <= 0 || h <= 0 || target <= 0f) return null
+        val px = IntArray(w * h)
+        input.getPixels(px, 0, w, 0, 0, w, h)
+        var x0 = w; var y0 = h; var x1 = -1; var y1 = -1
+        for (i in px.indices) {
+            if ((px[i] ushr 24) == 0) continue
+            val x = i % w; val y = i / w
+            if (x < x0) x0 = x; if (y < y0) y0 = y; if (x > x1) x1 = x; if (y > y1) y1 = y
+        }
+        if (x1 < 0) return null
+        val bw = x1 - x0 + 1
+        val bh = y1 - y0 + 1
+        val side = maxOf(w, h)
+        val scale = (target * side) / maxOf(bw, bh)
+        // 已经落在目标上（±1 格）就别重画：省一次分配，也让"重复处理同一张"逐字节相同。
+        if (kotlin.math.abs(scale - 1f) <= 1f / maxOf(bw, bh)) return input
+        val dw = maxOf(1, (bw * scale).roundToInt())
+        val dh = maxOf(1, (bh * scale).roundToInt())
+        val out = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        val dx = (side - dw) / 2
+        val dy = (side - dh) / 2
+        canvas.drawBitmap(input, Rect(x0, y0, x1 + 1, y1 + 1), Rect(dx, dy, dx + dw, dy + dh), paint)
+        return out
     }
 
     /**

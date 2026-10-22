@@ -70,8 +70,13 @@ object NotificationIconPatch {
             noteRuler(pkg, "放弃", bitmap, null)
             return false
         }
-        val applied = IconBitmap.applySmallIcon(Icon.createWithBitmap(monochrome), notification)
-        if (applied) noteRuler(pkg, "被补", bitmap, monochrome)
+        // **大小归一（2026-10-22，主人"通知小图标的大小还是不太对"+"全都做了"）**：
+        //   只动"被补"这一族 —— 墨框长边缩到 [SIZE_TARGET]×画布、居中、等比。
+        //   目标 0.95 的来历：框架 `stat_*` 那 100 张的尺分布中位是 **0.949**（跨 0.40–1.00），
+        //   "和已适配的看着差不多大"只能按中位对。**已适配的被调用方提前 return 了，碰不到这里。**
+        val shaped = IconBitmap.fitInk(monochrome, SIZE_TARGET) ?: monochrome
+        val applied = IconBitmap.applySmallIcon(Icon.createWithBitmap(shaped), notification)
+        if (applied) noteRuler(pkg, "被补", bitmap, shaped)
         return applied
     }
 
@@ -94,5 +99,14 @@ object NotificationIconPatch {
 
     /** 账的上限：这一族不该长成一本无限账（超出后停止扫描，也就不再印）。 */
     private const val RULER_MAX = 200
+
+    /**
+     * 「被补」那一族归一后的目标尺（墨框长边 / 画布长边）。
+     *
+     * 0.95 的来历：框架 `stat_*` 那 100 张（= 应用自己做好、系统直接用的那一族）尺分布
+     * **0.403–1.000、中位 0.949**。取中位而不是"占满整格"：参照族自己就跨 2.5×，
+     * 推到 1.0 会落到它的上边缘之外。已适配那一族**不经过**这个常数（见调用处）。
+     */
+    private const val SIZE_TARGET = 0.95f
     private val rulerSeen = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 }
