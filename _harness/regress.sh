@@ -518,23 +518,14 @@ echo "== 8/8 自画层不透传账 =="
 echo "== 21/21 分母去向账 =="
 node _corpusmap.cjs || exit 1
 
-# —— 第廿二闸：**主体上墨账**（2026-10-22，主人验收时给的判据：「快捷方式都是主体上墨」）。
-# 这句是判据不是感想，而它此前**一把尺都没有**：第 16/19 闸管"哪本账说了算"，不管你把墨铺在哪；
-#   而"把整块盘也上墨"正是 2026-10-08 那次事故的形状（屏幕上多一块实心饼）。
-# 读数用 MaskBench 早就在印的 `框内`（墨的内容框 / 整幅）：只给主体 ⇒ 小；连盘一起上墨 ⇒ 逼近 1.0。
-# 🔴 结构性不变量只压 `shortcut_bit` 那 45 张：它们的**源**框内最大 0.69 ⇒ 交付里出现 ≥0.9 只能是铺了盘。
-#   `shortcut_model` 不受这条管 —— 它有 3 张满幅，而三张的源本身就是满幅图（Settings 电池磁贴 /
-#   Aperture 视频缩略图 / 一个 FCM 图），那是"主体占满整幅"，钉在 pin 里、变了要人看。
-echo "== 22/22 主体上墨账 =="
-INK_RC=0
-run harness.MaskBenchKt --edge=384 "$SHOTBITCORPUS" > bench/reg/ink_sh.txt 2>&1 || INK_RC=$?
-run harness.MaskBenchKt --edge=384 "$SHOTCORPUS" > bench/reg/ink_sm.txt 2>&1 || INK_RC=$?
-[ "$INK_RC" = "0" ] || { echo "!! MaskBench 没跑完（退码 $INK_RC）—— 缺读数不等于干净"; tail -3 bench/reg/ink_sh.txt; tail -3 bench/reg/ink_sm.txt; exit 1; }
-if [ -n "$UPDATE" ]; then
-  node _inkwhere.cjs --sh=bench/reg/ink_sh.txt --sm=bench/reg/ink_sm.txt --pin=bench/reg/inkwhere.pin --update || exit 1
-else
-  node _inkwhere.cjs --sh=bench/reg/ink_sh.txt --sm=bench/reg/ink_sm.txt --pin=bench/reg/inkwhere.pin || exit 1
-fi
+# —— **撤回：第廿二闸「主体上墨账」（2026-10-22 立、当天撤）**。理由不是"它红了"，是**它量错了轴**：
+#   我那时把 `框内` 读成"内容框占画幅"，而它其实是 `fill = kept / boxArea` —— **墨在模型自己那个
+#   内容框里的密度** ⇒ 量的是"这个符号本身有多实"，跟"有没有把盘铺进掩码"不是一件事
+#   （Settings 电池那种实心字形天然 ≥0.9，线稿天然 0.09）。
+#   连那句"源里没有底、所以出现满幅只能是铺了盘"也错了：把 45 张的**源**量了一遍（`_srccbox.ps1`），
+#   贴吧那张就是一个浅色圆角方块 + 符号 —— **源里确实有底**（主人那句"主体加背景"是对的）。
+# ⇒ 主人那条「都是主体上墨」目前**没有直接量它的尺**。宁可把闸撤掉，也不留一把量错轴的尺当证据；
+#   要重开，先拿出"量交付里的墨落在画布哪一带（而不是墨有多密）"的读数。
 
 # ⚠ **收尾自证：平色饼那本账到最后必须还是两条。**（2026-10-20：我加第 18 闸时把它的读数写成
 #   `bench/reg/flat.txt` —— 正是第 3 段在 `>>` 追加的那个文件 —— 于是在最后一步把别人的账本清空，
