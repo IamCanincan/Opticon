@@ -149,12 +149,8 @@ object NotificationIconPatch {
         //   ⚠ 判据必须在**撑之前**取：`decode` 已经把 1×1 画成 96×96 了，事后量尺寸就全是一样大。
         val srcEdge = IconBitmap.resourceEdge(context, smallIcon)
         if (srcEdge in 0..2 || bitmap.width <= 2 || bitmap.height <= 2) {
-            val app = runCatching { context.packageManager.getApplicationIcon(pkg) }.getOrNull()
-            if (app == null) { noteRuler(pkg, "退化无兜底", bitmap, null); return false }
-            val fromApp = IconBitmap.rasterize(app)
-            val monoApp = if (ToneCheck.isGrayscale(fromApp)) fromApp else IconBitmap.monochrome(fromApp)
-            if (monoApp == null) { noteRuler(pkg, "退化无兜底", bitmap, null); return false }
-            val shapedApp = IconBitmap.fitInk(monoApp, SIZE_TARGET) ?: monoApp
+            val shapedApp = appIconFallback(context, pkg)
+            if (shapedApp == null) { noteRuler(pkg, "退化无兜底", bitmap, null); return false }
             val icon = Icon.createWithBitmap(shapedApp)
             if (cacheKey != null) shapeCache[cacheKey] = icon
             val ok = IconBitmap.applySmallIcon(icon, notification)
@@ -191,6 +187,20 @@ object NotificationIconPatch {
         // 压不出像样的形状（全空/全满）就保持原样，别交一张更糟的图出去
         val monochrome = if (plain) base else IconBitmap.monochrome(base)
         if (monochrome == null) {
+            // **再退一步**（2026-10-23 主人问「3 不能优化了吗」）：合成不出剪影（全空/全满）时，
+            //   用应用自己的图标兜底 —— 和 1×1 源退化那一支同一个办法。
+            //   这类原图往往就是一块实心色，留着比换成应用图标更难看。
+            val shapedApp = appIconFallback(context, pkg)
+            if (shapedApp != null) {
+                val icon = Icon.createWithBitmap(shapedApp)
+                if (cacheKey != null) shapeCache[cacheKey] = icon
+                val applied = IconBitmap.applySmallIcon(icon, notification)
+                if (applied) {
+                    noteRuler(pkg, "代用应用图标", bitmap, shapedApp)
+                    markPatched(notification)
+                }
+                return applied
+            }
             noteRuler(pkg, "放弃", bitmap, null)
             if (cacheKey != null) skipCache[cacheKey] = true
             markPatched(notification)
@@ -205,6 +215,20 @@ object NotificationIconPatch {
             markPatched(notification)
         }
         return applied
+    }
+
+    /**
+     * 最后一道兜底：用**应用自己的图标**顶上去（单色化 + 归一 0.95）。
+     *
+     * 两个调用点：① 1×1 源退化（怎么处理都是块）；② 合成不出剪影（全空/全满，原图往往也是一块实心色）。
+     * 返回 null 表示连应用图标都拿不到、或它自己也压不出剪影 —— 调用方按 `退化无兜底` / `放弃` 记。
+     */
+    private fun appIconFallback(context: Context, pkg: String): android.graphics.Bitmap? {
+        val app = runCatching { context.packageManager.getApplicationIcon(pkg) }.getOrNull() ?: return null
+        val fromApp = IconBitmap.rasterize(app)
+        val monoApp = if (ToneCheck.isGrayscale(fromApp)) fromApp else IconBitmap.monochrome(fromApp)
+        if (monoApp == null) return null
+        return IconBitmap.fitInk(monoApp, SIZE_TARGET) ?: monoApp
     }
 
     /**
