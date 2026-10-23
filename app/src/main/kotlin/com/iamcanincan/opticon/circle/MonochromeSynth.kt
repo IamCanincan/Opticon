@@ -239,6 +239,23 @@ internal object MonochromeSynth {
 
   private val synthesized = AtomicInteger(0)
 
+  /**
+   * 命中路径的实际耗时（`render` 进门 → 交缓存那张）。没有这一格，“命中白扫两遍”改没改
+   * 只能靠结构推断；有它才能在真机上看到命中均值的下降。
+   */
+  private val hitNanos = java.util.concurrent.atomic.AtomicLong()
+  private val hitCalls = java.util.concurrent.atomic.AtomicLong()
+
+  private fun noteHitCost(ns: Long) {
+    hitNanos.addAndGet(ns)
+    val n = hitCalls.incrementAndGet()
+    if (n % HIT_LOG_EVERY == 0L) {
+      Log.d(TAG, "Mono: 命中均=${hitNanos.get() / n / 1000}µs ($n 次)")
+    }
+  }
+
+  private const val HIT_LOG_EVERY = 50L
+
   private const val LOG_FIRST = 3
 
   private const val LOG_EVERY = 40
@@ -255,6 +272,7 @@ internal object MonochromeSynth {
   @Synchronized
   fun render(source: Drawable, edge: Int): Bitmap? {
     if (edge <= 0) return null
+    val t0 = System.nanoTime()
     return runCatching {
       val adaptive = source is AdaptiveIconDrawable
       val label = describe(source, adaptive)
@@ -333,8 +351,9 @@ internal object MonochromeSynth {
       // 「只给前景层」= 自适应且背景是纯色盘（`flatten` = false）。见上面那条。
       val fgOnly = adaptive && !flatten
       // 窗口**照量**（几何那一档与日志还要用它，见下），搬不搬由 `win` 定。
-      val winMeasured = if (circle) IconCropWindow.measure(pixels, edge) else null
-      val win = if (fgOnly) null else winMeasured
+      // ⚠ **只在缓存未命中时才需要**：输入（pixels/edge/flags）已经在键里，命中路径白扫一遍 384²。
+      val winMeasured by lazy(LazyThreadSafetyMode.NONE) { if (circle) IconCropWindow.measure(pixels, edge) else null }
+      val win by lazy(LazyThreadSafetyMode.NONE) { if (fgOnly) null else winMeasured }
       // 极性的取数（彩色那一本账）**不在这里算**：它要额外画一张，而这一趟在 `MonoCache.lookup` 之前 ——
       // 命中那条路今天也要付钱就白付了（真机一次重启 1594 次 bind、只有 209 种内容）。
       // 它只在缓存未命中之后、`plateSubject` 那一段现算。见下面 🔴 那段。
@@ -353,7 +372,11 @@ internal object MonochromeSynth {
       //   p90 28，**≥35% 的只有 4 张** —— 贴吧 59 / kazumi 44 / spotify 38 / spotube 44。
       //   而逐张对过：前三张翻不翻**结果完全一样**（spotify 两条路逐字节相同），
       //   只有 spotube 真的变。所以这一条的波及面就是一张，不是 34 张。
-      val plateLayer = adaptive && !flatten && fgPlatePct(pixels) < FG_PLATE_MIN_PCT
+      // ⚠ 同上：也**只在缓存未命中时才求值**。`fgPlatePct` 是又一遍全画布扫描，而
+      //   `plateLayer` 是 `pixels` 的纯函数 ⇒ 命中路径用它 = 白付。
+      val plateLayer by lazy(LazyThreadSafetyMode.NONE) {
+        adaptive && !flatten && fgPlatePct(pixels) < FG_PLATE_MIN_PCT
+      }
       // ⚠ `flatten` 那一路（背景是一张真 drawable）**另起一张只画背景层的**，作为 `under` 一起交
       //   给模型：那一层自己也可能就是一块盘，而合成之后模型只认一块底，另一块会被整片交成墨
       //   （主人 2026-10-11 点名的 translate「半边黑了」就是这一张）。见 [MonochromeMask.build] 的 `盘刀`。
@@ -375,6 +398,7 @@ internal object MonochromeSynth {
         // `mask != null` 时打，"放弃合成"这条 telemetry 就从每 bind 一次塌成每内容一次，
         // 日志上看着像"这台桌面根本不放弃合成"（本仓吃过四次的那类静默）。
         noteCached(edge, label, hit, raster, key)
+        noteHitCost(System.nanoTime() - t0)
         raster.recycle()
         return@runCatching hit.mask
       }
@@ -397,11 +421,13 @@ internal object MonochromeSynth {
       val visT = edge - 2 * inset
       val tOff = if (adaptive) inset else 0
       val tSide = if (adaptive) visT else edge
-      val pxIn = if (win == null) pixels
-        else IconCropWindow.reframe(pixels, edge, edge, win, tOff, tOff, tSide, tSide)
+      // `win` 是 lazy（命中路径不付钱），取到本地才能做 smart cast。
+      val winLocal = win
+      val pxIn = if (winLocal == null) pixels
+        else IconCropWindow.reframe(pixels, edge, edge, winLocal, tOff, tOff, tSide, tSide)
       // `under` 必须一起搬，否则模型看到的合成图与它背后那张层底对不上（真机上整张图标都动了）。
-      val underIn = if (win == null || underPx == null) underPx
-        else IconCropWindow.reframe(underPx, edge, edge, win, tOff, tOff, tSide, tSide)
+      val underIn = if (winLocal == null || underPx == null) underPx
+        else IconCropWindow.reframe(underPx, edge, edge, winLocal, tOff, tOff, tSide, tSide)
       // 裁圆把这张判成"裁不动、整幅缩进圆里、还剩一半以上" → 那块大色块是**图案**，
       // 不是板。极性必须与彩色同意的档位一致，否则同一个模块对同一张图给两个答案。
       // 🔴 **读的是 `winColour`（彩色那一本账），不是 `winMeasured`（2026-10-21，两本账合成一本）**：
