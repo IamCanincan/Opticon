@@ -2373,6 +2373,12 @@ internal object MonochromeMask {
     //  屏幕上被清成一张褪色的画。它们和膜的区别不在颜色、在**形状**：
     //  插画的浅调是**和暗部咬在一起**的（哪儿都挨着墨），膜是**一大片中间没有墨**。
     //  所以再加一把尺：浅底格子离最近的真墨（α≥128）有多远，只清"离墨 > 一圈带宽"的那些。
+    // 「要不要下这一刀」与距离场无关（只读上面两堆直方图），先判；判不过就**连距离场都不建**。
+    fun ok(n: Int, deep: Int) = n * 100 >= total * PLATE_FILM_MIN_PCT && deep in 0..PLATE_FILM_DEEP
+    val filmP = ok(pN, pDeep); val filmD = ok(dN, dDeep)
+    val noDark = (pN < PLATE_FILM_EVID || pDeep in 0..PLATE_FILM_DEEP) &&
+      (dN < PLATE_FILM_EVID || dDeep in 0..PLATE_FILM_DEEP)
+    if (tonal != null && (filmP || filmD) && noDark) {
     val bd0 = (minOf(box.width(), box.height()) / RING_BAND_DIV).coerceIn(2, 8)
     // 只用得到 `dist[i] <= bd0`（见 filmCutOf），所以做**两遍棋盘距离变换**、在 `bd0+1` 截断：
     // 原 BFS 是 8 邻域单位步（棋盘距离），两遍扫描给出同样的 ≤bd0 值；远处一律 bd0+1。
@@ -2452,11 +2458,6 @@ internal object MonochromeMask {
     //   边长上 —— 与 [tonalClass] 那句「框比格小就不算」是同一类错（6a2c318 已经为它修过一次）。
     //  实测：换成分数后 96 档多开 3 张、192 档多开 2 张；384 档只多一张（中国移动 10086 的
     //  2966 格，正好卡在旧的 3000 下面一点点）。
-    fun ok(n: Int, deep: Int) = n * 100 >= total * PLATE_FILM_MIN_PCT && deep in 0..PLATE_FILM_DEEP
-    val filmP = ok(pN, pDeep); val filmD = ok(dN, dDeep)
-    val noDark = (pN < PLATE_FILM_EVID || pDeep in 0..PLATE_FILM_DEEP) &&
-      (dN < PLATE_FILM_EVID || dDeep in 0..PLATE_FILM_DEEP)
-    if (tonal != null && (filmP || filmD) && noDark) {
       if (filmP) cutP = filmCutOf(true)
       if (filmD) cutD = filmCutOf(false)
     }
