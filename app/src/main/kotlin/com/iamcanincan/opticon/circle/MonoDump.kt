@@ -333,42 +333,10 @@ internal object MonoDump {
   private const val MAX_PNG_BYTES = 90 * 1024
   private const val SMALL_EDGE = 192
 
-  /**
-   * 点名包**命中**时也把缓存里那张掩码 + 设备真吃的源图带回来。
-   *
-   * 2026-10-23 Pinduoduo 白心案：离线画得对、设备上每一条都是缓存命中，而命中路径没有像素证据
-   * —— 只能看着 `diag … 缓存=内存` 猜"交的是哪张"。一次进程一张，不进共享预算。
-   */
-  private val cachedDumped = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
-
-  fun dumpCached(label: String, src: Bitmap, mask: Bitmap, bg: Int?) {
-    if (!watched(label)) return
-    if (cachedDumped.putIfAbsent(label, true) != null) return
-    runCatching {
-      val n = 90000 + cachedDumped.size
-      val w = mask.width
-      val h = mask.height
-      val px = IntArray(w * h)
-      mask.getPixels(px, 0, w, 0, 0, w, h)
-      val mb = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-      mb.setPixels(IntArray(px.size) { i -> (px[i] and -0x1000000) or 0x00FFFFFF }, 0, w, 0, 0, w, h)
-      // 铺过底的那一族，带回来的 `src` 必须是**模型吃的那张合成图**（与 [MonochromeSynth] 同一判据）。
-      val over = if (bg != null) {
-        val sp = IntArray(w * h)
-        src.getPixels(sp, 0, w, 0, 0, w, h)
-        if (bgMarks(sp, bg) > 0)
-          Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also {
-            it.setPixels(overBg(sp, bg), 0, w, 0, 0, w, h)
-          }
-        else null
-      } else null
-      emit(n, -1, "src", "缓存命中", pngOf(over ?: src))
-      emit(n, -1, "out", "缓存命中", pngOf(mb))
-      over?.recycle()
-      mb.recycle()
-    }.onFailure { Log.w(TAG, "Mono: 缓存 dump 失败 $label: ${it.message}") }
-  }
-
+  // 命中路径的 `dumpCached`（2026-10-23 为 Pinduoduo 调查加的）已退役：
+  //   命中探针实测它一条要 PNG 编码两张 384² + base64 + 十几行日志，~17ms/次；
+  //   而它只服务于"已经缓存的图标怎么复现"—— 调查结束后，冷路径的 [maybe] 仍带同样的三件，
+  //   且只在每次内容变化后跑一次。见 devlog 2026-10-23「命中 dump 退场」。
   private fun emit(n: Int, id: Int, what: String, why: String, bytes: ByteArray) {
     val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
     val parts = (b64.length + CHUNK - 1) / CHUNK

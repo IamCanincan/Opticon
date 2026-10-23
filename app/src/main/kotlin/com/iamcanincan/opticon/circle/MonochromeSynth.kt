@@ -245,12 +245,23 @@ internal object MonochromeSynth {
    */
   private val hitNanos = java.util.concurrent.atomic.AtomicLong()
   private val hitCalls = java.util.concurrent.atomic.AtomicLong()
+  // 2026-10-23 命中路径账：20 ms/次到底花在**栅格**、**键**还是**其余**（查缓存+日志+dump）。
+  //   实测结论（改前/改后见 devlog）：命中路径的 `dumpCached`（PNG+base64+日志）一条就 ~17ms，
+  //   是"其余"的全部；它退场后其余回到亚毫秒。`ConstantState` 快路当场判死（40 次 0 命中）。
+  private val hitRasterNs = java.util.concurrent.atomic.AtomicLong()
+  private val hitKeyNs = java.util.concurrent.atomic.AtomicLong()
+  private val hitRestNs = java.util.concurrent.atomic.AtomicLong()
 
-  private fun noteHitCost(ns: Long) {
+  private fun noteHitCost(ns: Long, raster: Long, key: Long) {
     hitNanos.addAndGet(ns)
+    hitRasterNs.addAndGet(raster)
+    hitKeyNs.addAndGet(key)
+    hitRestNs.addAndGet(ns - raster - key)
     val n = hitCalls.incrementAndGet()
     if (n % HIT_LOG_EVERY == 0L) {
-      Log.d(TAG, "Mono: 命中均=${hitNanos.get() / n / 1000}µs ($n 次)")
+      Log.d(TAG, "Mono: 命中均=${hitNanos.get() / n / 1000}µs" +
+        " 栅格=${hitRasterNs.get() / n / 1000} 键=${hitKeyNs.get() / n / 1000}" +
+        " 其余=${hitRestNs.get() / n / 1000}")
     }
   }
 
@@ -337,6 +348,7 @@ internal object MonochromeSynth {
       val total = edge * edge
       val pixels = IntArray(total)
       raster.getPixels(pixels, 0, edge, 0, 0, edge, edge)
+      val tRaster = System.nanoTime()
       // 裁圆那个窗口 —— 量在**模型真吃的那一张**上（`raster` 的像素）。只在「强制裁圆」开着时量。
       // 搬的是**算好的墨**（见下面「甲」那一段），判据本身不看这个窗口。
       // ⚠ **「只给前景层」那一支不许搬**（主人 2026-10-16：强制裁圆开着时，单色几何要和彩色完全一样）。
@@ -403,14 +415,15 @@ internal object MonochromeSynth {
       // ⚠ 键算在这里而不是 `forIcon` 里：算键要像素，而拿像素就得先光栅化。所以命中这条路
       //   仍然付一次光栅化（几毫秒），省下的是整条模型（三百多毫秒）。
       val key = MonoCache.keyOf(pixels, underPx, edge, adaptive, flatten, circle)
+      val tKey = System.nanoTime()
       MonoCache.lookup(key, edge)?.let { hit ->
         // 负缓存（`mask == null`）= 这张判据不成立，照旧交 null 给桌面走它自己的路。
         // 出口与不缓存时一模一样，只是不再重算第二遍 —— **两种命中都要留痕**：原来只在
         // `mask != null` 时打，"放弃合成"这条 telemetry 就从每 bind 一次塌成每内容一次，
         // 日志上看着像"这台桌面根本不放弃合成"（本仓吃过四次的那类静默）。
         noteCached(edge, label, hit, raster, key)
-        if (hit.mask != null) MonoDump.dumpCached(label, raster, hit.mask, bgColor)
-        noteHitCost(System.nanoTime() - t0)
+        val now = System.nanoTime()
+        noteHitCost(now - t0, tRaster - t0, tKey - tRaster)
         raster.recycle()
         return@runCatching hit.mask
       }
