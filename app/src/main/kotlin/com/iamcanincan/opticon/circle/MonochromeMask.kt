@@ -798,6 +798,14 @@ internal object MonochromeMask {
     var labL = ShortArray(0)
     var labA = ShortArray(0)
     var labB = ShortArray(0)
+    /** [build] 的 Lab 预计算直接映射缓存：键 = RGB（−1 = 空槽），值 = 三通道。
+     *  映射是纯函数，上一张图留下的条目照样正确，所以**不必按张清空**。 */
+    var labCacheKey = IntArray(0)
+    var labCacheVal = IntArray(0)
+    /** `under` 那一段的三份逐像素预计算（见 [build] 里 `plateInv` 前那一段）。 */
+    var underA = IntArray(0)
+    var underLu = IntArray(0)
+    var underLc = IntArray(0)
     var dist = ShortArray(0)
     var pass = ByteArray(0)
     var plate = ByteArray(0)
@@ -956,6 +964,7 @@ internal object MonochromeMask {
         body = ByteArray(total)
         beta = ShortArray(total); gRefL = ShortArray(total); off = ShortArray(total)
         distT = ShortArray(total)
+        underA = IntArray(total); underLu = IntArray(total); underLc = IntArray(total)
       }
       if (cellR.size < cells) {
         cellR = ShortArray(cells); cellG = ShortArray(cells); cellB = ShortArray(cells)
@@ -1627,11 +1636,32 @@ internal object MonochromeMask {
     // 0) 每个像素的 Lab 只算一次：后面每一轮洪泛、每一次距离都只是查表 + 一次开方。
     //    三通道在一个函数里出（`labChannel` 每遍都重算 fx/fy/fz，三遍就是三倍的钱）。
     val lab3 = IntArray(3)
+    // 平色图标里同一个 RGB 会重复几万次，而 [labInto] 每像素是三组长乘除 + 三次查表。
+    // 直接映射缓存（2048 槽）在这里是纯查表 —— 命中与现算逐位相同。
+    val LC = 2048
+    if (s.labCacheKey.size < LC) {
+      s.labCacheKey = IntArray(LC) { -1 }
+      s.labCacheVal = IntArray(LC * 3)
+    }
+    val labKey = s.labCacheKey
+    val labVal = s.labCacheVal
     for (i in 0 until total) {
-      labInto(pixels[i], lab3)
-      s.labL[i] = lab3[0].toShort()
-      s.labA[i] = lab3[1].toShort()
-      s.labB[i] = lab3[2].toShort()
+      val px = pixels[i] and 0x00FFFFFF
+      val slot = (px * 0x9E3779B1.toInt()) ushr 21
+      if (labKey[slot] == px) {
+        val o = slot * 3
+        s.labL[i] = labVal[o].toShort()
+        s.labA[i] = labVal[o + 1].toShort()
+        s.labB[i] = labVal[o + 2].toShort()
+      } else {
+        labInto(pixels[i], lab3)
+        val o = slot * 3
+        labVal[o] = lab3[0]; labVal[o + 1] = lab3[1]; labVal[o + 2] = lab3[2]
+        labKey[slot] = px
+        s.labL[i] = lab3[0].toShort()
+        s.labA[i] = lab3[1].toShort()
+        s.labB[i] = lab3[2].toShort()
+      }
     }
 
     // **这张里到底有没有空气露出来** —— 按**整张画布**数，不按内容框。
@@ -2094,20 +2124,31 @@ internal object MonochromeMask {
     if (tonal == null && s.rimDomOn) {
       var famInk = 0
       var inkAll = 0
-      for (i in 0 until total) {
-        if (out[i] ushr 24 == 0) continue
-        inkAll++
-        if (s.plate[i] == 0.toByte() && Color.alpha(pixels[i]) >= A_SOLID &&
-          deltaE(s.labL[i].toInt(), s.labA[i].toInt(), s.labB[i].toInt(),
-            s.rimDomL, s.rimDomA, s.rimDomB) <= RIM_FAMILY_DE_WIDE shl 6) famInk++
+      // `deltaE ≤ T` ⇔ `de2 < (T+1)²`；只在内容框里扫（框外 out 恒 0）。
+      val rimT = (RIM_FAMILY_DE_WIDE shl 6).toLong()
+      val rim2 = (rimT + 1) * (rimT + 1)
+      for (y in box.top until box.bottom) {
+        val row = y * w
+        for (x in box.left until box.right) {
+          val i = row + x
+          if (out[i] ushr 24 == 0) continue
+          inkAll++
+          if (s.plate[i] == 0.toByte() && Color.alpha(pixels[i]) >= A_SOLID &&
+            de2(s.labL[i].toInt(), s.labA[i].toInt(), s.labB[i].toInt(),
+              s.rimDomL, s.rimDomA, s.rimDomB) < rim2) famInk++
+        }
       }
       if (famInk * 100 >= total * RIM_KILL_MIN_PCT && (inkAll - famInk) * 100 >= total * RIM_KEEP_MIN_PCT) {
-        for (i in 0 until total) {
-          if (out[i] ushr 24 == 0) continue
-          if (s.plate[i] != 0.toByte() || Color.alpha(pixels[i]) < A_SOLID) continue
-          if (deltaE(s.labL[i].toInt(), s.labA[i].toInt(), s.labB[i].toInt(),
-              s.rimDomL, s.rimDomA, s.rimDomB) <= RIM_FAMILY_DE_WIDE shl 6) {
-            out[i] = 0; s.rimKill++
+        for (y in box.top until box.bottom) {
+          val row = y * w
+          for (x in box.left until box.right) {
+            val i = row + x
+            if (out[i] ushr 24 == 0) continue
+            if (s.plate[i] != 0.toByte() || Color.alpha(pixels[i]) < A_SOLID) continue
+            if (de2(s.labL[i].toInt(), s.labA[i].toInt(), s.labB[i].toInt(),
+                s.rimDomL, s.rimDomA, s.rimDomB) < rim2) {
+              out[i] = 0; s.rimKill++
+            }
           }
         }
       }
@@ -2200,22 +2241,34 @@ internal object MonochromeMask {
     // **目标物计成损伤** —— 第一次跑就是这么撞上 5787→40685 的，归因之后：
     // 未走这一支的 105 行合计 3540（比基线还低 2247），涨的 37145 格 100% 落在 fired 的 8 行上。
     var tonResN = 0; var tonResSum = 0L
-    for (i in 0 until total) {
-      if (Color.alpha(pixels[i]) < 255) continue
-      val a = out[i] ushr 24
-      if (a == 0) continue
-      markN++; markSum += a; if (a >= 250) markTop++
-      // dep 在这里就是判连通用的那一个数（fitGround 交付段之后，非底的格子没被改写过）。
-      // ⚠ **沿细带补上去的那些格（`bandSeen==3`）另记一笔，不混进 [resN]**：
-      //   `残盘` 的定义是"非 plate 且 dep ≤ 零"，而 [propagateBands] 专门补的就是"颜色离底很近、
-      //   但属于一条已成墨的带"的格 —— 混在一起量，这一刀的**目标物**会被计成**损伤**
-      //   （第一次跑就是这么撞上 5787→12327 的：+6540 格 100% 落在 fired 的 8 张上，
-      //   没 fired 的一张没涨）。分开记，`残盘` 回到它原本要防的那件事："底被整片点亮"。
-      if (s.plate[i] == 0.toByte() && (s.distT[i].toInt() and 0xffff) <= ground.zero) {
-        if (tonal != null) { tonResN++; tonResSum += a }
-        else if (i < s.bandSeen.size && s.bandSeen[i] == 3.toByte()) { bfN++; bfSum += a } else { resN++; resSum += a }
+    // 满幅支的两堆浓度直方图（见下面那段解释）；顺手在统计这一趟里摊，不再单扫一遍。
+    val hp = IntArray(8); val hd = IntArray(8)
+    // 只数不透明像素 ⇒ 只扫内容框（框外 α<[A_BOX]）。
+    for (y in box.top until box.bottom) {
+      val row = y * w
+      for (x in box.left until box.right) {
+        val i = row + x
+        val pa = Color.alpha(pixels[i])
+        val a = out[i] ushr 24
+        if (tonal != null && pa >= A_SOLID && a != 0) {
+          if (s.plate[i] != 0.toByte()) hp[(a / 32).coerceAtMost(7)]++
+          else if ((s.distT[i].toInt() and 0xffff) <= ground.zero) hd[(a / 32).coerceAtMost(7)]++
+        }
+        if (pa < 255) continue
+        if (a == 0) continue
+        markN++; markSum += a; if (a >= 250) markTop++
+        // dep 在这里就是判连通用的那一个数（fitGround 交付段之后，非底的格子没被改写过）。
+        // ⚠ **沿细带补上去的那些格（`bandSeen==3`）另记一笔，不混进 [resN]**：
+        //   `残盘` 的定义是"非 plate 且 dep ≤ 零"，而 [propagateBands] 专门补的就是"颜色离底很近、
+        //   但属于一条已成墨的带"的格 —— 混在一起量，这一刀的**目标物**会被计成**损伤**
+        //   （第一次跑就是这么撞上 5787→12327 的：+6540 格 100% 落在 fired 的 8 张上，
+        //   没 fired 的一张没涨）。分开记，`残盘` 回到它原本要防的那件事："底被整片点亮"。
+        if (s.plate[i] == 0.toByte() && (s.distT[i].toInt() and 0xffff) <= ground.zero) {
+          if (tonal != null) { tonResN++; tonResSum += a }
+          else if (i < s.bandSeen.size && s.bandSeen[i] == 3.toByte()) { bfN++; bfSum += a } else { resN++; resSum += a }
+        }
+        else { figN++; figSum += a; if (a >= 250) figTop++ }
       }
-      else { figN++; figSum += a; if (a >= 250) figTop++ }
     }
     // 满幅那一支把「图标自己的底色」也当成一个调子转录了 —— cainiao 那块蓝方底 L*≈50
     // 被映射成 α≈126（分档=3/4(0,126,237,254) 里那个 126 就是它），屏幕上是一层半透明灰，
@@ -2232,14 +2285,7 @@ internal object MonochromeMask {
     // `hd` 0.00~6.90% 对 20.1% 以上；α≥96 与 α≥160 两条线上都分不开。
     // 所以"128"不是挑出来的数，是唯一能把"一层灰"与"底下压着真东西"分开的线 ——
     // 也正好是"半不半透明"那把现成的尺。**必须在任何归零刀之前摊**，摊的是交付原样。
-    val hp = IntArray(8); val hd = IntArray(8)
-    if (tonal != null) for (i in 0 until total) {
-      if (Color.alpha(pixels[i]) < A_SOLID) continue
-      val a0 = out[i] ushr 24
-      if (a0 == 0) continue
-      if (s.plate[i] != 0.toByte()) hp[(a0 / 32).coerceAtMost(7)]++
-      else if ((s.distT[i].toInt() and 0xffff) <= ground.zero) hd[(a0 / 32).coerceAtMost(7)]++
-    }
+    // （两张直方图在统计那一趟里已经摊好，见上面 `hp` / `hd`。）
     var rimGrew = 0
     if (tonal != null && tonal.flat >= PLATE_FLAT_MIN && plateTouchesBorder(pixels, w, h, s)) {
       // ⚠ **只归零"亮的那一半底"，不按 `plate` 一刀切**（2026-10-10，主人报「转转 "不"字没了」）：
@@ -2328,48 +2374,62 @@ internal object MonochromeMask {
     // 为什么换：JFR 上这段 BFS 占冷路径的 9.2%（大块墨时整个画布的带都要入队）；
     // 两遍扫描是 O(n)、无队列、无分配。输出逐字节不变（判据只问 <=bd0）。
     val cap = bd0 + 1
-    val dist = IntArray(total) { cap }
-    for (i in 0 until total) if (Color.alpha(pixels[i]) >= A_SOLID && (out[i] ushr 24) >= 128) dist[i] = 0
-    for (y in 0 until h) {
+    // 值域只有 `0..cap`（cap ≤ 9，见 [bd0]）⇒ 用 Byte：147k 格的数组从 576KB 降到 144KB，
+    // 两遍扫描的访存从"每格一次 L2/内存往返"落到 L2 以内。比较与赋值语义逐位不变。
+    val dist = ByteArray(total) { cap.toByte() }
+    // **只扫内容框**：种子要求源 α≥[A_SOLID]，而框外按 [contentBounds] 的定义 α<[A_BOX]，永远不是种子；
+    // 框外那一圈值恒为 `cap`，`cap+1` 不可能把框内压得更低，所以两遍扫描的框内结果逐位不变。
+    for (y in box.top until box.bottom) {
       val row = y * w
-      for (x in 0 until w) {
+      for (x in box.left until box.right) {
         val i = row + x
-        if (dist[i] == 0) continue
-        var m = dist[i]
-        if (x > 0) m = minOf(m, dist[i - 1] + 1)
-        if (y > 0) {
-          m = minOf(m, dist[i - w] + 1)
-          if (x > 0) m = minOf(m, dist[i - w - 1] + 1)
-          if (x < w - 1) m = minOf(m, dist[i - w + 1] + 1)
-        }
-        dist[i] = m
+        if (Color.alpha(pixels[i]) >= A_SOLID && (out[i] ushr 24) >= 128) dist[i] = 0
       }
     }
-    for (y in h - 1 downTo 0) {
+    for (y in box.top until box.bottom) {
       val row = y * w
-      for (x in w - 1 downTo 0) {
+      for (x in box.left until box.right) {
         val i = row + x
-        if (dist[i] == 0) continue
-        var m = dist[i]
-        if (x < w - 1) m = minOf(m, dist[i + 1] + 1)
-        if (y < h - 1) {
-          m = minOf(m, dist[i + w] + 1)
-          if (x < w - 1) m = minOf(m, dist[i + w + 1] + 1)
-          if (x > 0) m = minOf(m, dist[i + w - 1] + 1)
+        if (dist[i].toInt() == 0) continue
+        var m = dist[i].toInt()
+        if (x > box.left) m = minOf(m, dist[i - 1].toInt() + 1)
+        if (y > box.top) {
+          m = minOf(m, dist[i - w].toInt() + 1)
+          if (x > box.left) m = minOf(m, dist[i - w - 1].toInt() + 1)
+          if (x < box.right - 1) m = minOf(m, dist[i - w + 1].toInt() + 1)
         }
-        dist[i] = m
+        dist[i] = m.toByte()
+      }
+    }
+    for (y in box.bottom - 1 downTo box.top) {
+      val row = y * w
+      for (x in box.right - 1 downTo box.left) {
+        val i = row + x
+        if (dist[i].toInt() == 0) continue
+        var m = dist[i].toInt()
+        if (x < box.right - 1) m = minOf(m, dist[i + 1].toInt() + 1)
+        if (y < box.bottom - 1) {
+          m = minOf(m, dist[i + w].toInt() + 1)
+          if (x < box.right - 1) m = minOf(m, dist[i + w + 1].toInt() + 1)
+          if (x > box.left) m = minOf(m, dist[i + w - 1].toInt() + 1)
+        }
+        dist[i] = m.toByte()
       }
     }
     fun filmCutOf(plateSet: Boolean): Int {
       var n = 0
-      for (i in 0 until total) {
-        if (Color.alpha(pixels[i]) < A_SOLID) continue
-        val on = if (plateSet) s.plate[i] != 0.toByte()
-          else s.plate[i] == 0.toByte() && (s.distT[i].toInt() and 0xffff) <= ground.zero
-        if (!on) continue
-        val a1 = out[i] ushr 24
-        if (a1 == 0 || a1 >= 128 || dist[i] <= bd0) continue
-        out[i] = 0; n++
+      for (y in box.top until box.bottom) {
+        val row = y * w
+        for (x in box.left until box.right) {
+          val i = row + x
+          if (Color.alpha(pixels[i]) < A_SOLID) continue
+          val on = if (plateSet) s.plate[i] != 0.toByte()
+            else s.plate[i] == 0.toByte() && (s.distT[i].toInt() and 0xffff) <= ground.zero
+          if (!on) continue
+          val a1 = out[i] ushr 24
+          if (a1 == 0 || a1 >= 128 || dist[i] <= bd0) continue
+          out[i] = 0; n++
+        }
       }
       return n
     }
@@ -2413,10 +2473,23 @@ internal object MonochromeMask {
     var plateCut = 0; var plateCand = -1; var plateInv = 0; var plateHole = 0
     if (under != null && under.size >= total) {
       val fam = HashMap<Int, Int>(); var solid = 0
+      // 按"同色连续段"摊：`under` 通常是一整块纯色盘，逐像素 `plateKey` + HashMap 读写全是重复。
+      // 累加到段尾再写一次，**每个键第一次出现的位置不变** ⇒ HashMap 的节点顺序（也就是
+      // `maxByOrNull` 的平票顺序）与逐像素写完全一致。
+      var runU = 0; var runK = -1; var runN = 0
       for (i in 0 until total) {
-        if (Color.alpha(under[i]) < A_SOLID) continue
-        solid++; val k = plateKey(under[i]); fam[k] = (fam[k] ?: 0) + 1
+        if (Color.alpha(under[i]) < A_SOLID) {
+          if (runN > 0) { fam[runK] = (fam[runK] ?: 0) + runN; runN = 0 }
+          continue
+        }
+        solid++
+        val u = under[i]
+        if (runK >= 0 && u == runU) { runN++ } else {
+          if (runN > 0) fam[runK] = (fam[runK] ?: 0) + runN
+          runU = u; runK = plateKey(u); runN = 1
+        }
       }
+      if (runN > 0) fam[runK] = (fam[runK] ?: 0) + runN
       val top = fam.maxByOrNull { it.value }
       // ── 「一块被别的卡压着的平色卡 + 卡上画着标记」：卡交墨、标记镂空 ──
       // 主人 2026-10-12 点名 translate：「右半边全黑、只有"文"是镂空的会更好」。
@@ -2439,18 +2512,20 @@ internal object MonochromeMask {
       if (under != null && under.size >= total) {
         // 预计算：这四个循环原来各自重算 `invLuma(under)` / `invLuma(pixels)` 3–4 遍（JFR 上这段
         // 占冷路径 ~12%），`Color.alpha(under)` 也是四遍。值逐位相同。
-        val uA = IntArray(total)
-        val luA = IntArray(total)
-        val lcA = IntArray(total)
+        // 三份数组来自 [Scratch]（每张都新建 3×total 的 IntArray 是白付的分配）；直方图顺手在同一趟里摊。
+        val uA = s.underA
+        val luA = s.underLu
+        val lcA = s.underLc
+        val hL = IntArray(256); var sol = 0
         for (i in 0 until total) {
           val ua = (under[i] ushr 24) and 0xff
           uA[i] = ua
-          if (ua >= A_SOLID) { luA[i] = invLuma(under[i]); lcA[i] = invLuma(pixels[i]) }
-        }
-        val hL = IntArray(256); var sol = 0
-        for (i in 0 until total) {
-          if (uA[i] < A_SOLID) continue
-          sol++; hL[luA[i]]++
+          if (ua >= A_SOLID) {
+            val lu = invLuma(under[i])
+            luA[i] = lu
+            lcA[i] = invLuma(pixels[i])
+            sol++; hL[lu]++
+          }
         }
         val plateL = (0..255).maxByOrNull { hL[it] } ?: -1
         var markN = 0; var covN = 0
@@ -2525,23 +2600,31 @@ internal object MonochromeMask {
       // 逐色计数/求和换 primitive 表（2026-10-23 第二轮 JFR：这段的装箱 HashMap 占冷路径 ~13%）。
       // ⚠ 这段没有 max/平票，遍历顺序不影响结果；有平票的 `fam`（plate 主色）**不换**。
       val cnt = IntIntMap()
-      for (i in 0 until total) {
-        val p = pixels[i]
-        if ((p ushr 24) and 0xff != 255) continue        // 半透明与空气都不参加（AA 自成一族，别爬进去）
-        cnt.inc(p and 0xffffff)
+      // 三个循环都只收不透明像素 ⇒ 只扫内容框。
+      for (y in box.top until box.bottom) {
+        val row = y * w
+        for (x in box.left until box.right) {
+          val p = pixels[row + x]
+          if ((p ushr 24) and 0xff != 255) continue      // 半透明与空气都不参加（AA 自成一族，别爬进去）
+          cnt.inc(p and 0xffffff)
+        }
       }
       var hasBig = false
       cnt.forEach { _, n -> if (n >= famMinN) hasBig = true }
       if (hasBig) {
         val inkN = IntIntMap(); val inkSum = IntIntMap(); val plateN = IntIntMap()
-        for (i in 0 until total) {
-          val p = pixels[i]
-          if ((p ushr 24) and 0xff != 255) continue
-          val key = p and 0xffffff
-          if (cnt.get(key) < famMinN) continue
-          val a = (out[i] ushr 24) and 0xff
-          if (a >= 128) { inkN.inc(key); inkSum.add(key, a) }
-          else plateN.inc(key)
+        for (y in box.top until box.bottom) {
+          val row = y * w
+          for (x in box.left until box.right) {
+            val i = row + x
+            val p = pixels[i]
+            if ((p ushr 24) and 0xff != 255) continue
+            val key = p and 0xffffff
+            if (cnt.get(key) < famMinN) continue
+            val a = (out[i] ushr 24) and 0xff
+            if (a >= 128) { inkN.inc(key); inkSum.add(key, a) }
+            else plateN.inc(key)
+          }
         }
         val tone = IntIntMap()
         var toneAny = false
@@ -2555,8 +2638,10 @@ internal object MonochromeMask {
             }
           }
         }
-        if (toneAny)
-          for (i in 0 until total) {
+        if (toneAny) for (y in box.top until box.bottom) {
+          val row = y * w
+          for (x in box.left until box.right) {
+            val i = row + x
             val p = pixels[i]
             if ((p ushr 24) and 0xff != 255) continue
             val t = tone.get(p and 0xffffff)
@@ -2564,6 +2649,7 @@ internal object MonochromeMask {
             if (((out[i] ushr 24) and 0xff) >= 128) continue
             out[i] = (t shl 24) or 0x00FFFFFF; famLift++
           }
+        }
       }
     }
     // ── 【SepTone】最后一步：把"源色差得开、交付却撞成同一浓度"的那一块挪开（见 [applySepTone]）。
@@ -4027,15 +4113,27 @@ internal object MonochromeMask {
         // 「离这块实的底有多远」的查表：每格找最近的一格全覆盖（β≥250）。一格都没有
         // （H3「参照=空气」那种）就是 -1，外沿那条判断整条不参与 —— 白色剪影不许自吸。
         val cells = g * g
+        // 只遍历"全覆盖格"的名单，坐标预计算 —— 原来 256×256 还带两次 div/mod，名单通常只有几张。
+        // 名单按格号升序、`d2 < bd` 保留第一个 ⇒ 平票时的胜者与原来逐位相同。
+        val fullIdx = IntArray(cells)
+        var nFullCells = 0
+        for (j in 0 until cells) if (s.fCov[j] >= 250) fullIdx[nFullCells++] = j
+        val cellX = IntArray(cells) { it % g }
+        val cellY = IntArray(cells) { it / g }
         val nFull = IntArray(cells) { c ->
-          val cx = c % g
-          val cy = c / g
+          val cx = cellX[c]
+          val cy = cellY[c]
           var best = -1
           var bd = Int.MAX_VALUE
-          for (j in 0 until cells) {
-            if (s.fCov[j] < 250) continue
-            val d2 = (j % g - cx) * (j % g - cx) + (j / g - cy) * (j / g - cy)
-            if (d2 < bd) { bd = d2; best = j }
+          for (u in 0 until nFullCells) {
+            val j = fullIdx[u]
+            val dx = cellX[j] - cx
+            val dy = cellY[j] - cy
+            val d2 = dx * dx + dy * dy
+            if (d2 < bd) {
+              bd = d2; best = j
+              if (d2 == 0) return@IntArray best
+            }
           }
           best
         }
@@ -4052,6 +4150,10 @@ internal object MonochromeMask {
         if (s.rimBand.size < total) s.rimBand = ByteArray(total)
         val rb = s.rimBand
         rb.fill(0, box.top * w + box.left, ((box.bottom - 1) * w + box.right).coerceAtMost(total))
+        // 一格全覆盖的底都没有（H3「参照=空气」那一类）⇒ `nFull` 全是 −1，下面整段都是空转：
+        // `rb` 全是 0、BFS 一个种子都没有、交付那一步的 `rb[i]==2` 恒 false。直接跳过，
+        // `rb` 的清零照旧（那几个位置在交付那一步还会被读）。
+        if (nFullCells > 0) {
         val jnd2 = GROUND_INK_JND.toLong() * GROUND_INK_JND
         for (y in box.top until box.bottom) {
           val row = y * w
@@ -4104,6 +4206,7 @@ internal object MonochromeMask {
               if (rb[j] == 1.toByte()) { rb[j] = 2; q[tail++] = j }
             }
           }
+        }
         }
         for (y in box.top until box.bottom) {
           val row = y * w
@@ -4192,15 +4295,16 @@ internal object MonochromeMask {
           //   应用 —— 一旦把已归入底的像素写成 0，下一轮的 `dist <= tol` 就恒成立，被误吸收的
           //   像素再也回不来（判据台上 三段距离 最近那一档 ΔE 16，第一轮被 TOL_COARSE=18 收进去，
           //   之后每一轮都自己给自己投赞成票，整块就此消失）。那条规则是**出图时**的事。
-          val d = departure(pixels[i], i, s)
-          s.dist[i] = d.toShort()
+          // 两个口径一次算完：`dist` 要含覆盖率的那一个、`hist` 要纯颜色的那一个。
+          val both = departureBoth(pixels[i], i, s)
+          s.dist[i] = (both ushr 16).toShort()
           s.beta[i] = b.toShort()
           s.gRefL[i] = s.fL[cell].toShort()
           if (s.plate[i] != 0.toByte()) {
             // 零点只量参照**自己颜色的散度**，不量它本身的透明度：参照是透明的时候颜色那一段
             // 就不存在，把覆盖率算进散度会把零点抬到 76（判据台上 白底柔光 那一圈光晕），
             // 于是淡的那一层整个被当成噪声扣掉，剩下的断环变成 7 个连通块。
-            s.hist[departure(pixels[i], i, s, withCoverage = false).coerceAtMost(DBUCKETS - 1)]++
+            s.hist[(both and 0xffff).coerceAtMost(DBUCKETS - 1)]++
             nGround++
           }
         }
@@ -4235,11 +4339,12 @@ internal object MonochromeMask {
         for (x in box.left until box.right) {
           val i = row + x
           val cell = if (s.ref[i] >= 0) s.ref[i] else 0
-          s.dist[i] = departure(pixels[i], i, s).toShort()
+          val both = departureBoth(pixels[i], i, s)
+          s.dist[i] = (both ushr 16).toShort()
           s.beta[i] = s.fCov[cell].toShort()
           s.gRefL[i] = s.fL[cell].toShort()
           if (s.plate[i] != 0.toByte()) {
-            s.hist[departure(pixels[i], i, s, withCoverage = false).coerceAtMost(DBUCKETS - 1)]++
+            s.hist[(both and 0xffff).coerceAtMost(DBUCKETS - 1)]++
             nGround++
           }
         }
@@ -5023,7 +5128,7 @@ internal object MonochromeMask {
     var mx = 0
     while (head < tail) {
       val c = q[head++]
-      val x = c % boxW; val y = c / boxW
+      val y = c / boxW; val x = c - y * boxW
       for ((dx, dy) in NEIGHBOURS) {
         val nx = x + dx; val ny = y + dy
         if (nx < 0 || ny < 0 || nx >= boxW || ny >= boxH) continue
@@ -5488,6 +5593,18 @@ internal object MonochromeMask {
    *   不需要再动它的色相。
    */
   private fun departure(pixel: Int, i: Int, s: Scratch, withCoverage: Boolean = true, byTop: Boolean = false): Int {
+    val both = departureBoth(pixel, i, s, byTop)
+    return if (withCoverage) both ushr 16 else both and 0xffff
+  }
+
+  /**
+   * [departure] 的"一次算两个"版本：高 16 位是含覆盖率的那一个，低 16 位是不含的那一个。
+   *
+   * 为什么要有它：`fitGround` 每轮对 plate 像素**两个口径都要**（`dist` 存前者、`hist` 摊后者），
+   * 而原先是两次独立调用 —— 同一格参照、同一次 ΔE 开方算了两遍。两个值都 ≤ 510，装得进 16 位。
+   * 公式与 [departure] 逐字相同，后者现在只是从这里取一半。
+   */
+  private fun departureBoth(pixel: Int, i: Int, s: Scratch, byTop: Boolean = false): Int {
     val a = Color.alpha(pixel)
     if (a == 0) return 0
     val cell = if (s.ref[i] >= 0) s.ref[i] else 0
@@ -5521,11 +5638,9 @@ internal object MonochromeMask {
     //
     //   ⚠ 三处公式说明（类文档 / [build] / 本函数 KDoc）必须与这一行**逐字对上**，
     //     它们原先写的是 `a × [(1−β) + β×ΔE/EMAX]` —— 那正是这个陷阱的来源。
-    return if (withCoverage) {
-      (if (a > c) a - c else 0) + a * b * cf / 65025
-    } else {
-      a * b * cf / 65025
-    }
+    val cover = a * b * cf / 65025
+    val cov = (if (a > c) a - c else 0) + cover
+    return (cov shl 16) or cover
   }
 
   /** ΔE 到多少算"完全不像参照"。超过就按这个数截断，再往上的差别交给标定。 */
@@ -5668,8 +5783,14 @@ internal object MonochromeMask {
         if (Color.alpha(pixels[i]) < A_SOLID) { s.pass[i] = 1; continue }
         val l = s.labL[i].toInt(); val a = s.labA[i].toInt(); val b = s.labB[i].toInt()
         var ok = false
+        // `deltaE ≤ tol` ⇔ `de2 < (tol+1)²`（见 [de2]），省掉每族一次开方。
+        val lim = (tol + 1).toLong()
+        val lim2 = lim * lim
         for (c in 0 until fams) {
-          if (deltaE(l, a, b, s.famL[c], s.famA[c], s.famB[c]) <= tol) { ok = true; break }
+          val dl = (l - s.famL[c]).toLong()
+          val da = (a - s.famA[c]).toLong()
+          val db = (b - s.famB[c]).toLong()
+          if (dl * dl + da * da + db * db < lim2) { ok = true; break }
         }
         s.pass[i] = if (ok) 1 else 0
       }
@@ -5690,8 +5811,14 @@ internal object MonochromeMask {
    */
   private fun cellFar(s: Scratch, k: Int, fams: Int, cells: Int): Boolean {
     if (fams <= 0 || k < 0 || k >= cells) return false
+    // `deltaE(..) < T` ⇔ `de2 < T²`（T 为整数；deltaE 是截断后的整数）。省掉每族一次开方。
+    val lim = (SEAM_DIVERGE shl 6).toLong()
+    val lim2 = lim * lim
     for (c in 0 until fams) {
-      if (deltaE(s.fL[k], s.fA[k], s.fB[k], s.famL[c], s.famA[c], s.famB[c]) < SEAM_DIVERGE shl 6) return false
+      val dl = (s.fL[k] - s.famL[c]).toLong()
+      val da = (s.fA[k] - s.famA[c]).toLong()
+      val db = (s.fB[k] - s.famB[c]).toLong()
+      if (dl * dl + da * da + db * db < lim2) return false
     }
     return true
   }
@@ -6238,23 +6365,30 @@ internal object MonochromeMask {
     s.cellTot.fill(0, 0, cells)
     s.fCov.fill(0, 0, cells)
     s.fieldHist.fill(0, 0, cells * 1024)
+    // 列方向的格号与直方图偏移本来就只跟 x 有关，预计算掉每像素一次除法 + 一次乘法。
+    val bw = box.width()
+    val bh = box.height()
+    val cxOf = IntArray(bw) { ((it * g) / bw).coerceAtMost(g - 1) }
+    val atOf = IntArray(bw) { cxOf[it] * 1024 }
     for (y in box.top until box.bottom) {
       val row = y * w
-      val cy = ((y - box.top) * g / box.height()).coerceAtMost(g - 1)
+      val cy = ((y - box.top) * g / bh).coerceAtMost(g - 1)
+      val rowK = cy * g
+      val rowAt = rowK * 1024
       for (x in box.left until box.right) {
         val i = row + x
         if (seed[i] == 0.toByte()) continue
         val p = pixels[i]
-        val cx = ((x - box.left) * g / box.width()).coerceAtMost(g - 1)
-        val k = cy * g + cx
+        val xi = x - box.left
+        val k = rowK + cxOf[xi]
         val a = Color.alpha(p)
         s.cellTot[k]++
         // 覆盖率也进直方图（第 4 个通道）：β 取**中位数**，理由与参照色取中位数是同一条 ——
         // 见下面 [fCov] 那段。均值不许再用，一格里的少数抗锯齿会把整格的参照拖成"半不在"。
-        s.fieldHist[k * 1024 + 768 + a]++
+        s.fieldHist[rowAt + atOf[xi] + 768 + a]++
         // 透明像素的 RGB 是垃圾（非预乘、未定义），不参与定色；它算参照，但不算「参照是什么颜色」。
         if (a < A_SOLID) continue
-        val at = k * 1024
+        val at = rowAt + atOf[xi]
         s.fieldHist[at + ((p shr 16) and 0xff)]++
         s.fieldHist[at + 256 + ((p shr 8) and 0xff)]++
         s.fieldHist[at + 512 + (p and 0xff)]++
