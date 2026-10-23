@@ -2510,41 +2510,45 @@ internal object MonochromeMask {
     val famMinPlate = 25       // 而它还得够大（5×5）才算"看得见的一块"，不然就是噪声记成开火
     var famLift = 0; var famFires = 0
     run {
-      val cnt = HashMap<Int, Int>()
+      // 逐色计数/求和换 primitive 表（2026-10-23 第二轮 JFR：这段的装箱 HashMap 占冷路径 ~13%）。
+      // ⚠ 这段没有 max/平票，遍历顺序不影响结果；有平票的 `fam`（plate 主色）**不换**。
+      val cnt = IntIntMap()
       for (i in 0 until total) {
         val p = pixels[i]
         if ((p ushr 24) and 0xff != 255) continue        // 半透明与空气都不参加（AA 自成一族，别爬进去）
-        val key = p and 0xffffff
-        cnt[key] = (cnt[key] ?: 0) + 1
+        cnt.inc(p and 0xffffff)
       }
-      val big = HashSet<Int>()
-      for ((key, c) in cnt) if (c >= famMinN) big.add(key)
-      if (big.isNotEmpty()) {
-        val inkN = HashMap<Int, Int>(); val inkSum = HashMap<Int, Int>(); val plateN = HashMap<Int, Int>()
+      var hasBig = false
+      cnt.forEach { _, n -> if (n >= famMinN) hasBig = true }
+      if (hasBig) {
+        val inkN = IntIntMap(); val inkSum = IntIntMap(); val plateN = IntIntMap()
         for (i in 0 until total) {
           val p = pixels[i]
           if ((p ushr 24) and 0xff != 255) continue
           val key = p and 0xffffff
-          if (key !in big) continue
+          if (cnt.get(key) < famMinN) continue
           val a = (out[i] ushr 24) and 0xff
-          if (a >= 128) { inkN[key] = (inkN[key] ?: 0) + 1; inkSum[key] = (inkSum[key] ?: 0) + a }
-          else plateN[key] = (plateN[key] ?: 0) + 1
+          if (a >= 128) { inkN.inc(key); inkSum.add(key, a) }
+          else plateN.inc(key)
         }
-        val tone = HashMap<Int, Int>()
-        for (key in big) {
-          val n = cnt[key] ?: 0; val ink = inkN[key] ?: 0; val plate = plateN[key] ?: 0
-          if (n < famMinN || ink * 100 < n * famInkPct || plate * 100 > n * famPlatePct) continue
-          // 少数那一头至少要有**看得见的一块**（25 格 = 5×5，与 `DustKt` 同一条约定）才值得抬：
-          // 真机第一轮里 12306 与混元各只抬了 1 格 —— 那不是「"不"没了」，是噪声在记开火。
-          if (plate < famMinPlate) continue
-          tone[key] = (inkSum[key] ?: 0) / ink.coerceAtLeast(1)
-          famFires++
+        val tone = IntIntMap()
+        var toneAny = false
+        cnt.forEach { key, n ->
+          if (n >= famMinN) {
+            val ink = inkN.get(key); val plate = plateN.get(key)
+            // 条件与原来逐字同向（见上）：多数是墨、少数那头够大且不超过 35%。
+            if (ink * 100 >= n * famInkPct && plate * 100 <= n * famPlatePct && plate >= famMinPlate) {
+              tone.put(key, inkSum.get(key) / ink.coerceAtLeast(1))
+              famFires++; toneAny = true
+            }
+          }
         }
-        if (tone.isNotEmpty())
+        if (toneAny)
           for (i in 0 until total) {
             val p = pixels[i]
             if ((p ushr 24) and 0xff != 255) continue
-            val t = tone[p and 0xffffff] ?: continue
+            val t = tone.get(p and 0xffffff)
+            if (t == 0) continue
             if (((out[i] ushr 24) and 0xff) >= 128) continue
             out[i] = (t shl 24) or 0x00FFFFFF; famLift++
           }
