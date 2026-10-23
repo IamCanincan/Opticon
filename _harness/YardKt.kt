@@ -1,6 +1,7 @@
 package harness
 
 import com.iamcanincan.opticon.circle.MonochromeMask
+import com.iamcanincan.opticon.circle.PlateFog
 import java.awt.Color
 import java.awt.image.BufferedImage
 import java.io.File
@@ -135,19 +136,32 @@ fun main(args: Array<String>) {
     //   （第一版我反过来把设计师那层放大 1.5 倍凑模型，`iouMed` 掉到 0.114 —— 方向错了，越对越差。）
     val ours = if (useModel) toVisible(oursRaw, edge) ?: continue else oursRaw
     val theirs = load(mono, edge)
+    // 源必须在同一几何（可见区）里；`--regions` 与 `--cutPlate` 共用这一份换算。
+    val srcVis = if (useModel) toVisible(inPx, edge) ?: continue else inPx
+    // `--cutPlate=t`：在设计师参照上量**生产那条规则**（纯色盘 + 内部 + 近盘色 + 只压雾）。
+    //   直接调 `PlateFog.cut`（生产同一份），不是台子里另写一条。
+    val plateCutOn = args.firstOrNull { it.startsWith("--cutPlate=") }?.substringAfter("=")?.toIntOrNull()
+    var oursUse = ours
+    if (plateCutOn != null && r.size > 14 && r[14].startsWith("flat")) {
+      val pc = r[14].removePrefix("flat").toIntOrNull(16) ?: 0
+      if (pc != 0) {
+        oursUse = ours.copyOf()
+        val st = PlateFog.cut(oursUse, srcVis, edge, pc, plateCutOn)
+        if (st[0] > 0) println("    〔盘雾〕${r[0]} t=$plateCutOn 区域=${st[0]} 格=${st[1]}")
+      }
+    }
     // `--regions=<tsv>`：把这张图切成颜色区域，逐块记「它长什么样 + 设计师把它涂成墨还是留成底」。
     //   挂在这里而不是另起一台：`ours` 已经过 `toVisible`，源也必须走同一个换算才在同一框架里。
     if (regTo != null) {
-      val srcVis = if (useModel) toVisible(inPx, edge) ?: continue else inPx
       // 盘色/背景层：甲类 = index 的 `bgColor`；乙类 = `_modelbg`（模型吃的那张 under）换算到同一几何。
       // 两者都是运行时拿得到的，不是设计师层。
       val plate = if (r.size > 14 && r[14].startsWith("flat"))
         r[14].removePrefix("flat").toIntOrNull(16) ?: -1 else -1
       val bgVis = if (modelUnder != null && useModel) toVisible(modelUnder, edge) else null
-      regRows += regionRows(r[0], srcVis, ours, theirs, edge, bgVis, if (isJia) plate else -1)
+      regRows += regionRows(r[0], srcVis, oursUse, theirs, edge, bgVis, if (isJia) plate else -1)
     }
-    if (shotDir != null && r[0] in only) shot(shotDir, r[0], inPx, ours, theirs, edge)
-    devs += r[0] to Math.abs(inkShare(ours, edge) - inkShare(theirs, edge)) * 100.0
+    if (shotDir != null && r[0] in only) shot(shotDir, r[0], inPx, oursUse, theirs, edge)
+    devs += r[0] to Math.abs(inkShare(oursUse, edge) - inkShare(theirs, edge)) * 100.0
     // ⚠ 原来只有上面这一行 —— 它量的是**两边各涂了多少墨**，两张毫不相干的遮罩只要墨量相同
     //   就是满分。要拿"像不像人画的"当准，必须先有一把看**位置**的尺子，否则优化出来的是假像。
     var both = 0; var either = 0; var sum = 0L
@@ -160,7 +174,7 @@ fun main(args: Array<String>) {
     var greyN = 0L; var greyBad = 0L; var theirMid = 0L
     var theirTopOurGrey = 0L; var theirEmptyOurGrey = 0L
     for (i in 0 until edge * edge) {
-      val a = (ours[i] ushr 24) and 0xff
+      val a = (oursUse[i] ushr 24) and 0xff
       val b = (theirs[i] ushr 24) and 0xff
       if (a >= 128 || b >= 128) either++
       if (a >= 128 && b >= 128) both++
@@ -187,7 +201,7 @@ fun main(args: Array<String>) {
       if (b in 16..239) theirMid++
     }
     val iou = if (either == 0) 1.0 else both.toDouble() / either
-    val (us, them) = inkShare(ours, edge) * 100.0 to inkShare(theirs, edge) * 100.0
+    val (us, them) = inkShare(oursUse, edge) * 100.0 to inkShare(theirs, edge) * 100.0
     val da = sum.toDouble() / (edge.toLong() * edge)
     ious += r[0] to iou
     shares[r[0]] = us to them

@@ -18,6 +18,7 @@ KCP="$(win "$KC");$(win "$SL");$(win "$CO");$(win "$AN")"
 CP="$(win "$SL");$(win stubs_out)"
 SRC="../app/src/main/kotlin/com/iamcanincan/opticon/circle/MonochromeMask.kt \
      ../app/src/main/kotlin/com/iamcanincan/opticon/circle/SolidBg.kt \
+     ../app/src/main/kotlin/com/iamcanincan/opticon/circle/PlateFog.kt \
      ../app/src/main/kotlin/com/iamcanincan/opticon/circle/IconCropWindow.kt \
      ../app/src/main/kotlin/com/iamcanincan/opticon/circle/MonoKey.kt \
      ../app/src/main/kotlin/com/iamcanincan/opticon/circle/MonoVeto.kt \

@@ -482,6 +482,14 @@ internal object MonochromeSynth {
       // H0 的射程跟着记：见 [noteSynthesized] 那条汇总为什么带它。
       noteH0(out.h0why)
       noteVeto(out.veto)
+      // ── 纯色盘：内部、近盘色、只压雾 → 归零（2026-10-23 第九轮；见 [PlateFog]）──
+      //   `underPx` 整张同一个不透明颜色才开（纯色盘 / `ColorDrawable`）；真背景层（乙类）不走。
+      //   冷路径：命中已在上面返回；这里只在模型算完之后跑一遍 384² 的切块。
+      val fogPlate = if (underPx != null) PlateFog.uniformPlate(underPx) else 0
+      val mask0 = out.mask
+      val fogCut = if (fogPlate != 0 && mask0 != null) PlateFog.cut(mask0, pxIn, edge, fogPlate) else null
+      if (fogCut != null && fogCut[0] > 0)
+        Log.d(TAG, "Mono: 盘雾 $label 归零 ${fogCut[0]} 块 / ${fogCut[1]} 格")
       // 指纹打在判据行上：解不出包名的那一批（快捷方式）在日志里都叫 `?`，没有这个数
       // 就对不上"哪一行判据是哪一个带回来的 PNG"。见 [MonoDump.sigOf]。
       val sig = MonoDump.sigOf(pxIn, edge, edge)
@@ -509,7 +517,9 @@ internal object MonochromeSynth {
           .also { it.setPixels(srcPx, 0, edge, 0, 0, edge, edge) }
         try {
           MonoDump.maybe(id, label, src, pxIn, out.mask, underIn, plateLayer, edge, edge,
-            "${label.substringBefore(' ')}_${sig}${if (variant.isEmpty()) "" else "_$variant"} | ${out.report}${geoTag(win, winMeasured)}", isWatched)
+            "${label.substringBefore(' ')}_${sig}${if (variant.isEmpty()) "" else "_$variant"} | " +
+              "${out.report}${geoTag(win, winMeasured)}" +
+              (if (fogCut != null && fogCut[0] > 0) " 盘雾=${fogCut[0]}/${fogCut[1]}" else ""), isWatched)
         } finally {
           if (src !== raster) src.recycle()
         }

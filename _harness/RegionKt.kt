@@ -1,6 +1,7 @@
 package harness
 
 import com.iamcanincan.opticon.circle.MonochromeMask
+import com.iamcanincan.opticon.circle.PlateFog
 
 /**
  * **把"主体内部那块该不该交成底"变成一张可打分的表**（2026-10-20，KNOWN-LIMITS 两条重开入口指向的那件事）。
@@ -102,48 +103,13 @@ private fun flatInk(src: IntArray, ours: IntArray, edge: Int): String {
   return "〔平块〕平块=$blocks/${cells}格 坡=${slope}块/${slopeCells}格 抬到255多=${raise} 墨当量"
 }
 
-/** 4 位/通道的颜色 bin；α<64 一律记 -1（空气）。两处共用一份，别各抄一遍。 */
-internal fun colorBins(src: IntArray, edge: Int): IntArray {
-  val out = IntArray(src.size)
-  for (i in src.indices) {
-    val p = src[i]
-    val a = (p ushr 24) and 0xff
-    out[i] = if (a < 64) -1
-    else (((p shr 16) and 0xff) / 16 * 256) or (((p shr 8) and 0xff) / 16 * 16) or ((p and 0xff) / 16)
-  }
-  return out
-}
+/** 4 位/通道的颜色 bin。**实现在生产 `PlateFog` 里**（台子只转发，避免两台各切一套块）。 */
+internal fun colorBins(src: IntArray, edge: Int): IntArray = PlateFog.colorBins(src, edge)
 
-/** 同 bin 的 4 邻接连通块。返回 (每格的块号, 各块面积)。 */
-internal fun components(bin: IntArray, edge: Int): Pair<IntArray, ArrayList<Int>> {
-  val n = edge * edge
-  val comp = IntArray(n) { -2 }
-  val areas = ArrayList<Int>()
-  val stack = IntArray(n)
-  for (i in 0 until n) {
-    if (comp[i] != -2) continue
-    val id = areas.size; var sp = 0; var area = 0
-    stack[sp++] = i; comp[i] = id
-    val b = bin[i]
-    while (sp > 0) {
-      val p = stack[--sp]; area++
-      val x = p % edge; val y = p / edge
-      if (x > 0 && comp[p - 1] == -2 && bin[p - 1] == b) { comp[p - 1] = id; stack[sp++] = p - 1 }
-      if (x < edge - 1 && comp[p + 1] == -2 && bin[p + 1] == b) { comp[p + 1] = id; stack[sp++] = p + 1 }
-      if (y > 0 && comp[p - edge] == -2 && bin[p - edge] == b) { comp[p - edge] = id; stack[sp++] = p - edge }
-      if (y < edge - 1 && comp[p + edge] == -2 && bin[p + edge] == b) { comp[p + edge] = id; stack[sp++] = p + edge }
-    }
-    areas += area
-  }
-  return comp to areas
-}
+/** 同 bin 的 4 邻接连通块。**生产 `PlateFog` 那一份。** */
+internal fun components(bin: IntArray, edge: Int): Pair<IntArray, ArrayList<Int>> = PlateFog.components(bin, edge)
 /** 真 ΔE76（[MonochromeMask.labChannel] 三个通道都是**真值 ×64**，与 `carrierDep` 同口径）。 */
-internal fun labDe(p: Int, q: Int): Double {
-  val dl = (MonochromeMask.labChannel(p, 0) - MonochromeMask.labChannel(q, 0)) / 64.0
-  val da = (MonochromeMask.labChannel(p, 1) - MonochromeMask.labChannel(q, 1)) / 64.0
-  val db = (MonochromeMask.labChannel(p, 2) - MonochromeMask.labChannel(q, 2)) / 64.0
-  return Math.sqrt(dl * dl + da * da + db * db)
-}
+internal fun labDe(p: Int, q: Int): Double = PlateFog.labDe(p, q)
 
 /**
  * 逐颜色区域落表。**第一段六个数是 2026-10-20 那一轮的原配**（`面积/触边/离边/离空/明度/饱和/围合`），
@@ -283,58 +249,9 @@ internal fun regionRows(
   return out
 }
 
-/** 每格到最近"空气（bin<0）或画布外"的 8 邻域步数。区域内部判据（`离空 ≥12`）与生产模拟共用这一份。 */
-internal fun distToAir(bin: IntArray, edge: Int): IntArray {
-  val n = edge * edge
-  val dist = IntArray(n) { 1 shl 20 }
-  val q = IntArray(n); var head = 0; var tail = 0
-  for (p in 0 until n) {
-    val x = p % edge; val y = p / edge
-    val outside = x == 0 || y == 0 || x == edge - 1 || y == edge - 1
-    if (bin[p] < 0 || outside) { dist[p] = 0; q[tail++] = p }
-  }
-  while (head < tail) {
-    val p = q[head++]; val x = p % edge; val y = p / edge
-    for (dy in -1..1) for (dx in -1..1) {
-      if (dx == 0 && dy == 0) continue
-      val qx = x + dx; val qy = y + dy
-      if (qx < 0 || qy < 0 || qx >= edge || qy >= edge) continue
-      val q2 = qy * edge + qx
-      if (dist[q2] > dist[p] + 1) { dist[q2] = dist[p] + 1; q[tail++] = q2 }
-    }
-  }
-  return dist
-}
+/** 每格到最近空气/画布外的步数。**生产 `PlateFog` 那一份。** */
+internal fun distToAir(bin: IntArray, edge: Int): IntArray = PlateFog.distToAir(bin, edge)
 
-/**
- * **模拟/候选**：纯色盘上，把"内部（离空≥12）、离盘色 ΔE 小于阈值、当前还是雾（逐格 α<200）"的格归零。
- * 2026-10-23 第九轮：62 对参照上甲类 +5.3k、0 块受伤；乙类净负，**生产里还没落地**。
- * 返回 [归零的区域数, 归零的可疑格数]；只改 [mask] 的 α，不动 RGB。
- */
-internal fun cutFogNearPlate(mask: IntArray, src: IntArray, edge: Int, plate: Int, maxDe: Int): IntArray {
-  val n = edge * edge
-  val bin = colorBins(src, edge)
-  val (comp, areas) = components(bin, edge)
-  val dist = distToAir(bin, edge)
-  val minArea = n * 2 / 1000
-  var regions = 0; var cells = 0
-  for (id in areas.indices) {
-    val area = areas[id]
-    if (area < minArea) continue
-    var deep = 1 shl 20; var de = 0.0; var alpha = 0L
-    for (p in 0 until n) {
-      if (comp[p] != id) continue
-      if (dist[p] < deep) deep = dist[p]
-      de += labDe(src[p], plate)
-      alpha += (mask[p] ushr 24) and 0xff
-    }
-    if (deep < 12 || de / area >= maxDe || alpha / area >= 200) continue
-    var cut = 0
-    for (p in 0 until n) if (comp[p] == id) {
-      val a = (mask[p] ushr 24) and 0xff
-      if (a in 1..199) { mask[p] = mask[p] and 0x00ffffff; cut++ }
-    }
-    if (cut > 0) { regions++; cells += cut }
-  }
-  return intArrayOf(regions, cells)
-}
+/** 纯色盘雾区清理的**模拟入口** —— 直接转发生产的 [PlateFog.cut]，台子上量的就是落地那一份。 */
+internal fun cutFogNearPlate(mask: IntArray, src: IntArray, edge: Int, plate: Int, maxDe: Int): IntArray =
+  PlateFog.cut(mask, src, edge, plate, maxDe)
