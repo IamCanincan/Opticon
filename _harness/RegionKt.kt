@@ -1,5 +1,7 @@
 package harness
 
+import com.iamcanincan.opticon.circle.MonochromeMask
+
 /**
  * **把"主体内部那块该不该交成底"变成一张可打分的表**（2026-10-20，KNOWN-LIMITS 两条重开入口指向的那件事）。
  *
@@ -135,7 +137,33 @@ internal fun components(bin: IntArray, edge: Int): Pair<IntArray, ArrayList<Int>
   }
   return comp to areas
 }
-internal fun regionRows(pkg: String, src: IntArray, ours: IntArray, theirs: IntArray, edge: Int): ArrayList<String> {
+/** 真 ΔE76（[MonochromeMask.labChannel] 三个通道都是**真值 ×64**，与 `carrierDep` 同口径）。 */
+internal fun labDe(p: Int, q: Int): Double {
+  val dl = (MonochromeMask.labChannel(p, 0) - MonochromeMask.labChannel(q, 0)) / 64.0
+  val da = (MonochromeMask.labChannel(p, 1) - MonochromeMask.labChannel(q, 1)) / 64.0
+  val db = (MonochromeMask.labChannel(p, 2) - MonochromeMask.labChannel(q, 2)) / 64.0
+  return Math.sqrt(dl * dl + da * da + db * db)
+}
+
+/**
+ * 逐颜色区域落表。**第一段六个数是 2026-10-20 那一轮的原配**（`面积/触边/离边/离空/明度/饱和/围合`），
+ * 后面八个是 2026-10-23 新加的**运行时可得**候选（不碰设计师那层）：
+ *
+ *   盘同 = 这块有多少格与**盘色**同族（甲类 `ColorDrawable` 用它的颜色；乙类用背景层同位置的颜色）
+ *   盘Δ  = 与盘色的平均 真 ΔE76
+ *   源α  = 源图的平均不透明度
+ *   质心 = 区域质心到**内容质心**的距离（按画布半径归一，0=正中）
+ *   细长 = 周长/(面积×8)（细线/文字高，块状低）
+ *   环Δ  = 区域均色与**外圈邻格均色**的 真 ΔE76
+ *   族占 = **同色族**（同一 4 位/通道 bin）占整张画布的比例 —— 盘通常很大、细节很小
+ *   长宽 = 外接框长边/短边
+ *
+ * [bg] 必须与 [src] **同几何**（可见区）；甲类的纯色盘走 [plate]，乙类传 [bg]。
+ */
+internal fun regionRows(
+  pkg: String, src: IntArray, ours: IntArray, theirs: IntArray, edge: Int,
+  bg: IntArray? = null, plate: Int = -1,
+): ArrayList<String> {
   val n = edge * edge
   // 切块与 bin 都用共用那一份（`colorBins` / `components`）—— 两处各抄一套，
   // 就会出现"两张表的分块不是同一套块"，而那两个数看着完全可以互相解释。
@@ -146,26 +174,16 @@ internal fun regionRows(pkg: String, src: IntArray, ours: IntArray, theirs: IntA
   //   为什么要有它：原来那把 `围合`（外圈邻格里非空气的比例）**当场退化** —— 645 块里 594 块 = 1.00、
   //   只有 49 块 <0.2，AUC 0.504 量的是"这把尺没有量程"，不是"这块包不包住没有信息"。
   //   连续的距离才有分辨率：谁能把"主体内部的一块"和"贴在边缘的一块"分开，看这个数。
-  val distAir = IntArray(n) { 1 shl 20 }
-  run {
-    val q = IntArray(n)
-    var head = 0; var tail = 0
-    for (p in 0 until n) {
-      val x = p % edge; val y = p / edge
-      val outside = x == 0 || y == 0 || x == edge - 1 || y == edge - 1
-      if (bin[p] < 0 || outside) { distAir[p] = 0; q[tail++] = p }
-    }
-    while (head < tail) {
-      val p = q[head++]; val x = p % edge; val y = p / edge
-      for (dy in -1..1) for (dx in -1..1) {
-        if (dx == 0 && dy == 0) continue
-        val qx = x + dx; val qy = y + dy
-        if (qx < 0 || qy < 0 || qx >= edge || qy >= edge) continue
-        val q2 = qy * edge + qx
-        if (distAir[q2] > distAir[p] + 1) { distAir[q2] = distAir[p] + 1; q[tail++] = q2 }
-      }
-    }
+  val distAir = distToAir(bin, edge)
+  // 同色族总覆盖 + 内容质心：这两样运行时都能从源图直接算，不需要设计师层。
+  val binCount = IntArray(4096)
+  var gx = 0.0; var gy = 0.0; var nAll = 0
+  for (p in 0 until n) {
+    val b = bin[p]; if (b < 0) continue
+    binCount[b]++
+    gx += p % edge; gy += p / edge; nAll++
   }
+  if (nAll > 0) { gx /= nAll; gy /= nAll } else { gx = edge / 2.0; gy = edge / 2.0 }
   val out = ArrayList<String>()
   var dropped = 0
   for (id in areas.indices) {
@@ -174,8 +192,15 @@ internal fun regionRows(pkg: String, src: IntArray, ours: IntArray, theirs: IntA
     var x0 = edge; var y0 = edge; var x1 = 0; var y1 = 0
     var touch = 0; var luma = 0L; var sat = 0L; var their = 0L; var our = 0L
     var perim = 0; var enclosed = 0; var deep = 1 shl 20
+    var alphaSum = 0L; var cxSum = 0L; var cySum = 0L
+    var perim4 = 0
+    var plateSame = 0; var plateDen = 0; var plateDe = 0.0
+    var labL = 0L; var labA = 0L; var labB = 0L
+    var ringL = 0L; var ringA = 0L; var ringB = 0L; var ringN = 0
+    var binId = -1
     for (p in 0 until n) {
       if (comp[p] != id) continue
+      if (binId < 0) binId = bin[p]
       val x = p % edge; val y = p / edge
       if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y
       if (x == 0 || y == 0 || x == edge - 1 || y == edge - 1) touch = 1
@@ -185,25 +210,131 @@ internal fun regionRows(pkg: String, src: IntArray, ours: IntArray, theirs: IntA
       sat += maxOf(rr, gg, bb) - minOf(rr, gg, bb)
       their += ((theirs[p] ushr 24) and 0xff).toLong()
       our += ((ours[p] ushr 24) and 0xff).toLong()
+      alphaSum += ((px ushr 24) and 0xff).toLong()
+      cxSum += x; cySum += y
+      labL += MonochromeMask.labChannel(px, 0)
+      labA += MonochromeMask.labChannel(px, 1)
+      labB += MonochromeMask.labChannel(px, 2)
+      // 盘色：甲类 = 纯色盘那一个颜色；乙类 = 背景层同位置的颜色（α<128 的格不算分母）。
+      if (plate >= 0) {
+        plateDen++
+        if (MonochromeMask.plateKey(px) == MonochromeMask.plateKey(plate)) plateSame++
+        plateDe += labDe(px, plate)
+      } else if (bg != null) {
+        val q = bg[p]
+        if (((q ushr 24) and 0xff) >= 128) {
+          plateDen++
+          if (MonochromeMask.plateKey(px) == MonochromeMask.plateKey(q)) plateSame++
+          plateDe += labDe(px, q)
+        }
+      }
       // **围合度**：这块的外圈邻格里，有多少是"图上还有别的东西"（非空气、在画布内）。
       //   1.00 = 完全被别的东西包着（主体内部的一块）；0.00 = 四周都是空气/画布外。
+      //   环Δ 用的是**别的块**（同一块的邻格不算），与围合的"非空气"分母分开。
       var nb = 0; var enc = 0
       for (dy in -1..1) for (dx in -1..1) {
         if (dx == 0 && dy == 0) continue
         val qx = x + dx; val qy = y + dy
         if (qx < 0 || qy < 0 || qx >= edge || qy >= edge) continue
         nb++
-        if (bin[qy * edge + qx] >= 0) enc++
+        val q = qy * edge + qx
+        if (bin[q] >= 0) {
+          enc++
+          if (comp[q] != id) {
+            val rp = src[q]
+            ringL += MonochromeMask.labChannel(rp, 0)
+            ringA += MonochromeMask.labChannel(rp, 1)
+            ringB += MonochromeMask.labChannel(rp, 2)
+            ringN++
+          }
+        }
       }
       perim += nb; enclosed += enc
+      // 真正的**边界**：4 邻域里出到块外的边数。原来的 `perim` 是"邻格总数"（≈8×面积），
+      // 除下来恒等于 1，量不了细不细 —— 2026-10-23 第一版当场退化成常数 1.00。
+      if (x == 0 || comp[p - 1] != id) perim4++
+      if (x == edge - 1 || comp[p + 1] != id) perim4++
+      if (y == 0 || comp[p - edge] != id) perim4++
+      if (y == edge - 1 || comp[p + edge] != id) perim4++
       if (distAir[p] < deep) deep = distAir[p]
     }
+    val ringDe = if (ringN == 0) -1.0 else {
+      val l = labL.toDouble() / area - ringL.toDouble() / ringN
+      val a = labA.toDouble() / area - ringA.toDouble() / ringN
+      val b = labB.toDouble() / area - ringB.toDouble() / ringN
+      Math.sqrt(l * l + a * a + b * b) / 64.0
+    }
+    val platePct = if (plateDen == 0) -1.0 else plateSame * 100.0 / plateDen
+    val plateDeMean = if (plateDen == 0) -1.0 else plateDe / plateDen
+    val cdist = Math.hypot(cxSum.toDouble() / area - gx, cySum.toDouble() / area - gy) / (edge / 2.0) * 100
+    val thin = perim4.toDouble() / area
+    val famPct = if (binId < 0) -1.0 else binCount[binId] * 100.0 / n
+    val aspect = maxOf(x1 - x0 + 1, y1 - y0 + 1).toDouble() / maxOf(1, minOf(x1 - x0 + 1, y1 - y0 + 1))
     out.add(listOf(pkg, id, "%.3f".format(area * 100.0 / n), touch,
       minOf(x0, y0, edge - 1 - x1, edge - 1 - y1), deep,
       "%.0f".format(luma.toDouble() / area), "%.0f".format(sat.toDouble() / area),
       "%.2f".format(if (perim == 0) 0.0 else enclosed.toDouble() / perim),
-      "%.0f".format(their / area.toDouble()), "%.0f".format(our / area.toDouble())).joinToString("\t"))
+      "%.0f".format(their / area.toDouble()), "%.0f".format(our / area.toDouble()),
+      "%.1f".format(alphaSum.toDouble() / area), "%.1f".format(cdist), "%.3f".format(thin),
+      "%.2f".format(ringDe), "%.1f".format(platePct), "%.2f".format(plateDeMean),
+      "%.2f".format(famPct), "%.2f".format(aspect)).joinToString("\t"))
   }
-  if (dropped > 0) out.add("$pkg\t噪点\t$dropped\t-\t-\t-\t-\t-\t-\t-\t-")
+  if (dropped > 0) out.add("$pkg\t噪点\t$dropped\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-")
   return out
+}
+
+/** 每格到最近"空气（bin<0）或画布外"的 8 邻域步数。区域内部判据（`离空 ≥12`）与生产模拟共用这一份。 */
+internal fun distToAir(bin: IntArray, edge: Int): IntArray {
+  val n = edge * edge
+  val dist = IntArray(n) { 1 shl 20 }
+  val q = IntArray(n); var head = 0; var tail = 0
+  for (p in 0 until n) {
+    val x = p % edge; val y = p / edge
+    val outside = x == 0 || y == 0 || x == edge - 1 || y == edge - 1
+    if (bin[p] < 0 || outside) { dist[p] = 0; q[tail++] = p }
+  }
+  while (head < tail) {
+    val p = q[head++]; val x = p % edge; val y = p / edge
+    for (dy in -1..1) for (dx in -1..1) {
+      if (dx == 0 && dy == 0) continue
+      val qx = x + dx; val qy = y + dy
+      if (qx < 0 || qy < 0 || qx >= edge || qy >= edge) continue
+      val q2 = qy * edge + qx
+      if (dist[q2] > dist[p] + 1) { dist[q2] = dist[p] + 1; q[tail++] = q2 }
+    }
+  }
+  return dist
+}
+
+/**
+ * **模拟/候选**：纯色盘上，把"内部（离空≥12）、离盘色 ΔE 小于阈值、当前还是雾（逐格 α<200）"的格归零。
+ * 2026-10-23 第九轮：62 对参照上甲类 +5.3k、0 块受伤；乙类净负，**生产里还没落地**。
+ * 返回 [归零的区域数, 归零的可疑格数]；只改 [mask] 的 α，不动 RGB。
+ */
+internal fun cutFogNearPlate(mask: IntArray, src: IntArray, edge: Int, plate: Int, maxDe: Int): IntArray {
+  val n = edge * edge
+  val bin = colorBins(src, edge)
+  val (comp, areas) = components(bin, edge)
+  val dist = distToAir(bin, edge)
+  val minArea = n * 2 / 1000
+  var regions = 0; var cells = 0
+  for (id in areas.indices) {
+    val area = areas[id]
+    if (area < minArea) continue
+    var deep = 1 shl 20; var de = 0.0; var alpha = 0L
+    for (p in 0 until n) {
+      if (comp[p] != id) continue
+      if (dist[p] < deep) deep = dist[p]
+      de += labDe(src[p], plate)
+      alpha += (mask[p] ushr 24) and 0xff
+    }
+    if (deep < 12 || de / area >= maxDe || alpha / area >= 200) continue
+    var cut = 0
+    for (p in 0 until n) if (comp[p] == id) {
+      val a = (mask[p] ushr 24) and 0xff
+      if (a in 1..199) { mask[p] = mask[p] and 0x00ffffff; cut++ }
+    }
+    if (cut > 0) { regions++; cells += cut }
+  }
+  return intArrayOf(regions, cells)
 }

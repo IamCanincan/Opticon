@@ -142,6 +142,15 @@ fun main(args: Array<String>) {
     //   （`IconCropWindow.polarityOf`），台子默认 false；这一个旗只用来单独摊极性这一维。
     val r = MonochromeMask.build(src, edge, edge, plateLayer, under, trimSubject = trimOn,
       plateIsSubject = args.contains("--plate-subject"))
+    // `--cutPlate=t`：模拟第九轮「纯色盘 · 内部 · 近盘色 · 只压雾 → 归零」的波及面。
+    //   **只在台子上，生产里一行都没有**（甲类参照 +5.3k/0 受伤，乙类净负，尚未落码）。
+    args.firstOrNull { it.startsWith("--cutPlate=") }?.substringAfter("=")?.toIntOrNull()?.let { t ->
+      val plate = solidBg[f.name]
+      if (plate != null && r.mask != null) {
+        val st = cutFogNearPlate(r.mask!!, src, edge, plate, t)
+        println("    〔盘雾〕t=$t 区域=${st[0]} 格=${st[1]}")
+      }
+    }
     // `--raise`：**台子上的模拟，生产一行没动** —— 把"源平色、我们铺了坡"的块抬到它自己的 p90，
     //   然后照常出浓度行 / 〔平块〕行 / `--shot` 预览。用途只有一个：拿眼睛判这 5 张该不该抬。
     if (args.contains("--raise") && r.mask != null) {

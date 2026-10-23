@@ -139,7 +139,12 @@ fun main(args: Array<String>) {
     //   挂在这里而不是另起一台：`ours` 已经过 `toVisible`，源也必须走同一个换算才在同一框架里。
     if (regTo != null) {
       val srcVis = if (useModel) toVisible(inPx, edge) ?: continue else inPx
-      regRows += regionRows(r[0], srcVis, ours, theirs, edge)
+      // 盘色/背景层：甲类 = index 的 `bgColor`；乙类 = `_modelbg`（模型吃的那张 under）换算到同一几何。
+      // 两者都是运行时拿得到的，不是设计师层。
+      val plate = if (r.size > 14 && r[14].startsWith("flat"))
+        r[14].removePrefix("flat").toIntOrNull(16) ?: -1 else -1
+      val bgVis = if (modelUnder != null && useModel) toVisible(modelUnder, edge) else null
+      regRows += regionRows(r[0], srcVis, ours, theirs, edge, bgVis, if (isJia) plate else -1)
     }
     if (shotDir != null && r[0] in only) shot(shotDir, r[0], inPx, ours, theirs, edge)
     devs += r[0] to Math.abs(inkShare(ours, edge) - inkShare(theirs, edge)) * 100.0
@@ -238,7 +243,8 @@ fun main(args: Array<String>) {
   }
   if (regTo != null) {
     File(regTo).writeText(
-      "pkg\treg\t面积%\t触边\t离边\t离空\t明度\t饱和\t围合\t设计师α\t我们α\n" +
+      "pkg\treg\t面积%\t触边\t离边\t离空\t明度\t饱和\t围合\t设计师α\t我们α" +
+        "\t源α\t质心\t细长\t环Δ\t盘同\t盘Δ\t族占\t长宽\n" +
         regRows.joinToString("\n") + "\n")
     println("逐区域已落盘：$regTo（${regRows.size} 行 = 区域 + 每包的噪点行）")
   }
