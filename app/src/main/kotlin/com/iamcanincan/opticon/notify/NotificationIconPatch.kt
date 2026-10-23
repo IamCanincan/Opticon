@@ -40,9 +40,13 @@ object NotificationIconPatch {
             // 没有这一行，"行钩子有没有进来""标记有没有写进去"两件事都只能猜 ——
             // 第一版的标记漏写就是靠它现撞的（帖与行是同一个对象、同一个 extras，却读到 false）。
             // ⚠ **自己一份 64 条上限**，不占 `通知尺` 那 200 行的预算（否则长跑会把主账挤掉）。
-            val entryKey = "$source $pkg ${iconType(notification.smallIcon)} $marked"
-            if (entrySeen.size < ENTRY_MAX && entrySeen.putIfAbsent(entryKey, true) == null) {
-                ModuleRuntime.logI("通知补丁 入口 $source $pkg type=${iconType(notification.smallIcon)} 标记=$marked")
+            //   上限到了之后连键都不再拼 —— 这条在每次 patch 上都会跑，字符串也是钱。
+            if (entrySeen.size < ENTRY_MAX) {
+                val type = iconType(notification.smallIcon)
+                val entryKey = "$source $pkg $type $marked"
+                if (entrySeen.putIfAbsent(entryKey, true) == null) {
+                    ModuleRuntime.logI("通知补丁 入口 $source $pkg type=$type 标记=$marked")
+                }
             }
             if (marked) {
                 // 快路径单独计时：冷启动那几次首次处理是 ms 级，会把整段均值糊住。
@@ -165,7 +169,11 @@ object NotificationIconPatch {
         //   只说明颜色会被重画，不说明字带会消失 —— 挪到颜色判断之后是可见行为变化，不是优化。
         //   真正的热路径优化是第 ① 步的缓存：同一个（包, 资源）只扫这一次。
         val stripped = IconBitmap.stripTextBand(bitmap)
-        if (stripped == null && ToneCheck.isGrayscale(bitmap)) {
+        // ⚠ **只在"没剥字带"这一支复用灰度判决**（2026-10-23）：那一支 `base` 就是 `bitmap` 本身，
+        //   旧写法把它扫了两遍（条件一次、`base` 再一次）。**不能**跨到"剥成功"那一支去复用 ——
+        //   字带本身可能是彩色的，剥掉后整张会从彩色变灰，必须按剥后那张重判。
+        val gray = if (stripped == null) ToneCheck.isGrayscale(bitmap) else false
+        if (stripped == null && gray) {
             // 诊断（每包一次）：把"字带判据"看到的几何打出来 —— 不打印就只能猜它为什么没命中。
             if (rulerSeen.size < RULER_MAX && rulerSeen.putIfAbsent("带诊断 $pkg", true) == null)
                 ModuleRuntime.logI("通知带诊断 $pkg ${IconBitmap.bandDebug(bitmap)}" +
@@ -178,8 +186,10 @@ object NotificationIconPatch {
             return false
         }
         val base = stripped ?: bitmap
+        // 剥成功的那一支按剥后那张重判（理由见上）；没剥的那一支直接用刚才那一次判决。
+        val plain = if (stripped == null) gray else ToneCheck.isGrayscale(base)
         // 压不出像样的形状（全空/全满）就保持原样，别交一张更糟的图出去
-        val monochrome = if (ToneCheck.isGrayscale(base)) base else IconBitmap.monochrome(base)
+        val monochrome = if (plain) base else IconBitmap.monochrome(base)
         if (monochrome == null) {
             noteRuler(pkg, "放弃", bitmap, null)
             if (cacheKey != null) skipCache[cacheKey] = true
