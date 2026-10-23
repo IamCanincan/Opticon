@@ -15,7 +15,9 @@ const names = new Map();   // "p|dump#|what" -> {name,total}
 const parts = new Map();   // "p|dump#|what" -> {pages:{n:b64}}
 const clash = new Set();   // 同一片号来了两份不同内容的组
 for (const l of txt) {
-  let m = l.match(/Mono: dump#(\d+)(?: p=(\w+))? BEGIN id=(\d+) what=(\w+) parts=(\d+) (\S+)/);
+  // `id=-1` = 命中路径的缓存 dump（`MonoDump.dumpCached`）。只认 `\d+` 会让整组静默消失 ——
+  //   2026-10-23 Pinduoduo 白心案里第一次撞上：17:24 明明打了 `dump#90001`，重组结果是 0 张。
+  let m = l.match(/Mono: dump#(\d+)(?: p=(\w+))? BEGIN id=(-?\d+) what=(\w+) parts=(\d+) (\S+)/);
   if (m) { const k = procOf(l, m[2]) + '|' + m[1] + '|' + m[4]; names.set(k, { name: m[6], total: +m[5] }); continue; }
   m = l.match(/Mono: dump#(\d+)(?: p=(\w+))? (\w+) P(\d+)\/(\d+) (\S+)/);
   if (!m) continue;

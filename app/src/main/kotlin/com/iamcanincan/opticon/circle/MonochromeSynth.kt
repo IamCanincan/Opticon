@@ -306,6 +306,11 @@ internal object MonochromeSynth {
       //   那一对 getter 才有的（下面 351 行那处已经在 `adaptive` 分支里，靠智能转换过）。
       val bg = (source as? AdaptiveIconDrawable)?.background
       val bgIsPlate = bg is ColorDrawable || bg is GradientDrawable
+      // 纯色背景的**颜色**也要交给模型（2026-10-23 Pinduoduo 白心案）：那层盘不在前景里，
+      // 但它的颜色会从前景的镂空里透出来 —— 模型拿不到它，就把同色的小物品当成墨、
+      // 把白心当成空气。下面先把它作为 `under` 交进去；当前景自己用到了这个颜色时，
+      // 再把它整块铺到前景底下（见 `bgOn` 那一段与 [bgMarks]）。
+      val bgColor = (bg as? ColorDrawable)?.color
       val flatten = adaptive && !bgIsPlate
       val target = if (adaptive && !flatten) source.foreground else source
       if (target == null) {
@@ -382,8 +387,14 @@ internal object MonochromeSynth {
       //   （主人 2026-10-11 点名的 translate「半边黑了」就是这一张）。见 [MonochromeMask.build] 的 `盘刀`。
       val under = if (flatten && adaptive) rasterizeLayer(source.background, edge) else null
       // 取完像素就回收：这张 384² 的 ARGB 有 590KB，留着要一直活到 `raster` 那两处 recycle 才走。
-      val underPx = under?.let { u -> IntArray(total).also { a -> u.getPixels(a, 0, edge, 0, 0, edge, edge) }
-        .also { u.recycle() } }
+      // ⚠ **纯色背景也要交**（`under` 的一层颜色，不是位图）：桌面把这块底色补在层外，但前景的
+      //   镂空里能看见它 —— 模型没有这块参照时，Pinduoduo 那样"白心 + 同色小物品"会被判反。
+      val underPx = when {
+        under != null -> IntArray(total).also { a -> under.getPixels(a, 0, edge, 0, 0, edge, edge) }
+          .also { under.recycle() }
+        adaptive && bgColor != null -> IntArray(total) { bgColor }
+        else -> null
+      }
       // ── 内容缓存：到这里为止，输入已经全了 ──
       //   掩码是 `(pixels, underPx, edge, adaptive, flatten, circle)` 的纯函数，这六样就是键。
       //   为什么这一层必须存在：桌面**每次 bind 都交一个新实例**（`getConstantState().newDrawable()`），
@@ -398,6 +409,7 @@ internal object MonochromeSynth {
         // `mask != null` 时打，"放弃合成"这条 telemetry 就从每 bind 一次塌成每内容一次，
         // 日志上看着像"这台桌面根本不放弃合成"（本仓吃过四次的那类静默）。
         noteCached(edge, label, hit, raster, key)
+        if (hit.mask != null) MonoDump.dumpCached(label, raster, hit.mask, bgColor)
         noteHitCost(System.nanoTime() - t0)
         raster.recycle()
         return@runCatching hit.mask
@@ -417,14 +429,19 @@ internal object MonochromeSynth {
       //     算完之后由 [intoVisibleArea] 收。**各收一次，不许收两遍。**
       // ⚠ `plateLayer` 仍按**原始像素**判：它问的是"盘在哪一层"，那是图层结构的事，不因放大
       //   而变；而 35% 那条线是在原始取景下摊过分母定的（上面那段），换取景再比 = 拿没标定的尺量。
+      // ── 纯色盘：前景自己用到了盘色 → 先把盘铺进前景，再交模型（2026-10-23 Pinduoduo 白心）──
+      //   判据与量过的波及面见 [bgMarks]；这一遍只在**冷路径**上跑（命中已在上面返回）。
+      //   `plateLayer` 仍按原始 `pixels` 判：它问的是"盘在不在这层里"，与铺底无关。
+      val bgOn = if (adaptive && under == null && bgColor != null) bgMarks(pixels, bgColor) else 0
+      val srcPx = if (bgOn > 0) overBg(pixels, bgColor!!) else pixels
       val inset = visibleInset(edge)
       val visT = edge - 2 * inset
       val tOff = if (adaptive) inset else 0
       val tSide = if (adaptive) visT else edge
       // `win` 是 lazy（命中路径不付钱），取到本地才能做 smart cast。
       val winLocal = win
-      val pxIn = if (winLocal == null) pixels
-        else IconCropWindow.reframe(pixels, edge, edge, winLocal, tOff, tOff, tSide, tSide)
+      val pxIn = if (winLocal == null) srcPx
+        else IconCropWindow.reframe(srcPx, edge, edge, winLocal, tOff, tOff, tSide, tSide)
       // `under` 必须一起搬，否则模型看到的合成图与它背后那张层底对不上（真机上整张图标都动了）。
       val underIn = if (winLocal == null || underPx == null) underPx
         else IconCropWindow.reframe(underPx, edge, edge, winLocal, tOff, tOff, tSide, tSide)
@@ -487,8 +504,15 @@ internal object MonochromeSynth {
         // ⚠ **这条通道看不见甲那一刀**：带的是 `out.mask`，而搬位置发生在它**之后**。两版装机对
         //   dump 里的 PNG 逐张相同（2026-10-15 量过：21/21 same），而屏上 me.ele 已经大了 1.5 倍。
         //   要核对"搬完之后那张"，只有 [noteDiagnosis] 那 8 行 ASCII 缩略图（`_harness/_thumbab.cjs`）。
-        MonoDump.maybe(id, label, raster, pxIn, out.mask, underIn, plateLayer, edge, edge,
-          "${label.substringBefore(' ')}_${sig}${if (variant.isEmpty()) "" else "_$variant"} | ${out.report}${geoTag(win, winMeasured)}", isWatched)
+        // ⚠ 铺过底的那一族要带**合成图**：`pxIn` 与它才是同一张；带原始前景复放出来的是铺底前那张。
+        val src = if (srcPx === pixels) raster else Bitmap.createBitmap(edge, edge, Bitmap.Config.ARGB_8888)
+          .also { it.setPixels(srcPx, 0, edge, 0, 0, edge, edge) }
+        try {
+          MonoDump.maybe(id, label, src, pxIn, out.mask, underIn, plateLayer, edge, edge,
+            "${label.substringBefore(' ')}_${sig}${if (variant.isEmpty()) "" else "_$variant"} | ${out.report}${geoTag(win, winMeasured)}", isWatched)
+        } finally {
+          if (src !== raster) src.recycle()
+        }
       }
       // 可疑的那几张把**原像素**带回来（PNG → base64 → 分片进日志），判据台原样重放。
       // 没有这条通道，"不够细致"永远只能靠猜：他报的应用发的是 vector / webp，台子解不出。

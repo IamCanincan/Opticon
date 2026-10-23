@@ -13,8 +13,17 @@ internal object MonoKey {
   /** FNV-1a 的素数；只求快与分布，不求密码学强度。 */
   private const val FNV_PRIME = 1099511628211L
 
-  /** 文件头：`rowBytes` 与 `edge` 各 4 字节（大端）。见 [decode] 里为什么不能按算的。 */
-  const val HEADER_BYTES = 8
+  /**
+   * 文件头：`rowBytes` 与 `edge` 各 4 字节（大端）+ 1 字节口径版本。见 [decode] 里为什么不能按算的。
+   *
+   * ⚠ **口径版本是缓存失效的唯一开关**（2026-10-23 Pinduoduo 白心）：键只覆盖六个输入，
+   *   表达不了"同样的输入、掩码该换一种"。9 字节头让上一版写下的 8 字节文件在 [decode] 的
+   *   长度检查处直接落空 —— 不读坏数据、也不用清桌面缓存。
+   */
+  const val HEADER_BYTES = 9
+
+  /** 掩码口径版本。**凡是"同样六样输入、交出的掩码该变"的改动都要 +1。** */
+  private const val FORMAT = 2
 
   /**
    * 内容键。**六个输入一个都不能少**：掩码是这六样的纯函数，少一样就是「换了设置还给旧答案」。
@@ -76,6 +85,7 @@ internal object MonoKey {
     val out = ByteArray(HEADER_BYTES + body.size)
     putInt(out, 0, rowBytes)
     putInt(out, 4, edge)
+    out[8] = FORMAT.toByte()
     body.copyInto(out, HEADER_BYTES)
     return out
   }
@@ -88,6 +98,8 @@ internal object MonoKey {
    */
   fun decode(bytes: ByteArray, wantEdge: Int, haveRowBytes: Int): ByteArray? {
     if (bytes.size < HEADER_BYTES) return null
+    // 旧口径的文件（8 字节头）先在这里落空 —— 别让一版前的掩码借同一个键回来。
+    if (bytes[8].toInt() != FORMAT) return null
     val rowBytes = getInt(bytes, 0)
     val edge = getInt(bytes, 4)
     if (edge != wantEdge || edge <= 0 || rowBytes < edge) return null

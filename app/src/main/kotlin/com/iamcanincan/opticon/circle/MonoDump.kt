@@ -32,6 +32,10 @@ internal object MonoDump {
   /** 每进程最多带回来几张。PNG 压完一张十几 KB、六到十八行日志，所以这个数可以比想象中大。 */
   private const val MAX_ICONS = 48
 
+  /** 点名名单的独立张数上限：不受共享预算约束（点名的图标本来就只有那几家）。 */
+  private const val MAX_WATCHED = 60
+  private var watchedSent = 0
+
   /** 一条日志的安全长度：logd 单条约 4000 字节，留足余量免得截断。 */
   private const val CHUNK = 3000
 
@@ -219,7 +223,11 @@ internal object MonoDump {
     plateIsLayer: Boolean, w: Int, h: Int, why: String, watched: Boolean,
   ) {
     // 普通可疑图花到剩 [WATCH_RESERVE_KB] 就停；点名的那张可以花到底。
-    if (sent >= MAX_ICONS || budget - (if (watched) 0 else WATCH_RESERVE_KB) <= 0) {
+    // ⚠ **点名名单只受张数约束、不受共享预算**（2026-10-23 现撞：预算被非点名的吃光，
+    //   Pinduoduo 在 WATCH 里却一次没带回来，日志只剩"不抓 … 预算剩 -37KB"）。
+    val stop = if (watched) watchedSent >= MAX_WATCHED
+      else sent >= MAX_ICONS || budget - WATCH_RESERVE_KB <= 0
+    if (stop) {
       // ⚠ 这一条 else 就是这一版要加的东西：静默 return 让"抓不到"看起来像"没渲染过"。
       if (watched && dropped.add(label))
         Log.w(TAG, "Mono: dump 不抓 $label —— 抓取已停（发了 $sent 张 / 预算剩 ${budget}KB / 上限 $MAX_ICONS 张）")
@@ -248,6 +256,7 @@ internal object MonoDump {
       return
     }
     sent++
+    if (watched) watchedSent++
     val n = sent
     // 复放要还原设备这一次的**输入**，除了像素还得知道两位：`层底`（plateIsLayer）与
     // `层`（这一张到底有没有背景层）。少了后者，"没带 under"就分不清是**它本来没有**还是
@@ -323,6 +332,42 @@ internal object MonoDump {
   /** 超过这个大小就降采样发。 */
   private const val MAX_PNG_BYTES = 90 * 1024
   private const val SMALL_EDGE = 192
+
+  /**
+   * 点名包**命中**时也把缓存里那张掩码 + 设备真吃的源图带回来。
+   *
+   * 2026-10-23 Pinduoduo 白心案：离线画得对、设备上每一条都是缓存命中，而命中路径没有像素证据
+   * —— 只能看着 `diag … 缓存=内存` 猜"交的是哪张"。一次进程一张，不进共享预算。
+   */
+  private val cachedDumped = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+  fun dumpCached(label: String, src: Bitmap, mask: Bitmap, bg: Int?) {
+    if (!watched(label)) return
+    if (cachedDumped.putIfAbsent(label, true) != null) return
+    runCatching {
+      val n = 90000 + cachedDumped.size
+      val w = mask.width
+      val h = mask.height
+      val px = IntArray(w * h)
+      mask.getPixels(px, 0, w, 0, 0, w, h)
+      val mb = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+      mb.setPixels(IntArray(px.size) { i -> (px[i] and -0x1000000) or 0x00FFFFFF }, 0, w, 0, 0, w, h)
+      // 铺过底的那一族，带回来的 `src` 必须是**模型吃的那张合成图**（与 [MonochromeSynth] 同一判据）。
+      val over = if (bg != null) {
+        val sp = IntArray(w * h)
+        src.getPixels(sp, 0, w, 0, 0, w, h)
+        if (bgMarks(sp, bg) > 0)
+          Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also {
+            it.setPixels(overBg(sp, bg), 0, w, 0, 0, w, h)
+          }
+        else null
+      } else null
+      emit(n, -1, "src", "缓存命中", pngOf(over ?: src))
+      emit(n, -1, "out", "缓存命中", pngOf(mb))
+      over?.recycle()
+      mb.recycle()
+    }.onFailure { Log.w(TAG, "Mono: 缓存 dump 失败 $label: ${it.message}") }
+  }
 
   private fun emit(n: Int, id: Int, what: String, why: String, bytes: ByteArray) {
     val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)

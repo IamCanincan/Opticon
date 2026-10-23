@@ -1,6 +1,8 @@
 package harness
 
 import com.iamcanincan.opticon.circle.MonochromeMask
+import com.iamcanincan.opticon.circle.bgMarks
+import com.iamcanincan.opticon.circle.overBg
 import java.awt.image.BufferedImage
 import java.io.File
 import javax.imageio.ImageIO
@@ -101,27 +103,45 @@ fun main(args: Array<String>) {
   val tsv = args.firstOrNull { it.startsWith("--tsv=") }?.substringAfter("=")?.let { File(it) }
   tsv?.writeText("")
   val fgAll = args.contains("--fg")
+  // `--over`：复现/对照生产的"纯色盘铺底"那一步（2026-10-23 Pinduoduo 白心）。
+  //   判据与生产同一份（[bgMarks] / [overBg] + index 的 `bgColor=flatRRGGBB`），不是台子上另抄一套。
+  val over = args.contains("--over")
   // **输入构造（`src` / `isFg` / `plateLayer` / `under`）只有 [Inputs.kt] 那一份。** 以前它抄在
   //   这个 main 里，于是任何想吃同一条路的台子都得再抄一遍 —— 2026-10-19 的 `FaintShotKt` 就是
   //   抄漏了 `plateLayer` 与 `under`，两张图在像素比对里"一格没变"，而判据行 `顶占比 14→34`。
   //   逐张口径的三条理由（index 决定前景层 / `_modelbg` 优先 / 分母剔 preview 与 modelbg）都写在那里。
   val dir = File(args.first { !it.startsWith("--") })
+  // 生产只在 `background is ColorDrawable`（拿得到 bgColor）时合成；语料 index 的 `bgColor=flatRRGGBB`
+  // 就是这一位的记录 —— 用它，别用"under 是不是纯色"猜（真背景层也可能恰好是纯色）。
+  val solidBg = HashMap<String, Int>()
+  File(dir, "index.tsv").takeIf { it.isFile }?.readLines()?.drop(1)?.forEach { l ->
+    val c = l.split('\t')
+    if (c.size >= 15 && c[14].startsWith("flat")) runCatching {
+      solidBg[c[2]] = c[14].removePrefix("flat").toInt(16)
+    }
+  }
   println("=== ${if (inset) "自适应前景（内容缩到中央 61%）" else "非自适应（满幅）"} · edge=$edge ===")
   for (k in cases(dir, edge, inset, fgAll)) {
     val f = k.file
-    val src = k.src
+    val srcRaw = k.src
     val srcSize = k.srcSize
     val t0 = System.nanoTime()
     val isFg = k.isFg
     val plateLayer = k.plateLayer
     val under = k.under
+    // 与生产同一判据：纯色盘 **且** 前景自己用到了盘色（`SolidBg.bgMarks`）才铺底。
+    val bgOn = solidBg[f.name]?.takeIf { over && bgMarks(srcRaw, it) > 0 }
+    val src = if (bgOn != null) overBg(srcRaw, bgOn) else srcRaw
     // `--trim`：把【主形】按生产的口径开一遍 —— 不带 `=all` 时只开名单里那张（与 MonochromeSynth
     //   同一个判法），带 `=all` 则每张都开（用来看那批对照）。**不开这旗时判据台与改动前逐字同口径。**
     val trimArg = args.firstOrNull { it == "--trim" || it.startsWith("--trim=") }
     val trimPkg = f.nameWithoutExtension.substringBefore('_')
     val trimOn = trimArg != null &&
       (trimArg == "--trim=all" || MonochromeMask.TRIM_PKGS.any { it == trimPkg })
-    val r = MonochromeMask.build(src, edge, edge, plateLayer, under, trimSubject = trimOn)
+    // `--plate-subject`：把"盘是图案"的极性直接传给模型。生产这一位由彩色那本账算
+    //   （`IconCropWindow.polarityOf`），台子默认 false；这一个旗只用来单独摊极性这一维。
+    val r = MonochromeMask.build(src, edge, edge, plateLayer, under, trimSubject = trimOn,
+      plateIsSubject = args.contains("--plate-subject"))
     // `--raise`：**台子上的模拟，生产一行没动** —— 把"源平色、我们铺了坡"的块抬到它自己的 p90，
     //   然后照常出浓度行 / 〔平块〕行 / `--shot` 预览。用途只有一个：拿眼睛判这 5 张该不该抬。
     if (args.contains("--raise") && r.mask != null) {
