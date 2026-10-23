@@ -608,3 +608,17 @@
     `通知尺 代用应用图标 源 96x96 尺=100% → 出 96x96 尺=95%`（fbclient）逐字对上预测。
     同轮另落两条兜底：`stripTextBand`（已单色 + 一行字）与 1×1 源退化（`代用应用图标`）；
     同一条通知的重复合成改走形状缓存。来历见 `docs/devlog/2026-10-16.md` 末尾两段。
+
+- **通知小图标：SystemUI 重启后，顶栏那批旧图标要等应用重发一次**（2026-10-23 量过，**不再猜**）。
+  覆盖是两条钩子：通知**进来那一刻**（`onNotificationPosted`，状态栏那排也由此覆盖）
+  ＋ 通知**行重绑**（`inflateViews`）。重启前就在的通知不会重走 `onNotificationPosted`；
+  顶栏图标是在重建条目时画的，行钩子只修通知行。
+  - **试过且全部不响的四个落点**：① 框架 `NotificationListenerService.getActiveNotifications()`
+    （返回处）；② SystemUI 的 final 覆写 `NotificationListenerWithPlugins.getActiveNotifications()`；
+    ③ 重建 runnable `NotificationListener$$ExternalSyntheticLambda0..9.run()`；
+    ④ `NotificationEntry.setSbn(StatusBarNotification)`。
+    时序账排除"装钩太晚"（`onListenerConnected` 在装钩之后才跑），所以是内联 / 更深的
+    Compose 图标管线（`NotificationIconContainer*`）。按"连否三条不再猜"停手，钩子已撤回。
+  - **重开条件**：拿到该 ROM 的 SystemUI 源码/差分，或愿意接受动 Compose 图标管线的风险。
+  - **日常影响**：只在 SystemUI 重启后出现；该应用下一次重发通知即自愈。下拉通知栏时行钩子
+    仍会修好通知行；被补那族（媒体/常驻通知）通常更新频繁，几秒内就自愈。
