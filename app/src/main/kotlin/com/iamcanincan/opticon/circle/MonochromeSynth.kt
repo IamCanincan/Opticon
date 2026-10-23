@@ -252,6 +252,12 @@ internal object MonochromeSynth {
   private val hitKeyNs = java.util.concurrent.atomic.AtomicLong()
   private val hitRestNs = java.util.concurrent.atomic.AtomicLong()
 
+  // 命中路径每次 bind 都要一块 `edge²` 的像素数组（384² = 590KB）。`render` 是 @Synchronized，
+  // 按 size 复用同一块即可；一次桌面启动 ~1600 次 bind，省掉的是同尺寸短命数组的分配与 GC。
+  // ⚠ 数组只在这一次调用里用（取像素 → 键 → 模型/日志），不许被任何异步路径留住。
+  private var scratchPixels: IntArray? = null
+
+
   private fun noteHitCost(ns: Long, raster: Long, key: Long) {
     hitNanos.addAndGet(ns)
     hitRasterNs.addAndGet(raster)
@@ -346,7 +352,8 @@ internal object MonochromeSynth {
       //     而漏接计数正好爬到 3 —— 屏幕上他看到的「反下色」。
       //  通知侧不看这个开关（那边是系统自己上色，不走这条遮罩路径）。
       val total = edge * edge
-      val pixels = IntArray(total)
+      val pixels = scratchPixels?.takeIf { it.size == total }
+        ?: IntArray(total).also { scratchPixels = it }
       raster.getPixels(pixels, 0, edge, 0, 0, edge, edge)
       val tRaster = System.nanoTime()
       // 裁圆那个窗口 —— 量在**模型真吃的那一张**上（`raster` 的像素）。只在「强制裁圆」开着时量。
@@ -401,12 +408,13 @@ internal object MonochromeSynth {
       // 取完像素就回收：这张 384² 的 ARGB 有 590KB，留着要一直活到 `raster` 那两处 recycle 才走。
       // ⚠ **纯色背景也要交**（`under` 的一层颜色，不是位图）：桌面把这块底色补在层外，但前景的
       //   镂空里能看见它 —— 模型没有这块参照时，Pinduoduo 那样"白心 + 同色小物品"会被判反。
-      val underPx = when {
-        under != null -> IntArray(total).also { a -> under.getPixels(a, 0, edge, 0, 0, edge, edge) }
+      // 纯色盘的 `under` **按定义**是「整张画布同一个不透明色」：键里只折这个颜色，
+      // 整张 590KB 数组等真未命中再铺（命中路径占 bind 的绝大多数）。
+      val flatUnder = adaptive && under == null && bgColor != null
+      val underPx = if (under != null)
+        IntArray(total).also { a -> under.getPixels(a, 0, edge, 0, 0, edge, edge) }
           .also { under.recycle() }
-        adaptive && bgColor != null -> IntArray(total) { bgColor }
-        else -> null
-      }
+      else null
       // ── 内容缓存：到这里为止，输入已经全了 ──
       //   掩码是 `(pixels, underPx, edge, adaptive, flatten, circle)` 的纯函数，这六样就是键。
       //   为什么这一层必须存在：桌面**每次 bind 都交一个新实例**（`getConstantState().newDrawable()`），
@@ -414,7 +422,8 @@ internal object MonochromeSynth {
       //   同一张图标最多重压 148 次，串行在一把锁上就是 760 秒。见 [MonoCache]。
       // ⚠ 键算在这里而不是 `forIcon` 里：算键要像素，而拿像素就得先光栅化。所以命中这条路
       //   仍然付一次光栅化（几毫秒），省下的是整条模型（三百多毫秒）。
-      val key = MonoCache.keyOf(pixels, underPx, edge, adaptive, flatten, circle)
+      val key = if (flatUnder) MonoKey.keyOfFlat(pixels, bgColor!!, edge, adaptive, flatten, circle)
+        else MonoCache.keyOf(pixels, underPx, edge, adaptive, flatten, circle)
       val tKey = System.nanoTime()
       MonoCache.lookup(key, edge)?.let { hit ->
         // 负缓存（`mask == null`）= 这张判据不成立，照旧交 null 给桌面走它自己的路。
@@ -427,6 +436,8 @@ internal object MonochromeSynth {
         raster.recycle()
         return@runCatching hit.mask
       }
+      // 未命中：纯色盘现在才铺成整张像素（模型与 PlateFog 都要真值）。
+      val underPx0 = if (flatUnder) IntArray(total) { bgColor!! } else underPx
       // 判据吃的是**原样像素**（浓度、分档、盘刀、极性都不受几何影响）；几何只作用在
       // **算完之后**的交付掩码上 —— 这条是今晚量出来的：把重排放到输入侧（模型吃裁好的图），
       // 双线性会让 xbox 换支成一块黑饼、最近邻也会动到 4 张的判据；放到输出侧，14 闸结构上不可能红。
@@ -456,8 +467,8 @@ internal object MonochromeSynth {
       val pxIn = if (winLocal == null) srcPx
         else IconCropWindow.reframe(srcPx, edge, edge, winLocal, tOff, tOff, tSide, tSide)
       // `under` 必须一起搬，否则模型看到的合成图与它背后那张层底对不上（真机上整张图标都动了）。
-      val underIn = if (winLocal == null || underPx == null) underPx
-        else IconCropWindow.reframe(underPx, edge, edge, winLocal, tOff, tOff, tSide, tSide)
+      val underIn = if (winLocal == null || underPx0 == null) underPx0
+        else IconCropWindow.reframe(underPx0, edge, edge, winLocal, tOff, tOff, tSide, tSide)
       // 裁圆把这张判成"裁不动、整幅缩进圆里、还剩一半以上" → 那块大色块是**图案**，
       // 不是板。极性必须与彩色同意的档位一致，否则同一个模块对同一张图给两个答案。
       // 🔴 **读的是 `winColour`（彩色那一本账），不是 `winMeasured`（2026-10-21，两本账合成一本）**：
@@ -498,7 +509,7 @@ internal object MonochromeSynth {
       // ── 纯色盘：内部、近盘色、只压雾 → 归零（2026-10-23 第九轮；见 [PlateFog]）──
       //   `underPx` 整张同一个不透明颜色才开（纯色盘 / `ColorDrawable`）；真背景层（乙类）不走。
       //   冷路径：命中已在上面返回；这里只在模型算完之后跑一遍 384² 的切块。
-      val fogPlate = if (underPx != null) PlateFog.uniformPlate(underPx) else 0
+      val fogPlate = if (underPx0 != null) PlateFog.uniformPlate(underPx0) else 0
       val mask0 = out.mask
       val fogCut = if (fogPlate != 0 && mask0 != null) PlateFog.cut(mask0, pxIn, edge, fogPlate) else null
       if (fogCut != null && fogCut[0] > 0)

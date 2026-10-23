@@ -50,6 +50,27 @@ internal object MonoKey {
     return final(h)
   }
 
+  /**
+   * 纯色 `under` 的内容键：不把整张 `IntArray(total)` 铺出来再逐像素折，直接把那个颜色折进去。
+   *
+   * 为什么可以省：这一支的 `under` **按定义**是「整张画布都是同一个不透明色」（调用方在
+   * [MonochromeSynth.render] 里只在 `bgColor != null` 时走），它本来就只是 `(颜色, 边长)` 的函数。
+   * 键仍覆盖全部六样输入：`edge`、三个标志、`px`、`underColor`（`under` 的长度由 `edge` 决定）。
+   *
+   * ⚠ 与数组那一路用**不同的种子/标记**（`1L shl 33`、tag 6），两条路的键空间不重叠；
+   *   缓存目录按装机身份分，换装即换目录，所以它不会和旧格式的文件撞在一起。
+   */
+  fun keyOfFlat(
+    px: IntArray, underColor: Int, edge: Int, adaptive: Boolean, flatten: Boolean, circle: Boolean,
+  ): Long {
+    var h = edge.toLong() or (1L shl 33)
+    h = mix(h, (if (adaptive) 1L else 0L) or (if (flatten) 2L else 0L) or (if (circle) 4L else 0L))
+    h = fold(h, px, 2L)
+    h = mix(h, 6L shl 40)
+    h = mix(h, underColor.toLong() and 0xffffffffL)
+    return final(h)
+  }
+
   private fun mix(h: Long, v: Long): Long = (h xor v) * FNV_PRIME
 
   /**

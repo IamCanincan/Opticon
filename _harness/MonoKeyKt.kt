@@ -123,6 +123,25 @@ fun main(args: Array<String>) {
       MonoKey.keyOf(px, under, edge, true, true, true))
   }
 
+  // ── ③b 纯色 `under` 的键（`keyOfFlat`）：同样六个输入一位不少、且与数组那一路分开 ──
+  run {
+    val px = imgs[0]
+    val c = 0xfff40009.toInt()
+    val k = MonoKey.keyOfFlat(px, c, edge, true, true, true)
+    check("flat 确定性", k == MonoKey.keyOfFlat(px, c, edge, true, true, true))
+    check("flat edge 进键", MonoKey.keyOfFlat(px, c, edge / 2, true, true, true) != k)
+    check("flat adaptive 进键", MonoKey.keyOfFlat(px, c, edge, false, true, true) != k)
+    check("flat flatten 进键", MonoKey.keyOfFlat(px, c, edge, true, false, true) != k)
+    check("flat circle 进键", MonoKey.keyOfFlat(px, c, edge, true, true, false) != k)
+    check("flat underColor 进键", MonoKey.keyOfFlat(px, c xor 0x00010000, edge, true, true, true) != k)
+    // 一个像素都不能漏
+    val mut = IntArray(px.size).also { px.copyInto(it) }
+    mut[edge * (edge / 2) + edge / 2] = mut[edge * (edge / 2) + edge / 2] xor 1
+    check("flat 单像素敏感", MonoKey.keyOfFlat(mut, c, edge, true, true, true) != k)
+    // 与"把同色铺成整张数组"那一路必须分开：两条路的键空间不重叠
+    check("flat != 数组", k != MonoKey.keyOf(px, IntArray(px.size) { c }, edge, true, true, true))
+  }
+
   // ── ④ 语料两两不撞：这是 64 位哈希在这台机器上唯一能被量的性质 ──
   run {
     val keys = HashMap<Long, Int>()
@@ -134,6 +153,14 @@ fun main(args: Array<String>) {
     }
     check("语料互不撞（${imgs.size} 张）", collide == 0, "撞了 $collide 对")
     println("   互不撞：${imgs.size} 张 → ${keys.size} 个不同的键")
+    // 纯色 under 那一路同样两两不撞（同一个颜色、同一档边长）
+    val flat = HashMap<Long, Int>()
+    var flatCollide = 0
+    imgs.forEachIndexed { i, px ->
+      val kk = MonoKey.keyOfFlat(px, 0xfff40009.toInt(), edge, true, false, true)
+      if (flat.put(kk, i) != null) flatCollide++
+    }
+    check("flat 语料互不撞（${imgs.size} 张）", flatCollide == 0, "撞了 $flatCollide 对")
   }
 
   // ── ⑤ 文件格式：往返必须逐字节相同，六种坏输入六种都要拒 ──
