@@ -1947,6 +1947,16 @@ internal object MonochromeMask {
     var plateInked = 0
     // 同色表 `cDep` 的一格缓存：大片平色里相邻像素反复问同一个键，HashMap 的装箱/查找白付。
     var ckLast = -2; var cvLast: LongArray? = null
+    // 交付循环每像素两次除法（JFR ~4%）：`dep→CURVE` 与 `u→斜坡` 先摊成表，逐字节等价。
+    // dep ∈ 0..65535（distT/Short）；u = ref − L ∈ ±6400，表取 ±8192 足够，越界按原式钳位。
+    // ⚠ 表要 81k 次除法才建得起来：小内容框（<4 万格）用它反而更慢（A/B 里 14 张就是这样），
+    //   所以按框面积开表；小框走原式，一条像素都不改。
+    val tabOn = box.width().toLong() * box.height() >= 40000L
+    val tdTab = if (tabOn)
+      IntArray(65536) { d -> CURVE[((d - ground.zero) * 255 / ground.span).coerceIn(0, 255)] } else null
+    val tlOff = 8192
+    val tlTab = if (tabOn)
+      IntArray(16384) { idx -> ((idx - tlOff - lo) * 255 / spread).coerceIn(0, 255) } else null
     for (y in box.top until box.bottom) {
       val row = y * w
       for (x in box.left until box.right) {
@@ -1973,9 +1983,11 @@ internal object MonochromeMask {
         //   那一族也救不到（淡带 α<64 的 P 中位数同样只有 4，两族在 P 上分不开）。
         //   真剩下的是一小撮可点名的格（P≥64 而 α<64，占全部墨 1.11%）—— 那条路走 [softEdge] 的**资格**，
         //   不走这一条。数与被推翻的三把尺都记在 `docs/devlog/2026-10-16.md`。
-        val td = CURVE[((dep - ground.zero) * 255 / ground.span).coerceIn(0, 255)]
+        val td = if (tdTab != null) tdTab[dep.coerceIn(0, 65535)]
+          else CURVE[((dep - ground.zero) * 255 / ground.span).coerceIn(0, 255)]
         val u = ref - (s.labL[i].toInt() and 0xffff)
-        val tl = ((u - lo) * 255 / spread).coerceIn(0, 255) * pa / 255
+        val tl = if (tlTab != null) tlTab[(u + tlOff).coerceIn(0, 16383)] * pa / 255
+          else ((u - lo) * 255 / spread).coerceIn(0, 255) * pa / 255
         // ⚠ 明暗这一条**必须乘上覆盖率**，距离那条本来就是 `a × […]`（见 departure）。
         //   透明的像素没有"亮度"可言：它的 RGB 未定义，读出来是黑，于是 `u = 参照L − 0` 直接顶格，
         //   按 q 混进去就是**在空气上上墨**。真机抖音量出来：模型上墨的像素里 51.4% 的源 alpha
