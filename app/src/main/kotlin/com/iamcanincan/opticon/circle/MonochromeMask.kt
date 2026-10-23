@@ -307,12 +307,39 @@ internal object MonochromeMask {
     }
   }
 
+  /**
+   * 一次把三通道都算出来。**预计算那条每像素原来调 [labChannel] 三遍**，而每遍都要重算
+   * `fx/fy/fz`（三组线性组合 + 查表）—— 三倍的钱买同一个像素。表达式与 [labChannel] 逐字相同。
+   */
+  internal fun labInto(pixel: Int, out: IntArray) {
+    val lr = LIN[(pixel shr 16) and 0xff]
+    val lg = LIN[(pixel shr 8) and 0xff]
+    val lb = LIN[pixel and 0xff]
+    val fx = FTAB[((lr * 4124 + lg * 3576 + lb * 1805).toLong() * 1024 / DEN_X).toInt().coerceAtMost(2048)]
+    val fy = FTAB[((lr * 2126 + lg * 7152 + lb * 722).toLong() * 1024 / DEN_Y).toInt().coerceAtMost(2048)]
+    val fz = FTAB[((lr * 193 + lg * 1192 + lb * 9505).toLong() * 1024 / DEN_Z).toInt().coerceAtMost(2048)]
+    out[0] = 116 * fy / 64 - 1024
+    out[1] = 500 * (fx - fy) / 64
+    out[2] = 200 * (fy - fz) / 64
+  }
+
   /** 两组 Lab（×64）之间的 ΔE76，返回真值 ×64。sRGB 全域上界约 130，Short 装得下。 */
   internal fun deltaE(l1: Int, a1: Int, b1: Int, l2: Int, a2: Int, b2: Int): Int {
     val dl = (l1 - l2).toLong()
     val da = (a1 - a2).toLong()
     val db = (b1 - b2).toLong()
     return sqrt((dl * dl + da * da + db * db).toDouble()).toInt()
+  }
+
+  /**
+   * 与 [deltaE] 同源的**平方距离**，仅供"比阈值"用：`deltaE(..) > T` ⇔ `de2 >= (T+1)²`
+   * （`sqrt(sum).toInt()` 截断，`>T` 即 `>=T+1`）。省掉每像素一次开方；结果逐位等价。
+   */
+  private fun de2(l1: Int, a1: Int, b1: Int, l2: Int, a2: Int, b2: Int): Long {
+    val dl = (l1 - l2).toLong()
+    val da = (a1 - a2).toLong()
+    val db = (b1 - b2).toLong()
+    return dl * dl + da * da + db * db
   }
 
   // ───────────────────────────── 产出 ─────────────────────────────
@@ -1598,11 +1625,13 @@ internal object MonochromeMask {
     s.borderOn = false; s.borderKill = 0
 
     // 0) 每个像素的 Lab 只算一次：后面每一轮洪泛、每一次距离都只是查表 + 一次开方。
+    //    三通道在一个函数里出（`labChannel` 每遍都重算 fx/fy/fz，三遍就是三倍的钱）。
+    val lab3 = IntArray(3)
     for (i in 0 until total) {
-      val p = pixels[i]
-      s.labL[i] = labChannel(p, 0).toShort()
-      s.labA[i] = labChannel(p, 1).toShort()
-      s.labB[i] = labChannel(p, 2).toShort()
+      labInto(pixels[i], lab3)
+      s.labL[i] = lab3[0].toShort()
+      s.labA[i] = lab3[1].toShort()
+      s.labB[i] = lab3[2].toShort()
     }
 
     // **这张里到底有没有空气露出来** —— 按**整张画布**数，不按内容框。
@@ -1909,10 +1938,15 @@ internal object MonochromeMask {
     val miL = if (modalInk < 0) 0 else labChannel(modalInk, 0)
     val miA = if (modalInk < 0) 0 else labChannel(modalInk, 1)
     val miB = if (modalInk < 0) 0 else labChannel(modalInk, 2)
+    // `deltaE(..) > (MODAL_INK_DE shl 6)` 的平方形式（见 [de2]）。
+    val modalInkThr = (MODAL_INK_DE shl 6).toLong()
+    val modalInk2 = (modalInkThr + 1) * (modalInkThr + 1)
     val out = IntArray(total)
     var knocked = 0
     /** 这一遍里"判成底、但本来会拿到墨"的格数。见 [Output.plateInked]。 */
     var plateInked = 0
+    // 同色表 `cDep` 的一格缓存：大片平色里相邻像素反复问同一个键，HashMap 的装箱/查找白付。
+    var ckLast = -2; var cvLast: LongArray? = null
     for (y in box.top until box.bottom) {
       val row = y * w
       for (x in box.left until box.right) {
@@ -1922,8 +1956,11 @@ internal object MonochromeMask {
         //   判据台 113 张真图标的 `残盘=` 从 4923 涨到 26440（40 行涨、0 行跌，9 行 >1000，
         //   最狠浙江在线 0→5334），正是他报过两次的那圈"看得见的灰盘"。
         val own = s.distT[i].toInt() and 0xffff
-        val v = if (own > ground.zero && s.plate[i] == 0.toByte() && Color.alpha(pixels[i]) == 255)
-          cDep[pixels[i] and 0x00FFFFFF] else null
+        val pa = (pixels[i] ushr 24) and 0xff
+        val ck = pixels[i] and 0x00FFFFFF
+        val v = if (own > ground.zero && s.plate[i] == 0.toByte() && pa == 255)
+          if (ck == ckLast) cvLast else cDep[ck].also { ckLast = ck; cvLast = it }
+        else null
         val dep = if (v != null) v[0].toInt() else own
         val ref = if (v != null) v[1].toInt() else refLight(i, s)
         // ⚠ 感知曲线只加在**距离**那一条上，混完不再过一次。桌面拿 alpha 当不透明度，ΔE 距离
@@ -1938,7 +1975,7 @@ internal object MonochromeMask {
         //   不走这一条。数与被推翻的三把尺都记在 `docs/devlog/2026-10-16.md`。
         val td = CURVE[((dep - ground.zero) * 255 / ground.span).coerceIn(0, 255)]
         val u = ref - (s.labL[i].toInt() and 0xffff)
-        val tl = ((u - lo) * 255 / spread).coerceIn(0, 255) * Color.alpha(pixels[i]) / 255
+        val tl = ((u - lo) * 255 / spread).coerceIn(0, 255) * pa / 255
         // ⚠ 明暗这一条**必须乘上覆盖率**，距离那条本来就是 `a × […]`（见 departure）。
         //   透明的像素没有"亮度"可言：它的 RGB 未定义，读出来是黑，于是 `u = 参照L − 0` 直接顶格，
         //   按 q 混进去就是**在空气上上墨**。真机抖音量出来：模型上墨的像素里 51.4% 的源 alpha
@@ -2005,9 +2042,10 @@ internal object MonochromeMask {
         //   y=192 那一行量到：同一条纯白、源 α 都是 255，x=84 出墨 255 而 x=192 出墨 83，
         //   那两列的 `离体=175`、参照 L 从 100 翻到 49）。加上这一条之后 384/768 回到 100%，
         //   而「镂空刻出来了」那条性质照旧绿 —— 洞本来就是**另一种**颜色，不是主体的颜色。
-        if ((s.labL[i].toInt() and 0xffff) - bodyLight(i, s) > 0 && kc[i] != 2.toByte() &&
-          deltaE(s.labL[i].toInt() and 0xffff, s.labA[i].toInt() and 0xffff,
-            s.labB[i].toInt() and 0xffff, miL, miA, miB) > (MODAL_INK_DE shl 6)
+        val hl = s.labL[i].toInt() and 0xffff
+        if (hl - bodyLight(i, s) > 0 && kc[i] != 2.toByte() &&
+          de2(hl, s.labA[i].toInt() and 0xffff,
+            s.labB[i].toInt() and 0xffff, miL, miA, miB) >= modalInk2
         ) {
           val off = s.off[i].toInt() and 0xffff
           val k = CURVE[((off - body.zero) * 255 / body.span).coerceIn(0, 255)]
@@ -2273,21 +2311,41 @@ internal object MonochromeMask {
     //  插画的浅调是**和暗部咬在一起**的（哪儿都挨着墨），膜是**一大片中间没有墨**。
     //  所以再加一把尺：浅底格子离最近的真墨（α≥128）有多远，只清"离墨 > 一圈带宽"的那些。
     val bd0 = (minOf(box.width(), box.height()) / RING_BAND_DIV).coerceIn(2, 8)
-    val dist = IntArray(total) { 9999 }
-    val qd = IntArray(total); var qh = 0; var qt = 0
-    for (i in 0 until total) if (Color.alpha(pixels[i]) >= A_SOLID && (out[i] ushr 24) >= 128) {
-      dist[i] = 0; qd[qt++] = i
+    // 只用得到 `dist[i] <= bd0`（见 filmCutOf），所以做**两遍棋盘距离变换**、在 `bd0+1` 截断：
+    // 原 BFS 是 8 邻域单位步（棋盘距离），两遍扫描给出同样的 ≤bd0 值；远处一律 bd0+1。
+    // 为什么换：JFR 上这段 BFS 占冷路径的 9.2%（大块墨时整个画布的带都要入队）；
+    // 两遍扫描是 O(n)、无队列、无分配。输出逐字节不变（判据只问 <=bd0）。
+    val cap = bd0 + 1
+    val dist = IntArray(total) { cap }
+    for (i in 0 until total) if (Color.alpha(pixels[i]) >= A_SOLID && (out[i] ushr 24) >= 128) dist[i] = 0
+    for (y in 0 until h) {
+      val row = y * w
+      for (x in 0 until w) {
+        val i = row + x
+        if (dist[i] == 0) continue
+        var m = dist[i]
+        if (x > 0) m = minOf(m, dist[i - 1] + 1)
+        if (y > 0) {
+          m = minOf(m, dist[i - w] + 1)
+          if (x > 0) m = minOf(m, dist[i - w - 1] + 1)
+          if (x < w - 1) m = minOf(m, dist[i - w + 1] + 1)
+        }
+        dist[i] = m
+      }
     }
-    while (qh < qt) {
-      val i = qd[qh++]; val cy = i / w; val cx = i - cy * w; val d0 = dist[i]
-      if (d0 >= bd0 + 2) continue
-      for (dy in -1..1) for (dx in -1..1) {
-        if (dx == 0 && dy == 0) continue
-        val ny = cy + dy; val nx = cx + dx
-        if (ny < 0 || ny >= h || nx < 0 || nx >= w) continue
-        val j = ny * w + nx
-        if (Color.alpha(pixels[j]) < A_SOLID || dist[j] <= d0 + 1) continue
-        dist[j] = d0 + 1; qd[qt++] = j
+    for (y in h - 1 downTo 0) {
+      val row = y * w
+      for (x in w - 1 downTo 0) {
+        val i = row + x
+        if (dist[i] == 0) continue
+        var m = dist[i]
+        if (x < w - 1) m = minOf(m, dist[i + 1] + 1)
+        if (y < h - 1) {
+          m = minOf(m, dist[i + w] + 1)
+          if (x < w - 1) m = minOf(m, dist[i + w + 1] + 1)
+          if (x > 0) m = minOf(m, dist[i + w - 1] + 1)
+        }
+        dist[i] = m
       }
     }
     fun filmCutOf(plateSet: Boolean): Int {
@@ -2367,18 +2425,28 @@ internal object MonochromeMask {
       // ⚠ 只动"背景层露在外面"的格：合成图那一格离背景层自己太远 = 被前景盖住了，不越权去改
       //   （气泡压在盘上的那一截、气泡投在盘上的那道影，都是靠这一条保住的）。
       if (under != null && under.size >= total) {
+        // 预计算：这四个循环原来各自重算 `invLuma(under)` / `invLuma(pixels)` 3–4 遍（JFR 上这段
+        // 占冷路径 ~12%），`Color.alpha(under)` 也是四遍。值逐位相同。
+        val uA = IntArray(total)
+        val luA = IntArray(total)
+        val lcA = IntArray(total)
+        for (i in 0 until total) {
+          val ua = (under[i] ushr 24) and 0xff
+          uA[i] = ua
+          if (ua >= A_SOLID) { luA[i] = invLuma(under[i]); lcA[i] = invLuma(pixels[i]) }
+        }
         val hL = IntArray(256); var sol = 0
         for (i in 0 until total) {
-          if (Color.alpha(under[i]) < A_SOLID) continue
-          sol++; hL[invLuma(under[i])]++
+          if (uA[i] < A_SOLID) continue
+          sol++; hL[luA[i]]++
         }
         val plateL = (0..255).maxByOrNull { hL[it] } ?: -1
         var markN = 0; var covN = 0
         if (plateL >= 0) for (i in 0 until total) {
-          if (Color.alpha(under[i]) < A_SOLID) continue
-          val lu = invLuma(under[i])
+          if (uA[i] < A_SOLID) continue
+          val lu = luA[i]
           if (Math.abs(lu - plateL) >= PLATE_INV_DELTA) markN++
-          if (Math.abs(invLuma(pixels[i]) - lu) >= PLATE_INV_COVER) covN++
+          if (Math.abs(lcA[i] - lu) >= PLATE_INV_COVER) covN++
         }
         if (sol > 0 && plateL >= 0 && hL[plateL] * 100 >= sol * PLATE_INV_L_MIN &&
             markN * 1000 >= sol * PLATE_INV_MARK_MIN &&
@@ -2387,18 +2455,18 @@ internal object MonochromeMask {
           // （translate 就是气泡的 132）。有了它，斜边那道混色带不用再靠一个魔数判"被盖住"。
           val hT = IntArray(256)
           for (i in 0 until total) {
-            if (Color.alpha(under[i]) < A_SOLID) continue
-            if (Math.abs(invLuma(under[i]) - plateL) >= PLATE_INV_DELTA) continue
-            val lc = invLuma(pixels[i])
+            if (uA[i] < A_SOLID) continue
+            if (Math.abs(luA[i] - plateL) >= PLATE_INV_DELTA) continue
+            val lc = lcA[i]
             if (Math.abs(lc - plateL) < PLATE_INV_DELTA) continue
             hT[lc]++
           }
           val topL = (0..255).maxByOrNull { hT[it] } ?: plateL
           var inked = 0; var holed = 0
           for (i in 0 until total) {
-            if (Color.alpha(under[i]) < A_SOLID) continue
-            val lu = invLuma(under[i])
-            val lc = invLuma(pixels[i])
+            if (uA[i] < A_SOLID) continue
+            val lu = luA[i]
+            val lc = lcA[i]
             val isMark = Math.abs(lu - plateL) >= PLATE_INV_DELTA
             if (Math.abs(lc - lu) >= PLATE_INV_COVER && !stillPlate(lc, plateL, topL)) continue
             if (isMark) { out[i] = 0; holed++ }
