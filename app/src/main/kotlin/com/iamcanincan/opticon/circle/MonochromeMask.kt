@@ -1995,8 +1995,13 @@ internal object MonochromeMask {
         //   让它借用同色另一格的浓度，等于把盘子画回去 —— `f2196b7` 落地时没量这一列，
         //   判据台 113 张真图标的 `残盘=` 从 4923 涨到 26440（40 行涨、0 行跌，9 行 >1000，
         //   最狠浙江在线 0→5334），正是他报过两次的那圈"看得见的灰盘"。
-        val own = s.distT[i].toInt() and 0xffff
         val pa = (pixels[i] ushr 24) and 0xff
+        // 源 α=0 ⇒ 这一格不可能出墨：`distT` 在 fitGround 出图那一遍只从三个地方来 ——
+        // plate 支是 `α×(255−t)/255`（=0）、非 plate 支是 `departure`（`a==0` 直接 return 0）、
+        // `thinInk` 把它写成 0；于是 `td = CURVE[钳到 0] = 0`，明暗项又乘 `pa`。
+        // 两支都得到 a=0（cutPlate 那一支对 plate 也是 `continue`、同样不写 out），所以整段可跳。
+        if (pa == 0) continue
+        val own = s.distT[i].toInt() and 0xffff
         val ck = pixels[i] and 0x00FFFFFF
         val v = if (own > ground.zero && s.plate[i] == 0.toByte() && pa == 255)
           if (ck == ckLast) cvLast else cDep[ck].also { ckLast = ck; cvLast = it }
@@ -5734,6 +5739,8 @@ internal object MonochromeMask {
     val bw = box.width()
     val bh = box.height()
     for (i in 0 until total) ref[i] = -1
+    // 列方向的格号只跟 x 有关：种子可能上万，逐像素一次除法不划算（式子与原来逐字等价）。
+    val cxOf = IntArray(bw) { ((it * g) / bw).coerceAtMost(g - 1) }
     var head = 0
     var tail = 0
     for (y in box.top until box.bottom) {
@@ -5742,7 +5749,7 @@ internal object MonochromeMask {
       for (x in box.left until box.right) {
         val i = row + x
         if (seed[i] == 0.toByte()) continue
-        val cx = ((x - box.left) * g / bw).coerceAtMost(g - 1)
+        val cx = cxOf[x - box.left]
         val k = cy * g + cx
         // 双峰格（[bimodalSplit]）：按这一像素落在哪一峰，取那一族的槽；另一族在 [Scratch.bimSlot]。
         val slot = s.bimSlot[k]
@@ -6364,7 +6371,9 @@ internal object MonochromeMask {
     s.cellN.fill(0, 0, cells)
     s.cellTot.fill(0, 0, cells)
     s.fCov.fill(0, 0, cells)
-    s.fieldHist.fill(0, 0, cells * 1024)
+    // ⚠ `fieldHist` 不在开头整块清：这张表是 `cells×1024` 个 Int（1MB），每张要算 4–5 遍。
+    //   改成**用完即清**（下面 fCov 循环里只清 `tot > 0` 的那些格）—— 未用过的格永远是 0
+    //   （数组新建即 0，用过的格在上一次调用结束时已经清掉），读到的值与整块清空逐位相同。
     // 列方向的格号与直方图偏移本来就只跟 x 有关，预计算掉每像素一次除法 + 一次乘法。
     val bw = box.width()
     val bh = box.height()
@@ -6473,6 +6482,8 @@ internal object MonochromeMask {
           top
         }
       }
+      // 这一格的直方图已经读完了，清掉它，下一次调用就不用整块清（见开头那段）。
+      if (tot > 0) s.fieldHist.fill(0, k * 1024, k * 1024 + 1024)
     }
     // 格子色一旦定了，就把 Lab 也一次性算出来（每轮 ≤ cells 次转换）：距离是每像素都要查的，
     // 放在像素循环里转就是每像素多两次色度学转换。
@@ -6697,7 +6708,11 @@ internal object MonochromeMask {
     visited.fill(0, 0, total)
     val minSpeck = maxOf(8, total / MIN_SPECK_DIVISOR)
     val substantial = minSpeck * 8
-    for (start in 0 until total) {
+    // `mark` 只在内容框里非零（框外 α<[A_BOX]，第一趟就写成 0）⇒ 起点只扫内容框。
+    for (sy in box.top until box.bottom) {
+      val srow = sy * w
+      for (sx in box.left until box.right) {
+      val start = srow + sx
       if (mark[start] == 0.toByte() || visited[start] != 0.toByte()) continue
       var head = 0
       var tail = 0
@@ -6733,6 +6748,7 @@ internal object MonochromeMask {
         components--
       } else {
         if (tail > largest) largest = tail
+      }
       }
     }
 
