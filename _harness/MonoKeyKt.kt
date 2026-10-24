@@ -114,6 +114,8 @@ fun main(args: Array<String>) {
     check("adaptive 进键", MonoKey.keyOf(px, under, edge, false, true, true) != k)
     check("flatten 进键", MonoKey.keyOf(px, under, edge, true, false, true) != k)
     check("circle 进键", MonoKey.keyOf(px, under, edge, true, true, false) != k)
+    // 快捷方式位（2026-10-25）：同一组像素以快捷方式身份进来时几何不同（细环那张不重排）
+    check("shortcut 进键", MonoKey.keyOf(px, under, edge, true, true, true, true) != k)
     check("under 进键", MonoKey.keyOf(px, null, edge, true, true, true) != k)
     // 空数组与"根本没有这一层"必须分开：否则 `rasterizeLayer` 失败那张会撞上正常那张
     check("under 空!=无", MonoKey.keyOf(px, IntArray(0), edge, true, true, true) !=
@@ -133,6 +135,7 @@ fun main(args: Array<String>) {
     check("flat adaptive 进键", MonoKey.keyOfFlat(px, c, edge, false, true, true) != k)
     check("flat flatten 进键", MonoKey.keyOfFlat(px, c, edge, true, false, true) != k)
     check("flat circle 进键", MonoKey.keyOfFlat(px, c, edge, true, true, false) != k)
+    check("flat shortcut 进键", MonoKey.keyOfFlat(px, c, edge, true, true, true, true) != k)
     check("flat underColor 进键", MonoKey.keyOfFlat(px, c xor 0x00010000, edge, true, true, true) != k)
     // 一个像素都不能漏
     val mut = IntArray(px.size).also { px.copyInto(it) }
@@ -143,24 +146,36 @@ fun main(args: Array<String>) {
   }
 
   // ── ④ 语料两两不撞：这是 64 位哈希在这台机器上唯一能被量的性质 ──
+  //   ⚠ 前提是"两张图内容不同"。语料里 `com.perol.pixez` 与 `com.perol.play.pixez` 的图标
+  //   **逐字节相同**（同一份资源装成两个包名）—— 同一张图同键是**正确**行为，不是碰撞。
+  //   2026-10-25 这条闸报过一次假红（还把两边的下标都印成当前那个，见下面的修复），
+  //   所以先按内容去重，再断言"不同内容不撞"。
   run {
+    val uniq = ArrayList<IntArray>()
+    val buckets = HashMap<Int, MutableList<IntArray>>()
+    var dup = 0
+    for (px in imgs) {
+      val bucket = buckets.getOrPut(px.contentHashCode()) { ArrayList() }
+      if (bucket.any { it.contentEquals(px) }) { dup++; continue }
+      bucket.add(px); uniq.add(px)
+    }
     val keys = HashMap<Long, Int>()
     var collide = 0
-    imgs.forEachIndexed { i, px ->
+    uniq.forEachIndexed { i, px ->
       val k = MonoKey.keyOf(px, null, edge, true, false, true)
       val prev = keys.put(k, i)
-      if (prev != null) { collide++; println("   撞：#${keys.getValue(k)} 与 #$i 同键") }
+      if (prev != null) { collide++; println("   撞：#$prev 与 #$i 同键（内容不同）") }
     }
-    check("语料互不撞（${imgs.size} 张）", collide == 0, "撞了 $collide 对")
-    println("   互不撞：${imgs.size} 张 → ${keys.size} 个不同的键")
+    check("语料互不撞（${uniq.size} 张不同内容，另有 $dup 张同内容重复）", collide == 0, "撞了 $collide 对")
+    println("   互不撞：${imgs.size} 张 → ${uniq.size} 张不同内容 → ${keys.size} 个不同的键")
     // 纯色 under 那一路同样两两不撞（同一个颜色、同一档边长）
     val flat = HashMap<Long, Int>()
     var flatCollide = 0
-    imgs.forEachIndexed { i, px ->
+    uniq.forEachIndexed { i, px ->
       val kk = MonoKey.keyOfFlat(px, 0xfff40009.toInt(), edge, true, false, true)
       if (flat.put(kk, i) != null) flatCollide++
     }
-    check("flat 语料互不撞（${imgs.size} 张）", flatCollide == 0, "撞了 $flatCollide 对")
+    check("flat 语料互不撞（${uniq.size} 张不同内容）", flatCollide == 0, "撞了 $flatCollide 对")
   }
 
   // ── ⑤ 文件格式：往返必须逐字节相同，六种坏输入六种都要拒 ──

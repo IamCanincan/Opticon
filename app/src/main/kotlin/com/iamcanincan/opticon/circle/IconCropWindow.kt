@@ -11,7 +11,9 @@ import kotlin.math.sqrt
  *  - [MaskedDrawable]：彩色那支，量的是整个图标光栅化到 [SCAN_EDGE]（自适应图标的子层按 1.5 倍
  *    铺出去、裁掉四边 —— `AdaptiveIconDrawable.draw()` 的画法），桌面上那个圆里的内容是它裁的；
  *  - [MonochromeSynth]：染色那支，**两件事两本账，别再说成一本**：
- *    · **几何**（墨搬到多大）量的是**喂给模型的那一张**（`raster` 的像素，`measure` 走 [GEO_ZOOM_CAP]）；
+ *    · **几何**（墨搬到多大）量的是**喂给模型的那一张**（`raster` 的像素，`measure` 走 [GEO_ZOOM_CAP]）——
+ *      **唯一例外是快捷方式**（2026-10-25）：它直接读彩色那一本（`colourWindow`，同一套格子 +
+ *      [shortcutFullBleed]），因为彩色按满幅还是按窗口，只有那一本说了算；
  *    · **极性**（那块大色块是不是图案）量的是**彩色那一张**（`MonochromeSynth.colourWindow`，
  *      同一套 [scanSize] 格子、同样不卡上限）—— 因为 [PLATE_SUBJECT_MIN] 那条线本来就是在
  *      彩色那行 `裁了只剩` 上标定的。
@@ -410,6 +412,78 @@ internal object IconCropWindow {
     val body = ext[1]
     if (body < 1f) return 1f
     return minOf(1f, SAFE_ZONE * (plateSide / 2f) / body)
+  }
+
+  /**
+   * 快捷方式位图**在内切圆半径处画了一圈贴边细环**（拼多多的四条动态快捷方式就是）。
+   *
+   * 只认形状关系、不认颜色：`0.985R` 那一圈明显不透明、`0.945R` 那一圈基本透明。
+   *
+   * ⚠ **采样半径按 R 归一，不能按像素偏移**：同一条判据要在两套格子上跑 —— 彩色那支量的是
+   * 原始尺寸（108 档，环只有 1 格），染色那支量的是 384 的判据格（环约 3.5 格）。按"外圈 r-1、
+   * 内圈 r-5"写的话，384 那一侧的内圈还落在环里 → 同一张图两边一个判"细环"、一个判"没有"，
+   * 屏幕上的几何就必然分家（2026-10-25 这一轮就是这么来的）。
+   */
+  internal fun edgeRing(px: IntArray, sw: Int, sh: Int): Boolean {
+    val n = minOf(sw, sh)
+    if (n < 24) return false
+    val cx = (sw - 1) / 2f
+    val cy = (sh - 1) / 2f
+    val r = n / 2f
+    var outer = 0L
+    var inner = 0L
+    var cnt = 0
+    for (i in 0 until 360) {
+      val t = Math.toRadians(i.toDouble())
+      val c = Math.cos(t).toFloat()
+      val s = Math.sin(t).toFloat()
+      val xo = (cx + r * 0.985f * c).toInt(); val yo = (cy + r * 0.985f * s).toInt()
+      val xi = (cx + r * 0.945f * c).toInt(); val yi = (cy + r * 0.945f * s).toInt()
+      if (xo in 0 until sw && yo in 0 until sh) outer += (px[yo * sw + xo] ushr 24) and 0xff
+      if (xi in 0 until sw && yi in 0 until sh) inner += (px[yi * sw + xi] ushr 24) and 0xff
+      cnt++
+    }
+    return cnt > 0 && outer / cnt >= 100 && inner / cnt <= 30
+  }
+
+  /**
+   * 图案自己落在圆内（环带不计）：最远不透明格 ≤ `0.95R`。
+   *
+   * 这是"按满幅"的**安全前提** —— 图案碰到圆边时按满幅画会被圆切掉（2026-10-25 第一版
+   * 对所有 `keepPct=0` 的快捷方式放行，主人当场看到"有些图标都被裁了"）。
+   */
+  internal fun ringFits(px: IntArray, sw: Int, sh: Int): Boolean {
+    val n = minOf(sw, sh)
+    if (n < 24) return false
+    val r = n / 2f
+    val cx = (sw - 1) / 2f
+    val cy = (sh - 1) / 2f
+    val skip2 = (r * 0.96f) * (r * 0.96f)   // 环带（≥0.96R）不计入图案
+    val fit2 = (r * 0.95f) * (r * 0.95f)
+    var max2 = 0f
+    for (y in 0 until sh) for (x in 0 until sw) {
+      if (((px[y * sw + x] ushr 24) and 0xff) < 64) continue
+      val dx = x - cx
+      val dy = y - cy
+      val d2 = dx * dx + dy * dy
+      if (d2 >= skip2) continue
+      if (d2 > max2) max2 = d2
+    }
+    return max2 <= fit2
+  }
+
+  /**
+   * 快捷方式这样的一张要不要**按满幅**画（不缩、不补白）：细环 + 图案在圆内 + 判据落在
+   * plate 档且 `keepPct=0`。
+   *
+   * **彩色与染色唯一的一份**（2026-10-25）：这两条分支以前只写在彩色那支，染色侧照旧按
+   * 窗口重排 → 同一张快捷方式，彩色按满幅、单色被缩到 0.66，屏上就"单色比彩色小一圈"；
+   * 而反过来把可见区那一刀整体去掉，又让**其它**快捷方式大了 1.5 倍（主人：「有的快捷图标
+   * 放大过头了」）。判据必须是同一份、逐张算，不能按"快捷方式"整类下结论。
+   */
+  internal fun shortcutFullBleed(win: Window?, px: IntArray, sw: Int, sh: Int): Boolean {
+    if (win == null || !win.plate || win.keepPct != 0) return false
+    return edgeRing(px, sw, sh) && ringFits(px, sw, sh)
   }
 
   /** 以画布中心为锚把 [px] 整体缩到 [s]（最近邻，理由同 [reframe]）。[s] ≥1 时原样返回。 */

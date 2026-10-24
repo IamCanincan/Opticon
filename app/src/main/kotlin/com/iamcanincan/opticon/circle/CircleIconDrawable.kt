@@ -154,7 +154,8 @@ class CircleIconDrawable(
   override fun getMonochrome(): Drawable? {
     sourceMonochrome?.let { return it }
     if (!ModuleRuntime.options().monoInvert) return null
-    return MonochromeSynth.forIcon(sourceIcon)
+    // `trimEdgeRing` 一起交过去：快捷方式的细环/满幅判据必须与彩色那支同源（2026-10-25）。
+    return MonochromeSynth.forIcon(sourceIcon, shortcut = trimEdgeRing)
   }
 
   override fun draw(canvas: Canvas) {
@@ -345,6 +346,13 @@ private class MaskedDrawable(
     val boxCenterY = box?.exactCenterY() ?: intrinsicHeight / 2f
 
     val scale = maxOf(width / boxWidth, height / boxHeight)
+    // 一次性几何诊断：彩色这支**实际画多大、内容框/倍数是多少**。之前只有 mono 那侧的
+    // `layer bounds`，两边对不上时没法算比例（2026-10-25 核几何用；每个进程前 60 张）。
+    if (drawLogLeft.decrementAndGet() >= 0) {
+      Log.d(TAG, "裁圆绘制: ${IconNames.of(icon)} bounds=${width}x$height " +
+        "intrinsic=${intrinsicWidth}x$intrinsicHeight box=${box?.toShortString() ?: "-"} " +
+        "scale=${"%.2f".format(scale)} plate=$plateWhite ring=$edgeRing")
+    }
     layer.save()
     layer.translate(width / 2f - boxCenterX * scale, height / 2f - boxCenterY * scale)
     layer.scale(scale, scale)
@@ -418,7 +426,7 @@ private class MaskedDrawable(
     scratch.getPixels(px, 0, sw, 0, 0, sw, sh)
     scratch.recycle()
     if (trimEdgeRing) {
-      edgeRing = hasEdgeRing(px, sw, sh)
+      edgeRing = IconCropWindow.edgeRing(px, sw, sh)
       if (edgeRing) Log.d(TAG, "裁圆：去掉贴边细环 ${IconNames.of(icon)}（扫描 ${sw}x${sh}）")
     }
     val win = IconCropWindow.of(px, sw, sh) ?: return null
@@ -431,27 +439,14 @@ private class MaskedDrawable(
     //   现在放行条件多两条：① 位图确认有那圈贴边细环；② **把环带排除之后，图案自己落在圆内**
     //   （最远不透明格 ≤ 0.95R）—— 这一条保证"不缩"不会裁到任何东西。图案碰到边的一律退回
     //   原来的"缩小 + 圆内补白"。
-    if (trimEdgeRing && edgeRing && win.plate && win.keepPct == 0) {
-      val n = minOf(sw, sh)
-      val r = n / 2f
-      val cx = (sw - 1) / 2f
-      val cy = (sh - 1) / 2f
-      val skip2 = (r - 3f) * (r - 3f)          // 环带（R-3..R）不计入图案
-      val fit2 = (r * 0.95f) * (r * 0.95f)
-      var max2 = 0f
-      for (y in 0 until sh) for (x in 0 until sw) {
-        if (((px[y * sw + x] ushr 24) and 0xff) < 64) continue
-        val dx = x - cx
-        val dy = y - cy
-        val d2 = dx * dx + dy * dy
-        if (d2 >= skip2) continue
-        if (d2 > max2) max2 = d2
-      }
-      if (max2 <= fit2) {
+    // 🔴 判据**只有 [IconCropWindow.shortcutFullBleed] 这一份**（2026-10-25）：染色那支的几何
+    //   也要读同一个结论，否则同一张图彩色按满幅、单色被窗口缩一圈（见那里的文档）。
+    if (trimEdgeRing && win.plate && win.keepPct == 0) {
+      if (IconCropWindow.shortcutFullBleed(win, px, sw, sh)) {
         Log.d(TAG, "裁圆外框: ${IconNames.of(icon)} 快捷方式：细环 + 图案在圆内 → 按满幅：不缩、不补白")
         return null
       }
-      Log.d(TAG, "裁圆外框: ${IconNames.of(icon)} 快捷方式：图案碰到圆外 → 保留缩小+补白")
+      if (edgeRing) Log.d(TAG, "裁圆外框: ${IconNames.of(icon)} 快捷方式：图案碰到圆外 → 保留缩小+补白")
     }
     // 带包名：这两行原本只有尺寸，装机上**没法把"彩色对某张做了什么"和"染色对同一张做了什么"
     // 对起来** —— 2026-10-14 这一轮三次判错都卡在这个洞上（单色那行有包名，这两行没有）。
@@ -487,34 +482,7 @@ private class MaskedDrawable(
     return win
   }
 
-  /**
-   * **贴边细环**：内切圆半径处一圈明显不透明、再往里三格就透明。
-   *
-   * 只认这条形状关系，不认颜色：拼多多的四条动态快捷方式位图是透明底 + 红气泡，额外在
-   * 内切圆半径处画了一圈 1px 灰环（扫描图上 r=53→54 平均 alpha 10→128）；高德等同批位图
-   * 在同一半径是 42–51 的渐变，没有跳变，不会被误判。
-   */
-  private fun hasEdgeRing(px: IntArray, sw: Int, sh: Int): Boolean {
-    val n = minOf(sw, sh)
-    if (n < 24) return false
-    val cx = (sw - 1) / 2f
-    val cy = (sh - 1) / 2f
-    val rOut = n / 2f - 1f
-    var outer = 0L
-    var inner = 0L
-    var cnt = 0
-    for (i in 0 until 360) {
-      val t = Math.toRadians(i.toDouble())
-      val c = Math.cos(t).toFloat()
-      val s = Math.sin(t).toFloat()
-      val xo = (cx + rOut * c).toInt(); val yo = (cy + rOut * s).toInt()
-      val xi = (cx + (rOut - 4f) * c).toInt(); val yi = (cy + (rOut - 4f) * s).toInt()
-      if (xo in 0 until sw && yo in 0 until sh) outer += (px[yo * sw + xo] ushr 24) and 0xff
-      if (xi in 0 until sw && yi in 0 until sh) inner += (px[yi * sw + xi] ushr 24) and 0xff
-      cnt++
-    }
-    return outer / cnt >= 100 && inner / cnt <= 30
-  }
+  /** 贴边细环的判据本体在 [IconCropWindow.edgeRing]（彩色/染色共用一份）。 */
 
   override fun setAlpha(alpha: Int) {
     icon.alpha = alpha
@@ -547,6 +515,9 @@ private class MaskedDrawable(
 private const val BOX_LOG_LIMIT = 200
 
 private val boxLogLeft = AtomicInteger(BOX_LOG_LIMIT)
+
+/** 彩色绘制几何诊断：每个进程前 60 张（够覆盖桌面 + 抽屉的两类）。 */
+private val drawLogLeft = AtomicInteger(60)
 
 /**
  * 「圆外不透明、圆内透明」的遮罩。

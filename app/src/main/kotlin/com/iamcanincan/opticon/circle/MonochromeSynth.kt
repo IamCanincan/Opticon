@@ -137,32 +137,44 @@ internal object MonochromeSynth {
    * 会互相抢（图层 bounds 是父级在 `onBoundsChange` 里设的）。所以每次 [forIcon] 都交出一个
    * **新实例**，只共享那张位图。
    */
-  private val cache = IdentityHashMap<Drawable, Bitmap>()
+  private val cache = IdentityHashMap<Drawable, CachedMask>()
+
+  /**
+   * 按实例缓存的掩码要**连着走的是哪条几何**一起存：同一个 drawable 以快捷方式身份进来
+   * （[shortcut] = true，细环那张按满幅）和以普通图标身份进来，掩码不是同一张。
+   */
+  private class CachedMask(val shortcut: Boolean, val mask: Bitmap)
 
   /**
    * 给 [source] 合成一个单色层；合成不出来就返回 null，让调用方照原样走下去。
+   *
+   * [shortcut] = 这一张是快捷方式通道交进来的（`CircleIconDrawable.trimEdgeRing`）：它的
+   * 几何要走**彩色那支的同一份结论**（细环 + 图案在圆内 → 不重排），见
+   * [IconCropWindow.shortcutFullBleed]。
    *
    * 尺寸已知就一次到位，不知道才按 MIN_EDGE 探一次（探的意义是「压不出形状就别交空壳出去」，
    * 那会让桌面以为有单色图标、结果画出一片空白）。一次会话里桌面给的图层 bounds
    * 是常量，所以只有第一个图标付两次。
    */
   @Synchronized
-  fun forIcon(source: Drawable): Drawable? {
-    cache[source]?.let { return MonochromeLayer(source, it).also { noteSynthesized() } }
-    val mask = render(source, minOf(if (knownEdge > 0) knownEdge else MIN_EDGE, MAX_EDGE))
+  fun forIcon(source: Drawable, shortcut: Boolean = false): Drawable? {
+    cache[source]?.takeIf { it.shortcut == shortcut }?.let {
+      return MonochromeLayer(source, it.mask).also { noteSynthesized() }
+    }
+    val mask = render(source, minOf(if (knownEdge > 0) knownEdge else MIN_EDGE, MAX_EDGE), shortcut)
       ?: return null
-    store(source, mask)
+    store(source, mask, shortcut)
     return MonochromeLayer(source, mask).also { noteSynthesized() }
   }
 
-  private fun store(source: Drawable, mask: Bitmap) {
+  private fun store(source: Drawable, mask: Bitmap, shortcut: Boolean) {
     val size = mask.byteCount.toLong()
     if (cacheBytes + size > MAX_CACHE_BYTES && cache.isNotEmpty()) {
       cache.clear()
       cacheBytes = 0
     }
-    val previous = cache.put(source, mask)
-    cacheBytes += size - (previous?.byteCount?.toLong() ?: 0L)
+    val previous = cache.put(source, CachedMask(shortcut, mask))
+    cacheBytes += size - (previous?.mask?.byteCount?.toLong() ?: 0L)
   }
 
   /**
@@ -189,7 +201,7 @@ internal object MonochromeSynth {
   @Synchronized
   fun demote(source: Drawable) {
     val previous = cache.remove(source) ?: return
-    cacheBytes -= previous.byteCount.toLong()
+    cacheBytes -= previous.mask.byteCount.toLong()
   }
 
   /**
@@ -287,7 +299,7 @@ internal object MonochromeSynth {
    * 同一条路。模型自己是 `ThreadLocal` 缓冲、无共享状态，这把锁护的是缓存与桌面那边。
    */
   @Synchronized
-  fun render(source: Drawable, edge: Int): Bitmap? {
+  fun render(source: Drawable, edge: Int, shortcut: Boolean = false): Bitmap? {
     if (edge <= 0) return null
     val t0 = System.nanoTime()
     return runCatching {
@@ -377,6 +389,17 @@ internal object MonochromeSynth {
       // 窗口**照量**（几何那一档与日志还要用它，见下），搬不搬由 `win` 定。
       // ⚠ **只在缓存未命中时才需要**：输入（pixels/edge/flags）已经在键里，命中路径白扫一遍 384²。
       val winMeasured by lazy(LazyThreadSafetyMode.NONE) { if (circle) IconCropWindow.measure(pixels, edge) else null }
+      // 快捷方式："彩色那支按满幅"的结论要读**彩色那一本账**（同一张像素、同一套格子、同一条
+      // 细环判据）。不能拿 384 的判据格再量一遍：实测 45 张快捷方式里有 2 张（拼多多两条）
+      // 细环判据在 108 与 384 两格上结论相反（`ringFits` 的 0.95R 边界被放大后的环内沿顶到）
+      // → 彩色按满幅、单色被收缩，屏上又分家。见 `_harness/AlignKt.kt` 的两格对表。
+      // 极性（[IconCropWindow.polarityOf]）读的也是这一个值 —— 一次绘制、两处用。
+      val winColour by lazy(LazyThreadSafetyMode.NONE) {
+        if (circle) colourWindow(source, fgOnly, shortcut) else null
+      }
+      // **窗口本身不改**：细环那档的模型输入与主人已验收的那版逐字相同（拼多多四条）。
+      // 只有"要不要再收一道可见区"按这个结论逐张定（见下面 `placed`）。
+      val ringBleed by lazy(LazyThreadSafetyMode.NONE) { winColour?.fullBleed == true }
       val win by lazy(LazyThreadSafetyMode.NONE) { if (fgOnly) null else winMeasured }
       // 极性的取数（彩色那一本账）**不在这里算**：它要额外画一张，而这一趟在 `MonoCache.lookup` 之前 ——
       // 命中那条路今天也要付钱就白付了（真机一次重启 1594 次 bind、只有 209 种内容）。
@@ -416,14 +439,15 @@ internal object MonochromeSynth {
           .also { under.recycle() }
       else null
       // ── 内容缓存：到这里为止，输入已经全了 ──
-      //   掩码是 `(pixels, underPx, edge, adaptive, flatten, circle)` 的纯函数，这六样就是键。
+      //   掩码是 `(pixels, underPx, edge, adaptive, flatten, circle, shortcut)` 的纯函数，
+      //   这些就是键（`shortcut` 位只管几何：细环那张按满幅）。
       //   为什么这一层必须存在：桌面**每次 bind 都交一个新实例**（`getConstantState().newDrawable()`），
       //   上面那个按实例的缓存结构上命中不了 —— 真机一次重启 1594 次合成、只有 209 种内容，
       //   同一张图标最多重压 148 次，串行在一把锁上就是 760 秒。见 [MonoCache]。
       // ⚠ 键算在这里而不是 `forIcon` 里：算键要像素，而拿像素就得先光栅化。所以命中这条路
       //   仍然付一次光栅化（几毫秒），省下的是整条模型（三百多毫秒）。
-      val key = if (flatUnder) MonoKey.keyOfFlat(pixels, bgColor!!, edge, adaptive, flatten, circle)
-        else MonoCache.keyOf(pixels, underPx, edge, adaptive, flatten, circle)
+      val key = if (flatUnder) MonoKey.keyOfFlat(pixels, bgColor!!, edge, adaptive, flatten, circle, shortcut)
+        else MonoCache.keyOf(pixels, underPx, edge, adaptive, flatten, circle, shortcut)
       val tKey = System.nanoTime()
       MonoCache.lookup(key, edge)?.let { hit ->
         // 负缓存（`mask == null`）= 这张判据不成立，照旧交 null 给桌面走它自己的路。
@@ -493,10 +517,10 @@ internal object MonochromeSynth {
       // ── **极性读的是彩色那一本账**（2026-10-21，两本账合成一本）──
       // 画这一张的成本放在**缓存未命中之后**：命中那条路（真机一次重启 1594 次 bind / 209 种内容）
       // 已经交出现成掩码，不该再付一次绘制。量具口径见 [colourWindow]。
-      val winColour = if (circle) colourWindow(source, fgOnly) else null
+      // 快捷方式的几何在上面已经读过同一个 `winColour`（lazy，只算一次）—— 两处不许各量一遍。
       // 取数口在 [IconCropWindow.polarityOf]（不在这里写式子）：那个文件在台子的编译清单里，
       // 这里没有 —— 写在这里，第 19 闸就退回"量具看不见生产"那一族（第十六闸的同一课）。
-      val plateSubject = IconCropWindow.polarityOf(winColour, winMeasured)
+      val plateSubject = IconCropWindow.polarityOf(winColour?.win, winMeasured)
       // 【主形】按包开闸（名单与"为什么不能全局"见 [MonochromeMask.TRIM_PKGS]）。
       //   `label` 的第一段是 `IconNames.of(source)`，两种形式都要认（`包名/类型/入口名` 与
       //   `pm:包名`）—— 只配前一种的话，快捷方式那一批永远开不了火，见 [IconNames.matchesPkg]。
@@ -517,7 +541,7 @@ internal object MonochromeSynth {
       // 指纹打在判据行上：解不出包名的那一批（快捷方式）在日志里都叫 `?`，没有这个数
       // 就对不上"哪一行判据是哪一个带回来的 PNG"。见 [MonoDump.sigOf]。
       val sig = MonoDump.sigOf(pxIn, edge, edge)
-      val id = noteBranch(edge, sig, label, out, win, key, winMeasured, winColour, plateSubject)
+      val id = noteBranch(edge, sig, label, out, win, key, winMeasured, winColour?.win, plateSubject)
       val isWatched = MonoDump.watched(label)
       // ⚠ **变体标记必须进带回来的那个名字。** 桌面会把**同一张图标按不同尺寸再画一遍**：
       //   真机实测（`live2.txt`，2026-10-11 20:34–21:39）translate 在 `edge=384` 下有两种前景层
@@ -566,12 +590,15 @@ internal object MonochromeSynth {
       val alpha = toAlphaMask(ramp, edge, edge)
       // 非自适应图标的内容是满幅的，而它在图层 bounds 里只该占中间那 2/3（可见区），
       // 所以掩码算完**之后**才缩进 —— 顺序反了就会踩 [rasterize] 上面那个坑。
-      // 快捷方式（`pm:包/id`）**不再收这一道**：彩色那支画快捷方式时没有经过自适应图标的
-      // 可见区缩放（长按菜单直接按槽位画），再收一次就是两道叠起来 —— 屏上单色图案比彩色小一圈
-      // （主人 2026-10-25 对照钉钉发现的；钉钉的快捷方式走自适应/flatten，本来就不收）。
-      // `pm:包名`（没有 `/`）是 PackageManager 拿的应用图标，那一路仍按自适应口径收边。
-      val shortcut = label.startsWith("pm:") && label.contains('/')
-      val placed = if (adaptive || shortcut) alpha else intoVisibleArea(alpha, edge)
+      // 快捷方式**逐张**定，不按整类（2026-10-25）：
+      //  · 细环 + 图案在圆内那一档（[IconCropWindow.shortcutFullBleed]，彩色按满幅画）→ **不收**。
+      //    它的窗口把盘的**安全区**铺到整张图层，倍率实测 0.665；而可见区/图层正好是 2/3 ——
+      //    这一步换算已经由窗口做掉了，再收就是两遍（主人已验收的拼多多大小就是这一档）。
+      //  · 其余非自适应（彩色按窗口铺进槽位）→ **收一道**。之前把快捷方式整类豁免掉，
+      //    高德/菜鸟/淘宝/微信这些就大了 1.5 倍（主人：「有的快捷图标放大过头了」）。
+      // 自适应**不收**：它的 `reframe` 目标本来就是可见区（[visibleInset]），再收也是两遍。
+      // `pm:包名`（没有 `/`）是 PackageManager 拿的应用图标，与普通非自适应图标同一口径。
+      val placed = if (adaptive || ringBleed) alpha else intoVisibleArea(alpha, edge)
       // ⚠ 这一趟多花的钱（判据台 `_harness/CostKt.kt`，62 张真机语料 @edge=384，取七遍最快一趟）：
       //   `of` 中位 **0.54 ms**（**每张都跑**，因为它内部先降到 128 才扫，与画布多大无关 —— 与真机
       //   彩色那行 `量一张` 的 0.60 ms 同一档）；`reframe` 中位 **2.24 ms**，只有开了窗口的 **13/62**
@@ -1005,6 +1032,10 @@ internal object MonochromeSynth {
    *
    * ⚠ **只给前景层那一支（`fgOnly`）不画**：背景是纯色盘，盘把整张画布铺满 → 彩色那本账**恒判满幅**
    *   （`TwoAcctKt` 在 132 张上现量：这一支一张窗口都拿不到）。恒判 = 不必画，画它是白花一次绘制。
+   * ⚠ **快捷方式那一档读的也是这里**（2026-10-25）：它的几何与极性都跟着**彩色那套格子**
+   *   （`scanSize` + 细环判据）走，不再另量 384 的判据格。为什么：同一张拼多多快捷方式，
+   *   细环判据在 108 与 384 两格上能给出相反结论（`_harness/AlignKt.kt` 实测 45 张里 2 张），
+   *   而彩色屏幕上用的是 108 那本 —— 染色跟着 384 走就必然分家。
    * ⚠ 异常**不许冒到 [render] 的 `runCatching`**：那会把整趟合成吞成 null，屏幕上=图标消失。
    *   量不到就交 null（= 不接管极性 = 这次改动之前的默认行为）。
    * ⚠ **残余的一处不完全同格**（诚实记一笔）：彩色那支在"固有尺寸不知道"那一档是按**当时画布**
@@ -1012,8 +1043,10 @@ internal object MonochromeSynth {
    *   画布是方的（桌面上就是方的）时两边逐字相同；万一哪天出现**非方画布**的自适应槽位，
    *   那一张的格子会差在长短边上，装机对表（`_twobook.cjs`）会当场报出来，不会静默。
    */
-  private fun colourWindow(source: Drawable, fgOnly: Boolean): IconCropWindow.Window? {
-    if (fgOnly) return null
+  private class ColourWindow(val win: IconCropWindow.Window?, val fullBleed: Boolean)
+
+  private fun colourWindow(source: Drawable, fgOnly: Boolean, shortcut: Boolean = false): ColourWindow? {
+    if (fgOnly) return ColourWindow(null, false)
     val iw = source.intrinsicWidth
     val ih = source.intrinsicHeight
     // 固有尺寸不知道的（自适应）按彩色那支的做法撑到长边 128（`1 to 1` 走 canonical 那一路）。
@@ -1023,7 +1056,12 @@ internal object MonochromeSynth {
     return try {
       val px = IntArray(w * h)
       bmp.getPixels(px, 0, w, 0, 0, w, h)
-      runCatching { IconCropWindow.of(px, w, h) }.getOrNull()
+      val win = runCatching { IconCropWindow.of(px, w, h) }.getOrNull() ?: return ColourWindow(null, false)
+      // 快捷方式：彩色那支"细环 + 图案在圆内 → 按满幅"的结论在这里算一次 —— 染色侧的
+      // **摆放**（还要不要收可见区）与极性都读它，保证是同一张像素、同一个答案。
+      // 判据本体在 [IconCropWindow.shortcutFullBleed]；窗口本身照旧返回（模型输入不改）。
+      val full = shortcut && IconCropWindow.shortcutFullBleed(win, px, w, h)
+      ColourWindow(win, full)
     } catch (t: Throwable) {
       null
     } finally {
@@ -1306,8 +1344,10 @@ private class MonochromeLayer(
       loggedBounds = true
       val total = boundsLogged.incrementAndGet()
       if (total <= BOUNDS_LOG_FIRST) {
+        // `label=` 是 2026-10-25 核几何时补的（与彩色那行 `裁圆绘制:` 按名字对比例）。
         Log.d(TAG, "Mono: layer bounds=${bounds.width()}x${bounds.height()} mask=${mask.width} " +
-          "edge=$edge alpha=${paint.alpha} filter=${paint.colorFilter?.javaClass?.simpleName ?: "none"}")
+          "edge=$edge alpha=${paint.alpha} filter=${paint.colorFilter?.javaClass?.simpleName ?: "none"}" +
+          " label=${IconNames.of(source)}")
       }
     }
     canvas.drawBitmap(mask, null, bounds, paint)

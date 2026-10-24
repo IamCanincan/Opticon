@@ -103,10 +103,11 @@ internal object MonoCache {
   /** 本进程已经记过归属的 (键, 边长)：一次会话里同一张会被 bind 上百次，只记第一遍。 */
   private val seenOwner = HashSet<String>()
 
-  /** 内容键：见 [MonoKey.keyOf]，那六样就是掩码的全部输入。 */
+  /** 内容键：见 [MonoKey.keyOf]，那些输入就是掩码的全部输入。 */
   fun keyOf(
     px: IntArray, under: IntArray?, edge: Int, adaptive: Boolean, flatten: Boolean, circle: Boolean,
-  ): Long = MonoKey.keyOf(px, under, edge, adaptive, flatten, circle)
+    shortcut: Boolean = false,
+  ): Long = MonoKey.keyOf(px, under, edge, adaptive, flatten, circle, shortcut)
 
   /**
    * 查这一张。命中返回 [Entry]（`mask == null` 是负缓存，调用方照旧返回 null），没命中返回 null。

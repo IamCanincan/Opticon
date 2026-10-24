@@ -16,20 +16,22 @@ internal object MonoKey {
   /**
    * 文件头：`rowBytes` 与 `edge` 各 4 字节（大端）+ 1 字节口径版本。见 [decode] 里为什么不能按算的。
    *
-   * ⚠ **口径版本是缓存失效的唯一开关**（2026-10-23 Pinduoduo 白心）：键只覆盖六个输入，
-   *   表达不了"同样的输入、掩码该换一种"。9 字节头让上一版写下的 8 字节文件在 [decode] 的
+   * ⚠ **口径版本是缓存失效的唯一开关**（2026-10-23 Pinduoduo 白心）：键表达不了"同样的输入、
+   *   掩码该换一种"。9 字节头让上一版写下的 8 字节文件在 [decode] 的
    *   长度检查处直接落空 —— 不读坏数据、也不用清桌面缓存。
    */
   const val HEADER_BYTES = 9
 
   /**
-   * 掩码口径版本。**凡是"同样六样输入、交出的掩码该变"的改动都要 +1。**
+   * 掩码口径版本。**凡是"同样这些输入、交出的掩码该变"的改动都要 +1。**
    * v3 = 纯色盘雾区清理（`PlateFog`，2026-10-23 第九轮）：键不变、掩码会变，旧文件必须作废。
    */
   private const val FORMAT = 3
 
   /**
-   * 内容键。**六个输入一个都不能少**：掩码是这六样的纯函数，少一样就是「换了设置还给旧答案」。
+   * 内容键。**输入一个都不能少**：掩码是这些值的纯函数，少一样就是「换了设置还给旧答案」。
+   * 2026-10-25 起多一位 `shortcut`：同一张位图以快捷方式身份进来时，细环那张按满幅、不重排
+   * （与彩色同一条判据），掩码与普通图标身份不同。
    *
    * 全像素扫，不抽样：抽样的漏检代价是**交出别的图标的掩码**，而这一趟只在省掉三百多毫秒的那
    * 一刻才跑，扫 147456 个 int 的钱（判据台量 ≤1 ms）与它比可以忽略。
@@ -42,9 +44,11 @@ internal object MonoKey {
    */
   fun keyOf(
     px: IntArray, under: IntArray?, edge: Int, adaptive: Boolean, flatten: Boolean, circle: Boolean,
+    shortcut: Boolean = false,
   ): Long {
     var h = edge.toLong() or (1L shl 32)
-    h = mix(h, (if (adaptive) 1L else 0L) or (if (flatten) 2L else 0L) or (if (circle) 4L else 0L))
+    h = mix(h, (if (adaptive) 1L else 0L) or (if (flatten) 2L else 0L) or (if (circle) 4L else 0L) or
+      (if (shortcut) 8L else 0L))
     h = fold(h, px, 2L)
     h = fold(h, under, 3L)
     return final(h)
@@ -55,16 +59,18 @@ internal object MonoKey {
    *
    * 为什么可以省：这一支的 `under` **按定义**是「整张画布都是同一个不透明色」（调用方在
    * [MonochromeSynth.render] 里只在 `bgColor != null` 时走），它本来就只是 `(颜色, 边长)` 的函数。
-   * 键仍覆盖全部六样输入：`edge`、三个标志、`px`、`underColor`（`under` 的长度由 `edge` 决定）。
+   * 键仍覆盖全部输入：`edge`、四个标志、`px`、`underColor`（`under` 的长度由 `edge` 决定）。
    *
    * ⚠ 与数组那一路用**不同的种子/标记**（`1L shl 33`、tag 6），两条路的键空间不重叠；
    *   缓存目录按装机身份分，换装即换目录，所以它不会和旧格式的文件撞在一起。
    */
   fun keyOfFlat(
     px: IntArray, underColor: Int, edge: Int, adaptive: Boolean, flatten: Boolean, circle: Boolean,
+    shortcut: Boolean = false,
   ): Long {
     var h = edge.toLong() or (1L shl 33)
-    h = mix(h, (if (adaptive) 1L else 0L) or (if (flatten) 2L else 0L) or (if (circle) 4L else 0L))
+    h = mix(h, (if (adaptive) 1L else 0L) or (if (flatten) 2L else 0L) or (if (circle) 4L else 0L) or
+      (if (shortcut) 8L else 0L))
     h = fold(h, px, 2L)
     h = mix(h, 6L shl 40)
     h = mix(h, underColor.toLong() and 0xffffffffL)
