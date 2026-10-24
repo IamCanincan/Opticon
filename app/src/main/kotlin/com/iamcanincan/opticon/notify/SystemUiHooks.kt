@@ -43,6 +43,10 @@ object SystemUiHooks {
     private const val NOTIFICATION_LISTENER =
         "com.android.systemui.statusbar.NotificationListener"
 
+    /** 通知图标的工厂：SystemUI 重启后顶栏那批图标在这里按 `Notification.smallIcon` 重建。 */
+    private const val ICON_MANAGER =
+        "com.android.systemui.statusbar.notification.icon.IconManager"
+
     /** 已挂过的方法，防止框架重复回调时重复挂钩 */
     // 线程安全集合：安装路径虽然目前只走主线程，但框架的回调时机不由我们决定，
     // 用并发集合换掉 HashSet，避免万一并发时的静默数据损坏（零成本）。
@@ -63,7 +67,7 @@ object SystemUiHooks {
 
     /** 挂载前会逐个探测这些类是否存在，缺的会打进日志 */
     private val TARGET_CLASSES = listOf(
-        ROW_BINDER_MODERN, ROW_BINDER_LEGACY, NOTIFICATION_ENTRY, NOTIFICATION_LISTENER
+        ROW_BINDER_MODERN, ROW_BINDER_LEGACY, NOTIFICATION_ENTRY, NOTIFICATION_LISTENER, ICON_MANAGER
     )
 
     /**
@@ -102,7 +106,66 @@ object SystemUiHooks {
         val row = installRowInflation(module, classLoader)
         // 状态栏那一条（不依赖行钩子；行钩子没装上它也该装上）
         val posted = installNotificationPosted(module, classLoader)
-        return row || posted
+        // 重启后顶栏那批：IconManager 建图标前强制补一遍（前四个落点都接在它后面，没响）。
+        val iconMgr = installIconManager(module, classLoader)
+        return row || posted || iconMgr
+    }
+
+    /**
+     * 在 `IconManager.createIcons(NotificationEntry)` **之前**把 `notification.smallIcon` 换掉。
+     *
+     * 为什么是这里：SystemUI 重启后，顶栏图标由通知条目重建，而条目走的是 IconManager；
+     * 前四个落点（listener 的 active list、重建 runnable、`NotificationEntry.setSbn`）都在
+     * 图标已经被读走之后。这里强制跳过通知上的"已处理"标记 —— 重启后的通知是框架重新给的，
+     * 标记可能不在而图标还是原始资源；形状/跳过缓存让已判过的内容一次查表返回。
+     *
+     * 失败一律吞：IconManager 挂不上只是回到旧边界（等应用重发），不能让 SystemUI 崩。
+     */
+    private fun installIconManager(module: XposedModule, classLoader: ClassLoader): Boolean {
+        val cls = MemberLookup.findClass(ICON_MANAGER, classLoader)
+        if (cls == null) {
+            ModuleRuntime.logW("IconManager not resolvable yet")
+            return false
+        }
+        val entryClass = MemberLookup.findClass(NOTIFICATION_ENTRY, classLoader)
+        val sbnField = installOnly("IconManager.NotificationEntry.<sbn>") {
+            entryClass?.let { MemberLookup.findFieldByType(it, StatusBarNotification::class.java) }
+        }
+        val ctxField = installOnly("IconManager.shadeContext") { MemberLookup.findField(cls, "shadeContext") }
+        val methods = cls.declaredMethods.filter { it.name == "createIcons" && it.parameterTypes.isNotEmpty() }
+        if (methods.isEmpty()) {
+            ModuleRuntime.logE("IconManager.createIcons not found", NoSuchMethodException("createIcons"))
+            return false
+        }
+        var hooked = 0
+        for (m in methods) {
+            if (hookedMethods.contains(m)) { hooked++; continue }
+            val ok = runCatching {
+                m.isAccessible = true
+                val id = "notify:iconFactory[" + m.parameterTypes.joinToString { it.simpleName } + "]"
+                module.hook(m).setId(id).setExceptionMode(EXCEPTION_MODE).intercept { chain ->
+                    runCatching {
+                        val arg = chain.args.firstOrNull { a ->
+                            a != null && (entryClass == null || entryClass.isInstance(a))
+                        } ?: return@runCatching
+                        val sbn = readEntryField(arg, sbnField) as? StatusBarNotification ?: return@runCatching
+                        val ctx = (ctxField?.let { MemberLookup.readField(chain.thisObject, it) } as? Context)
+                            ?: ModuleRuntime.hostContext ?: return@runCatching
+                        NotificationIconPatch.patch(sbn, "图标工厂", force = true) {
+                            runCatching {
+                                ctx.createPackageContext(sbn.packageName, Context.CONTEXT_IGNORE_SECURITY)
+                            }.getOrDefault(ctx)
+                        }
+                    }.onFailure { ModuleRuntime.logE("IconManager patch failed", it) }
+                    chain.proceed()
+                }
+            }.onFailure {
+                ModuleRuntime.logE("IconManager createIcons hook failed", it)
+            }.isSuccess
+            if (ok) { hookedMethods.add(m); hooked++ } else ModuleRuntime.logW("IconManager createIcons 挂载失败")
+        }
+        if (hooked > 0) ModuleRuntime.logI("IconManager.createIcons hooked ($hooked overload(s))")
+        return hooked > 0
     }
 
     /**

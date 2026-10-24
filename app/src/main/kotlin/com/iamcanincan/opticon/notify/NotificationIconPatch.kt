@@ -28,7 +28,13 @@ object NotificationIconPatch {
      *   标记命中、缓存命中这两条路一次都不该为它付钱 —— 现量它曾经排在标记检查**之前**，
      *   行钩子每次重绑都白建一个 Context。用提供者而不是现成 Context，就是把这笔钱挪到真正要解码时。
      */
-    fun patch(sbn: StatusBarNotification, source: String, contextProvider: () -> Context) {
+    /**
+     * @param force 跳过通知上的"已处理"标记。只有 SystemUI 重启后的图标工厂（`IconManager`）
+     *   会传 `true`：那一批通知是框架重新给的，标记可能不在、图标却是原始资源；
+     *   形状/跳过缓存仍会让已判过的内容一次查表返回，不会重复压图。
+     */
+    fun patch(sbn: StatusBarNotification, source: String, force: Boolean = false,
+              contextProvider: () -> Context) {
         val p0 = System.nanoTime()
         try {
             val notification = sbn.notification ?: return
@@ -42,7 +48,7 @@ object NotificationIconPatch {
             //   （先试过"按 Bitmap 引用认"，现量一次都没命中，才换成这个通知级的标记。）
             //   只在"已经做过决定"的分支里写（换图成功 / 已适配 / 放弃，**含缓存命中那一支**）；
             //   未解码与无兜底不写 —— 否则一次临时失败会把这份通知永久钉死。
-            val marked = notification.extras?.getBoolean(EXTRA_PATCHED, false) == true
+            val marked = !force && notification.extras?.getBoolean(EXTRA_PATCHED, false) == true
             // 入口账：来源（帖=onNotificationPosted / 行=inflateViews）+ 图标类型 + 标记在不在。
             // 没有这一行，"行钩子有没有进来""标记有没有写进去"两件事都只能猜 ——
             // 第一版的标记漏写就是靠它现撞的（帖与行是同一个对象、同一个 extras，却读到 false）。
