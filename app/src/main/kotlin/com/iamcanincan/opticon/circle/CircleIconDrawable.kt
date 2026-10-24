@@ -83,35 +83,7 @@ internal fun themedPlateColor(): Int = themedPlateCache.getOrPut("plate") {
 /** 缓存放在这里而不是 object 里：`getIdentifier` 的口径是"当前进程"，一个进程只有一个答案。 */
 private val themedPlateCache = HashMap<String, Int>()
 
-/**
- * 窗口测量的**跨副本备忘**（2026-10-25）。
- *
- * 桌面每次 bind 都 `getConstantState().newDrawable()` 交一个新副本，副本的 `boxMeasured` 是新的
- * ⇒ 同一个图标每 bind 都重新光栅化到 128 再量一次（真机 `量一张 0.3–0.6ms`，`裁圆外框` 同一张
- * 重复出现就是证据）。这条备忘挂在**原 wrapper**上、由副本共享，所以一张图标只量一次。
- *
- * ⚠ 与两次失败过的"按 ConstantState 省光栅化"**不是同一件事**：那两条按**源 drawable 的 state**
- *   做键，真机 0/200 命中（副本的源 state 不共享）。这里是**我们自己的 wrapper** 捕获并传下去，
- *   生命周期就是桌面 IconCache 里那一张图标；换图标/换主题 = 新 wrapper = 新备忘。
- * ⚠ `Animatable` 的源**不进备忘**：内容会动，窗口要跟着每一帧重新量。`alpha` 也进备忘键
- *   （禁用态的 alpha 会改测量阈值）；变了就重量。
- */
-private class WindowMemo {
-  var measured = false
-  var win: IconCropWindow.Window? = null
-  var plate = false
-  var ring = false
-  var alpha = 255
-  var canonical = false
-  var iw = -1
-  var ih = -1
-}
-
-/** 备忘命中/重量计数（进程级，只为 `裁圆外框` 尾部那一截能回答"备忘到底有没有活"）。 */
-private val memoHits = AtomicInteger(0)
-private val memoMisses = AtomicInteger(0)
-
-class CircleIconDrawable private constructor(
+class CircleIconDrawable(
   icon: Drawable,
   /**
    * 快捷方式那一路才开：**去掉贴边的那一圈细环**。
@@ -122,9 +94,7 @@ class CircleIconDrawable private constructor(
    * 判据只看"贴边那一格平均不透明、往里三格就透明"这条**形状关系**，不认颜色；
    * 命中时把遮罩圆收 [EDGE_RING_INSET]（约 1.2%），环整圈切掉，图案本身不动。
    */
-  private val trimEdgeRing: Boolean,
-  /** 跨副本共享的窗口备忘（见 [WindowMemo]）。 */
-  private val memo: WindowMemo,
+  private val trimEdgeRing: Boolean = false,
 ) :
   AdaptiveIconDrawable(
     // 背景：**桌面自己给主题图标用的那块盘**（2026-10-09），取不到时退回白。
@@ -141,12 +111,8 @@ class CircleIconDrawable private constructor(
     //   回滚 = 把这一行改回 `Color.WHITE`（或 `Color.TRANSPARENT`）。
     ColorDrawable(themedPlateColor()),
     // 前景：原图标套上圆形遮罩，再缩到可见区
-    ViewportDrawable(MaskedDrawable(icon, trimEdgeRing, memo)),
+    ViewportDrawable(MaskedDrawable(icon, trimEdgeRing)),
   ) {
-
-  /** 外部只走这个入口：每张图标一个备忘，副本共享它。 */
-  constructor(icon: Drawable, trimEdgeRing: Boolean = false) :
-    this(icon, trimEdgeRing, WindowMemo())
 
   /** 原图标留一份引用，只为了 [getConstantState] 能重建出副本。 */
   private val sourceIcon: Drawable = icon
@@ -208,9 +174,8 @@ class CircleIconDrawable private constructor(
     return object : ConstantState() {
       // ⚠ `trimEdgeRing` 必须一起带过去：桌面每次 bind 都是 `getConstantState().newDrawable()`，
       //   漏了它副本就退回"白盘 + 细环"那一条（2026-10-25 全量检查抓到）。
-      // `memo` 也一起带：窗口测量按原 wrapper 只做一次（[WindowMemo]）。
       override fun newDrawable(): Drawable =
-        CircleIconDrawable(src?.newDrawable() ?: sourceIcon, trimEdgeRing, memo)
+        CircleIconDrawable(src?.newDrawable() ?: sourceIcon, trimEdgeRing)
 
       override fun getChangingConfigurations(): Int = changingConfigurations
     }
@@ -294,8 +259,6 @@ private class MaskedDrawable(
   private val icon: Drawable,
   /** 快捷方式那一路才开：去掉贴边的细环（判据与来历见 [CircleIconDrawable] 的构造参数）。 */
   private val trimEdgeRing: Boolean = false,
-  /** 跨副本共享的窗口备忘；null = 不共享（只用于非常规构造）。 */
-  private val memo: WindowMemo? = null,
 ) : Drawable() {
 
   private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
@@ -418,43 +381,19 @@ private class MaskedDrawable(
   private fun contentBox(iw: Int, ih: Int, canonical: Boolean): Rect? {
     if (!boxMeasured) {
       boxMeasured = true
-      val m = memo
-      // 跨副本备忘：同一个原 wrapper 的副本共享这一份窗口，只有第一张付 0.3–0.6ms 的光栅化。
-      // `Animatable` 不进备忘（内容会动）；`alpha` 变了也重量（测量阈值看 alpha）。
-      if (m != null && m.measured && icon !is android.graphics.drawable.Animatable &&
-        m.alpha == icon.alpha && m.canonical == canonical && m.iw == iw && m.ih == ih
-      ) {
-        boxWin = m.win
-        plateWhite = m.plate
-        edgeRing = m.ring
-        memoHits.incrementAndGet()
-      } else {
-        val t0 = System.nanoTime()
-        boxWin = runCatching { measureWindow(iw, ih, canonical) }.getOrNull()
-        plateWhite = boxWin?.plate == true
-        if (m != null && icon !is android.graphics.drawable.Animatable) {
-          m.win = boxWin
-          m.plate = plateWhite
-          m.ring = edgeRing
-          m.alpha = icon.alpha
-          m.canonical = canonical
-          m.iw = iw
-          m.ih = ih
-          m.measured = true
-        }
-        if (m != null) memoMisses.incrementAndGet()
-        // 这张小图是**每个图标多出来的一次绘制**，所以成本要能看见（本仓吃过"只报数不量毫秒"的亏）。
-        // 这一行也要带包名：它是**唯一一条"这张没动"的读数** —— 不带名字就没法回答
-        // "某张在彩色那支到底动没动"（2026-10-14 判元宝时正是卡在这里，只能靠反推）。
-        if (boxLogLeft.decrementAndGet() >= 0) {
-          Log.d(TAG, "裁圆外框: ${IconNames.of(icon)} 量一张 %.2f ms → %s".format(
-            (System.nanoTime() - t0) / 1_000_000.0,
-            if (boxWin == null) "满幅（不放大）" else "有留白",
-          ) + " 缓存=${IconCropWindow.winHits}/${IconCropWindow.winHits + IconCropWindow.winMisses}" +
-            " memo=${memoHits.get()}/${memoHits.get() + memoMisses.get()}")
-          // ↑ 尾部那一截是**累计**命中/总量（不是这一条的）。加在最末尾：这两行的前面每个字段
-          //   都是装机后的唯一读数，位置一个不许动。没这一截的话"缓存到底有没有活"只能靠猜。
-        }
+      val t0 = System.nanoTime()
+      boxWin = runCatching { measureWindow(iw, ih, canonical) }.getOrNull()
+      plateWhite = boxWin?.plate == true
+      // 这张小图是**每个图标多出来的一次绘制**，所以成本要能看见（本仓吃过"只报数不量毫秒"的亏）。
+      // 这一行也要带包名：它是**唯一一条"这张没动"的读数** —— 不带名字就没法回答
+      // "某张在彩色那支到底动没动"（2026-10-14 判元宝时正是卡在这里，只能靠反推）。
+      if (boxLogLeft.decrementAndGet() >= 0) {
+        Log.d(TAG, "裁圆外框: ${IconNames.of(icon)} 量一张 %.2f ms → %s".format(
+          (System.nanoTime() - t0) / 1_000_000.0,
+          if (boxWin == null) "满幅（不放大）" else "有留白",
+        ) + " 缓存=${IconCropWindow.winHits}/${IconCropWindow.winHits + IconCropWindow.winMisses}")
+        // ↑ 尾部那一截是**累计**命中/总量（不是这一条的）。加在最末尾：这两行的前面每个字段
+        //   都是装机后的唯一读数，位置一个不许动。没这一截的话"缓存到底有没有活"只能靠猜。
       }
     }
     val win = boxWin ?: return null
@@ -565,7 +504,7 @@ private class MaskedDrawable(
   override fun getConstantState(): ConstantState? =
     icon.constantState?.let { src ->
       object : ConstantState() {
-        override fun newDrawable(): Drawable = MaskedDrawable(src.newDrawable(), trimEdgeRing, memo)
+        override fun newDrawable(): Drawable = MaskedDrawable(src.newDrawable())
 
         override fun getChangingConfigurations(): Int = src.changingConfigurations
       }
