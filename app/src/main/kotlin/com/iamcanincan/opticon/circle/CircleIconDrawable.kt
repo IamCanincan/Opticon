@@ -83,7 +83,19 @@ internal fun themedPlateColor(): Int = themedPlateCache.getOrPut("plate") {
 /** 缓存放在这里而不是 object 里：`getIdentifier` 的口径是"当前进程"，一个进程只有一个答案。 */
 private val themedPlateCache = HashMap<String, Int>()
 
-class CircleIconDrawable(icon: Drawable) :
+class CircleIconDrawable(
+  icon: Drawable,
+  /**
+   * 快捷方式那一路才开：**去掉贴边的那一圈细环**。
+   *
+   * 真机（2026-10-25）：拼多多的四条动态快捷方式，位图自己在**内切圆半径处**画了一圈
+   * 1px 灰环（r=53→54 平均 alpha 10→128），裁成圆之后那圈正好压在圆的边上，看起来像我们
+   * 多套了一圈；高德等同批位图在同半径是 42–51 的渐变，没有这个跳变。
+   * 判据只看"贴边那一格平均不透明、往里三格就透明"这条**形状关系**，不认颜色；
+   * 命中时把遮罩圆收 [EDGE_RING_INSET]（约 1.2%），环整圈切掉，图案本身不动。
+   */
+  private val trimEdgeRing: Boolean = false,
+) :
   AdaptiveIconDrawable(
     // 背景：**桌面自己给主题图标用的那块盘**（2026-10-09），取不到时退回白。
     // 原来这里是写死的 `Color.WHITE`（2026-10-08）。为什么那一手不够：桌面上"已适配"图标的盘
@@ -99,7 +111,7 @@ class CircleIconDrawable(icon: Drawable) :
     //   回滚 = 把这一行改回 `Color.WHITE`（或 `Color.TRANSPARENT`）。
     ColorDrawable(themedPlateColor()),
     // 前景：原图标套上圆形遮罩，再缩到可见区
-    ViewportDrawable(MaskedDrawable(icon)),
+    ViewportDrawable(MaskedDrawable(icon, trimEdgeRing)),
   ) {
 
   /** 原图标留一份引用，只为了 [getConstantState] 能重建出副本。 */
@@ -236,7 +248,11 @@ private class ViewportDrawable(private val inner: Drawable) : Drawable() {
  *   白底画在**前景层的位图里**，绝不动 `AdaptiveIconDrawable` 的背景层：那一层的颜色是给
  *   取色合成器当盘色用的（10-09 定案），换掉它会连带改单色那一支的输出。
  */
-private class MaskedDrawable(private val icon: Drawable) : Drawable() {
+private class MaskedDrawable(
+  private val icon: Drawable,
+  /** 快捷方式那一路才开：去掉贴边的细环（判据与来历见 [CircleIconDrawable] 的构造参数）。 */
+  private val trimEdgeRing: Boolean = false,
+) : Drawable() {
 
   private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
   private val maskMode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
@@ -253,6 +269,10 @@ private class MaskedDrawable(private val icon: Drawable) : Drawable() {
   private var cache: Bitmap? = null
   private var cacheCanvas: Canvas? = null
   private var cacheMask: Path? = null
+  /** 当前遮罩用到的内收量（px）；[edgeRing] 在第一次量窗口之后才知道，变了要重做遮罩路径。 */
+  private var cacheInset = 0f
+  /** 这张图标自带一圈贴边细环（见构造参数 `trimEdgeRing`），遮罩要往里收一点把它切掉。 */
+  private var edgeRing = false
 
   /**
    * 图案窗口（[IconCropWindow] 三条出口里的两条非空者）；null = 满幅或任何"宁可不动"。
@@ -296,6 +316,15 @@ private class MaskedDrawable(private val icon: Drawable) : Drawable() {
     val intrinsicWidth = if (sizeUnknown) width else icon.intrinsicWidth
     val intrinsicHeight = if (sizeUnknown) height else icon.intrinsicHeight
     val box = contentBox(intrinsicWidth, intrinsicHeight, sizeUnknown)
+
+    // 贴边细环是**量完窗口才知道的**，而遮罩在上一段就已经建好了 —— 变了就重做一次路径。
+    // 只收 [EDGE_RING_INSET]（约 1.2%）：够把 1px 环切掉，图案本身看不出来。
+    val inset = if (edgeRing) minOf(width, height) * EDGE_RING_INSET else 0f
+    if (cacheInset != inset) {
+      mask = circleMaskPath(width, height, inset)
+      cacheMask = mask
+      cacheInset = inset
+    }
 
     // 圆内白底：**只给"裁不动"那类**（[plateWhite]，见 [IconCropWindow] ③）。它们不裁、
     // 缩进圆里，盖不满的地方补上的就是这层。裁得好的图标一个像素都不铺 —— 铺了就是白边。
@@ -382,6 +411,10 @@ private class MaskedDrawable(private val icon: Drawable) : Drawable() {
     val px = IntArray(sw * sh)
     scratch.getPixels(px, 0, sw, 0, 0, sw, sh)
     scratch.recycle()
+    if (trimEdgeRing) {
+      edgeRing = hasEdgeRing(px, sw, sh)
+      if (edgeRing) Log.d(TAG, "裁圆：去掉贴边细环 ${IconNames.of(icon)}（扫描 ${sw}x${sh}）")
+    }
     val win = IconCropWindow.of(px, sw, sh) ?: return null
     // 带包名：这两行原本只有尺寸，装机上**没法把"彩色对某张做了什么"和"染色对同一张做了什么"
     // 对起来** —— 2026-10-14 这一轮三次判错都卡在这个洞上（单色那行有包名，这两行没有）。
@@ -415,6 +448,35 @@ private class MaskedDrawable(private val icon: Drawable) : Drawable() {
         " 不透明圆盘 r=${"%.1f".format(win.rCover)} → $dir ${"%.2f".format(win.zoom)}×")
     }
     return win
+  }
+
+  /**
+   * **贴边细环**：内切圆半径处一圈明显不透明、再往里三格就透明。
+   *
+   * 只认这条形状关系，不认颜色：拼多多的四条动态快捷方式位图是透明底 + 红气泡，额外在
+   * 内切圆半径处画了一圈 1px 灰环（扫描图上 r=53→54 平均 alpha 10→128）；高德等同批位图
+   * 在同一半径是 42–51 的渐变，没有跳变，不会被误判。
+   */
+  private fun hasEdgeRing(px: IntArray, sw: Int, sh: Int): Boolean {
+    val n = minOf(sw, sh)
+    if (n < 24) return false
+    val cx = (sw - 1) / 2f
+    val cy = (sh - 1) / 2f
+    val rOut = n / 2f - 1f
+    var outer = 0L
+    var inner = 0L
+    var cnt = 0
+    for (i in 0 until 360) {
+      val t = Math.toRadians(i.toDouble())
+      val c = Math.cos(t).toFloat()
+      val s = Math.sin(t).toFloat()
+      val xo = (cx + rOut * c).toInt(); val yo = (cy + rOut * s).toInt()
+      val xi = (cx + (rOut - 4f) * c).toInt(); val yi = (cy + (rOut - 4f) * s).toInt()
+      if (xo in 0 until sw && yo in 0 until sh) outer += (px[yo * sw + xo] ushr 24) and 0xff
+      if (xi in 0 until sw && yi in 0 until sh) inner += (px[yi * sw + xi] ushr 24) and 0xff
+      cnt++
+    }
+    return outer / cnt >= 100 && inner / cnt <= 30
   }
 
   override fun setAlpha(alpha: Int) {
@@ -455,11 +517,15 @@ private val boxLogLeft = AtomicInteger(BOX_LOG_LIMIT)
  * `EVEN_ODD` 下「整块矩形 + 圆」两个同向轮廓重叠处计数为偶 → 成为洞，
  * 于是填充出来的正是圆外的那一圈，配合 `DST_OUT` 恰好把圆外擦掉。
  */
-private fun circleMaskPath(width: Int, height: Int) = Path().apply {
+private fun circleMaskPath(width: Int, height: Int, inset: Float = 0f) = Path().apply {
   fillType = Path.FillType.EVEN_ODD
   addRect(0f, 0f, width.toFloat(), height.toFloat(), Path.Direction.CW)
-  addCircle(width / 2f, height / 2f, minOf(width, height) / 2f, Path.Direction.CW)
+  addCircle(width / 2f, height / 2f,
+    (minOf(width, height) / 2f - inset).coerceAtLeast(0f), Path.Direction.CW)
 }
+
+/** 贴边细环那一刀把遮罩圆收多少（短边占比）。1.2% 在 384 上约 4.6px，够切掉 1px@108 的环。 */
+private const val EDGE_RING_INSET = 0.012f
 
 /**
  * 诊断用：所有通道最终都汇到这里，所以在这里打一次日志就能知道**这条通道到底跑没跑、在哪个宿主里跑**。
@@ -594,5 +660,6 @@ fun clipToCircle(icon: Drawable, from: String): Drawable {
     Log.d(TAG, "clip from=$from host=$clipHost : ${icon.javaClass.simpleName} " +
       "${icon.intrinsicWidth}x${icon.intrinsicHeight}")
   }
-  return if (icon is CircleIconDrawable) icon else CircleIconDrawable(icon)
+  return if (icon is CircleIconDrawable) icon
+  else CircleIconDrawable(icon, trimEdgeRing = from.contains("Shortcut"))
 }
