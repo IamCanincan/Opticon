@@ -843,6 +843,10 @@ internal object MonochromeMask {
     var preAir = 0
     var preBoxOpaque = false
     var preBoxOpaqueN = 0
+    /** `groundPass` / `bodyPass` 的产物。两个函数只看 pixels/under/层的两个开关（与选支、切底、
+     *  线割、边灰、抬顶这些**每一遍才不同**的旗子无关），所以同一次 [build] 里第二遍起直接用。 */
+    var modelGround: Pass? = null
+    var modelBody: Pass? = null
     var preTonal = false
     var preTonalSeen: Tonal? = null
     var preTonalWhy = 0
@@ -1096,9 +1100,9 @@ internal object MonochromeMask {
     //   当场被搬回满幅支 —— 满幅那一边被切干净之后，「参照的淡膜更低」不再成立。
     //   拼多多 `中 0.08→0.19、α 232→205` 就是代价，而它本来是对的。
     val s = checkNotNull(pool.get())
-    // 一次 build 里的逐像素预计算（Lab / 内容框 / boxOpaque / tonalClass）只做一遍。
+    // 一次 build 里的逐像素预计算（Lab / 内容框 / boxOpaque / tonalClass / 两遍参照）只做一遍。
     s.preLab = false; s.preBounds = false; s.preBoxOpaque = false; s.preTonal = false
-    s.preAirDist = false
+    s.preAirDist = false; s.modelGround = null; s.modelBody = null
     val ramp = buildOnce(pixels, w, h, plateIsLayer, false, under, plateIsSubject = plateIsSubject,
       cutBorder = false)
     // 【底云】见 [plateCloudErase]。⚠ 与【广色度】同一条规矩：**只施加在交付的那几份成品上**，
@@ -1719,8 +1723,19 @@ internal object MonochromeMask {
     val ownPct = if (plateLayer) ownBrightPlate(pixels, w, h, box, s) else 0
     val ownPlate = ownPct >= PLATE_OWN_MIN
     // 1) 两遍参照。顺序固定：第二遍要用第一遍剩下的那一半当工作集。
-    val ground = groundPass(pixels, w, h, box, band, g, s, plateLayer, plateIsSubject)
-    val body = bodyPass(pixels, w, h, box, g, s)
+    // 同一次 build 里后续几遍（选支探针 / 切底 / 抬顶 / 线割）用的是**同一组输入**，
+    // 而这两个函数只看 pixels/under/层的开关 —— 从第二遍起直接取上一遍的产物。
+    val ground: Pass
+    val body: Pass
+    val mg = s.modelGround
+    if (mg != null) {
+      ground = mg
+      body = checkNotNull(s.modelBody)
+    } else {
+      ground = groundPass(pixels, w, h, box, band, g, s, plateLayer, plateIsSubject)
+      body = bodyPass(pixels, w, h, box, g, s)
+      s.modelGround = ground; s.modelBody = body
+    }
 
     // 2) 明度序的两个刻度，都从这张图自己的分布量：
     //    · `amp` = |ΔL| 的 p[LAYER_AMP_PCT] —— 同一距离上把两侧排开时要按多大跨度归一；
