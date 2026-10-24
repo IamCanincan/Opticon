@@ -1378,11 +1378,13 @@ internal object MonochromeMask {
     if (s.labL.size < n) return o
     val ink = IntArray(n) { (mask[it] ushr 24) and 0xff }
     val opaque = BooleanArray(n) { ((src[it] ushr 24) and 0xff) == 255 }
-    val cloud = HashMap<Int, Int>()
+    // 逐像素 `HashMap.merge` 会把每个 Lab 格键装箱一次（JFR 分配榜上这段排得上前几）；
+    // 这里只要计数、而且后面只做"≥minCount 就进集合"，与遍历顺序无关 ⇒ 换成 primitive 表。
+    val cloud = IntIntMap()
     var plateN = 0
     var plateL = 0.0
     for (i in 0 until n) if (opaque[i] && ink[i] == 0) {
-      plateN++; plateL += s.labL[i].toInt() / 64.0; cloud.merge(cloudBin(s, i), 1) { a, b -> a + b }
+      plateN++; plateL += s.labL[i].toInt() / 64.0; cloud.inc(cloudBin(s, i))
     }
     // 底不足 2,000 格 = 这张压根没有"底"可言（整张都是主体），不开火。
     if (plateN < CLOUD_MIN_PLATE_CELLS) return o
@@ -1390,7 +1392,7 @@ internal object MonochromeMask {
     // 一只 Lab 格子要被底用过至少 CLOUD_MIN_PERMILLE（千分比）才算"底用过的颜色"
     val minCount = maxOf(CLOUD_MIN_CELLS, plateN * CLOUD_MIN_PERMILLE / 1000)
     val used = HashSet<Int>((cloud.size * 2).coerceAtLeast(64))
-    for ((b, c) in cloud) if (c >= minCount) used.add(b)
+    cloud.forEach { b, c -> if (c >= minCount) used.add(b) }
     if (used.isEmpty()) return o
     // 离实墨几格：只当"边灰不许碰"那一道用。⚠ 试过再拿它当**洪泛的墙**（不许穿主体的光晕），
     //   量下来不分离：halo=3/5 时工行 26.9%→25.5%/17.1% 而 malody 19.1%→17.3%/13.1% —— 两边一起降，

@@ -26,6 +26,9 @@ internal class IntIntMap(initial: Int = 1024) {
     used = 0
   }
 
+  /** 已用的键数（调用方只拿它开集合容量）。 */
+  val size: Int get() = used
+
   fun get(key: Int): Int {
     val k = key + 1
     var i = mix(key) and mask
