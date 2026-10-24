@@ -828,6 +828,21 @@ internal object MonochromeMask {
      *  用途见 [fitGround] 里 `rb` 那一段。⚠ 自己的数组：借 `pass` / `visited` 的下场
      *  [region] 那条已经写过一遍。 */
     var rimBand = ByteArray(0)
+    /**
+     * 同一次 [build] 里会跑多个 `buildOnce`（选支探针 / 交付），而 **Lab、内容框、boxOpaque、
+     * tonalClass 只依赖 pixels** —— 第二、三遍不必重算。`build()` 开头统一作废。
+     */
+    var preLab = false
+    var preBounds = false
+    var preBox: Rect? = null
+    var preAir = 0
+    var preBoxOpaque = false
+    var preBoxOpaqueN = 0
+    var preTonal = false
+    var preTonalSeen: Tonal? = null
+    var preTonalWhy = 0
+    /** 到空气的距离场也只依赖 pixels/box（[A_AIR]），同一次 build 的多个 buildOnce 共用。 */
+    var preAirDist = false
     /** 第二遍降层次的"围住"标记：1 = 比主体亮且够远（降档候选）；2 = 这些候选里能从**空气**
      *  只踩候选格走得到的那些 —— 那是设计者的第二种颜色，不是镂空。用途见 [build] 里 `kc` 那段。 */
     var knockReach = ByteArray(0)
@@ -1075,9 +1090,12 @@ internal object MonochromeMask {
     //   第一版把切背景直接写进交付循环，7 张（金山文档/高德/谷歌翻译/美的/拼多多/学信网/WebAPK）
     //   当场被搬回满幅支 —— 满幅那一边被切干净之后，「参照的淡膜更低」不再成立。
     //   拼多多 `中 0.08→0.19、α 232→205` 就是代价，而它本来是对的。
+    val s = checkNotNull(pool.get())
+    // 一次 build 里的逐像素预计算（Lab / 内容框 / boxOpaque / tonalClass）只做一遍。
+    s.preLab = false; s.preBounds = false; s.preBoxOpaque = false; s.preTonal = false
+    s.preAirDist = false
     val ramp = buildOnce(pixels, w, h, plateIsLayer, false, under, plateIsSubject = plateIsSubject,
       cutBorder = false)
-    val s = checkNotNull(pool.get())
     // 【底云】见 [plateCloudErase]。⚠ 与【广色度】同一条规矩：**只施加在交付的那几份成品上**，
     //   挑支用的 `ramp` / `cut` / `ref0` 一律不过 —— 四道守卫（`meanAlpha` / `渣` / `largest` /
     //   `components`）读的就是掩码本身，刀先进比较，守卫就是被自己改过的数喂的。
@@ -1610,18 +1628,22 @@ internal object MonochromeMask {
   ): Output {
     val total = w * h
     if (total <= 0) return Output(IntArray(0), 0f, 0f, 0f, 0, 0f, 0f, "尺寸非法 → 空层")
-    val airCount = IntArray(1)
-    val box = contentBounds(pixels, w, h, airCount)
+    val s = checkNotNull(pool.get()) { "withInitial 建的 ThreadLocal 不会给回 null" }
+    val box: Rect?
+    if (s.preBounds) box = s.preBox else {
+      val airCount = IntArray(1)
+      box = contentBounds(pixels, w, h, airCount)
+      s.preBox = box; s.preAir = airCount[0]; s.preBounds = true
+    }
       // ⚠ **这里曾经改成过 `Output(null, …)`（"交回桌面"），被兼容性台当场拦下**（`PASS 62→58 / FAIL 6→10`，
       //   红的全是具名夹具 `整张透明`）：那条契约是 `CompatKt` 里 `wantsEmpty = true` **故意钉的**，
       //   不是漏看的旧 bug。改它需要一次真机观察（交回 null 之后桌面到底画什么），而我没有，所以撤回。
       //   另：真机上这一支 60 次全是「名字解析不出的 `GradientDrawable`、整张透明」，
       //   交出的是一张逐字节全零的掩码（屏幕上等于图标没了）—— 那是**已知代价**，见 KNOWN-LIMITS。
-      ?: return Output(IntArray(total), 0f, 0f, 0f, 0, 0f, 0f, "整张透明 → 空层")
+    if (box == null) return Output(IntArray(total), 0f, 0f, 0f, 0, 0f, 0f, "整张透明 → 空层")
     val boxArea = box.width().toLong() * box.height()
     val band = (minOf(box.width(), box.height()) / RING_BAND_DIV).coerceIn(2, 8)
     val g = if (minOf(box.width(), box.height()) >= FIELD_MIN_SIDE) FIELD_GRID else FIELD_GRID_MIN
-    val s = checkNotNull(pool.get()) { "withInitial 建的 ThreadLocal 不会给回 null" }
     s.grid = g
     s.ensure(total, g * g)
     // 【SepTone】这一张的挪档结论从这里清零。**归零必须在这一层，不能在 [assignLevels] 里**：
@@ -1636,33 +1658,36 @@ internal object MonochromeMask {
 
     // 0) 每个像素的 Lab 只算一次：后面每一轮洪泛、每一次距离都只是查表 + 一次开方。
     //    三通道在一个函数里出（`labChannel` 每遍都重算 fx/fy/fz，三遍就是三倍的钱）。
-    val lab3 = IntArray(3)
-    // 平色图标里同一个 RGB 会重复几万次，而 [labInto] 每像素是三组长乘除 + 三次查表。
-    // 直接映射缓存（2048 槽）在这里是纯查表 —— 命中与现算逐位相同。
-    val LC = 2048
-    if (s.labCacheKey.size < LC) {
-      s.labCacheKey = IntArray(LC) { -1 }
-      s.labCacheVal = IntArray(LC * 3)
-    }
-    val labKey = s.labCacheKey
-    val labVal = s.labCacheVal
-    for (i in 0 until total) {
-      val px = pixels[i] and 0x00FFFFFF
-      val slot = (px * 0x9E3779B1.toInt()) ushr 21
-      if (labKey[slot] == px) {
-        val o = slot * 3
-        s.labL[i] = labVal[o].toShort()
-        s.labA[i] = labVal[o + 1].toShort()
-        s.labB[i] = labVal[o + 2].toShort()
-      } else {
-        labInto(pixels[i], lab3)
-        val o = slot * 3
-        labVal[o] = lab3[0]; labVal[o + 1] = lab3[1]; labVal[o + 2] = lab3[2]
-        labKey[slot] = px
-        s.labL[i] = lab3[0].toShort()
-        s.labA[i] = lab3[1].toShort()
-        s.labB[i] = lab3[2].toShort()
+    if (!s.preLab) {
+      val lab3 = IntArray(3)
+      // 平色图标里同一个 RGB 会重复几万次，而 [labInto] 每像素是三组长乘除 + 三次查表。
+      // 直接映射缓存（2048 槽）在这里是纯查表 —— 命中与现算逐位相同。
+      val LC = 2048
+      if (s.labCacheKey.size < LC) {
+        s.labCacheKey = IntArray(LC) { -1 }
+        s.labCacheVal = IntArray(LC * 3)
       }
+      val labKey = s.labCacheKey
+      val labVal = s.labCacheVal
+      for (i in 0 until total) {
+        val px = pixels[i] and 0x00FFFFFF
+        val slot = (px * 0x9E3779B1.toInt()) ushr 21
+        if (labKey[slot] == px) {
+          val o = slot * 3
+          s.labL[i] = labVal[o].toShort()
+          s.labA[i] = labVal[o + 1].toShort()
+          s.labB[i] = labVal[o + 2].toShort()
+        } else {
+          labInto(pixels[i], lab3)
+          val o = slot * 3
+          labVal[o] = lab3[0]; labVal[o + 1] = lab3[1]; labVal[o + 2] = lab3[2]
+          labKey[slot] = px
+          s.labL[i] = lab3[0].toShort()
+          s.labA[i] = lab3[1].toShort()
+          s.labB[i] = lab3[2].toShort()
+        }
+      }
+      s.preLab = true
     }
 
     // **这张里到底有没有空气露出来** —— 按**整张画布**数，不按内容框。
@@ -1670,7 +1695,7 @@ internal object MonochromeMask {
     // 而盘是**铺满整个视口**的。按内容框数会把一个实心圆判成"没露空气"：
     // 混元那张圆盘在框内只露 21% 的角（圆占框 ≈78%，算术上就这样），卡在 25% 线下，
     // 于是"另外半个太极"又回来了 —— 而它前景层按画布数是 **61% 空**。
-    val airN0 = airCount[0]
+    val airN0 = s.preAir
     val airCanvasPct = airN0 * 100 / total
     // ⚠ **这一位要自己带前提**：`plateIsLayer` 说"承载面在另一层"，而这句话只有**这张真的露出空气**
     //   时才成立。对表台量出来的反例 `com.limelight.qiin`：背景层是纯色，可前景层自己
@@ -1741,10 +1766,15 @@ internal object MonochromeMask {
     //   β 不再有权把 q 压下去。但**必须再问一句这张是不是真有两个调子** ——
     //   整张纯色也"没有空气"，而它的正确答案是一张空掩码（钉着的性质），
     //   用 `spread`（有符号 ΔL 那条斜坡的端点跨度）挡它：纯色那张 spread 退到下限。
-    var boxOpaque = 0
-    for (y in box.top until box.bottom) {
-      val row = y * w
-      for (x in box.left until box.right) if (Color.alpha(pixels[row + x]) >= A_SOLID) boxOpaque++
+    val boxOpaque: Int
+    if (s.preBoxOpaque) boxOpaque = s.preBoxOpaqueN else {
+      var n = 0
+      for (y in box.top until box.bottom) {
+        val row = y * w
+        for (x in box.left until box.right) if (Color.alpha(pixels[row + x]) >= A_SOLID) n++
+      }
+      s.preBoxOpaqueN = n; s.preBoxOpaque = true
+      boxOpaque = n
     }
     val noAir = boxOpaque.toLong() * 100 >= boxArea.toLong() * NO_AIR_OPAQUE_PCT
     val cov = if (noAir && spread >= TWO_TONE_SPREAD) 255 else ground.meanCov
@@ -1805,8 +1835,15 @@ internal object MonochromeMask {
     // ⚠ `tonalSeen` 只为**报告**留着：以前 `?.takeIf { it.on }` 直接把没开火的那个对象丢掉，
     //   于是 `跨=` 只在开火时印得出来 —— 第十闸摊四档边长时发现"离阈值多远"永远看不见，
     //   而换支恰恰发生在**没开火**那几张身上（2026-10-17）。开火判据一个字没动，还是 `tonal.on`。
-    val tonalWhy = IntArray(1) { if (forceRef) 3 else 0 }
-    val tonalSeen = if (forceRef) null else tonalClass(pixels, w, h, box, tonalWhy)
+    val tonalSeen: Tonal?
+    if (forceRef) tonalSeen = null
+    else if (s.preTonal) tonalSeen = s.preTonalSeen
+    else {
+      val why = IntArray(1)
+      tonalSeen = tonalClass(pixels, w, h, box, why)
+      s.preTonalSeen = tonalSeen; s.preTonalWhy = why[0]; s.preTonal = true
+    }
+    val tonalWhy = IntArray(1) { if (forceRef) 3 else s.preTonalWhy }
     val tonal = tonalSeen?.takeIf { it.on }
     // 候选：盘子是**空气**时不许翻极性。"亮=墨"这条启发式存在的理由是"深盘上的白字"，
     // 而那需要一个**不透明的盘**；四周本来就是透明的时候，翻极性等于把最暗的笔画擦掉
@@ -4075,37 +4112,40 @@ internal object MonochromeMask {
     // 空气=0，框外也算 0（画布的边就是"什么都没有"的边界）。见 [PLATE_EDGE_R]。
     if (s.airDist.size < total) s.airDist = ShortArray(total)
     val ad = s.airDist
-    val INF = (box.width() + box.height()).toShort()
-    for (y in box.top until box.bottom) {
-      val row = y * w
-      for (x in box.left until box.right) {
-        val i = row + x
-        ad[i] = if (Color.alpha(pixels[i]) < A_AIR) 0 else INF
-        if (x > box.left && (ad[i - 1].toInt() + 1) < ad[i].toInt()) ad[i] = (ad[i - 1] + 1).toShort()
-        if (y > box.top) {
-          for (dx in -1..1) {
-            val xx = x + dx
-            if (xx < box.left || xx >= box.right) continue
-            val v = (ad[i - w + dx].toInt() + 1).toShort()
-            if (v < ad[i]) ad[i] = v
+    if (!s.preAirDist) {
+      val INF = (box.width() + box.height()).toShort()
+      for (y in box.top until box.bottom) {
+        val row = y * w
+        for (x in box.left until box.right) {
+          val i = row + x
+          ad[i] = if (Color.alpha(pixels[i]) < A_AIR) 0 else INF
+          if (x > box.left && (ad[i - 1].toInt() + 1) < ad[i].toInt()) ad[i] = (ad[i - 1] + 1).toShort()
+          if (y > box.top) {
+            for (dx in -1..1) {
+              val xx = x + dx
+              if (xx < box.left || xx >= box.right) continue
+              val v = (ad[i - w + dx].toInt() + 1).toShort()
+              if (v < ad[i]) ad[i] = v
+            }
           }
         }
       }
-    }
-    for (y in box.bottom - 1 downTo box.top) {
-      val row = y * w
-      for (x in box.right - 1 downTo box.left) {
-        val i = row + x
-        if (x < box.right - 1 && (ad[i + 1].toInt() + 1) < ad[i].toInt()) ad[i] = (ad[i + 1] + 1).toShort()
-        if (y < box.bottom - 1) {
-          for (dx in -1..1) {
-            val xx = x + dx
-            if (xx < box.left || xx >= box.right) continue
-            val v = (ad[i + w + dx].toInt() + 1).toShort()
-            if (v < ad[i]) ad[i] = v
+      for (y in box.bottom - 1 downTo box.top) {
+        val row = y * w
+        for (x in box.right - 1 downTo box.left) {
+          val i = row + x
+          if (x < box.right - 1 && (ad[i + 1].toInt() + 1) < ad[i].toInt()) ad[i] = (ad[i + 1] + 1).toShort()
+          if (y < box.bottom - 1) {
+            for (dx in -1..1) {
+              val xx = x + dx
+              if (xx < box.left || xx >= box.right) continue
+              val v = (ad[i + w + dx].toInt() + 1).toShort()
+              if (v < ad[i]) ad[i] = v
+            }
           }
         }
       }
+      s.preAirDist = true
     }
     passFromFamilies(pixels, w, box, s, TOL_COARSE shl 6, fams)
     // 第一轮之前先洪泛一次：色场是从「与边界连通的底」上拟合的，没有这一步就没有种子像素。
