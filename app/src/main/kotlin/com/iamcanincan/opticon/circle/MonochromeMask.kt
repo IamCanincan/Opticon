@@ -2301,6 +2301,11 @@ internal object MonochromeMask {
     var tonResN = 0; var tonResSum = 0L
     // 满幅支的两堆浓度直方图（见下面那段解释）；顺手在统计这一趟里摊，不再单扫一遍。
     val hp = IntArray(8); val hd = IntArray(8)
+    // 【族抬】的第一趟（逐色计数）也摊在这里：它只数 α=255 的**源色**，与统计这一趟的
+    //   门槛、范围逐字相同（都只数内容框里的不透明像素），而 `pixels` 在这之前之后都不再改。
+    //   原来它自己又扫一整趟（JFR ~2.5%）；并进来后 `cnt` 的插入顺序变了，但这一段
+    //   **与遍历顺序无关**（逐色阈值，没有 max/平票，见 [IntIntMap]）。
+    val famCnt = IntIntMap()
     // 只数不透明像素 ⇒ 只扫内容框（框外 α<[A_BOX]）。
     for (y in box.top until box.bottom) {
       val row = y * w
@@ -2313,6 +2318,7 @@ internal object MonochromeMask {
           else if ((s.distT[i].toInt() and 0xffff) <= ground.zero) hd[(a / 32).coerceAtMost(7)]++
         }
         if (pa < 255) continue
+        famCnt.inc(pixels[i] and 0x00FFFFFF)
         if (a == 0) continue
         markN++; markSum += a; if (a >= 250) markTop++
         // dep 在这里就是判连通用的那一个数（fitGround 交付段之后，非底的格子没被改写过）。
@@ -2667,16 +2673,8 @@ internal object MonochromeMask {
     run {
       // 逐色计数/求和换 primitive 表（2026-10-23 第二轮 JFR：这段的装箱 HashMap 占冷路径 ~13%）。
       // ⚠ 这段没有 max/平票，遍历顺序不影响结果；有平票的 `fam`（plate 主色）**不换**。
-      val cnt = IntIntMap()
-      // 三个循环都只收不透明像素 ⇒ 只扫内容框。
-      for (y in box.top until box.bottom) {
-        val row = y * w
-        for (x in box.left until box.right) {
-          val p = pixels[row + x]
-          if ((p ushr 24) and 0xff != 255) continue      // 半透明与空气都不参加（AA 自成一族，别爬进去）
-          cnt.inc(p and 0xffffff)
-        }
-      }
+      // 计数在统计那一趟里已经摊好（`famCnt`）：半透明与空气都不参加（AA 自成一族，别爬进去）。
+      val cnt = famCnt
       var hasBig = false
       cnt.forEach { _, n -> if (n >= famMinN) hasBig = true }
       if (hasBig) {
