@@ -366,6 +366,11 @@ object SystemUiHooks {
             ((if (contextField != null) MemberLookup.readField(it, contextField) else null)
                 ?: MemberLookup.readField(it, "mContext")) as? Context
         } ?: ModuleRuntime.hostContext
-        if (context != null) ModuleRuntime.hostContext = context
+        if (context != null) {
+            ModuleRuntime.hostContext = context
+            // 拿到 SystemUI Context 的那刻就把包更新监听装上：不能等彩色通知 ——
+            // 已适配的通知在 forceMonochrome 之前就被跳过，可能很久都等不到一次。
+            runCatching { NotificationIconPatch.ensurePackageWatch() }
+        }
     }
 }

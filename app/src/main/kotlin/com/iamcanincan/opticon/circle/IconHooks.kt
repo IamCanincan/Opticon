@@ -30,6 +30,7 @@ import android.os.Parcel
 import android.os.Process
 import android.util.Log
 import com.iamcanincan.opticon.BuildConfig
+import com.iamcanincan.opticon.runtime.MemberLookup
 import com.iamcanincan.opticon.runtime.ModuleRuntime
 import com.iamcanincan.opticon.runtime.TAG
 import io.github.libxposed.api.XposedInterface
@@ -1732,14 +1733,23 @@ private fun resIdArg(args: List<Any?>): Int? =
  */
 private val ICON_LAYER = Regex("_(foreground|background)$", RegexOption.IGNORE_CASE)
 
+/** `ApplicationInfo.roundIconRes` 在公开 SDK 里是 @hide（编译期 Unresolved），只能反射；解析一次。 */
+private val ROUND_ICON_RES: java.lang.reflect.Field? =
+  runCatching { MemberLookup.findField(ApplicationInfo::class.java, "roundIconRes") }.getOrNull()
+
 private fun unmarkedAppIcon(method: Method, args: List<Any?>, host: Any?): String? {
   val rid = resIdArg(args)
   if (rid == null || rid == 0 || rid.isMarkedIcon()) return null
   val app = args.firstOrNull { it is ApplicationInfo } as? ApplicationInfo
-  // ⚠ 只比 `icon`：这个 compile SDK 上 `ApplicationInfo.roundIcon` 解析不到（编译期 Unresolved），
-  //   而真机上这一族（Hook.JiuWu.Xp）声明的正是 `icon`。只声明 `roundIcon` 的应用这一版会漏，
-  //   但那种会在"只记录"名单里露头，届时再补。
   if (app != null && app.icon == rid) return "pm:${app.packageName}"
+  // **只声明 `roundIcon`、没有 `icon` 的应用**：此时 roundIcon 是它唯一的图标资源，不算
+  // 「两份各归各的」那条裁定（`icon != 0` 时 roundIcon 仍原样留给平台，见 [markResolveInfo]）。
+  // ⚠ 只影响"未标记包装"这一支（非自适应 drawable），标记路径仍然只动 `icon`。
+  // ⚠ 反射解析不到（被 hidden-API 挡住）时退回按资源名那条兜底，不会比现在更差。
+  if (app != null && app.icon == 0) {
+    val round = ROUND_ICON_RES?.let { runCatching { it.getInt(app) }.getOrNull() } ?: 0
+    if (round != 0 && round == rid) return "pm:${app.packageName}"
+  }
   val res = host as? Resources ?: return null
   val nm = resourceName(res, rid)
   if (ICON_LAYER.containsMatchIn(nm.substringAfterLast('/'))) return null

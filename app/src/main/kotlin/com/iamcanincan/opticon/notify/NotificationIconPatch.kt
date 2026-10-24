@@ -1,12 +1,16 @@
 package com.iamcanincan.opticon.notify
 
 import android.app.Notification
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.Bundle
 import android.service.notification.StatusBarNotification
 import java.util.Collections
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 import com.iamcanincan.opticon.runtime.ModuleRuntime
 
@@ -29,6 +33,9 @@ object NotificationIconPatch {
         try {
             val notification = sbn.notification ?: return
             val pkg = sbn.packageName
+            // 每条通知都试一次（原子位，已装即返回）：不能只放在 `forceMonochrome` ——
+            // 已适配的通知在它之前就被跳过，可能很久都等不到一次。
+            ensurePackageWatch()
             // **处理标记**（2026-10-22 深夜第二版）：两条钩子处理的是**同一份通知**，标记位随
             //   `Notification.extras` 走 —— 行钩子 `inflateViews` 再把这份通知送进来时，一次
             //   Bundle 查询就放过，不必 decode + 两趟 96² 全图扫描，也不必建目标上下文。
@@ -105,6 +112,7 @@ object NotificationIconPatch {
         pkg: String
     ): Boolean {
         val f0 = System.nanoTime()
+        ensurePackageWatch()
         // ① **两级缓存**（2026-10-22 深夜第二版）：同一条通知每次更新都会重新进来，而结论只取决于（包, 资源）。
         //   正向：我们已经造好的那张 Icon，命中直接装回 —— 不重新解码、也不重新合成。
         //   负向：上次判成「已适配 / 放弃」的，这次**连解码都不做** —— 已适配是大多数
@@ -242,6 +250,52 @@ object NotificationIconPatch {
         }
     }
 
+        /** `hostContext` 就绪后装一次包更新监听；没就绪就复位，下一次通知再试。 */
+    private val pkgWatch = AtomicBoolean(false)
+
+    @Suppress("UnspecifiedRegisterReceiverFlag")
+    fun ensurePackageWatch() {
+        if (!pkgWatch.compareAndSet(false, true)) return
+        val ctx = runCatching { ModuleRuntime.hostContext }.getOrNull()
+        if (ctx == null) { pkgWatch.set(false); return }
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(c: Context?, intent: Intent?) {
+                val pkg = intent?.data?.encodedSchemeSpecificPart ?: return
+                invalidate(pkg)
+            }
+        }
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_PACKAGE_REPLACED)
+            addAction(Intent.ACTION_PACKAGE_CHANGED)
+            addAction(Intent.ACTION_PACKAGE_ADDED)
+            addAction(Intent.ACTION_PACKAGE_REMOVED)
+            addDataScheme("package")
+        }
+        val ok = runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+                ctx.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            else ctx.registerReceiver(receiver, filter)
+            true
+        }.getOrElse {
+            ModuleRuntime.logW("通知缓存：包更新监听装不上（${it.javaClass.simpleName}），旧形状要等 SystemUI 重启")
+            false
+        }
+        if (ok) ModuleRuntime.logI("通知缓存：包更新监听已装") else pkgWatch.set(false)
+    }
+
+    /**
+     * 应用更新 / 卸载：清掉这个包的正向形状与负向结论。
+     *
+     * 这是"键不含应用版本"那条已知边界的正解：**不把版本塞进每次通知都要拼的热键**，
+     * 只在包真的变了时清一次。缓存键仍是 `包:资源id`，命中路径一个额外调用都不加。
+     */
+    private fun invalidate(pkg: String) {
+        val pre = "$pkg:"
+        synchronized(shapeCache) { shapeCache.keys.removeAll { it.startsWith(pre) } }
+        synchronized(skipCache) { skipCache.keys.removeAll { it.startsWith(pre) } }
+        ModuleRuntime.logI("通知缓存：$pkg 变了，清掉旧形状/旧结论")
+    }
+
     /**
      * 正向形状缓存：键 = `包:资源id`（只对 RESOURCE 图标生效）；上限 32 个 Icon（96² 约 36 KB/个）。
      *
@@ -249,8 +303,9 @@ object NotificationIconPatch {
      *   而 access-order 的 `LinkedHashMap.get` 本身会改链表。计数与"60 秒一行"只影响诊断，
      *   但缓存结构被并发改坏会直接把通知路径打崩，所以整张表挂在一把锁上。
      *
-     * 已知边界：键不含应用版本。应用更新后若复用同一个资源 id 而图变了，SystemUI 不重启
-     *   就会一直用旧图 —— 重启后自然消失；这条代价换的是"同一条通知每次刷新都不再重解码"。
+     * **键不含应用版本**，由 [ensurePackageWatch] 在包更新/卸载时把这两张表里该包的条目清掉 ——
+     * 应用更新复用同一个资源 id 也拿不到旧图，且**命中路径不增加任何调用**。
+     * 监听装不上时退回旧边界：等 SystemUI 重启才换新图（日志里会写明）。
      */
     private val shapeCache = Collections.synchronizedMap(
         object : LinkedHashMap<String, Icon>(16, 0.75f, true) {
@@ -260,7 +315,7 @@ object NotificationIconPatch {
 
     /**
      * 负向缓存：**上次的结论就是"什么都不用做"**（已适配 / 放弃）。
-     * 只存字符串，上限 256 条（≈10 KB）；与正向缓存同一套口径与同一条已知边界（键不含应用版本）。
+     * 只存字符串，上限 256 条（≈10 KB）；与正向缓存同一套口径，也由包更新监听一起清。
      * 为什么值得：已适配那一族恰好是更新最频繁的（常驻通知、媒体通知），而每次重判都要
      * 解码 + 两趟 96² 扫描 —— 复判的是一个**不会再变**的结论。
      */

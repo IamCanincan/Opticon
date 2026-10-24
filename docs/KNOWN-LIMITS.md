@@ -354,7 +354,9 @@
   **How to apply:** 再遇到「桌面和应用信息页不一样」的报法，**先查这个应用声明了几份图标**
   （`aapt2 dump resources <apk> | grep -i ic_launcher`）：两份不同资源 → 天然不同源，回这一条；
   只有一份 → 那是**缩放**差异（同一幅画被平台缩了），属我们该修的（`Hook.JiuWu.Xp` 那类）。
-  ⚠ 已知残留：只声明 `roundIcon`（没有 `icon`）的应用，`unmarkedAppIcon` 那一支只比 `app.icon`，这一版会漏。
+  ✅ **2026-10-24 补上**：`unmarkedAppIcon` 在 `app.icon == 0` 时改读 `ApplicationInfo.roundIconRes`
+  （公开 SDK 里是 @hide，`MemberLookup` 反射一次；解析不到退回按资源名兜底）—— 只声明 `roundIcon`
+  的应用现在能走未标记包装。`icon != 0` 时仍不碰 roundIcon（上一段的裁决不变），标记路径也只动 `icon`。
 
 - **图标标记 id 不再假设应用资源住在 `0x7f`**（2026-10-15 换掉"顶字节换 `0x6e`、还原时 OR 回 `0x7f`"那套）。
   真机 `Hook.JiuWu.Xp` 的 APK **5701 个资源全在 `0x95` 包号下**（`aapt2 link --package-id 0x95`）——
@@ -644,6 +646,11 @@
     两条通知（USB 调试/充电）是 67% vs 100%，都属已适配；统一缩放会把 67% 放大 42%、把系统图标
     也改大小，观感反而更怪。**定案：已适配一个像素都不碰**；被补/代用仍走 0.95。补丁留档
     `/d/tmp/adapted-scale-attempt.patch`，别再试。
+
+  - ✅ **2026-10-24 形状/跳过缓存的"键不含应用版本"边界已收**：SystemUI 进程里装一次包更新广播
+    （REPLACED / CHANGED / ADDED / REMOVED，`RECEIVER_NOT_EXPORTED`），按 `包:` 前缀清两张表；
+    命中路径一个额外调用都不加。⚠ 装机验证待 SystemUI 真重启（`adb force-stop` 对常驻 SystemUI
+    无效、pid 不变）；监听装不上时日志会写明，并退回"等 SystemUI 重启"的旧边界。
 
   - ✅ **2026-10-23 第九轮：找到新信号并按最窄口径落码（纯色盘雾区清理，`PlateFog`）**。
     八个运行时新特征里，区域到盘色的平均 真 ΔE76（`盘Δ`）在内部区域 AUC **0.870**
