@@ -41,7 +41,9 @@ import kotlin.math.max
  *    彩色的整图标 = **盘 + 前景**，盘铺满 → **满幅**；染色量的是**前景层本身**（只占 ~0.61）
  *    → 拿到一个 ~1.6× 的窗口 → 屏上把前景撑到**满盘**。占盘：彩 `1.5×0.61 = 0.92`／染 `1.0`。
  *
- * `--fix` 那一列就是**拟改**：只给前景层那一支，染色也**不搬**（窗口置空）→ 与彩色逐字一致。
+ * 只给前景层那一支（背景是纯色盘）的修法 2026-10-16 就已进生产：染色也**不搬**（窗口置空）
+ * → 与彩色逐字一致。本表自 2026-10-25 起直接按**生产口径**量（以前"现状"列还按旧口径，
+ * 会印出 83 张假差；"拟改"列才是生产 —— 那一列已删）。
  * ⚠ 这把尺子只判「几何」，不判形状/极性（那是 `MonochromeMask` 那批尺子的事）。
  *
  * 用法：`sh run.sh harness.DeckKtKt <目录...> [--edge=384]`
@@ -60,9 +62,9 @@ fun main(args: Array<String>) {
       if (c.size > 18 && c[18] != "-") flat.add(c[2])
     }
   }
-  println("%-44s %-4s %-6s %-11s %-11s %-7s %-7s %-7s %-7s %s".format(
-    "图标", "自适应", "flatten", "彩色窗(层跨)", "染色窗(层跨)", "占盘彩", "占盘染", "现差", "改后差", "备注"))
-  var n = 0; var badNow = 0; var badFix = 0; var capHold = 0
+  println("%-44s %-4s %-6s %-11s %-11s %-7s %-7s %s".format(
+    "图标", "自适应", "flatten", "彩色窗(层跨)", "生产染色窗", "占盘彩", "占盘染", "差/备注"))
+  var n = 0; var badNow = 0; var capHold = 0
   for (d in dirs) {
     val files = d.listFiles()?.filter {
       it.extension == "png" && !it.name.contains("preview") &&
@@ -92,8 +94,10 @@ fun main(args: Array<String>) {
         if (wc == null) cbSpan else cbSpan / winSpan(wc)
       }
 
-      // ── 染色侧（产品现状）：量层本身，`takeIf zoom<=1.82`（**不看分支**，只给前景层那支也照量）──
-      val wmNow = IconCropWindow.of(px, edge, edge)?.takeIf { it.zoom <= 1.82f }
+      // ── 染色侧（**生产口径**）：量层本身，`takeIf zoom<=1.82`；只给前景层那一支恒不搬
+      //   （`fgOnly` 的窗口置空 2026-10-16 就在生产里；本表 2026-10-25 才补上 —— 以前这里
+      //   还按旧口径印 fgOnly 的差，于是出现 83 张假差，"拟改"列才是生产）──
+      val wmNow = if (fgOnly) null else IconCropWindow.of(px, edge, edge)?.takeIf { it.zoom <= 1.82f }
       val capHit = !adaptive && wmNow == null && IconCropWindow.of(px, edge, edge) != null
       if (capHit) capHold++
       val monoFracNow = if (adaptive) {
@@ -102,18 +106,8 @@ fun main(args: Array<String>) {
         if (wmNow == null) cbSpan else cbSpan / winSpan(wmNow)
       }
 
-      // ── 染色侧（拟改）：只给前景层那一支不搬 ──
-      val wmFix = if (fgOnly) null else wmNow
-      val monoFracFix = if (adaptive) {
-        if (wmFix == null) cbSpan * 1.5f else cbSpan / winSpan(wmFix)
-      } else {
-        if (wmFix == null) cbSpan else cbSpan / winSpan(wmFix)
-      }
-
       val dNow = colorFrac - monoFracNow
-      val dFix = colorFrac - monoFracFix
       if (abs(dNow) > 0.04f) badNow++
-      if (abs(dFix) > 0.04f) badFix++
       val note = when {
         capHit -> "染色压 1.82 退回（彩无上限 → 已知不一致）"
         fgOnly -> "只给前景层"
@@ -121,7 +115,7 @@ fun main(args: Array<String>) {
         adaptive -> "自适应"
         else -> "非自适应"
       }
-      println("%-44s %-4s %-6s %-11s %-11s %-7s %-7s %-7s %-7s %s".format(
+      println("%-44s %-4s %-6s %-11s %-11s %-7s %-7s %s".format(
         file.name.take(44), if (adaptive) "是" else "否", if (flatten) "是" else "否",
         when {
           !adaptive -> wc?.let { fmtPct(winSpan(it)) } ?: "满幅"
@@ -130,10 +124,10 @@ fun main(args: Array<String>) {
         },
         wmNow?.let { fmtPct(winSpan(it)) } ?: "满幅",
         "%.0f%%".format(colorFrac * 100), "%.0f%%".format(monoFracNow * 100),
-        "%+.0f".format(dNow * 100), "%+.0f".format(dFix * 100), note))
+        "%+.0f".format(dNow * 100), note))
     }
   }
-  println("共 $n 张；**现状两路几何差 >4 个点的 $badNow 张**；拟改后差 >4 个点的 $badFix 张；染色压上限退回的 $capHold 张")
+  println("共 $n 张；**生产两路几何差 >4 个点的 $badNow 张**；染色压上限退回的 $capHold 张")
 }
 
 /** 窗口跨度（取最长边）：`max(r-l, b-t)`，单位 = 量它的那张画布 0..1。null 不在这里。 */

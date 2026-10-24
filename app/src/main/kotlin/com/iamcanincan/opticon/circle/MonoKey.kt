@@ -85,12 +85,27 @@ internal object MonoKey {
    */
   fun hex(key: Long): String = java.lang.Long.toHexString(key)
 
-  /** 逐像素 FNV，先钉进长度与这一路的编号 —— 前缀相同、长度不同的两张，或「同一组像素挂在
-   *  `px` 还是挂在 `under` 上」，都要分开。 */
+  /**
+   * 逐像素 FNV，先钉进长度与这一路的编号 —— 前缀相同、长度不同的两张，或「同一组像素挂在
+   * `px` 还是挂在 `under` 上」，都要分开。
+   *
+   * **两个像素合成一个 64 位字再折**（2026-10-25 命中路径）：命中时这一步对 384² 要走
+   * 147k 次 Long 乘法，真机账里 `键` 一项 ~1.9ms、占一次命中 ~3 成的计算。两像素一并
+   * 把乘法次数减半，键空间与单像素敏感都不变（`MonoKeyKt` 逐条钉：语料两两不撞、
+   * 每一个像素位变化都换键）。顺序仍由下标决定：奇数长度最后补一格。
+   * ⚠ 旧键与新键**不兼容**（算法变了）；缓存目录按装机身份分，换装即新目录，不会读到旧键。
+   */
   private fun fold(h0: Long, px: IntArray?, tag: Long): Long {
     if (px == null) return mix(h0, tag shl 40)
     var h = mix(h0, (px.size.toLong() or (tag shl 48)))
-    for (p in px) h = (h xor p.toLong()) * FNV_PRIME
+    var i = 0
+    val n = px.size
+    while (i + 1 < n) {
+      val v = (px[i].toLong() shl 32) or (px[i + 1].toLong() and 0xffffffffL)
+      h = (h xor v) * FNV_PRIME
+      i += 2
+    }
+    if (i < n) h = (h xor px[i].toLong()) * FNV_PRIME
     return h
   }
 

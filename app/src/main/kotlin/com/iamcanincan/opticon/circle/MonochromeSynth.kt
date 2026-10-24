@@ -263,6 +263,12 @@ internal object MonochromeSynth {
   private val hitRasterNs = java.util.concurrent.atomic.AtomicLong()
   private val hitKeyNs = java.util.concurrent.atomic.AtomicLong()
   private val hitRestNs = java.util.concurrent.atomic.AtomicLong()
+  // 累计均值会被**开头的磁盘命中**抬起来（一次重启前几百次是磁盘层），单看它判不出
+  // "内存命中到底几毫秒"。这一段是最近 [HIT_LOG_EVERY] 次的窗口值（2026-10-25 加）。
+  private val winNanos = java.util.concurrent.atomic.AtomicLong()
+  private val winRasterNs = java.util.concurrent.atomic.AtomicLong()
+  private val winKeyNs = java.util.concurrent.atomic.AtomicLong()
+  private val winCalls = java.util.concurrent.atomic.AtomicLong()
 
   // 命中路径每次 bind 都要一块 `edge²` 的像素数组（384² = 590KB）。`render` 是 @Synchronized，
   // 按 size 复用同一块即可；一次桌面启动 ~1600 次 bind，省掉的是同尺寸短命数组的分配与 GC。
@@ -275,11 +281,23 @@ internal object MonochromeSynth {
     hitRasterNs.addAndGet(raster)
     hitKeyNs.addAndGet(key)
     hitRestNs.addAndGet(ns - raster - key)
+    winNanos.addAndGet(ns)
+    winRasterNs.addAndGet(raster)
+    winKeyNs.addAndGet(key)
     val n = hitCalls.incrementAndGet()
     if (n % HIT_LOG_EVERY == 0L) {
       Log.d(TAG, "Mono: 命中均=${hitNanos.get() / n / 1000}µs" +
         " 栅格=${hitRasterNs.get() / n / 1000} 键=${hitKeyNs.get() / n / 1000}" +
         " 其余=${hitRestNs.get() / n / 1000}")
+      val w = winCalls.incrementAndGet()
+      Log.d(TAG, "Mono: 命中窗（最近$HIT_LOG_EVERY 次）均=${winNanos.get() / HIT_LOG_EVERY / 1000}µs" +
+        " 栅格=${winRasterNs.get() / HIT_LOG_EVERY / 1000}" +
+        " 键=${winKeyNs.get() / HIT_LOG_EVERY / 1000}" +
+        " 其余=${(winNanos.get() - winRasterNs.get() - winKeyNs.get()) / HIT_LOG_EVERY / 1000}" +
+        " 窗#$w")
+      winNanos.set(0)
+      winRasterNs.set(0)
+      winKeyNs.set(0)
     }
   }
 
