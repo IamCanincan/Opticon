@@ -1736,6 +1736,10 @@ private val ICON_LAYER = Regex("_(foreground|background)$", RegexOption.IGNORE_C
 /** `ApplicationInfo.roundIconRes` 在公开 SDK 里是 @hide（编译期 Unresolved），只能反射；解析一次。 */
 private val ROUND_ICON_RES: java.lang.reflect.Field? =
   runCatching { MemberLookup.findField(ApplicationInfo::class.java, "roundIconRes") }.getOrNull()
+    .also {
+      Log.d(TAG, if (it != null) "裁圆：roundIconRes 反射可用"
+        else "裁圆：roundIconRes 反射不可用，roundIcon-only 退回按资源名")
+    }
 
 private fun unmarkedAppIcon(method: Method, args: List<Any?>, host: Any?): String? {
   val rid = resIdArg(args)
