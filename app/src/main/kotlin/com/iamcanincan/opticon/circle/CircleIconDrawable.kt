@@ -416,6 +416,37 @@ private class MaskedDrawable(
       if (edgeRing) Log.d(TAG, "裁圆：去掉贴边细环 ${IconNames.of(icon)}（扫描 ${sw}x${sh}）")
     }
     val win = IconCropWindow.of(px, sw, sh) ?: return null
+    // 快捷方式里"透明底 + 一个图案"的那一类（拼多多的四条动态快捷方式就是）没有实心内容可裁：
+    // `keepPct=0` 会让共用判据落进"不规则图标"那一档，进而**缩小 + 圆内补白** —— 屏幕上就是
+    // 图案外面多了一整块白盘（主人 2026-10-25：「拼多多的快捷方式比别的图标多套了一圈」）。
+    // 这一档对快捷方式直接**按满幅**画：不缩、不补白，图案保持它自己的比例；位图自带的贴边
+    // 细环由 [trimEdgeRing] 那一刀在遮罩上切掉。
+    // ⚠ 第一版对所有 `keepPct=0` 的快捷方式都按满幅 → **有些图案被圆切掉了**（主人 2026-10-25）。
+    //   现在放行条件多两条：① 位图确认有那圈贴边细环；② **把环带排除之后，图案自己落在圆内**
+    //   （最远不透明格 ≤ 0.95R）—— 这一条保证"不缩"不会裁到任何东西。图案碰到边的一律退回
+    //   原来的"缩小 + 圆内补白"。
+    if (trimEdgeRing && edgeRing && win.plate && win.keepPct == 0) {
+      val n = minOf(sw, sh)
+      val r = n / 2f
+      val cx = (sw - 1) / 2f
+      val cy = (sh - 1) / 2f
+      val skip2 = (r - 3f) * (r - 3f)          // 环带（R-3..R）不计入图案
+      val fit2 = (r * 0.95f) * (r * 0.95f)
+      var max2 = 0f
+      for (y in 0 until sh) for (x in 0 until sw) {
+        if (((px[y * sw + x] ushr 24) and 0xff) < 64) continue
+        val dx = x - cx
+        val dy = y - cy
+        val d2 = dx * dx + dy * dy
+        if (d2 >= skip2) continue
+        if (d2 > max2) max2 = d2
+      }
+      if (max2 <= fit2) {
+        Log.d(TAG, "裁圆外框: ${IconNames.of(icon)} 快捷方式：细环 + 图案在圆内 → 按满幅：不缩、不补白")
+        return null
+      }
+      Log.d(TAG, "裁圆外框: ${IconNames.of(icon)} 快捷方式：图案碰到圆外 → 保留缩小+补白")
+    }
     // 带包名：这两行原本只有尺寸，装机上**没法把"彩色对某张做了什么"和"染色对同一张做了什么"
     // 对起来** —— 2026-10-14 这一轮三次判错都卡在这个洞上（单色那行有包名，这两行没有）。
     val who = IconNames.of(icon)
@@ -524,8 +555,15 @@ private fun circleMaskPath(width: Int, height: Int, inset: Float = 0f) = Path().
     (minOf(width, height) / 2f - inset).coerceAtLeast(0f), Path.Direction.CW)
 }
 
-/** 贴边细环那一刀把遮罩圆收多少（短边占比）。1.2% 在 384 上约 4.6px，够切掉 1px@108 的环。 */
-private const val EDGE_RING_INSET = 0.012f
+/**
+ * 贴边细环那一刀把遮罩圆收多少（短边占比）。
+ *
+ * 实测这圈环在半径上的分布（拼多多 108 档，720 点平均 alpha）：0.963R≈11、0.972R≈46、
+ * 0.977R≈77、0.981R≈128、0.991R≈194 —— 可见质量从 0.97R 才开始。遮罩半径 = (1 − 2×这个值)R，
+ * 所以 **1.2% 只到 0.976R，还会留下 alpha≈77 的一条**；2% 到 0.96R（那里 alpha≈11，与透明底同级），
+ * 整圈才算真去掉。图案最远 0.58R，收 2% 碰不到它。
+ */
+private const val EDGE_RING_INSET = 0.02f
 
 /**
  * 诊断用：所有通道最终都汇到这里，所以在这里打一次日志就能知道**这条通道到底跑没跑、在哪个宿主里跑**。
