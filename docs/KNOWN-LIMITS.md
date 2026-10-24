@@ -629,19 +629,18 @@
     并保留原图；这条是“尽量不交一块”，不保证每家都有好结果。**已适配的实心块仍按“不碰”留原样**
     （主人 10-23 定案），这条只覆盖彩色 / 被补里合成失败的那一类。
 
-- **通知小图标：SystemUI 重启后，顶栏那批旧图标要等应用重发一次**（2026-10-23 量过，**不再猜**）。
-  覆盖是两条钩子：通知**进来那一刻**（`onNotificationPosted`，状态栏那排也由此覆盖）
-  ＋ 通知**行重绑**（`inflateViews`）。重启前就在的通知不会重走 `onNotificationPosted`；
-  顶栏图标是在重建条目时画的，行钩子只修通知行。
-  - **试过且全部不响的四个落点**：① 框架 `NotificationListenerService.getActiveNotifications()`
-    （返回处）；② SystemUI 的 final 覆写 `NotificationListenerWithPlugins.getActiveNotifications()`；
-    ③ 重建 runnable `NotificationListener$$ExternalSyntheticLambda0..9.run()`；
-    ④ `NotificationEntry.setSbn(StatusBarNotification)`。
-    时序账排除"装钩太晚"（`onListenerConnected` 在装钩之后才跑），所以是内联 / 更深的
-    Compose 图标管线（`NotificationIconContainer*`）。按"连否三条不再猜"停手，钩子已撤回。
-  - **重开条件**：拿到该 ROM 的 SystemUI 源码/差分，或愿意接受动 Compose 图标管线的风险。
-  - **日常影响**：只在 SystemUI 重启后出现；该应用下一次重发通知即自愈。下拉通知栏时行钩子
-    仍会修好通知行；被补那族（媒体/常驻通知）通常更新频繁，几秒内就自愈。
+- **通知小图标：SystemUI 重启后的顶栏旧图标 —— 2026-10-24 已闭合（第五个落点 `IconManager.createIcons`）**。
+  重启后顶栏图标由通知条目重建、走 `IconManager.createIcons(NotificationEntry)`；在它读 `Icon` 前
+  强制补一遍（跳过通知上的"已处理"标记，形状/跳过缓存兜底）。真机按应用内按钮重启 SystemUI 后
+  日志 `IconManager.createIcons hooked` + `通知补丁 入口 图标工厂`，**他确认屏上是单色剪影**。
+  覆盖现在是**三条钩子**：通知进来那一刻（`onNotificationPosted`）＋ 通知行重绑（`inflateViews`）
+  ＋ 重启后的顶栏重建（`IconManager.createIcons`）。
+  历史（2026-10-23 试过且不响，留档别再走）：① 框架 `NotificationListenerService.getActiveNotifications()`
+  （返回处）；② SystemUI 的 final 覆写 `NotificationListenerWithPlugins.getActiveNotifications()`；
+  ③ 重建 runnable `NotificationListener$$ExternalSyntheticLambda0..9.run()`；
+  ④ `NotificationEntry.setSbn(StatusBarNotification)`。那四条都在**图标已经被读走之后**；
+  第五个落点 `IconManager.createIcons` 才是工厂本身。
+  剩下唯一已接受的边界：已适配族自身 **67–100% 的尺寸跨度**（他 10-23 定案不碰，见下面缩放那条）。
   - 🔁 **2026-10-23 试过把"已适配"也统一缩放，主人判「看着很怪」，已撤回**。起因：屏上系统自己的
     两条通知（USB 调试/充电）是 67% vs 100%，都属已适配；统一缩放会把 67% 放大 42%、把系统图标
     也改大小，观感反而更怪。**定案：已适配一个像素都不碰**；被补/代用仍走 0.95。补丁留档
