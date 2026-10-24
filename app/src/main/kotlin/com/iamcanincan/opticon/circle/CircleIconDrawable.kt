@@ -168,7 +168,10 @@ class CircleIconDrawable(
   override fun getConstantState(): ConstantState? {
     val src = sourceState
     return object : ConstantState() {
-      override fun newDrawable(): Drawable = CircleIconDrawable(src?.newDrawable() ?: sourceIcon)
+      // ⚠ `trimEdgeRing` 必须一起带过去：桌面每次 bind 都是 `getConstantState().newDrawable()`，
+      //   漏了它副本就退回"白盘 + 细环"那一条（2026-10-25 全量检查抓到）。
+      override fun newDrawable(): Drawable =
+        CircleIconDrawable(src?.newDrawable() ?: sourceIcon, trimEdgeRing)
 
       override fun getChangingConfigurations(): Int = changingConfigurations
     }
