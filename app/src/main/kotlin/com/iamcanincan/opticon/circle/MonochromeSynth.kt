@@ -566,7 +566,12 @@ internal object MonochromeSynth {
       val alpha = toAlphaMask(ramp, edge, edge)
       // 非自适应图标的内容是满幅的，而它在图层 bounds 里只该占中间那 2/3（可见区），
       // 所以掩码算完**之后**才缩进 —— 顺序反了就会踩 [rasterize] 上面那个坑。
-      val placed = if (adaptive) alpha else intoVisibleArea(alpha, edge)
+      // 快捷方式（`pm:包/id`）**不再收这一道**：彩色那支画快捷方式时没有经过自适应图标的
+      // 可见区缩放（长按菜单直接按槽位画），再收一次就是两道叠起来 —— 屏上单色图案比彩色小一圈
+      // （主人 2026-10-25 对照钉钉发现的；钉钉的快捷方式走自适应/flatten，本来就不收）。
+      // `pm:包名`（没有 `/`）是 PackageManager 拿的应用图标，那一路仍按自适应口径收边。
+      val shortcut = label.startsWith("pm:") && label.contains('/')
+      val placed = if (adaptive || shortcut) alpha else intoVisibleArea(alpha, edge)
       // ⚠ 这一趟多花的钱（判据台 `_harness/CostKt.kt`，62 张真机语料 @edge=384，取七遍最快一趟）：
       //   `of` 中位 **0.54 ms**（**每张都跑**，因为它内部先降到 128 才扫，与画布多大无关 —— 与真机
       //   彩色那行 `量一张` 的 0.60 ms 同一档）；`reframe` 中位 **2.24 ms**，只有开了窗口的 **13/62**
