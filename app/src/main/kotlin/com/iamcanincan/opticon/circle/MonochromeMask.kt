@@ -868,6 +868,13 @@ internal object MonochromeMask {
     var modelUnderHasTop = false
     var modelUnderTopKey = 0
     var modelUnderTopVal = 0
+    /** `cutPlate == false` 那一遍的交付成品（拷在后续刀之前）。按 `tonal` 分两槽。 */
+    var modelOutOn: IntArray? = null
+    var modelOutOnInk = 0
+    var modelOutOnKnock = 0
+    var modelOutNull: IntArray? = null
+    var modelOutNullInk = 0
+    var modelOutNullKnock = 0
     var preTonal = false
     var preTonalSeen: Tonal? = null
     var preTonalWhy = 0
@@ -1125,6 +1132,7 @@ internal object MonochromeMask {
     s.preLab = false; s.preBounds = false; s.preBoxOpaque = false; s.preTonal = false
     s.preAirDist = false; s.modelGround = null; s.modelBody = null
     s.modelCDepOn = null; s.modelCDepNull = null; s.modelUnderDone = false
+    s.modelOutOn = null; s.modelOutNull = null
     val ramp = buildOnce(pixels, w, h, plateIsLayer, false, under, plateIsSubject = plateIsSubject,
       cutBorder = false)
     // 【底云】见 [plateCloudErase]。⚠ 与【广色度】同一条规矩：**只施加在交付的那几份成品上**，
@@ -2100,6 +2108,17 @@ internal object MonochromeMask {
     val toneTabF = if (toneTab != null && toneFloor)
       IntArray(16321) { l -> PLATE_FLOOR_MIN + (255 - PLATE_FLOOR_MIN) * toneTab[l] / 255 }
       else toneTab
+    // 交付循环只依赖模型与 `cutPlate`：同一次 build 里 `cutPlate == false` 的那几遍（参照支的
+    // `ramp`/`ref0`/`base`、满幅支的 `ramp`/`deliver(false)`）逐字节相同。第一遍算完缓一份，
+    // 后面的遍直接拷进来。**按 `tonal` 分两槽**（满幅支与参照遍的交付本来就不同，同 `cDep`）。
+    // ⚠ 缓存要在后面的刀（`cutBorderRegion`/抬顶/族抬）之前拷走 —— `out` 是每遍的新数组，
+    //   那些刀会就地改它。
+    val cachedOut = if (cutPlate) null else if (tonal == null) s.modelOutOn else s.modelOutNull
+    if (cachedOut != null) {
+      System.arraycopy(cachedOut, 0, out, 0, total)
+      if (tonal == null) { plateInked = s.modelOutOnInk; knocked = s.modelOutOnKnock }
+      else { plateInked = s.modelOutNullInk; knocked = s.modelOutNullKnock }
+    } else {
     for (y in box.top until box.bottom) {
       val row = y * w
       for (x in box.left until box.right) {
@@ -2226,6 +2245,14 @@ internal object MonochromeMask {
           if (!cutPlate && tonal != null && s.plate[i] != 0.toByte()) plateInked++
         }
       }
+    }
+    if (!cutPlate) {
+      if (tonal == null) {
+        s.modelOutOn = out.copyOf(); s.modelOutOnInk = plateInked; s.modelOutOnKnock = knocked
+      } else {
+        s.modelOutNull = out.copyOf(); s.modelOutNullInk = plateInked; s.modelOutNullKnock = knocked
+      }
+    }
     }
     // 4.1) **按线条分割，把「边界连通的那一整块」退成底**（主人 2026-10-18：「按照线条来分」）。
     //   上一版用的是"环族 + 放宽 ΔE"，结果 kazumi 剩下那半片头发（离白 ΔE 40–49）永远够不着 ——
