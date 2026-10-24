@@ -1726,15 +1726,55 @@ internal object MonochromeMask {
     var lo = 0
     var hi = 0
     var spread = 1
+    // 【满幅支】这一张能不能拿自己的调子当浓度。它只依赖 pixels/box，报告也要它（`调未算`），
+    //   所以提到这一趟之前算 —— 下面并进来的两段要以它为门槛（满幅支不建 cDep、也不做敲亮）。
+    // ⚠ `tonalSeen` 只为**报告**留着：以前 `?.takeIf { it.on }` 直接把没开火的那个对象丢掉，
+    //   于是 `跨=` 只在开火时印得出来 —— 第十闸摊四档边长时发现"离阈值多远"永远看不见，
+    //   而换支恰恰发生在**没开火**那几张身上（2026-10-17）。开火判据一个字没动，还是 `tonal.on`。
+    val tonalSeen: Tonal?
+    if (forceRef) tonalSeen = null
+    else if (s.preTonal) tonalSeen = s.preTonalSeen
+    else {
+      val why = IntArray(1)
+      tonalSeen = tonalClass(pixels, w, h, box, why)
+      s.preTonalSeen = tonalSeen; s.preTonalWhy = why[0]; s.preTonal = true
+    }
+    val tonalWhy = IntArray(1) { if (forceRef) 3 else s.preTonalWhy }
+    val tonal = tonalSeen?.takeIf { it.on }
+    // 【敲亮】与【cDep】的第一段都只需要同一批非底格子，与明度直方图**同框同序**。
+    //   原来这是三趟独立的整框扫描（JFR 上三段加起来 ~6%）。并成一趟之后，`cDep` 那一格
+    //   要的参照亮度直接用这里已经算出的 `rfl`，不再为它单独调一次 `refLight`。
+    var knockCand = 0L
+    var keep = 0L
+    val cDep = HashMap<Int, LongArray>()
+    var cDepOff = false
+    val cDepOn = tonal == null
     for (y in box.top until box.bottom) {
       val row = y * w
       for (x in box.left until box.right) {
         val i = row + x
         if (s.plate[i] != 0.toByte()) continue
-        val dev = refLight(i, s) - (s.labL[i].toInt() and 0xffff)
+        val pa = Color.alpha(pixels[i])
+        val rfl = refLight(i, s)
+        val dev = rfl - (s.labL[i].toInt() and 0xffff)
         s.hist[(if (dev < 0) -dev else dev).shr(6).coerceAtMost(DBUCKETS - 1)]++
         s.hist2[(dev.shr(6) + 128).coerceIn(0, DBUCKETS - 1)]++
         ampN++
+        if (pa >= A_SOLID) {
+          val dep = (s.dist[i].toInt() and 0xffff).toLong()
+          if ((s.labL[i].toInt() and 0xffff) - bodyLight(i, s) > 0 &&
+            (s.off[i].toInt() and 0xffff) > body.zero
+          ) knockCand += dep else keep += dep
+        }
+        if (cDepOn && pa == 255 && !cDepOff) {
+          val k = pixels[i] and 0x00FFFFFF
+          val v = cDep.getOrPut(k) { LongArray(3) }
+          if (cDep.size > CDEP_MAX) { cDep.clear(); cDepOff = true } else {
+            val d = s.distT[i].toInt() and 0xffff
+            v[2]++
+            if (d > v[0]) { v[0] = d.toLong(); v[1] = rfl.toLong() }
+          }
+        }
       }
     }
     val amp = maxOf(
@@ -1832,19 +1872,6 @@ internal object MonochromeMask {
     //     为什么必须翻：`全开`（暗=墨写死）把饿了么/全球网测/Google 翻译三张**画成反色**，
     //     而钉着的性质里 `字形实心`/`白方块还是实心` 那族全报 `方块=0.0`（白字被掏空）。
     //     加上这一条之后 `SelfTest` 从红 23 条降到红 3 条、兼容性台 30→57。
-    // ⚠ `tonalSeen` 只为**报告**留着：以前 `?.takeIf { it.on }` 直接把没开火的那个对象丢掉，
-    //   于是 `跨=` 只在开火时印得出来 —— 第十闸摊四档边长时发现"离阈值多远"永远看不见，
-    //   而换支恰恰发生在**没开火**那几张身上（2026-10-17）。开火判据一个字没动，还是 `tonal.on`。
-    val tonalSeen: Tonal?
-    if (forceRef) tonalSeen = null
-    else if (s.preTonal) tonalSeen = s.preTonalSeen
-    else {
-      val why = IntArray(1)
-      tonalSeen = tonalClass(pixels, w, h, box, why)
-      s.preTonalSeen = tonalSeen; s.preTonalWhy = why[0]; s.preTonal = true
-    }
-    val tonalWhy = IntArray(1) { if (forceRef) 3 else s.preTonalWhy }
-    val tonal = tonalSeen?.takeIf { it.on }
     // 候选：盘子是**空气**时不许翻极性。"亮=墨"这条启发式存在的理由是"深盘上的白字"，
     // 而那需要一个**不透明的盘**；四周本来就是透明的时候，翻极性等于把最暗的笔画擦掉
     // （azure 的锁梁 L=35.8，比它自己那块被当成底的盾牌还暗 4.3 —— 一翻就归零）。
@@ -1886,19 +1913,7 @@ internal object MonochromeMask {
     //    全 84 张重放：框内没有一张下降，档数 7 张变多、2 张变少，空洞 0.032 不变。
     //    被降那一侧的墨**多过**留下来的那一侧 → 前提不成立，第二遍对这一张整个退出；
     //    否则力度只由"主体在墨里占多少"给（[bodyPass] 里同一个 Σ dep₁ 加权）。
-    var knockCand = 0L
-    var keep = 0L
-    for (y in box.top until box.bottom) {
-      val row = y * w
-      for (x in box.left until box.right) {
-        val i = row + x
-        if (s.plate[i] != 0.toByte() || Color.alpha(pixels[i]) < A_SOLID) continue
-        val dep = (s.dist[i].toInt() and 0xffff).toLong()
-        if ((s.labL[i].toInt() and 0xffff) - bodyLight(i, s) > 0 &&
-          (s.off[i].toInt() and 0xffff) > body.zero
-        ) knockCand += dep else keep += dep
-      }
-    }
+    // 「两边各交出多少墨」在上面那一趟（与明度直方图同框）里已经数完。
     // 日志里的这一对 = 两边各交出多少墨，除以 255 换成"等效实心像素数"。
     val keepInk = keep / 255
     val knockInk = knockCand / 255
@@ -1965,7 +1980,7 @@ internal object MonochromeMask {
     //   同一个键换成最远那一格才是下面引号里那组数。理由：一块颜色跨在两种深的底上时，
     //   均值把"看得清的那半"拖下来陪"本来就远的那半" —— 陪的是浓度，不是真相。
     //   渐变不受影响：同一个精确颜色的像素本来就落在同一条带上。
-    val cDep = HashMap<Int, LongArray>()
+    // 逐色计数那一趟已经并进第 2 步（与明度直方图同框同序），这里只留口径说明。
     // 这张图有几种实心颜色，就得开几条表项 —— 所以这里必须有个上限。
     // 语料实测（`_harness/PartAreaKt --colours`）：老 113 张 **中位 1267 / p90 11088 / 最大 27986**；
     // ⚠ **但真机 61 张"会上屏"的那一半把上限撞穿了**：王者荣耀 **89951**、国际版 **72429** ——
@@ -1975,25 +1990,8 @@ internal object MonochromeMask {
     //   上限暂时没被真图标碰到 —— **但别把这句当成"65536 够用"**：再抓到一张满幅插画而它
     //   没过那三条判据，就会又落回这里。它挡的是异常大的那一张：满幅照片 × 超大边长可以开到
     //   几十万个精确色，就是几十 MB 的瞬时分配，而这段跑在桌面的图标加载线程上。
-    var cDepOff = false
-    if (tonal == null) for (y in box.top until box.bottom) {
-      val row = y * w
-      for (x in box.left until box.right) {
-        val i = row + x
-        if (s.plate[i] != 0.toByte() || Color.alpha(pixels[i]) != 255) continue
-        if (cDepOff) continue
-        val k = pixels[i] and 0x00FFFFFF
-        val v = cDep.getOrPut(k) { LongArray(3) }
-        if (cDep.size > CDEP_MAX) {
-          // 越界就整张退回"按格子给浓度"（`f2196b7` 之前的行为）：颜色多到这个量级的图，
-          // 本来就没有"某一块颜色应当匀成同一档"这回事可言 —— 清掉比留着半张表更诚实。
-          cDep.clear(); cDepOff = true; continue
-        }
-        val d = s.distT[i].toInt() and 0xffff
-        v[2]++                                              // 顺手数这种颜色交付了多少格（见 [modalInk]）
-        if (d > v[0]) { v[0] = d.toLong(); v[1] = refLight(i, s).toLong() }
-      }
-    }
+    // 越界就整张退回"按格子给浓度"（`f2196b7` 之前的行为）：颜色多到这个量级的图，
+    // 本来就没有"某一块颜色应当匀成同一档"这回事可言 —— 清掉比留着半张表更诚实。
     // **主体是哪一种颜色**：交付了墨的那批格子里最多的那一种源色。下面第二遍的镂空那一层要用它。
     // 放在这张表里数而不是另开一趟扫描：这张表访问的正是同一批格子（非底、实心），而这一段
     // 跑在桌面的图标加载线程上，多一趟全框遍历是白花的。
