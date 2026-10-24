@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.Bundle
 import android.service.notification.StatusBarNotification
 import java.util.Collections
+import com.iamcanincan.opticon.circle.uncroppedIcon
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 import com.iamcanincan.opticon.runtime.ModuleRuntime
@@ -239,7 +240,9 @@ object NotificationIconPatch {
      */
     private fun appIconFallback(context: Context, pkg: String): android.graphics.Bitmap? {
         val app = runCatching { context.packageManager.getApplicationIcon(pkg) }.getOrNull() ?: return null
-        val fromApp = IconBitmap.rasterize(app)
+        // SystemUI 里这个出口也被裁圆钩子包成圆（`clip from=PM.getApplicationIcon
+        // host=com.android.systemui`）；拿裁过的圆去压剪影，兜底会变成一块实心饼。
+        val fromApp = IconBitmap.rasterize(uncroppedIcon(app))
         val monoApp = if (ToneCheck.isGrayscale(fromApp)) fromApp else IconBitmap.monochrome(fromApp)
         if (monoApp == null) return null
         return IconBitmap.fitInk(monoApp, SIZE_TARGET) ?: monoApp

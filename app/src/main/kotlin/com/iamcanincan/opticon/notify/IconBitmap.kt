@@ -15,6 +15,7 @@ import android.net.Uri
 import android.os.Build
 import androidx.core.content.res.ResourcesCompat
 import kotlin.math.roundToInt
+import com.iamcanincan.opticon.circle.uncroppedIcon
 import com.iamcanincan.opticon.runtime.MemberLookup
 
 
@@ -148,7 +149,9 @@ object IconBitmap {
     /** TYPE_RESOURCE 类型的 Icon 需要用正确的 Resources 解码，不能走 Drawable 兜底 */
     fun fromResources(context: Context, resId: Int): Bitmap {
         val drawable = ResourcesCompat.getDrawable(context.resources, resId, null)
-        return if (drawable != null) rasterize(drawable) else Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+        // SystemUI 里的 Resources 出口也被裁圆钩子挂着：拿裁过的圆去压剪影会变成一块饼。
+        return if (drawable != null) rasterize(uncroppedIcon(drawable))
+          else Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
     }
 
     /**
@@ -582,10 +585,10 @@ object IconBitmap {
                         null
                     }
                 }
-                else -> icon.loadDrawable(context)?.let { rasterize(it) }
+                else -> icon.loadDrawable(context)?.let { rasterize(uncroppedIcon(it)) }
             }
         } else {
-            icon.loadDrawable(context)?.let { rasterize(it) }
+            icon.loadDrawable(context)?.let { rasterize(uncroppedIcon(it)) }
         }
     } catch (_: Throwable) {
         null

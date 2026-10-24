@@ -117,6 +117,9 @@ class CircleIconDrawable(
   /** 原图标留一份引用，只为了 [getConstantState] 能重建出副本。 */
   private val sourceIcon: Drawable = icon
 
+  /** 给**要未裁原图**的消费方（通知兜底 / 通知图标解码）：wrapper 画出来是一块圆，拿去压剪影会变成饼。 */
+  internal val source: Drawable get() = sourceIcon
+
   private val sourceState: ConstantState? = icon.constantState
 
   /**
@@ -687,6 +690,17 @@ private fun noteCrop(from: String) {
  *
  * [from] = 哪条通道把这张图交进来的（字符串在调用点写死，见上面那条 R8 的账）。
  */
+/**
+ * 取回**没裁过**的原图（不是 [CircleIconDrawable] 就原样返回）。
+ *
+ * 给通知那两条消费方用：SystemUI 里 `PackageManager.getApplicationIcon` 与
+ * `Resources.getDrawable*` 也会被裁圆钩子包起来（真机日志
+ * `clip from=PM.getApplicationIcon host=com.android.systemui`），而通知的剪影必须从
+ * **原图**的 alpha 取 —— 拿裁过的圆去压，整张剪影会变成一块实心饼。
+ */
+internal fun uncroppedIcon(d: Drawable): Drawable =
+  if (d is CircleIconDrawable) d.source else d
+
 fun clipToCircle(icon: Drawable, from: String): Drawable {
   // 配置按 TTL 重读，所以界面里关掉开关后很快生效，不用重启进程。
   if (!ModuleRuntime.options().circleEnabled) return icon
