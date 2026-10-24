@@ -2018,11 +2018,24 @@ internal object MonochromeMask {
     // ⚠ 表要 81k 次除法才建得起来：小内容框（<4 万格）用它反而更慢（A/B 里 14 张就是这样），
     //   所以按框面积开表；小框走原式，一条像素都不改。
     val tabOn = box.width().toLong() * box.height() >= 40000L
-    val tdTab = if (tabOn)
+    // 满幅支**用不到这两张表**（它在下面 `if (tonal != null)` 里就 `continue` 了），而它们要 81k 次
+    // 除法才建得起来 —— 21/67 张走满幅支，原来每张都白付一整套（JFR：建表本身占这一段 ~1/4）。
+    val tdTab = if (tabOn && tonal == null)
       IntArray(65536) { d -> CURVE[((d - ground.zero) * 255 / ground.span).coerceIn(0, 255)] } else null
     val tlOff = 8192
-    val tlTab = if (tabOn)
+    val tlTab = if (tabOn && tonal == null)
       IntArray(16384) { idx -> ((idx - tlOff - lo) * 255 / spread).coerceIn(0, 255) } else null
+    // 满幅支的斜坡只依赖 `l64`：除数与钳位是这张图的常数，盘层地板（`plateLayer && !ownPlate`）
+    // 又是整张恒定的那一位 —— 折成表（有/无地板各一张），逐像素只剩查表。小框仍走原式。
+    val toneFloor = plateLayer && !ownPlate
+    val toneTab = if (tabOn && tonal != null)
+      IntArray(16321) { l ->
+        val ramp = if (tonalBright) l - tonal.lo else tonal.hi - l
+        (ramp * 255 / maxOf(tonal.hi - tonal.lo, 1 shl 6)).coerceIn(0, 255)
+      } else null
+    val toneTabF = if (toneTab != null && toneFloor)
+      IntArray(16321) { l -> PLATE_FLOOR_MIN + (255 - PLATE_FLOOR_MIN) * toneTab[l] / 255 }
+      else toneTab
     for (y in box.top until box.bottom) {
       val row = y * w
       for (x in box.left until box.right) {
@@ -2043,8 +2056,6 @@ internal object MonochromeMask {
         if (tonal != null) {
           if (cutPlate && s.plate[i] != 0.toByte()) { plateInked++; continue }
           val l64 = s.labL[i].toInt() and 0xffff
-          val ramp = if (tonalBright) l64 - tonal.lo else tonal.hi - l64
-          var ta = (ramp * 255 / maxOf(tonal.hi - tonal.lo, 1 shl 6)).coerceIn(0, 255)
           // **盘在另一层的这一张：斜坡的零端不许发给标记自己的面。** 零端本来给的是"离墨最远
           // 的那一块"，也就是**承载面**；而 [plateIsLayer] 为真时这张里根本没有承载面（只有前景层，
           // 盘是背景层里那张 `ColorDrawable`，桌面自己会补）。于是最亮那个刻面被推到 α=0 ——
@@ -2054,8 +2065,14 @@ internal object MonochromeMask {
           // ⚠ 而**这一层自己带底的那张不压**（[ownBrightPlate]）：贴吧那块白底一压就是一整块灰板。
           // ⚠ 也**不压参照自己已经认成底的那些格**（2026-10-10，听歌识曲）：给底压一个下限，
           //   等于把判词推翻再画一遍 —— 那张白圆盘 90081 格会被抬进 128..254。
-          if (plateLayer && !ownPlate && s.plate[i] == 0.toByte())
-            ta = PLATE_FLOOR_MIN + (255 - PLATE_FLOOR_MIN) * ta / 255
+          val ta = if (toneTab == null) {
+            val ramp = if (tonalBright) l64 - tonal.lo else tonal.hi - l64
+            var x = (ramp * 255 / maxOf(tonal.hi - tonal.lo, 1 shl 6)).coerceIn(0, 255)
+            if (toneFloor && s.plate[i] == 0.toByte())
+              x = PLATE_FLOOR_MIN + (255 - PLATE_FLOOR_MIN) * x / 255
+            x
+          } else if (toneFloor && toneTabF != null && s.plate[i] == 0.toByte()) toneTabF[l64]
+          else toneTab[l64]
           val a = ta * pa / 255
           if (a > 0) {
             out[i] = (a shl 24) or 0x00FFFFFF
