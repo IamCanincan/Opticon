@@ -1610,7 +1610,8 @@ internal object MonochromeMask {
   ): Output {
     val total = w * h
     if (total <= 0) return Output(IntArray(0), 0f, 0f, 0f, 0, 0f, 0f, "尺寸非法 → 空层")
-    val box = contentBounds(pixels, w, h)
+    val airCount = IntArray(1)
+    val box = contentBounds(pixels, w, h, airCount)
       // ⚠ **这里曾经改成过 `Output(null, …)`（"交回桌面"），被兼容性台当场拦下**（`PASS 62→58 / FAIL 6→10`，
       //   红的全是具名夹具 `整张透明`）：那条契约是 `CompatKt` 里 `wantsEmpty = true` **故意钉的**，
       //   不是漏看的旧 bug。改它需要一次真机观察（交回 null 之后桌面到底画什么），而我没有，所以撤回。
@@ -1669,8 +1670,7 @@ internal object MonochromeMask {
     // 而盘是**铺满整个视口**的。按内容框数会把一个实心圆判成"没露空气"：
     // 混元那张圆盘在框内只露 21% 的角（圆占框 ≈78%，算术上就这样），卡在 25% 线下，
     // 于是"另外半个太极"又回来了 —— 而它前景层按画布数是 **61% 空**。
-    var airN0 = 0
-    for (i in 0 until total) if (Color.alpha(pixels[i]) < A_SOLID) airN0++
+    val airN0 = airCount[0]
     val airCanvasPct = airN0 * 100 / total
     // ⚠ **这一位要自己带前提**：`plateIsLayer` 说"承载面在另一层"，而这句话只有**这张真的露出空气**
     //   时才成立。对表台量出来的反例 `com.limelight.qiin`：背景层是纯色，可前景层自己
@@ -1814,9 +1814,8 @@ internal object MonochromeMask {
     // 盘是**空气**的时候不许翻极性（azure 锁梁那一条）—— 这里按**内容框**数，
     // 与上面 `airCanvasPct` 是两个问题：那一条问"盘有没有透出来"（画布），这一条问
     // "这张有没有一块不透明的盘"（内容框）。**别把它们并成一个。**
-    var airN = 0
-    if (tonal != null) for (y in box.top until box.bottom) for (x in box.left until box.right)
-      if (Color.alpha(pixels[y * w + x]) < A_SOLID) airN++
+    // 框内每一格非"透明"即"实心"⇒ 空气格数 = 框面积 − [boxOpaque]，不必再扫一遍。
+    val airN = if (tonal != null) (box.width().toLong() * box.height()).toInt() - boxOpaque else 0
     val airShare = airN * 100 / maxOf(box.width() * box.height(), 1)
     val groundIsAir = airShare >= TONAL_AIR_MIN
     // **极性问的是关系，不是绝对值**：「墨那一半比底亮吗」。
@@ -6898,19 +6897,30 @@ internal object MonochromeMask {
   }
 
   /** 非透明像素的外接矩形（阈值 [A_BOX]，比「算不算图形」的 [A_SOLID] 宽）。 */
-  private fun contentBounds(pixels: IntArray, w: Int, h: Int): Rect? {
+  /**
+   * 内容外接框；[airOut] 非空时顺手把「整张画布上 α<[A_SOLID] 的格数」写进 `airOut[0]`。
+   *
+   * 为什么顺手数：`airN0`（画布口径的"露了多少空气"）是同一趟全图扫描就能得到的数，
+   * 以前另起一遍 `for (i in 0 until total)` —— 同一批像素读两遍。两处判据不同、分母不同，
+   * 但**计数**完全可以在这一趟里一起做完。
+   */
+  private fun contentBounds(pixels: IntArray, w: Int, h: Int, airOut: IntArray? = null): Rect? {
     var minX = w; var minY = h; var maxX = -1; var maxY = -1
+    var air = 0
     for (y in 0 until h) {
       val row = y * w
       for (x in 0 until w) {
-        if (Color.alpha(pixels[row + x]) >= A_BOX) {
+        val a = Color.alpha(pixels[row + x])
+        if (a >= A_BOX) {
           if (x < minX) minX = x
           if (x > maxX) maxX = x
           if (y < minY) minY = y
           if (y > maxY) maxY = y
         }
+        if (a < A_SOLID) air++
       }
     }
+    if (airOut != null) airOut[0] = air
     return if (maxX < 0) null else Rect(minX, minY, maxX + 1, maxY + 1)
   }
 
