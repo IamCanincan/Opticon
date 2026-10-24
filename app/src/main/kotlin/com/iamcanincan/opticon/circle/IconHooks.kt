@@ -21,6 +21,7 @@ import android.content.pm.ShortcutInfo
 import android.content.res.Resources
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Rect
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.Drawable
 import android.os.Build
@@ -1212,13 +1213,58 @@ private fun hookShortcutIcons(xposed: XposedInterface) {
         val icon = chain.proceed() as? Drawable ?: return@intercept null
         // 日志用的名字（见 packageFromArgs）：这条路上桌面根本不经过 Resources.getDrawable*，
         // 不在这里登记，`Mono: diag` 行就永远是 `?`。
-        IconNames.remember(icon, packageFromArgs(chain.args))
-        clipToCircle(icon, "LauncherApps.getShortcutIconDrawable")
+        val name = packageFromArgs(chain.args)
+        IconNames.remember(icon, name)
+        // 空白快捷方式 → 应用图标兜底（真机：Play 商店的「收藏」
+        // `cubes_activity_shortcut` 是个整张透明的 GradientDrawable，模型按"整张透明 → 空层"
+        // 交回去，屏上就什么都没有）。与通知那条同一个先例：宁可交应用图标，不交一块空。
+        val fallback = appIconForBlankShortcut(icon, name)
+        if (fallback != null) {
+          IconNames.remember(fallback, "pm:" + name.removePrefix("pm:").substringBefore('/'))
+        }
+        clipToCircle(fallback ?: icon, "LauncherApps.getShortcutIconDrawable")
       }
       hooked++
     }
   }
   spoken("Shortcut", hooked)
+}
+
+/**
+ * 这张快捷方式图标是不是**整张透明**（alpha 恒 0）。
+ *
+ * 只认全透明：白字压在白底上的图标 alpha 不为 0，不会被误伤；半透明边也不算。
+ * 量在一个 64² 的格子上 —— 全透明的结论与最终画多大无关。
+ */
+private fun isBlankDrawable(d: Drawable, size: Int = 64): Boolean = runCatching {
+  val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+  val old = Rect(d.bounds)
+  try {
+    d.setBounds(0, 0, size, size)
+    d.draw(Canvas(bmp))
+  } finally {
+    d.setBounds(old)
+  }
+  val px = IntArray(size * size)
+  bmp.getPixels(px, 0, size, 0, 0, size, size)
+  bmp.recycle()
+  px.all { (it ushr 24) == 0 }
+}.getOrDefault(false)
+
+/** 空白快捷方式 → 该应用自己的图标；不空白 / 取不到 → null（交原图标）。 */
+private fun appIconForBlankShortcut(icon: Drawable, name: String): Drawable? {
+  if (name.isEmpty() || !isBlankDrawable(icon)) return null
+  val pkg = name.removePrefix("pm:").substringBefore('/')
+  if ('.' !in pkg) return null
+  val app = currentApplication()
+  if (app == null) {
+    Log.d(TAG, "快捷方式空白但没有 Application，取不到应用图标：$pkg")
+    return null
+  }
+  val fb = runCatching { app.packageManager.getApplicationIcon(pkg) }.getOrNull()
+  Log.d(TAG, "快捷方式空白 → 应用图标兜底 $pkg（${icon.javaClass.simpleName} → " +
+    (fb?.javaClass?.simpleName ?: "取不到") + "）")
+  return fb
 }
 
 private fun markAll(items: Iterable<*>?) {
