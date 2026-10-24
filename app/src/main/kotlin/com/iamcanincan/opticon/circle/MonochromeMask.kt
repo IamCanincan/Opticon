@@ -847,6 +847,15 @@ internal object MonochromeMask {
      *  线割、边灰、抬顶这些**每一遍才不同**的旗子无关），所以同一次 [build] 里第二遍起直接用。 */
     var modelGround: Pass? = null
     var modelBody: Pass? = null
+    var modelAmp = 0; var modelLo = 0; var modelHi = 0; var modelSpread = 1
+    var modelKnockCand = 0L; var modelKeep = 0L
+    /** `cDep` 按「这一遍建不建它」分两槽：`tonal == null` 的遍才建（满幅支恒空表）。
+     *  同一张图会既有 `tonal != null` 的探针（`ramp`）、又有 `tonal == null` 的遍（`ref0`，`forceRef`），
+     *  两槽不能混 —— 混了就会把一张空表当成"这张没有同色群"。 */
+    var modelCDepOn: HashMap<Int, LongArray>? = null
+    var modelCDepOnOff = false
+    var modelCDepOnInk = -1
+    var modelCDepNull: HashMap<Int, LongArray>? = null
     var preTonal = false
     var preTonalSeen: Tonal? = null
     var preTonalWhy = 0
@@ -1103,6 +1112,7 @@ internal object MonochromeMask {
     // 一次 build 里的逐像素预计算（Lab / 内容框 / boxOpaque / tonalClass / 两遍参照）只做一遍。
     s.preLab = false; s.preBounds = false; s.preBoxOpaque = false; s.preTonal = false
     s.preAirDist = false; s.modelGround = null; s.modelBody = null
+    s.modelCDepOn = null; s.modelCDepNull = null
     val ramp = buildOnce(pixels, w, h, plateIsLayer, false, under, plateIsSubject = plateIsSubject,
       cutBorder = false)
     // 【底云】见 [plateCloudErase]。⚠ 与【广色度】同一条规矩：**只施加在交付的那几份成品上**，
@@ -1742,9 +1752,6 @@ internal object MonochromeMask {
     //    · `lumLo/lumHi` = **有符号** ΔL 的 p[LUM_LOW_PCT]/p[LUM_HIGH_PCT] —— 一整张没有底的图
     //      （插画、照片底）唯一还有信息的轴就是"比周围暗还是亮"，这两个分位就是那条斜坡的端点。
     //      端点取分位而不是最值：一条 JPEG 噪点线、一块高光不该决定整张图的明暗标尺。
-    s.hist.fill(0)
-    s.hist2.fill(0)
-    var ampN = 0
     var lo = 0
     var hi = 0
     var spread = 1
@@ -1768,45 +1775,65 @@ internal object MonochromeMask {
     //   要的参照亮度直接用这里已经算出的 `rfl`，不再为它单独调一次 `refLight`。
     var knockCand = 0L
     var keep = 0L
-    val cDep = HashMap<Int, LongArray>()
+    var cDep: HashMap<Int, LongArray>
     var cDepOff = false
-    val cDepOn = tonal == null
-    for (y in box.top until box.bottom) {
-      val row = y * w
-      for (x in box.left until box.right) {
-        val i = row + x
-        if (s.plate[i] != 0.toByte()) continue
-        val pa = Color.alpha(pixels[i])
-        val rfl = refLight(i, s)
-        val dev = rfl - (s.labL[i].toInt() and 0xffff)
-        s.hist[(if (dev < 0) -dev else dev).shr(6).coerceAtMost(DBUCKETS - 1)]++
-        s.hist2[(dev.shr(6) + 128).coerceIn(0, DBUCKETS - 1)]++
-        ampN++
-        if (pa >= A_SOLID) {
-          val dep = (s.dist[i].toInt() and 0xffff).toLong()
-          if ((s.labL[i].toInt() and 0xffff) - bodyLight(i, s) > 0 &&
-            (s.off[i].toInt() and 0xffff) > body.zero
-          ) knockCand += dep else keep += dep
-        }
-        if (cDepOn && pa == 255 && !cDepOff) {
-          val k = pixels[i] and 0x00FFFFFF
-          val v = cDep.getOrPut(k) { LongArray(3) }
-          if (cDep.size > CDEP_MAX) { cDep.clear(); cDepOff = true } else {
-            val d = s.distT[i].toInt() and 0xffff
-            v[2]++
-            if (d > v[0]) { v[0] = d.toLong(); v[1] = rfl.toLong() }
+    var amp = 0
+    // 这一段的产物只依赖 ground/body 与 pixels（**不依赖 `tonal`**，只有 `cDep` 建不建看它），
+    // 同一次 build 的第二遍起直接取上一遍的，不再重扫一整框。分两个槽：`tonal == null` 的遍
+    // 才建 `cDep`，而同一张图两种遍都会有（满幅支的探针 + `forceRef` 的参照遍）。
+    val cOn = tonal == null
+    val cachedDep = if (cOn) s.modelCDepOn else s.modelCDepNull
+    val fresh = cachedDep == null
+    if (fresh) {
+      s.hist.fill(0)
+      s.hist2.fill(0)
+      var ampN = 0
+      cDep = HashMap()
+      for (y in box.top until box.bottom) {
+        val row = y * w
+        for (x in box.left until box.right) {
+          val i = row + x
+          if (s.plate[i] != 0.toByte()) continue
+          val pa = Color.alpha(pixels[i])
+          val rfl = refLight(i, s)
+          val dev = rfl - (s.labL[i].toInt() and 0xffff)
+          s.hist[(if (dev < 0) -dev else dev).shr(6).coerceAtMost(DBUCKETS - 1)]++
+          s.hist2[(dev.shr(6) + 128).coerceIn(0, DBUCKETS - 1)]++
+          ampN++
+          if (pa >= A_SOLID) {
+            val dep = (s.dist[i].toInt() and 0xffff).toLong()
+            if ((s.labL[i].toInt() and 0xffff) - bodyLight(i, s) > 0 &&
+              (s.off[i].toInt() and 0xffff) > body.zero
+            ) knockCand += dep else keep += dep
+          }
+          if (cOn && pa == 255 && !cDepOff) {
+            val k = pixels[i] and 0x00FFFFFF
+            val v = cDep.getOrPut(k) { LongArray(3) }
+            if (cDep.size > CDEP_MAX) { cDep.clear(); cDepOff = true } else {
+              val d = s.distT[i].toInt() and 0xffff
+              v[2]++
+              if (d > v[0]) { v[0] = d.toLong(); v[1] = rfl.toLong() }
+            }
           }
         }
       }
-    }
-    val amp = maxOf(
-      if (ampN > 0) percentile(s.hist, ampN, LAYER_AMP_PCT) shl 6 else 0,
-      LAYER_MIN_AMP shl 6
-    )
-    if (ampN > 0) {
-      lo = (percentile(s.hist2, ampN, LUM_LOW_PCT) - 128) shl 6
-      hi = (percentile(s.hist2, ampN, LUM_HIGH_PCT) - 128) shl 6
-      spread = (hi - lo).coerceAtLeast(1 shl 6)
+      amp = maxOf(
+        if (ampN > 0) percentile(s.hist, ampN, LAYER_AMP_PCT) shl 6 else 0,
+        LAYER_MIN_AMP shl 6
+      )
+      if (ampN > 0) {
+        lo = (percentile(s.hist2, ampN, LUM_LOW_PCT) - 128) shl 6
+        hi = (percentile(s.hist2, ampN, LUM_HIGH_PCT) - 128) shl 6
+        spread = (hi - lo).coerceAtLeast(1 shl 6)
+      }
+      s.modelAmp = amp; s.modelLo = lo; s.modelHi = hi; s.modelSpread = spread
+      s.modelKnockCand = knockCand; s.modelKeep = keep
+      if (cOn) { s.modelCDepOn = cDep; s.modelCDepOnOff = cDepOff } else s.modelCDepNull = cDep
+    } else {
+      amp = s.modelAmp; lo = s.modelLo; hi = s.modelHi; spread = s.modelSpread
+      knockCand = s.modelKnockCand; keep = s.modelKeep
+      cDep = checkNotNull(cachedDep)
+      cDepOff = cOn && s.modelCDepOnOff
     }
     // 浓度由哪一条给，只看「有多少东西真的是底」这一个数，而且它**两头都要退**：
     //  · 底占高（红底白方块 0.89）→ 参照就是一块板，距离项是主信息，明暗只在同一个距离上把
@@ -2017,8 +2044,13 @@ internal object MonochromeMask {
     // **主体是哪一种颜色**：交付了墨的那批格子里最多的那一种源色。下面第二遍的镂空那一层要用它。
     // 放在这张表里数而不是另开一趟扫描：这张表访问的正是同一批格子（非底、实心），而这一段
     // 跑在桌面的图标加载线程上，多一趟全框遍历是白花的。
-    var modalInk = -1; var modalN = 0L
-    for ((k, v) in cDep) if (v[0] > ground.zero && v[2] > modalN) { modalN = v[2]; modalInk = k }
+    var modalInk: Int
+    if (fresh) {
+      var modalN = 0L
+      modalInk = -1
+      for ((k, v) in cDep) if (v[0] > ground.zero && v[2] > modalN) { modalN = v[2]; modalInk = k }
+      if (cOn) s.modelCDepOnInk = modalInk
+    } else modalInk = if (cOn) s.modelCDepOnInk else -1
     // 主体那一色的 Lab。下面那道"主体不许被自己挖空"的闸**按这个比**，不按精确 RGB 比 ——
     // 理由见 [MODAL_INK_DE]。
     val miL = if (modalInk < 0) 0 else labChannel(modalInk, 0)
