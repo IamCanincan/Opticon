@@ -2001,6 +2001,32 @@ internal object MonochromeMask {
         // `thinInk` 把它写成 0；于是 `td = CURVE[钳到 0] = 0`，明暗项又乘 `pa`。
         // 两支都得到 a=0（cutPlate 那一支对 plate 也是 `continue`、同样不写 out），所以整段可跳。
         if (pa == 0) continue
+        // 满幅支**不需要**下面这一整套：cDep 在 `tonal != null` 时压根不建（查表只会空转），
+        // `td`/`tl` 只服务参照支的混合式，`hollow` 在满幅支恒为 0。直接在这里交付并 `continue`，
+        // 一个死值都不算 —— 原来这一支每像素白付一次 HashMap 查找 + 两次表查找 + 明暗加权。
+        if (tonal != null) {
+          if (cutPlate && s.plate[i] != 0.toByte()) { plateInked++; continue }
+          val l64 = s.labL[i].toInt() and 0xffff
+          val ramp = if (tonalBright) l64 - tonal.lo else tonal.hi - l64
+          var ta = (ramp * 255 / maxOf(tonal.hi - tonal.lo, 1 shl 6)).coerceIn(0, 255)
+          // **盘在另一层的这一张：斜坡的零端不许发给标记自己的面。** 零端本来给的是"离墨最远
+          // 的那一块"，也就是**承载面**；而 [plateIsLayer] 为真时这张里根本没有承载面（只有前景层，
+          // 盘是背景层里那张 `ColorDrawable`，桌面自己会补）。于是最亮那个刻面被推到 α=0 ——
+          // 真机上 `com.netease.uuremote` 四个面丢两个、`com.xunmeng.pinduoduo` 整片是灰，都是这一条。
+          // ⚠ **顺序是全部重点**：地板压在 `× 源α / 255` **之前**，空气还是 0。上一版把地板放在
+          //   乘 α 之后，13 张变实心方块 —— 那个方块是**空气被抬起来了**，不是标记变实了。
+          // ⚠ 而**这一层自己带底的那张不压**（[ownBrightPlate]）：贴吧那块白底一压就是一整块灰板。
+          // ⚠ 也**不压参照自己已经认成底的那些格**（2026-10-10，听歌识曲）：给底压一个下限，
+          //   等于把判词推翻再画一遍 —— 那张白圆盘 90081 格会被抬进 128..254。
+          if (plateLayer && !ownPlate && s.plate[i] == 0.toByte())
+            ta = PLATE_FLOOR_MIN + (255 - PLATE_FLOOR_MIN) * ta / 255
+          val a = ta * pa / 255
+          if (a > 0) {
+            out[i] = (a shl 24) or 0x00FFFFFF
+            if (!cutPlate && s.plate[i] != 0.toByte()) plateInked++
+          }
+          continue
+        }
         val own = s.distT[i].toInt() and 0xffff
         val ck = pixels[i] and 0x00FFFFFF
         val v = if (own > ground.zero && s.plate[i] == 0.toByte() && pa == 255)
@@ -2044,42 +2070,12 @@ internal object MonochromeMask {
         //     所以选支永远看**没切过背景**的那一份（与 SepTone 那条 `sepOff` 同一个先例：
         //     "选支这一件事与改动前完全同口径"），切只发生在**已经选中满幅之后**。
         //     代价：满幅支选中且真有底格上墨的那些图多算一遍（见 [build] 里 `plateInked` 那道短路）。
-        if (cutPlate && tonal != null && s.plate[i] != 0.toByte()) { plateInked++; continue }
-        var a = if (tonal != null) {
-          // 这一支的浓度 = 这张图自己的亮度，**暗=墨**，端点是它自己的 p5/p95。
-          // 透明像素照样不给墨（乘上源 alpha，与下面 `tl` 同一条规矩）。
-          val l64 = s.labL[i].toInt() and 0xffff
-          val ramp = if (tonalBright) l64 - tonal.lo else tonal.hi - l64
-          var ta = (ramp * 255 / maxOf(tonal.hi - tonal.lo, 1 shl 6)).coerceIn(0, 255)
-          // **盘在另一层的这一张：斜坡的零端不许发给标记自己的面。**
-          // 零端本来给的是"离墨最远的那一块"，也就是**承载面**；而 [plateIsLayer] 为真时这张里
-          // 根本没有承载面（只有前景层，盘是背景层里那张 `ColorDrawable`，桌面自己会补）。
-          // 于是最亮那个刻面被推到 α=0 —— 真机上 `com.netease.uuremote` 四个面丢两个、
-          // `com.xunmeng.pinduoduo` 整片是灰，都是这一条。压回 128..255 之后内部对比仍占满一整段。
-          // ⚠ **顺序是全部重点**：地板压在 `× 源α / 255` **之前**，空气还是 0。上一版
-          //   （`_harness/cand/MonochromeMask.ghostFloor.kt:1018`，那一版是 `… × α / 255` 之后
-          //   再 `if (ground.gN == 0 && ta < GHOST_FLOOR) ta = GHOST_FLOOR`）13 张变实心方块 ——
-          //   那个方块是**空气被抬起来了**，不是标记变实了。
-          //   🔑 **2026-10-21 语义变异现量**（`node _semanticmut.cjs --case=9`，只换顺序、谓词用现在这一套）：
-          //   第九闸**读不到**（`0 / 98`、退码 0）—— 那台子当时用 3 参 `build`，`plateLayer` 恒 false，
-          //   这条分支压根不在它的路上。宽到装机那条路之后同一改 = `2/64`、退码 1（azure 锁 1303 格 α=0→128）。
-          // ⚠ 而**这一层自己带底的那张不压**（[ownBrightPlate]）：贴吧那块白底一压就是一整块灰板。
-          // ⚠ 也**不压参照自己已经认成底的那些格**（2026-10-10，量 Google 听歌识曲时撞出来的）：
-          //   地板要保的是"标记最亮那一面"，而 `plate[i]!=0` 的格子按模型自己的判词就是底 ——
-          //   给底压一个下限，等于把判词推翻再画一遍。听歌识曲那张白圆盘就是这么变成灰盘的：
-          //   `盘实=78967` 全被抬到 α≥128，交付里 **90081 格落在 128..254**（整张画布的 61%）。
-          if (plateLayer && !ownPlate && s.plate[i] == 0.toByte())
-            ta = PLATE_FLOOR_MIN + (255 - PLATE_FLOOR_MIN) * ta / 255
-          ta * Color.alpha(pixels[i]) / 255
-        } else (td * (100 - q) + tl * q) / 100
+        var a = (td * (100 - q) + tl * q) / 100
         if (a == 0) continue
         // 比参照暗的往上、亮的往下，**按这张图自己的跨度成比例** —— 不是"暗/亮"两档。
         // ⚠ 上限不对称是有理由的：白字在彩色底上是最常见的"亮侧实心"，往下压狠了就是他报过的
         //   「主题色怎么这么浅」。q 上去之后这两侧自动退场：那时明暗已经是浓度本身了。
-        //   满幅插画那一支整个跳过这一步：它要的**就是**一条按亮度排的斜坡，再叠一次明度序
-        //   等于把同一条轴乘两遍（斜率变陡，中间调全被推到两端 —— 正是他报的「过渡生硬」）。
-        if (tonal == null)
-          a = (a + a * (u * 100 / amp).coerceIn(-down, up) / 100).coerceIn(0, 255)
+        a = (a + a * (u * 100 / amp).coerceIn(-down, up) / 100).coerceIn(0, 255)
         // 第二遍只降**比主体亮**的那一侧（镂空、高光、白 logo 上的洞）。比主体暗的那些是图形
         // 自己的暗部，降它等于把细节擦了 —— 与上面那条明度序同一个极性。
         // ⚠ 但**主体自己那一色不许降**。这一层的参照取的是"离这格最近的那块主体"，于是一块
@@ -2089,17 +2085,21 @@ internal object MonochromeMask {
         //   y=192 那一行量到：同一条纯白、源 α 都是 255，x=84 出墨 255 而 x=192 出墨 83，
         //   那两列的 `离体=175`、参照 L 从 100 翻到 49）。加上这一条之后 384/768 回到 100%，
         //   而「镂空刻出来了」那条性质照旧绿 —— 洞本来就是**另一种**颜色，不是主体的颜色。
-        val hl = s.labL[i].toInt() and 0xffff
-        if (hl - bodyLight(i, s) > 0 && kc[i] != 2.toByte() &&
-          de2(hl, s.labA[i].toInt() and 0xffff,
-            s.labB[i].toInt() and 0xffff, miL, miA, miB) >= modalInk2
-        ) {
-          val off = s.off[i].toInt() and 0xffff
-          val k = CURVE[((off - body.zero) * 255 / body.span).coerceIn(0, 255)]
-          if (k > 0) {
-            val b = a * (25500 - hollow * k) / 25500
-            if (b != a) knocked++
-            a = b
+        // `hollow == 0` 时这一段是恒等变换（`b = a×25500/25500 = a`），整块跳过 ——
+        // 满幅支恒为 0，不必再逐像素算 `bodyLight` / `de2` / `CURVE`。
+        if (hollow > 0) {
+          val hl = s.labL[i].toInt() and 0xffff
+          if (hl - bodyLight(i, s) > 0 && kc[i] != 2.toByte() &&
+            de2(hl, s.labA[i].toInt() and 0xffff,
+              s.labB[i].toInt() and 0xffff, miL, miA, miB) >= modalInk2
+          ) {
+            val off = s.off[i].toInt() and 0xffff
+            val k = CURVE[((off - body.zero) * 255 / body.span).coerceIn(0, 255)]
+            if (k > 0) {
+              val b = a * (25500 - hollow * k) / 25500
+              if (b != a) knocked++
+              a = b
+            }
           }
         }
         if (a > 0) {
