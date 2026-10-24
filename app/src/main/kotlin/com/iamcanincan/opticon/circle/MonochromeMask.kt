@@ -474,8 +474,13 @@ internal object MonochromeMask {
       while (head < tail) {
         val c = q[head++]
         val cy = c / w; val cx = c - cy * w
-        for (j in intArrayOf(if (cx > box.left) c - 1 else -1, if (cx < box.right - 1) c + 1 else -1,
-          if (cy > box.top) c - w else -1, if (cy < box.bottom - 1) c + w else -1)) {
+        // 四个邻居写成 0..3：`intArrayOf(...)` 原来每走一步就新建一个 4 元数组
+        // （JFR 分配榜上 flatVote 的 int[] 排第二），顺序与原来 -1/+1/−w/+w 逐字相同。
+        for (d in 0 until 4) {
+          val j = if (d == 0) (if (cx > box.left) c - 1 else -1)
+            else if (d == 1) (if (cx < box.right - 1) c + 1 else -1)
+            else if (d == 2) (if (cy > box.top) c - w else -1)
+            else (if (cy < box.bottom - 1) c + w else -1)
           if (j < 0 || !solidPx(pixels, j) || comp[j] != 0.toByte()) continue
           if (deltaE(s.labL[j].toInt() and 0xffff, s.labA[j].toInt() and 0xffff, s.labB[j].toInt() and 0xffff,
                      sl, sa, sb) >= VOTE_DE) continue
@@ -2390,9 +2395,10 @@ internal object MonochromeMask {
           val l0 = (s.labL[i].toInt() and 0xffff) shr 6
           val a0 = (s.labA[i].toInt() shr 6)
           val b0 = (s.labB[i].toInt() shr 6)
-          for (d in intArrayOf(-1, 1, -w, w)) {
-            val ny = cy + (if (d == -w) -1 else if (d == w) 1 else 0)
-            val nx = cx + (if (d == -1) -1 else if (d == 1) 1 else 0)
+          // 0..3 = 左/右/上/下（与原来的 -1/+1/−w/+w 同序）；不再每走一步新建一个数组。
+          for (d in 0 until 4) {
+            val nx = if (d == 0) cx - 1 else if (d == 1) cx + 1 else cx
+            val ny = if (d == 2) cy - 1 else if (d == 3) cy + 1 else cy
             if (ny < 0 || ny >= h || nx < 0 || nx >= w) continue
             val j0 = ny * w + nx
             if (seen[j0] != 0.toByte() || Color.alpha(pixels[j0]) < A_SOLID) continue
@@ -3559,7 +3565,8 @@ internal object MonochromeMask {
       val c = q[k]; val cx = c % w; val cy = c / w
       if ((out[c] ushr 24) >= 128) { inked++; vals += out[c] ushr 24 }
       for (d in 0 until 4) {
-        val nx = cx + intArrayOf(1, -1, 0, 0)[d]; val ny = cy + intArrayOf(0, 0, 1, -1)[d]
+        val nx = if (d == 0) cx + 1 else if (d == 1) cx - 1 else cx
+        val ny = if (d == 2) cy + 1 else if (d == 3) cy - 1 else cy
         if (nx < 0 || ny < 0 || nx >= w || ny >= h) { perim++; continue }
         if (s.bandSeen[ny * w + nx] != 2.toByte()) perim++
       }
@@ -3598,7 +3605,8 @@ internal object MonochromeMask {
     for (k in 0 until tail) {
       val c = q[k]; val cx = c % w; val cy = c / w
       for (d in 0 until 4) {
-        val nx = cx + intArrayOf(1, -1, 0, 0)[d]; val ny = cy + intArrayOf(0, 0, 1, -1)[d]
+        val nx = if (d == 0) cx + 1 else if (d == 1) cx - 1 else cx
+        val ny = if (d == 2) cy + 1 else if (d == 3) cy - 1 else cy
         if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
         val j = ny * w + nx
         if (s.bandSeen[j] == 2.toByte() || Color.alpha(pixels[j]) < A_SOLID) continue
@@ -6934,9 +6942,9 @@ internal object MonochromeMask {
       val i = q[head++]
       val cy = i / w
       val cx = i - cy * w
-      for (d in intArrayOf(-1, 1, -w, w)) {
-        val ny = cy + (if (d == -w) -1 else if (d == w) 1 else 0)
-        val nx = cx + (if (d == -1) -1 else if (d == 1) 1 else 0)
+      for (d in 0 until 4) {
+        val nx = if (d == 0) cx - 1 else if (d == 1) cx + 1 else cx
+        val ny = if (d == 2) cy - 1 else if (d == 3) cy + 1 else cy
         if (ny < box.top || ny >= box.bottom || nx < box.left || nx >= box.right) continue
         val j = ny * w + nx
         if (seen[j] != 0.toByte()) continue
