@@ -2514,18 +2514,33 @@ internal object MonochromeMask {
     //   所以先看擦完还剩多少墨，少于原来的 1/4 就整张不擦。
     var plateCut = 0; var plateCand = -1; var plateInv = 0; var plateHole = 0
     if (under != null && under.size >= total) {
-      val fam = HashMap<Int, Int>(); var solid = 0
-      // 按"同色连续段"摊：`under` 通常是一整块纯色盘，逐像素 `plateKey` + HashMap 读写全是重复。
+      // 摊同一趟：`fam`（同色连续段，盘刀用）与 `luA/hL`（逐像素亮度，反相那一刀用）原来各扫一遍，
+      //   JFR 上这两遍占这一段的一半；两张刀又是二选一，没有理由分两趟。
+      // 按"同色连续段"摊 `fam`：`under` 通常是一整块纯色盘，逐像素 `plateKey` + HashMap 读写全是重复。
       // 累加到段尾再写一次，**每个键第一次出现的位置不变** ⇒ HashMap 的节点顺序（也就是
       // `maxByOrNull` 的平票顺序）与逐像素写完全一致。
+      val fam = HashMap<Int, Int>()
+      // 预计算：这四个循环原来各自重算 `invLuma(under)` / `invLuma(pixels)` 3–4 遍（JFR 上这段
+      // 占冷路径 ~12%），`Color.alpha(under)` 也是四遍。值逐位相同。
+      // 三份数组来自 [Scratch]（每张都新建 3×total 的 IntArray 是白付的分配）；直方图顺手在同一趟里摊。
+      val uA = s.underA
+      val luA = s.underLu
+      val lcA = s.underLc
+      val hL = IntArray(256)
+      var sol = 0
       var runU = 0; var runK = -1; var runN = 0
       for (i in 0 until total) {
-        if (Color.alpha(under[i]) < A_SOLID) {
+        val ua = (under[i] ushr 24) and 0xff
+        uA[i] = ua
+        if (ua < A_SOLID) {
           if (runN > 0) { fam[runK] = (fam[runK] ?: 0) + runN; runN = 0 }
           continue
         }
-        solid++
+        sol++
         val u = under[i]
+        val lu = invLuma(u)
+        luA[i] = lu
+        hL[lu]++
         if (runK >= 0 && u == runU) { runN++ } else {
           if (runN > 0) fam[runK] = (fam[runK] ?: 0) + runN
           runU = u; runK = plateKey(u); runN = 1
@@ -2551,35 +2566,29 @@ internal object MonochromeMask {
       //      对表台当场 iouMed **0.94 → 0.845**、10 张全变差、零张变差里没有一个变好。
       // ⚠ 只动"背景层露在外面"的格：合成图那一格离背景层自己太远 = 被前景盖住了，不越权去改
       //   （气泡压在盘上的那一截、气泡投在盘上的那道影，都是靠这一条保住的）。
-      if (under != null && under.size >= total) {
-        // 预计算：这四个循环原来各自重算 `invLuma(under)` / `invLuma(pixels)` 3–4 遍（JFR 上这段
-        // 占冷路径 ~12%），`Color.alpha(under)` 也是四遍。值逐位相同。
-        // 三份数组来自 [Scratch]（每张都新建 3×total 的 IntArray 是白付的分配）；直方图顺手在同一趟里摊。
-        val uA = s.underA
-        val luA = s.underLu
-        val lcA = s.underLc
-        val hL = IntArray(256); var sol = 0
+      val plateL = (0..255).maxByOrNull { hL[it] } ?: -1
+      // ② 的数直接从 ① 的直方图里求和：`markN` 本来就是"离盘 ≥ DELTA 的实心格"，
+      //    原来为此又扫了一整趟、把 |lu−plateL| 逐格减一遍。区间和与逐像素计数逐位相同。
+      var markN = 0
+      if (plateL >= 0) {
+        val loB = maxOf(0, plateL - PLATE_INV_DELTA + 1)
+        val hiB = minOf(255, plateL + PLATE_INV_DELTA - 1)
+        var near = 0
+        for (b in loB..hiB) near += hL[b]
+        markN = sol - near
+      }
+      if (sol > 0 && plateL >= 0 && hL[plateL] * 100 >= sol * PLATE_INV_L_MIN &&
+          markN * 1000 >= sol * PLATE_INV_MARK_MIN) {
+        // ④ 的 `lcA`（合成图那一格的亮度）只有这里真要用才算：前两道闸否决时，原来那一趟
+        //    `invLuma(pixels)` 是白付的 —— JFR 上它比 `invLuma(under)` 还贵。
+        var covN = 0
         for (i in 0 until total) {
-          val ua = (under[i] ushr 24) and 0xff
-          uA[i] = ua
-          if (ua >= A_SOLID) {
-            val lu = invLuma(under[i])
-            luA[i] = lu
-            lcA[i] = invLuma(pixels[i])
-            sol++; hL[lu]++
-          }
-        }
-        val plateL = (0..255).maxByOrNull { hL[it] } ?: -1
-        var markN = 0; var covN = 0
-        if (plateL >= 0) for (i in 0 until total) {
           if (uA[i] < A_SOLID) continue
-          val lu = luA[i]
-          if (Math.abs(lu - plateL) >= PLATE_INV_DELTA) markN++
-          if (Math.abs(lcA[i] - lu) >= PLATE_INV_COVER) covN++
+          val lc = invLuma(pixels[i])
+          lcA[i] = lc
+          if (Math.abs(lc - luA[i]) >= PLATE_INV_COVER) covN++
         }
-        if (sol > 0 && plateL >= 0 && hL[plateL] * 100 >= sol * PLATE_INV_L_MIN &&
-            markN * 1000 >= sol * PLATE_INV_MARK_MIN &&
-            covN * 100 >= sol * PLATE_INV_OCCL_MIN) {
+        if (covN * 100 >= sol * PLATE_INV_OCCL_MIN) {
           // 压在盘上的**那张卡自己多亮**：只看"背景层是盘、而合成图离盘很远"的那些格取亮度众数
           // （translate 就是气泡的 132）。有了它，斜边那道混色带不用再靠一个魔数判"被盖住"。
           val hT = IntArray(256)
@@ -2604,7 +2613,7 @@ internal object MonochromeMask {
           plateInv = inked; plateHole = holed
         }
       }
-      if (plateInv == 0 && top != null && solid > 0 && top.value * 100 >= solid * PLATE_ALT_MIN) {
+      if (plateInv == 0 && top != null && sol > 0 && top.value * 100 >= sol * PLATE_ALT_MIN) {
         plateCand = 0
         val kept = IntArray(total)
         var cut = 0; var left = 0
