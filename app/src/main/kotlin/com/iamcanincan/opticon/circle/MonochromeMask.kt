@@ -856,6 +856,18 @@ internal object MonochromeMask {
     var modelCDepOnOff = false
     var modelCDepOnInk = -1
     var modelCDepNull: HashMap<Int, LongArray>? = null
+    /** `under` 那一段的预计算与四道闸（只依赖 under/pixels）。同一次 build 只做一遍；
+     *  依赖 `out` 的写回与盘刀比较仍每遍跑。 */
+    var modelUnderDone = false
+    var modelUnderSol = 0
+    var modelUnderPlateL = -1
+    var modelUnderModeN = 0
+    var modelUnderMarkN = 0
+    var modelUnderCovN = 0
+    var modelUnderTopL = 0
+    var modelUnderHasTop = false
+    var modelUnderTopKey = 0
+    var modelUnderTopVal = 0
     var preTonal = false
     var preTonalSeen: Tonal? = null
     var preTonalWhy = 0
@@ -1112,7 +1124,7 @@ internal object MonochromeMask {
     // 一次 build 里的逐像素预计算（Lab / 内容框 / boxOpaque / tonalClass / 两遍参照）只做一遍。
     s.preLab = false; s.preBounds = false; s.preBoxOpaque = false; s.preTonal = false
     s.preAirDist = false; s.modelGround = null; s.modelBody = null
-    s.modelCDepOn = null; s.modelCDepNull = null
+    s.modelCDepOn = null; s.modelCDepNull = null; s.modelUnderDone = false
     val ramp = buildOnce(pixels, w, h, plateIsLayer, false, under, plateIsSubject = plateIsSubject,
       cutBorder = false)
     // 【底云】见 [plateCloudErase]。⚠ 与【广色度】同一条规矩：**只施加在交付的那几份成品上**，
@@ -2590,40 +2602,55 @@ internal object MonochromeMask {
     //   所以先看擦完还剩多少墨，少于原来的 1/4 就整张不擦。
     var plateCut = 0; var plateCand = -1; var plateInv = 0; var plateHole = 0
     if (under != null && under.size >= total) {
-      // 摊同一趟：`fam`（同色连续段，盘刀用）与 `luA/hL`（逐像素亮度，反相那一刀用）原来各扫一遍，
-      //   JFR 上这两遍占这一段的一半；两张刀又是二选一，没有理由分两趟。
-      // 按"同色连续段"摊 `fam`：`under` 通常是一整块纯色盘，逐像素 `plateKey` + HashMap 读写全是重复。
-      // 累加到段尾再写一次，**每个键第一次出现的位置不变** ⇒ HashMap 的节点顺序（也就是
-      // `maxByOrNull` 的平票顺序）与逐像素写完全一致。
-      val fam = HashMap<Int, Int>()
-      // 预计算：这四个循环原来各自重算 `invLuma(under)` / `invLuma(pixels)` 3–4 遍（JFR 上这段
-      // 占冷路径 ~12%），`Color.alpha(under)` 也是四遍。值逐位相同。
-      // 三份数组来自 [Scratch]（每张都新建 3×total 的 IntArray 是白付的分配）；直方图顺手在同一趟里摊。
+      // 这一段**只依赖 `under`/`pixels`**（不读 `out`、不读选支旗子），同一次 build 的每一遍输入相同
+      // ⇒ 预计算与四道闸只在第一遍做。依赖 `out` 的两块（反相那一刀的写回、盘刀的比较）仍每遍跑 ——
+      // 它们读的是这一遍的成品，不能跨遍复用。
       val uA = s.underA
       val luA = s.underLu
       val lcA = s.underLc
-      val hL = IntArray(256)
-      var sol = 0
-      var runU = 0; var runK = -1; var runN = 0
-      for (i in 0 until total) {
-        val ua = (under[i] ushr 24) and 0xff
-        uA[i] = ua
-        if (ua < A_SOLID) {
-          if (runN > 0) { fam[runK] = (fam[runK] ?: 0) + runN; runN = 0 }
-          continue
+      val sol: Int
+      val plateL: Int
+      val modeN: Int
+      val markN: Int
+      val covN: Int
+      val topL: Int
+      val hasTop: Boolean
+      val topKey: Int
+      val topVal: Int
+      if (!s.modelUnderDone) {
+        // 摊同一趟：`fam`（同色连续段，盘刀用）与 `luA/hL`（逐像素亮度，反相那一刀用）原来各扫一遍，
+        //   JFR 上这两遍占这一段的一半；两张刀又是二选一，没有理由分两趟。
+        // 按"同色连续段"摊 `fam`：`under` 通常是一整块纯色盘，逐像素 `plateKey` + HashMap 读写全是重复。
+        // 累加到段尾再写一次，**每个键第一次出现的位置不变** ⇒ HashMap 的节点顺序（也就是
+        // `maxByOrNull` 的平票顺序）与逐像素写完全一致。
+        val fam = HashMap<Int, Int>()
+        // 预计算：这四个循环原来各自重算 `invLuma(under)` / `invLuma(pixels)` 3–4 遍（JFR 上这段
+        // 占冷路径 ~12%），`Color.alpha(under)` 也是四遍。值逐位相同。
+        // 三份数组来自 [Scratch]（每张都新建 3×total 的 IntArray 是白付的分配）；直方图顺手在同一趟里摊。
+        val hL = IntArray(256)
+        var solC = 0
+        var runU = 0; var runK = -1; var runN = 0
+        for (i in 0 until total) {
+          val ua = (under[i] ushr 24) and 0xff
+          uA[i] = ua
+          if (ua < A_SOLID) {
+            if (runN > 0) { fam[runK] = (fam[runK] ?: 0) + runN; runN = 0 }
+            continue
+          }
+          solC++
+          val u = under[i]
+          val lu = invLuma(u)
+          luA[i] = lu
+          hL[lu]++
+          if (runK >= 0 && u == runU) { runN++ } else {
+            if (runN > 0) fam[runK] = (fam[runK] ?: 0) + runN
+            runU = u; runK = plateKey(u); runN = 1
+          }
         }
-        sol++
-        val u = under[i]
-        val lu = invLuma(u)
-        luA[i] = lu
-        hL[lu]++
-        if (runK >= 0 && u == runU) { runN++ } else {
-          if (runN > 0) fam[runK] = (fam[runK] ?: 0) + runN
-          runU = u; runK = plateKey(u); runN = 1
-        }
-      }
-      if (runN > 0) fam[runK] = (fam[runK] ?: 0) + runN
-      val top = fam.maxByOrNull { it.value }
+        if (runN > 0) fam[runK] = (fam[runK] ?: 0) + runN
+        val top = fam.maxByOrNull { it.value }
+        sol = solC
+        hasTop = top != null; topKey = top?.key ?: 0; topVal = top?.value ?: 0
       // ── 「一块被别的卡压着的平色卡 + 卡上画着标记」：卡交墨、标记镂空 ──
       // 主人 2026-10-12 点名 translate：「右半边全黑、只有"文"是镂空的会更好」。
       // 这一族与下面盘刀的动作**正好相反**，所以放在同一个入口、由类判据二选一
@@ -2642,54 +2669,71 @@ internal object MonochromeMask {
       //      对表台当场 iouMed **0.94 → 0.845**、10 张全变差、零张变差里没有一个变好。
       // ⚠ 只动"背景层露在外面"的格：合成图那一格离背景层自己太远 = 被前景盖住了，不越权去改
       //   （气泡压在盘上的那一截、气泡投在盘上的那道影，都是靠这一条保住的）。
-      val plateL = (0..255).maxByOrNull { hL[it] } ?: -1
-      // ② 的数直接从 ① 的直方图里求和：`markN` 本来就是"离盘 ≥ DELTA 的实心格"，
-      //    原来为此又扫了一整趟、把 |lu−plateL| 逐格减一遍。区间和与逐像素计数逐位相同。
-      var markN = 0
-      if (plateL >= 0) {
-        val loB = maxOf(0, plateL - PLATE_INV_DELTA + 1)
-        val hiB = minOf(255, plateL + PLATE_INV_DELTA - 1)
-        var near = 0
-        for (b in loB..hiB) near += hL[b]
-        markN = sol - near
+        plateL = (0..255).maxByOrNull { hL[it] } ?: -1
+        modeN = if (plateL >= 0) hL[plateL] else 0
+        // ② 的数直接从 ① 的直方图里求和：`markN` 本来就是"离盘 ≥ DELTA 的实心格"，
+        //    原来为此又扫了一整趟、把 |lu−plateL| 逐格减一遍。区间和与逐像素计数逐位相同。
+        var markC = 0
+        if (plateL >= 0) {
+          val loB = maxOf(0, plateL - PLATE_INV_DELTA + 1)
+          val hiB = minOf(255, plateL + PLATE_INV_DELTA - 1)
+          var near = 0
+          for (b in loB..hiB) near += hL[b]
+          markC = sol - near
+        }
+        markN = markC
+        var covC = 0
+        var topLC = plateL
+        if (sol > 0 && plateL >= 0 && modeN * 100 >= sol * PLATE_INV_L_MIN &&
+            markN * 1000 >= sol * PLATE_INV_MARK_MIN) {
+          // ④ 的 `lcA`（合成图那一格的亮度）只有这里真要用才算：前两道闸否决时，原来那一趟
+          //    `invLuma(pixels)` 是白付的 —— JFR 上它比 `invLuma(under)` 还贵。
+          for (i in 0 until total) {
+            if (uA[i] < A_SOLID) continue
+            val lc = invLuma(pixels[i])
+            lcA[i] = lc
+            if (Math.abs(lc - luA[i]) >= PLATE_INV_COVER) covC++
+          }
+          if (covC * 100 >= sol * PLATE_INV_OCCL_MIN) {
+            // 压在盘上的**那张卡自己多亮**：只看"背景层是盘、而合成图离盘很远"的那些格取亮度众数
+            // （translate 就是气泡的 132）。有了它，斜边那道混色带不用再靠一个魔数判"被盖住"。
+            val hT = IntArray(256)
+            for (i in 0 until total) {
+              if (uA[i] < A_SOLID) continue
+              if (Math.abs(luA[i] - plateL) >= PLATE_INV_DELTA) continue
+              val lc = lcA[i]
+              if (Math.abs(lc - plateL) < PLATE_INV_DELTA) continue
+              hT[lc]++
+            }
+            topLC = (0..255).maxByOrNull { hT[it] } ?: plateL
+          }
+        }
+        covN = covC; topL = topLC
+        s.modelUnderDone = true; s.modelUnderSol = sol; s.modelUnderPlateL = plateL
+        s.modelUnderModeN = modeN; s.modelUnderMarkN = markN
+        s.modelUnderCovN = covN; s.modelUnderTopL = topL
+        s.modelUnderHasTop = hasTop; s.modelUnderTopKey = topKey; s.modelUnderTopVal = topVal
+      } else {
+        sol = s.modelUnderSol; plateL = s.modelUnderPlateL; modeN = s.modelUnderModeN
+        markN = s.modelUnderMarkN; covN = s.modelUnderCovN; topL = s.modelUnderTopL
+        hasTop = s.modelUnderHasTop; topKey = s.modelUnderTopKey; topVal = s.modelUnderTopVal
       }
-      if (sol > 0 && plateL >= 0 && hL[plateL] * 100 >= sol * PLATE_INV_L_MIN &&
-          markN * 1000 >= sol * PLATE_INV_MARK_MIN) {
-        // ④ 的 `lcA`（合成图那一格的亮度）只有这里真要用才算：前两道闸否决时，原来那一趟
-        //    `invLuma(pixels)` 是白付的 —— JFR 上它比 `invLuma(under)` 还贵。
-        var covN = 0
+      // ③ 通过之后这趟写回**每遍都要做**（`out` 是这一遍的新数组）；判定与逐格角色都来自上面。
+      if (sol > 0 && plateL >= 0 && modeN * 100 >= sol * PLATE_INV_L_MIN &&
+          markN * 1000 >= sol * PLATE_INV_MARK_MIN && covN * 100 >= sol * PLATE_INV_OCCL_MIN) {
+        var inked = 0; var holed = 0
         for (i in 0 until total) {
           if (uA[i] < A_SOLID) continue
-          val lc = invLuma(pixels[i])
-          lcA[i] = lc
-          if (Math.abs(lc - luA[i]) >= PLATE_INV_COVER) covN++
+          val lu = luA[i]
+          val lc = lcA[i]
+          val isMark = Math.abs(lu - plateL) >= PLATE_INV_DELTA
+          if (Math.abs(lc - lu) >= PLATE_INV_COVER && !stillPlate(lc, plateL, topL)) continue
+          if (isMark) { out[i] = 0; holed++ }
+          else { out[i] = (255 shl 24) or 0x00FFFFFF; inked++ }
         }
-        if (covN * 100 >= sol * PLATE_INV_OCCL_MIN) {
-          // 压在盘上的**那张卡自己多亮**：只看"背景层是盘、而合成图离盘很远"的那些格取亮度众数
-          // （translate 就是气泡的 132）。有了它，斜边那道混色带不用再靠一个魔数判"被盖住"。
-          val hT = IntArray(256)
-          for (i in 0 until total) {
-            if (uA[i] < A_SOLID) continue
-            if (Math.abs(luA[i] - plateL) >= PLATE_INV_DELTA) continue
-            val lc = lcA[i]
-            if (Math.abs(lc - plateL) < PLATE_INV_DELTA) continue
-            hT[lc]++
-          }
-          val topL = (0..255).maxByOrNull { hT[it] } ?: plateL
-          var inked = 0; var holed = 0
-          for (i in 0 until total) {
-            if (uA[i] < A_SOLID) continue
-            val lu = luA[i]
-            val lc = lcA[i]
-            val isMark = Math.abs(lu - plateL) >= PLATE_INV_DELTA
-            if (Math.abs(lc - lu) >= PLATE_INV_COVER && !stillPlate(lc, plateL, topL)) continue
-            if (isMark) { out[i] = 0; holed++ }
-            else { out[i] = (255 shl 24) or 0x00FFFFFF; inked++ }
-          }
-          plateInv = inked; plateHole = holed
-        }
+        plateInv = inked; plateHole = holed
       }
-      if (plateInv == 0 && top != null && sol > 0 && top.value * 100 >= sol * PLATE_ALT_MIN) {
+      if (plateInv == 0 && hasTop && sol > 0 && topVal * 100 >= sol * PLATE_ALT_MIN) {
         plateCand = 0
         val kept = IntArray(total)
         var cut = 0; var left = 0
@@ -2697,7 +2741,7 @@ internal object MonochromeMask {
           if (Color.alpha(out[i]) == 0) continue
           // ⚠ 比的是**源图**那一格的颜色，不是 `out` —— `out` 的 RGB 是墨色（几乎恒为黑/白），
           //   拿它归族会把"有没有墨"当成"是不是那块盘"，第一版就是这么一声没响。
-          val isPlate = Color.alpha(under[i]) >= A_SOLID && plateKey(pixels[i]) == top.key
+          val isPlate = Color.alpha(under[i]) >= A_SOLID && plateKey(pixels[i]) == topKey
           if (isPlate) { cut++; plateCand++ } else { kept[i] = out[i]; left++ }
         }
         // **拦的是"擦成空"，不是"擦掉一大片"** —— 第一版写成"剩下的墨不许少于原来的 1/4"，
