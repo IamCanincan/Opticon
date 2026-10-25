@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -17,7 +18,6 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.InvertColors
@@ -39,7 +39,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -219,18 +218,17 @@ private fun MonoInvertCard() {
 }
 
 /**
- * 「效果」卡：一张形状示意图 + 一句覆盖范围说明。
+ * 「效果」卡：一块四格样品板 —— 原样 / 裁圆 / 裁不动 / 快捷方式，下面一句结论。
  *
  * 补这张卡是因为图标页原本只有「开关 + 说明」两块，首屏下半截全是空的；
  * 而且「改完之后到底变成什么样」光靠文字不好讲 —— 画出来一目了然。
  *
- * ⚠ 两个色块只是**示意图**，不是真实图标渲染：左边用中性底表示「系统给的形状」
- * （圆角方 / 水滴 / 方都可能是它），右边用主色圆表示裁完的结果。
+ * 2026-10-26：从"两张大图 + 一行两小图"改成**等大四格**。上一版主图 56dp、例外 44dp，
+ * 两档例外像临时挂在下面；四格共用同一块 `surfaceContainerHighest` 底板、同一套两行字，
+ * 才像一条规则。白盘在浅色卡上也要有边界，所以用真白 + `outlineVariant` 描边。
  *
- * 2026-09-30 改版：原来左边那块**没有描边**，深色下就是一个和卡面几乎同色的方块，
- * 看着像"破了个洞"；箭头是一个裸 `Text("→")`（字号不跟主题、读屏还会把它念出来），
- * 两块下面也没有说明谁是谁。现在左块加 1dp 描边、箭头换成装饰性图标、
- * 两块各带一行小字（原样 / 裁圆），说明文字移到示意图**下方**占满整宽。
+ * ⚠ 样本只是**示意图**，不是真实图标渲染：原样那块用中性圆角方表示系统可能给的任何形状
+ * （圆角方 / 水滴 / 方）；其余三格用主色示意内容。
  */
 @Composable
 private fun EffectCard() {
@@ -238,43 +236,37 @@ private fun EffectCard() {
   OpticonCard {
     Row(
       modifier = Modifier.fillMaxWidth(),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.Center,
+      horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-      ShapeSample(
-        label = stringResource(R.string.effect_caption_before),
-        fill = scheme.surfaceContainerHighest,
-        shape = RoundedCornerShape(16.dp),
-        border = scheme.outlineVariant,
+      EffectTile(
+        modifier = Modifier.weight(1f),
+        style = EffectStyle.ORIGINAL,
+        title = stringResource(R.string.effect_caption_before),
+        detail = stringResource(R.string.effect_sample_original_detail),
       )
-      Icon(
-        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-        contentDescription = null,
-        tint = scheme.onSurfaceVariant,
-        modifier = Modifier.padding(horizontal = 18.dp).size(20.dp),
-      )
-      ShapeSample(
-        label = stringResource(R.string.effect_caption_after),
-        fill = scheme.primary,
-        shape = CircleShape,
-        border = null,
+      EffectTile(
+        modifier = Modifier.weight(1f),
+        style = EffectStyle.CROPPED,
+        title = stringResource(R.string.effect_caption_after),
+        detail = stringResource(R.string.effect_sample_cropped_detail),
       )
     }
-    Spacer(modifier = Modifier.height(14.dp))
-    // 第二行：说明里写的两档例外也要看得见（2026-10-26）。样本比主图小一号，
-    // 白盘用真白色 + outlineVariant 描边（白纸上不描边就看不见），内容块用主色示意。
+    Spacer(modifier = Modifier.height(12.dp))
     Row(
       modifier = Modifier.fillMaxWidth(),
-      verticalAlignment = Alignment.Top,
-      horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterHorizontally),
+      horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-      ExceptionSample(
-        kind = ExceptionKind.WIDE,
-        label = stringResource(R.string.effect_caption_shrink),
+      EffectTile(
+        modifier = Modifier.weight(1f),
+        style = EffectStyle.SHRUNK,
+        title = stringResource(R.string.effect_sample_shrink_title),
+        detail = stringResource(R.string.effect_caption_shrink),
       )
-      ExceptionSample(
-        kind = ExceptionKind.GLYPH,
-        label = stringResource(R.string.effect_caption_shortcut),
+      EffectTile(
+        modifier = Modifier.weight(1f),
+        style = EffectStyle.SHORTCUT,
+        title = stringResource(R.string.effect_sample_shortcut_title),
+        detail = stringResource(R.string.effect_caption_shortcut),
       )
     }
     Spacer(modifier = Modifier.height(18.dp))
@@ -292,64 +284,90 @@ private fun EffectCard() {
   }
 }
 
+private enum class EffectStyle { ORIGINAL, CROPPED, SHRUNK, SHORTCUT }
+
 /**
- * 效果示意图里的一个样本：一块形状 + 它下面那行小字。
+ * 效果板的一格：统一的 68dp 底板 + 40dp 样本 + 两行字。
  *
- * ⚠ 圆角是**画出来的图形**、不是卡片的圆角档位，所以调用方直接传具体形状
- * （`RoundedCornerShape(16.dp)` 表示"某个 ROM 给的圆角方"）——跟着 `shapes` 档位走
- * 反而失去这个意思。
+ * 底板用 `surfaceContainerHighest`（与 `IconTile`、命令块同一档）—— 卡片本身是
+ * `surfaceContainerLow`，正好隔一档，白盘和主色圆都能立住。
  */
 @Composable
-private fun ShapeSample(label: String, fill: Color, shape: Shape, border: Color?) {
-  Column(horizontalAlignment = Alignment.CenterHorizontally) {
-    Box(
-      modifier =
-        Modifier.size(56.dp)
-          .clip(shape)
-          .background(fill)
-          .then(if (border != null) Modifier.border(1.dp, border, shape) else Modifier)
-    )
+private fun EffectTile(
+  modifier: Modifier = Modifier,
+  style: EffectStyle,
+  title: String,
+  detail: String,
+) {
+  val scheme = MaterialTheme.colorScheme
+  Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+    Surface(
+      modifier = Modifier.fillMaxWidth().height(68.dp),
+      shape = MaterialTheme.shapes.medium,
+      color = scheme.surfaceContainerHighest,
+    ) {
+      Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        when (style) {
+          EffectStyle.ORIGINAL ->
+            Box(
+              modifier =
+                Modifier.size(40.dp)
+                  .clip(RoundedCornerShape(14.dp))
+                  .background(scheme.surfaceVariant)
+                  .border(1.dp, scheme.outline, RoundedCornerShape(14.dp))
+            )
+          EffectStyle.CROPPED ->
+            Box(modifier = Modifier.size(40.dp).clip(CircleShape).background(scheme.primary))
+          EffectStyle.SHRUNK ->
+            PlateSample {
+              Box(
+                modifier =
+                  Modifier.size(width = 24.dp, height = 10.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(scheme.primary)
+              )
+            }
+          EffectStyle.SHORTCUT ->
+            PlateSample {
+              Box(
+                modifier =
+                  Modifier.size(13.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(scheme.primary)
+              )
+            }
+        }
+      }
+    }
     Spacer(modifier = Modifier.height(8.dp))
     Text(
-      text = label,
-      style = MaterialTheme.typography.labelMedium,
-      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      text = title,
+      style = MaterialTheme.typography.labelLarge,
+      color = scheme.onSurface,
+    )
+    Spacer(modifier = Modifier.height(1.dp))
+    Text(
+      text = detail,
+      style = MaterialTheme.typography.labelSmall,
+      color = scheme.onSurfaceVariant,
+      textAlign = TextAlign.Center,
+      maxLines = 1,
     )
   }
 }
 
-/** 效果示意图第二行：两档"不按满幅裁"的样子 —— 白盘 + 内容。 */
-private enum class ExceptionKind { WIDE, GLYPH }
-
+/** 圆内的白盘：真白 + 描边（浅色卡上不描边就融进去了），内容由调用方放。 */
 @Composable
-private fun ExceptionSample(kind: ExceptionKind, label: String) {
-  val scheme = MaterialTheme.colorScheme
-  Column(horizontalAlignment = Alignment.CenterHorizontally) {
-    Box(
-      modifier =
-        Modifier.size(44.dp)
-          .clip(CircleShape)
-          .background(Color.White)
-          .border(1.dp, scheme.outlineVariant, CircleShape),
-      contentAlignment = Alignment.Center,
-    ) {
-      // 左：宽幅内容缩进后仍是一条横块；右：透明底快捷方式里的小图案，按原大小放。
-      Box(
-        modifier =
-          (if (kind == ExceptionKind.WIDE) Modifier.size(width = 26.dp, height = 11.dp)
-           else Modifier.size(14.dp))
-            .clip(if (kind == ExceptionKind.WIDE) RoundedCornerShape(3.dp) else RoundedCornerShape(4.dp))
-            .background(scheme.primary)
-      )
-    }
-    Spacer(modifier = Modifier.height(6.dp))
-    Text(
-      text = label,
-      style = MaterialTheme.typography.labelMedium,
-      color = scheme.onSurfaceVariant,
-      textAlign = TextAlign.Center,
-      maxLines = 2,
-    )
+private fun PlateSample(content: @Composable () -> Unit) {
+  Box(
+    modifier =
+      Modifier.size(40.dp)
+        .clip(CircleShape)
+        .background(Color.White)
+        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape),
+    contentAlignment = Alignment.Center,
+  ) {
+    content()
   }
 }
 
