@@ -162,6 +162,13 @@
     <string name="note_launcher3">Android 16 及以上会禁用桌面自带的背景板；圆形遮罩（以及部分图标圆内的白色底）由模块绘制。</string>
     <string name="note_themed_icon">本应用图标包含 monochrome 层；在 Android 13 及以上启动器启用“主题图标”时，将按壁纸取色渲染。</string>
 
+    <!-- 关于页：功能范围（覆盖什么、有意排除什么） -->
+    <string name="section_feature_range">功能范围</string>
+    <string name="range_crop">裁圆：所有已注入进程中的应用图标；快速设置磁贴除外。</string>
+    <string name="range_mono">单色：未提供单色层的自适应图标；已提供者原样透传。</string>
+    <string name="range_notify">通知：新通知、通知行与状态栏重建；已适配应用跳过，大图与头像不处理。</string>
+    <string name="range_scope">作用域由框架管理器决定；未注入的进程不受影响。</string>
+
     <!-- 更新卡片 -->
     <string name="section_update">更新</string>
     <!-- 卡片标题和按钮共用这一句 -->
