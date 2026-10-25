@@ -90,7 +90,7 @@ fun NotifyScreen(onNotify: (String) -> Unit) {
         }
 
         item {
-            Section(text = stringResource(R.string.notify_section_scope)) { ScopeCard() }
+            Section(text = stringResource(R.string.section_scope)) { ScopeCard() }
         }
 
         item {
