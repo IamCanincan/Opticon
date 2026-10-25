@@ -121,8 +121,11 @@
 
     <!-- 效果示意（形状对比图）-->
     <string name="section_effect">效果</string>
-    <string name="effect_title">一律裁成正圆</string>
+    <string name="effect_title">统一裁成正圆</string>
     <string name="effect_body">图案铺得满的直接裁成正圆；裁不动的保持完整、缩进圆里并补白底；透明底的快捷方式按原大小铺在白底上。</string>
+    <!-- 效果示意图第二行两块小样本下面的说明：左=裁不动，右=透明底快捷方式 -->
+    <string name="effect_caption_shrink">裁不动：缩进 + 白底</string>
+    <string name="effect_caption_shortcut">透明底：原大小 + 白底</string>
 
     <!--
         单色遮罩极性修正。这条和裁圆是**两个独立开关**：它管的是 Android 16 强制取色下

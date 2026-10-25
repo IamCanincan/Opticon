@@ -43,6 +43,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.circle.ACTION_CLEAR_ICON_CACHE
@@ -259,6 +260,23 @@ private fun EffectCard() {
         border = null,
       )
     }
+    Spacer(modifier = Modifier.height(14.dp))
+    // 第二行：说明里写的两档例外也要看得见（2026-10-26）。样本比主图小一号，
+    // 白盘用真白色 + outlineVariant 描边（白纸上不描边就看不见），内容块用主色示意。
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.Top,
+      horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterHorizontally),
+    ) {
+      ExceptionSample(
+        kind = ExceptionKind.WIDE,
+        label = stringResource(R.string.effect_caption_shrink),
+      )
+      ExceptionSample(
+        kind = ExceptionKind.GLYPH,
+        label = stringResource(R.string.effect_caption_shortcut),
+      )
+    }
     Spacer(modifier = Modifier.height(18.dp))
     Text(
       text = stringResource(R.string.effect_title),
@@ -296,6 +314,41 @@ private fun ShapeSample(label: String, fill: Color, shape: Shape, border: Color?
       text = label,
       style = MaterialTheme.typography.labelMedium,
       color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+  }
+}
+
+/** 效果示意图第二行：两档"不按满幅裁"的样子 —— 白盘 + 内容。 */
+private enum class ExceptionKind { WIDE, GLYPH }
+
+@Composable
+private fun ExceptionSample(kind: ExceptionKind, label: String) {
+  val scheme = MaterialTheme.colorScheme
+  Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    Box(
+      modifier =
+        Modifier.size(44.dp)
+          .clip(CircleShape)
+          .background(Color.White)
+          .border(1.dp, scheme.outlineVariant, CircleShape),
+      contentAlignment = Alignment.Center,
+    ) {
+      // 左：宽幅内容缩进后仍是一条横块；右：透明底快捷方式里的小图案，按原大小放。
+      Box(
+        modifier =
+          (if (kind == ExceptionKind.WIDE) Modifier.size(width = 26.dp, height = 11.dp)
+           else Modifier.size(14.dp))
+            .clip(if (kind == ExceptionKind.WIDE) RoundedCornerShape(3.dp) else RoundedCornerShape(4.dp))
+            .background(scheme.primary)
+      )
+    }
+    Spacer(modifier = Modifier.height(6.dp))
+    Text(
+      text = label,
+      style = MaterialTheme.typography.labelMedium,
+      color = scheme.onSurfaceVariant,
+      textAlign = TextAlign.Center,
+      maxLines = 2,
     )
   }
 }
