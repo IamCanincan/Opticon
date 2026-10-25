@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -296,29 +297,42 @@ internal fun HeroCard(
     colors = CardDefaults.cardColors(containerColor = containerColor),
     shape = MaterialTheme.shapes.large,
   ) {
-    Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-      IconTile(
-        icon = icon,
-        containerColor = contentColor,
-        contentColor = containerColor,
+    // 右上角一枚低透明度的大图标当水印：整张卡原来只有"色块 + 一行字"，
+    // 加一层同语义的图形就有了纵深（2026-10-26 美观性）。10% 与正文拉开，不抢内容。
+    Box(modifier = Modifier.clip(MaterialTheme.shapes.large)) {
+      Icon(
+        imageVector = icon,
+        contentDescription = null,
+        tint = contentColor.copy(alpha = 0.10f),
+        modifier =
+          Modifier.size(132.dp)
+            .align(Alignment.CenterEnd)
+            .offset(x = 30.dp),
       )
-      Spacer(modifier = Modifier.width(14.dp))
-      Column(modifier = Modifier.weight(1f)) {
-        Text(
-          text = title,
-          style = MaterialTheme.typography.titleMedium,
-          color = contentColor,
+      Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconTile(
+          icon = icon,
+          containerColor = contentColor,
+          contentColor = containerColor,
         )
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-          text = body,
-          style = MaterialTheme.typography.bodyMedium,
-          color = contentColor,
-        )
-      }
-      if (trailing != null) {
-        Spacer(modifier = Modifier.width(8.dp))
-        trailing()
+        Spacer(modifier = Modifier.width(14.dp))
+        Column(modifier = Modifier.weight(1f)) {
+          Text(
+            text = title,
+            style = MaterialTheme.typography.titleMedium,
+            color = contentColor,
+          )
+          Spacer(modifier = Modifier.height(4.dp))
+          Text(
+            text = body,
+            style = MaterialTheme.typography.bodyMedium,
+            color = contentColor,
+          )
+        }
+        if (trailing != null) {
+          Spacer(modifier = Modifier.width(8.dp))
+          trailing()
+        }
       }
     }
   }

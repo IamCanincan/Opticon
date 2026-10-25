@@ -8,6 +8,9 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -47,11 +50,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.res.colorResource
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -148,7 +154,13 @@ fun OpticonApp() {
             modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
             topBar = {
                 TopAppBar(
-                    title = { Text(text = stringResource(R.string.app_name)) },
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            BrandMark()
+                            Spacer(Modifier.width(10.dp))
+                            Text(text = stringResource(R.string.app_name))
+                        }
+                    },
                     actions = {
                         // ⚠ 走 openExternalUrl 而不是直接 `uriHandler.openUri`：没有浏览器的
                         //   设备上后者会抛 IllegalArgumentException 把应用带崩（见该函数说明）。
@@ -212,6 +224,30 @@ fun OpticonApp() {
                 .padding(bottom = 92.dp),
         )
     }
+}
+
+/**
+ * 顶栏左侧的品牌标记：与桌面图标同源（背景 + 前景两层）。
+ *
+ * 加它的理由：整页是卡片叠卡片，顶栏只有一行字，视觉上没有任何"这是 Opticon"的锚点；
+ * 而关于页已经在用同一张图标当品牌，这里只是把身份带到第一屏。尺寸 28dp ——
+ * 和顶栏一行的高度相称，不抢标题。
+ */
+@Composable
+private fun BrandMark() {
+  Box(
+    modifier =
+      Modifier.size(28.dp)
+        .clip(RoundedCornerShape(8.dp))
+        .background(colorResource(R.color.opticon_icon_background))
+        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+  ) {
+    Image(
+      painter = painterResource(R.drawable.ic_launcher_foreground),
+      contentDescription = null,
+      modifier = Modifier.fillMaxSize(),
+    )
+  }
 }
 
 /**

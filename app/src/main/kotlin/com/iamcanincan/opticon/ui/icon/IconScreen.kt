@@ -18,9 +18,12 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.InvertColors
+import androidx.compose.material.icons.filled.Panorama
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalButton
@@ -313,32 +316,52 @@ private fun EffectTile(
     ) {
       Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         when (style) {
+          // 用可识别的图形（相机 / 全景 / 闪电）代替抽象色块：一眼能看出"这是一张图"，
+          // 也把原样与裁圆的关系说清楚（同一个相机，换形状）。
           EffectStyle.ORIGINAL ->
             Box(
               modifier =
                 Modifier.size(40.dp)
                   .clip(RoundedCornerShape(14.dp))
                   .background(scheme.surfaceVariant)
-                  .border(1.dp, scheme.outline, RoundedCornerShape(14.dp))
-            )
+                  .border(1.dp, scheme.outline, RoundedCornerShape(14.dp)),
+              contentAlignment = Alignment.Center,
+            ) {
+              Icon(
+                imageVector = Icons.Default.PhotoCamera,
+                contentDescription = null,
+                tint = scheme.onSurfaceVariant,
+                modifier = Modifier.size(22.dp),
+              )
+            }
           EffectStyle.CROPPED ->
-            Box(modifier = Modifier.size(40.dp).clip(CircleShape).background(scheme.primary))
+            Box(
+              modifier = Modifier.size(40.dp).clip(CircleShape).background(scheme.primary),
+              contentAlignment = Alignment.Center,
+            ) {
+              Icon(
+                imageVector = Icons.Default.PhotoCamera,
+                contentDescription = null,
+                tint = scheme.onPrimary,
+                modifier = Modifier.size(22.dp),
+              )
+            }
           EffectStyle.SHRUNK ->
             PlateSample {
-              Box(
-                modifier =
-                  Modifier.size(width = 24.dp, height = 10.dp)
-                    .clip(RoundedCornerShape(3.dp))
-                    .background(scheme.primary)
+              Icon(
+                imageVector = Icons.Default.Panorama,
+                contentDescription = null,
+                tint = scheme.primary,
+                modifier = Modifier.size(22.dp),
               )
             }
           EffectStyle.SHORTCUT ->
             PlateSample {
-              Box(
-                modifier =
-                  Modifier.size(13.dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(scheme.primary)
+              Icon(
+                imageVector = Icons.Default.Bolt,
+                contentDescription = null,
+                tint = scheme.primary,
+                modifier = Modifier.size(20.dp),
               )
             }
         }
