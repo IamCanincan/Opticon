@@ -4,15 +4,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -22,7 +18,6 @@ import androidx.compose.material.icons.filled.Panorama
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -35,13 +30,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.runtime.ModulePrefs
 import com.iamcanincan.opticon.ui.FeatureSwitchCard
 import com.iamcanincan.opticon.ui.NoteList
 import com.iamcanincan.opticon.ui.OpticonCard
+import com.iamcanincan.opticon.ui.SampleTile
 import com.iamcanincan.opticon.ui.ScreenList
 import com.iamcanincan.opticon.ui.Section
 
@@ -213,79 +208,57 @@ private fun EffectTile(
   detail: String,
 ) {
   val scheme = MaterialTheme.colorScheme
-  Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-    Surface(
-      modifier = Modifier.fillMaxWidth().height(68.dp),
-      shape = MaterialTheme.shapes.medium,
-      color = scheme.surfaceContainerHighest,
-    ) {
-      Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        when (style) {
-          // 用可识别的图形（相机 / 全景 / 闪电）代替抽象色块：一眼能看出"这是一张图"，
-          // 也把原样与裁圆的关系说清楚（同一个相机，换形状）。
-          EffectStyle.ORIGINAL ->
-            Box(
-              modifier =
-                Modifier.size(40.dp)
-                  .clip(RoundedCornerShape(14.dp))
-                  .background(scheme.surfaceVariant)
-                  .border(1.dp, scheme.outline, RoundedCornerShape(14.dp)),
-              contentAlignment = Alignment.Center,
-            ) {
-              Icon(
-                imageVector = Icons.Default.PhotoCamera,
-                contentDescription = null,
-                tint = scheme.onSurfaceVariant,
-                modifier = Modifier.size(22.dp),
-              )
-            }
-          EffectStyle.CROPPED ->
-            Box(
-              modifier = Modifier.size(40.dp).clip(CircleShape).background(scheme.primary),
-              contentAlignment = Alignment.Center,
-            ) {
-              Icon(
-                imageVector = Icons.Default.PhotoCamera,
-                contentDescription = null,
-                tint = scheme.onPrimary,
-                modifier = Modifier.size(22.dp),
-              )
-            }
-          EffectStyle.SHRUNK ->
-            PlateSample {
-              Icon(
-                imageVector = Icons.Default.Panorama,
-                contentDescription = null,
-                tint = scheme.primary,
-                modifier = Modifier.size(22.dp),
-              )
-            }
-          EffectStyle.SHORTCUT ->
-            PlateSample {
-              Icon(
-                imageVector = Icons.Default.Bolt,
-                contentDescription = null,
-                tint = scheme.primary,
-                modifier = Modifier.size(20.dp),
-              )
-            }
+  SampleTile(modifier = modifier, title = title, detail = detail) {
+    when (style) {
+      // 用可识别的图形（相机 / 全景 / 闪电）代替抽象色块：一眼能看出"这是一张图"，
+      // 也把原样与正圆的关系说清楚（同一个相机，换形状）。
+      EffectStyle.ORIGINAL ->
+        Box(
+          modifier =
+            Modifier.size(40.dp)
+              .clip(RoundedCornerShape(14.dp))
+              .background(scheme.surfaceVariant)
+              .border(1.dp, scheme.outline, RoundedCornerShape(14.dp)),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.PhotoCamera,
+            contentDescription = null,
+            tint = scheme.onSurfaceVariant,
+            modifier = Modifier.size(22.dp),
+          )
         }
-      }
+      EffectStyle.CROPPED ->
+        Box(
+          modifier = Modifier.size(40.dp).clip(CircleShape).background(scheme.primary),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.PhotoCamera,
+            contentDescription = null,
+            tint = scheme.onPrimary,
+            modifier = Modifier.size(22.dp),
+          )
+        }
+      EffectStyle.SHRUNK ->
+        PlateSample {
+          Icon(
+            imageVector = Icons.Default.Panorama,
+            contentDescription = null,
+            tint = scheme.primary,
+            modifier = Modifier.size(22.dp),
+          )
+        }
+      EffectStyle.SHORTCUT ->
+        PlateSample {
+          Icon(
+            imageVector = Icons.Default.Bolt,
+            contentDescription = null,
+            tint = scheme.primary,
+            modifier = Modifier.size(20.dp),
+          )
+        }
     }
-    Spacer(modifier = Modifier.height(8.dp))
-    Text(
-      text = title,
-      style = MaterialTheme.typography.labelLarge,
-      color = scheme.onSurface,
-    )
-    Spacer(modifier = Modifier.height(1.dp))
-    Text(
-      text = detail,
-      style = MaterialTheme.typography.labelSmall,
-      color = scheme.onSurfaceVariant,
-      textAlign = TextAlign.Center,
-      maxLines = 1,
-    )
   }
 }
 

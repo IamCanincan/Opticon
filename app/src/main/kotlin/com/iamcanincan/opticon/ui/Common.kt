@@ -46,6 +46,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.R
@@ -437,6 +438,44 @@ internal fun FeatureSwitchCard(
         )
       }
     }
+  }
+}
+
+/**
+ * 功能示意卡中的一格：统一的 68dp 底板 + 居中样本 + 标题/细节两行。
+ * 裁圆与单色的「效果」卡共用，保证两页的示意语言一致（2026-10-26）。
+ */
+@Composable
+internal fun SampleTile(
+  title: String,
+  detail: String,
+  modifier: Modifier = Modifier,
+  content: @Composable () -> Unit,
+) {
+  Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+    Surface(
+      modifier = Modifier.fillMaxWidth().height(68.dp),
+      shape = MaterialTheme.shapes.medium,
+      color = MaterialTheme.colorScheme.surfaceContainerHighest,
+    ) {
+      Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        content()
+      }
+    }
+    Spacer(modifier = Modifier.height(8.dp))
+    Text(
+      text = title,
+      style = MaterialTheme.typography.labelLarge,
+      color = MaterialTheme.colorScheme.onSurface,
+    )
+    Spacer(modifier = Modifier.height(1.dp))
+    Text(
+      text = detail,
+      style = MaterialTheme.typography.labelSmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      textAlign = TextAlign.Center,
+      maxLines = 1,
+    )
   }
 }
 

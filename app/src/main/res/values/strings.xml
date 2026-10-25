@@ -140,6 +140,13 @@
     -->
     <string name="mono_switch_title">未适配图标的单色层</string>
     <string name="mono_switch_body">在 Android 16 强制动态取色下，为未提供单色层的应用生成极性正确的单色剪影。关闭后由桌面自身算法处理，该类图标的明暗关系可能反转。</string>
+    <!-- 单色页的示意卡：左=原图标（浅底深形），右=剪影（深形为墨，洞交给桌面主题盘） -->
+    <string name="mono_effect_title">单色层示意</string>
+    <string name="mono_effect_body">未提供单色层的应用由模块生成剪影：深色图形保留为墨，浅色区域交由桌面主题盘显示。</string>
+    <string name="mono_sample_original_title">原图标</string>
+    <string name="mono_sample_original_detail">浅底深形</string>
+    <string name="mono_sample_silhouette_title">剪影</string>
+    <string name="mono_sample_silhouette_detail">深形为墨</string>
     <!-- 效果示意图两块色块下面那行小字：左=系统原样、右=裁切后。用短词，别和 effect_title 重复 -->
     <string name="effect_caption_before">原样</string>
     <string name="effect_caption_after">正圆</string>
