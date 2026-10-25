@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.InvertColors
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -68,8 +69,9 @@ import com.iamcanincan.opticon.runtime.ModulePrefs
 import com.iamcanincan.opticon.ui.about.AboutScreen
 import com.iamcanincan.opticon.ui.about.UpdateState
 import com.iamcanincan.opticon.ui.about.toState
-import com.iamcanincan.opticon.ui.icon.IconScreen
+import com.iamcanincan.opticon.ui.crop.CropScreen
 import com.iamcanincan.opticon.ui.module.ModuleScreen
+import com.iamcanincan.opticon.ui.mono.MonoScreen
 import com.iamcanincan.opticon.ui.notify.NotifyScreen
 import com.iamcanincan.opticon.update.UpdateChecker
 import kotlinx.coroutines.Dispatchers
@@ -78,19 +80,20 @@ import kotlinx.coroutines.withContext
 
 private const val REPO_URL = "https://github.com/IamCanincan/Opticon"
 
-private const val TAB_ICON = 0
-private const val TAB_NOTIFY = 1
-private const val TAB_MODULE = 2
-private const val TAB_ABOUT = 3
+private const val TAB_CROP = 0
+private const val TAB_MONO = 1
+private const val TAB_NOTIFY = 2
+private const val TAB_MODULE = 3
+private const val TAB_ABOUT = 4
 
 /** 底栏格数 = Pager 的页数 */
-private const val PAGE_COUNT = 4
+private const val PAGE_COUNT = 5
 
 /**
- * 应用外壳：顶栏 + **悬浮药丸式**底部导航 + 三个页面。
+ * 应用外壳：顶栏 + **悬浮药丸式**底部导航 + 五个页面。
  *
- * 分页按**内容归属**来，不按「东西多不多」：
- * - 「图标」「通知」是**功能页** —— 各自的开关和只跟它自己有关的说明；
+ * 分页按**内容归属**来，三个功能各占一页：
+ * - 「裁圆」「单色」「通知」是**功能页** —— 各自的开关和只跟它自己有关的说明；
  * - 「模块」是**共用页** —— 作用域清单（三路功能都要勾）、启用步骤、验证方式、运维按钮；
  * - 「关于」是**信息页** —— 检查更新与版本信息（"看看就好"的那类内容）。
  *
@@ -98,7 +101,8 @@ private const val PAGE_COUNT = 4
  * 视觉上更轻、也更贴合 M3 Expressive 的形态语言。选中项会展开文字
  * （未选中的只留图标），所以药丸宽度随当前页变化 —— 这正是它像"药丸"的原因。
  *
- * ⚠ 底栏是**四格**：三格时药丸太短，撑不起"悬浮药丸"该有的形态（试过，明显偏窄）。
+ * ⚠ 底栏是**五格**：三个功能 + 模块 + 关于。五格时把每格左右内边距收到 12dp，
+ *   360dp 屏上药丸仍留出两侧空隙（16dp 那档在五格下会贴边）。
  *
  * ⚠ 切页**会**销毁离屏那页的组合：Pager 只保留视口内的页。所以「跨页还要留着的东西」
  * 一律放在这里（外壳）而不是页面里 —— 目前有两个：检查更新的结果，和发 Snackbar 的作用域。
@@ -189,7 +193,8 @@ fun OpticonApp() {
                     modifier = Modifier.fillMaxSize(),
                 ) { page ->
                     when (page) {
-                        TAB_ICON -> IconScreen(onNotify = notify)
+                        TAB_CROP -> CropScreen(onNotify = notify)
+                        TAB_MONO -> MonoScreen(onNotify = notify)
                         TAB_NOTIFY -> NotifyScreen(onNotify = notify)
                         TAB_MODULE -> ModuleScreen(onNotify = notify)
                         else -> AboutScreen(state = updateState, onCheck = checkUpdate, onNotify = notify)
@@ -251,7 +256,7 @@ private fun BrandMark() {
 }
 
 /**
- * 悬浮药丸导航：四格，选中那格展开文字。
+ * 悬浮药丸导航：五格（裁圆 / 单色 / 通知 / 模块 / 关于），选中那格展开文字。
  *
  * ## 底色为什么不是 `surface`
  * 这条原来写的是"用最亮的 `surface`（纯白）拉开明度差"，但两套配色下它都不成立：
@@ -284,7 +289,8 @@ private fun FloatingNavBar(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            NavItem(TAB_ICON, Icons.Default.Circle, R.string.tab_icon, selectedIndex, onSelect)
+            NavItem(TAB_CROP, Icons.Default.Circle, R.string.tab_crop, selectedIndex, onSelect)
+            NavItem(TAB_MONO, Icons.Default.InvertColors, R.string.tab_mono, selectedIndex, onSelect)
             NavItem(TAB_NOTIFY, Icons.Default.Notifications, R.string.tab_notify, selectedIndex, onSelect)
             NavItem(TAB_MODULE, Icons.Default.Extension, R.string.tab_module, selectedIndex, onSelect)
             NavItem(TAB_ABOUT, Icons.Default.Info, R.string.tab_about, selectedIndex, onSelect)
@@ -344,7 +350,7 @@ private fun NavItem(
         Row(
             modifier = Modifier
                 .animateContentSize(animationSpec = motion.defaultSpatialSpec())
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(

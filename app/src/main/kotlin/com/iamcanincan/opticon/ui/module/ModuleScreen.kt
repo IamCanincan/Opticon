@@ -1,5 +1,6 @@
 package com.iamcanincan.opticon.ui.module
 
+import android.content.Intent
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,18 +14,23 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Power
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -38,16 +44,32 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.R
+import com.iamcanincan.opticon.circle.ACTION_CLEAR_ICON_CACHE
+import com.iamcanincan.opticon.circle.ACTION_RESTART_SELF
 import com.iamcanincan.opticon.ui.CommandRow
 import com.iamcanincan.opticon.ui.HeroCard
 import com.iamcanincan.opticon.ui.IconTile
 import com.iamcanincan.opticon.ui.OpticonCard
 import com.iamcanincan.opticon.ui.ScreenList
 import com.iamcanincan.opticon.ui.Section
+
+private const val LAUNCHER_AOSP = "com.android.launcher3"
+private const val LAUNCHER_PIXEL = "com.google.android.apps.nexuslauncher"
+private const val SYSTEMUI = "com.android.systemui"
+
+/** 「重启其他」覆盖的进程：都是会显示别的应用图标、杀掉后系统会自动拉起的 UI 进程。 */
+private val OTHER_RESTARTABLE =
+  listOf(
+    "com.android.settings",
+    "com.google.android.settings.intelligence",
+    "com.android.intentresolver",
+    "com.android.permissioncontroller",
+  )
 
 /**
  * 「模块」页：三个功能共用的东西 —— 作用域、启用步骤、验证方式、运维操作。
@@ -70,6 +92,8 @@ fun ModuleScreen(onNotify: (String) -> Unit) {
 
     item { Section(text = stringResource(R.string.section_verify)) { VerifyCard(onNotify) } }
 
+    // 2026-10-26 三个功能分页：清缓存 / 重启这些跨功能操作从「裁圆」页搬到模块页。
+    item { Section(text = stringResource(R.string.section_tools)) { ToolsCard(onNotify) } }
   }
 }
 
@@ -352,5 +376,114 @@ private fun VerifyCard(onNotify: (String) -> Unit) {
       Spacer(modifier = Modifier.height(12.dp))
       CommandRow(command = command, onNotify = onNotify)
     }
+  }
+}
+
+/**
+ * 运维操作卡：清缓存 / 重启状态栏 / 重启设置等进程。
+ *
+ * 2026-10-26 三个功能分页：这些操作跨所有功能（清的是桌面那份渲染缓存），
+ * 从「裁圆」页搬到「模块」页。删除和重启都由**目标进程里的模块**执行 ——
+ * App 这里只是发一条广播点名，所以不需要 root，也不会执行任何 shell 命令。
+ */
+@Composable
+private fun ToolsCard(onNotify: (String) -> Unit) {
+  val context = LocalContext.current
+  val cacheSent = stringResource(R.string.cache_sent)
+  val restartSent = stringResource(R.string.restart_sent)
+
+  OpticonCard {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+      IconTile(
+        icon = Icons.Default.CleaningServices,
+        containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+      )
+      Spacer(modifier = Modifier.width(14.dp))
+      Text(
+        text = stringResource(R.string.cache_title),
+        style = MaterialTheme.typography.titleMedium,
+        color = MaterialTheme.colorScheme.onSurface,
+      )
+    }
+
+    Spacer(modifier = Modifier.height(12.dp))
+    Text(
+      text = stringResource(R.string.cache_body),
+      style = MaterialTheme.typography.bodyMedium,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
+    Spacer(modifier = Modifier.height(12.dp))
+    Text(
+      text = stringResource(R.string.tools_body),
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
+    Spacer(modifier = Modifier.height(16.dp))
+    // ⚠ 三个操作**只有一个是常规要用的**（清缓存重启桌面），它拿容器色（tonal）；
+    //   另外两个是"出问题时才点"的，用描边按钮。
+    FilledTonalButton(
+      onClick = {
+        // 桌面进程里注册的是动态接收器，隐式广播送得到；
+        // 再显式点两个已知桌面的包名，双保险（重复送达无害：第二次 DB 已经不存在了）。
+        runCatching {
+          context.sendBroadcast(Intent(ACTION_CLEAR_ICON_CACHE))
+          context.sendBroadcast(Intent(ACTION_CLEAR_ICON_CACHE).setPackage(LAUNCHER_AOSP))
+          context.sendBroadcast(Intent(ACTION_CLEAR_ICON_CACHE).setPackage(LAUNCHER_PIXEL))
+        }
+        onNotify(cacheSent)
+      },
+      modifier = Modifier.fillMaxWidth(),
+      shape = MaterialTheme.shapes.large,
+    ) {
+      Icon(
+        imageVector = Icons.Default.Refresh,
+        contentDescription = null,
+        modifier = Modifier.size(18.dp),
+      )
+      Spacer(modifier = Modifier.width(8.dp))
+      Text(text = stringResource(R.string.action_clear_launcher))
+    }
+
+    Spacer(modifier = Modifier.height(12.dp))
+    Row(modifier = Modifier.fillMaxWidth()) {
+      OutlinedButton(
+        onClick = {
+          runCatching {
+            context.sendBroadcast(Intent(ACTION_RESTART_SELF).setPackage(SYSTEMUI))
+          }
+          onNotify(restartSent)
+        },
+        modifier = Modifier.weight(1f),
+        shape = MaterialTheme.shapes.large,
+      ) {
+        Text(text = stringResource(R.string.action_restart_systemui))
+      }
+      Spacer(modifier = Modifier.width(10.dp))
+      OutlinedButton(
+        onClick = {
+          // 其余会画别的应用图标的进程。杀掉后系统会把它们拉起来，下次用到时重新注入。
+          runCatching {
+            for (pkg in OTHER_RESTARTABLE) {
+              context.sendBroadcast(Intent(ACTION_RESTART_SELF).setPackage(pkg))
+            }
+          }
+          onNotify(restartSent)
+        },
+        modifier = Modifier.weight(1f),
+        shape = MaterialTheme.shapes.large,
+      ) {
+        Text(text = stringResource(R.string.action_restart_others))
+      }
+    }
+
+    Spacer(modifier = Modifier.height(14.dp))
+    Text(
+      text = stringResource(R.string.tools_hint),
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
   }
 }

@@ -26,10 +26,11 @@
     <string name="permission_process_control_description">只允许 Opticon 自己请求被注入的进程清图标缓存或重启自身</string>
 
     <!--
-        底部导航：图标页（裁圆 + 单色层 + 运维按钮）、通知页、模块页（作用域 / 步骤 / 验证）、关于页（更新 / 版本）。
-        四格 —— 三格时药丸太短，撑不起"悬浮药丸"的形态。
+        底部导航：三个功能各一页（裁圆 / 单色 / 通知），再加模块（作用域/步骤/验证/运维）
+        与关于（更新/版本）。五格 —— 三格时药丸太短，五格仍能一行放下。
     -->
-    <string name="tab_icon">图标</string>
+    <string name="tab_crop">裁圆</string>
+    <string name="tab_mono">单色</string>
     <string name="tab_notify">通知</string>
     <string name="tab_module">模块</string>
     <string name="tab_about">关于</string>
@@ -41,7 +42,7 @@
     <string name="circle_switch_title">强制圆形图标</string>
     <string name="circle_switch_body">应用图标（含自适应图标）统一裁成正圆；桌面、应用列表、最近任务都生效。</string>
     <!-- 开关切换后的 Snackbar：桌面有预渲染缓存，不提醒的话用户会以为开关没生效 -->
-    <string name="switch_saved_hint">已保存。桌面上已经画好的图标要清一次缓存才会重画（在下面「运维」里）。</string>
+    <string name="switch_saved_hint">已保存。桌面上已经画好的图标要清一次缓存才会重画（在「模块」页的「运维操作」里）。</string>
 
     <!-- 状态卡 -->
     <string name="status_title">模块启用状态</string>
@@ -119,7 +120,7 @@
     <string name="action_restart_others">重启设置等进程</string>
     <string name="cache_sent">已发送：桌面会闪一下，然后按当前设置重建图标</string>
     <string name="restart_sent">已发送：目标进程即将重启</string>
-    <string name="tools_hint">一般只在图标没跟上变化时才点。点了没反应 = 该进程没注入模块，去「模块」页确认作用域。</string>
+    <string name="tools_hint">一般只在图标没跟上变化时才点。点了没反应 = 该进程没注入模块，先确认上方作用域并重启过设备。</string>
 
     <!-- 效果示意（形状对比图）-->
     <string name="section_effect">效果</string>
@@ -135,19 +136,19 @@
 
     <!--
         单色遮罩极性修正。这条和裁圆是**两个独立开关**：它管的是 Android 16 强制取色下
-        桌面替「未适配」应用现场生成的那张单色遮罩，和形状无关。
+        桌面替「未适配」应用现场生成的那张单色遮罩，和形状无关。2026-10-26 起单色独立成页。
     -->
-    <string name="section_mono">单色图标</string>
     <string name="mono_switch_title">未适配图标：本模块补单色层</string>
     <string name="mono_switch_body">Android 16 强制取色时，给未适配的应用补一张极性正确的剪影。关掉会退回桌面自己的算法，那批图标会整体反色。</string>
     <!-- 效果示意图两块色块下面那行小字：左=系统原样、右=裁完。用短词，别和 effect_title 重复 -->
     <string name="effect_caption_before">原样</string>
-    <string name="effect_caption_after">裁圆</string>
+    <string name="effect_caption_after">裁成圆</string>
 
     <!-- 说明 -->
     <string name="section_notes">说明</string>
     <string name="note_adaptive">自适应图标也会被强制裁成圆形：系统给它的形状（圆角方、水滴等）不一定是圆。</string>
     <string name="note_tiles">快捷设置磁贴画的是单色小图形，被排除在外。</string>
+    <string name="note_mono_scope">已经自带单色层的应用原样透传，模块一个像素都不碰。</string>
     <string name="note_mono_cache">剪影按图标内容缓存在桌面自己的缓存目录（上限 48 MB，系统存储紧张时会被清）。换模块版本或图标更新后自动重压，所以升级后第一次重启会慢一些。</string>
     <string name="note_launcher3">Android 16 及以上会关掉桌面自带的背景板；圆形（以及少数图标圆内那层白底）都由模块自己画。</string>
     <string name="note_themed_icon">本 App 图标已提供 monochrome 层，在 Android 13+ 启动器的“主题图标”开关下会染成壁纸取色。</string>

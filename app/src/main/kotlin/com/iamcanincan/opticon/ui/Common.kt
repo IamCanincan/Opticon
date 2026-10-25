@@ -197,10 +197,41 @@ internal fun CommandRow(command: String, onNotify: (String) -> Unit) {
 
 /** 小标题 + 它领的那张卡。分成一个 item，才能把组内间距压到比组间距小。 */
 @Composable
-internal fun Section(text: String, content: @Composable () -> Unit) {  Column {
+internal fun Section(text: String, content: @Composable () -> Unit) {
+  Column {
     SectionLabel(text = text)
     Spacer(modifier = Modifier.height(12.dp))
     content()
+  }
+}
+
+/**
+ * 「说明」要点：带圆点的列表（裁圆 / 单色两页共用）。
+ *
+ * 2026-10-26 从图标页搬出来：三个功能分页之后，两页都要这块，不能再各抄一份。
+ */
+@Composable
+internal fun NoteList(notes: List<Int>) {
+  OpticonCard {
+    Column {
+      notes.forEach { res ->
+        Row(modifier = Modifier.padding(vertical = 7.dp), verticalAlignment = Alignment.Top) {
+          // Surface 小圆点比 "•" 字符精致：在浅色下是一个清晰可见的小点，
+          // 在深色下用 onSurfaceVariant 的 alpha 自动变得柔和。
+          Surface(
+            shape = RoundedCornerShape(50),
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+            modifier = Modifier.padding(top = 9.dp, end = 12.dp).size(6.dp),
+          ) {}
+          Text(
+            text = stringResource(res),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+          )
+        }
+      }
+    }
   }
 }
 

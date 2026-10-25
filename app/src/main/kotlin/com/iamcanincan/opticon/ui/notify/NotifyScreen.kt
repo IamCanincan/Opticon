@@ -67,7 +67,7 @@ fun NotifyScreen(onNotify: (String) -> Unit) {
                 // 开关的语义在**整张卡**上（`toggleable` + `Switch(onCheckedChange = null)`）：
                 // 名字不要另挂 `contentDescription`，也不要加 `mergeDescendants` —— 真机上那两种写法
                 // 都会多出一个同尺寸的第二语义节点（读屏分两站念）。三条做法的实测记录见
-                // IconScreen 里 MasterSwitchCard 那段注释。
+                // CropScreen 里 MasterSwitchCard 那段注释。
                 OpticonCard(
                     padding = 0.dp,
                     modifier = Modifier.toggleable(
