@@ -747,6 +747,43 @@ fun main() {
       none == (0 to 0), "0×0→$none")
   }
 
+  // ── 第三十五组：**跨进程快键表**的磁盘格式（2026-10-26）──
+  //     这张表把 srcKey 指到内容键；半份/坏一份表 = 把一张图指到另一张掩码上（错，不是慢）。
+  //     所以格式判定全在纯函数 `SrcMapCodec`：这里钉往返 + 四种坏法都必须**整份拒绝**。
+  //     台子用的是仓里那份真实现（不是手抄），文件 I/O 那边只负责把字节交给它。
+  run {
+    val m = linkedMapOf(1L to 2L, -3L to 4L, Long.MAX_VALUE to Long.MIN_VALUE)
+    val good = com.iamcanincan.opticon.circle.SrcMapCodec.encode(m)
+    val empty = com.iamcanincan.opticon.circle.SrcMapCodec.encode(emptyMap())
+    println("         快键表格式  n=${m.size} → ${good.size}B；空表 ${empty.size}B；上限 " +
+      com.iamcanincan.opticon.circle.SrcMapCodec.MAX)
+    val back = com.iamcanincan.opticon.circle.SrcMapCodec.decode(good)
+    println("         快键表读回  $back")
+    check("快键表：写→读逐项相等（含负数和 Long 边界）", back == m, "n=${m.size} 读回=$back")
+    check("快键表：空表能往返（不是 null，也不是一条假的 0→0）",
+      com.iamcanincan.opticon.circle.SrcMapCodec.decode(empty)?.isEmpty() == true, "n=0")
+    val body = good.copyOf().also { it[it.size / 2] = (it[it.size / 2].toInt() xor 1).toByte() }
+    check("快键表：**表体**坏一位 ⇒ 整份拒绝（这条就是 CRC 的负控制；返回一张改过的表 = 错掩码）",
+      com.iamcanincan.opticon.circle.SrcMapCodec.decode(body) == null, "坏在 ${body.size / 2}")
+    val crc = good.copyOf().also { it[it.size - 1] = (it[it.size - 1].toInt() xor 1).toByte() }
+    check("快键表：CRC 自己坏一位 ⇒ 整份拒绝",
+      com.iamcanincan.opticon.circle.SrcMapCodec.decode(crc) == null, "坏在末尾")
+    check("快键表：截断一个字节 ⇒ 整份拒绝",
+      com.iamcanincan.opticon.circle.SrcMapCodec.decode(good.copyOf(good.size - 1)) == null, "少 1B")
+    val magic = good.copyOf().also { it[0] = (it[0].toInt() xor 1).toByte() }
+    check("快键表：magic 坏 ⇒ 整份拒绝",
+      com.iamcanincan.opticon.circle.SrcMapCodec.decode(magic) == null, "magic")
+    val ver = good.copyOf().also { it[4] = (it[4].toInt() xor 1).toByte() }
+    check("快键表：version 坏 ⇒ 整份拒绝（换了内容键算法时这张表必须先作废）",
+      com.iamcanincan.opticon.circle.SrcMapCodec.decode(ver) == null, "version")
+    val huge = good.copyOf().also {
+      // n 字段在 8..11；写成 MAX+1 也必须拒绝，免得坏文件让 HashMap 预分配爆内存
+      it[8] = 0x20; it[9] = 0x20; it[10] = 0; it[11] = 0
+    }
+    check("快键表：条数超上限 ⇒ 整份拒绝", com.iamcanincan.opticon.circle.SrcMapCodec.decode(huge) == null,
+      "n=0x2020 (>MAX)")
+  }
+
   println(if (failed == 0) "全部通过" else "!! $failed 条不成立")
 }
 

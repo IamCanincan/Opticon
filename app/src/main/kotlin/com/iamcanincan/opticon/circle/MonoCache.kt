@@ -100,6 +100,18 @@ internal object MonoCache {
   /** 归属索引文件名（见 [noteOwner]）。与掩码同目录，但 [sweep] 既不删它也不计进预算。 */
   private const val OWNER_INDEX = "index.tsv"
 
+  /**
+   * **源内容快键表**（srcKey → 内容键）的落盘文件名（2026-10-26）。
+   *
+   * 快键命中一次就跳过 384 光栅化 + 内容键（真机慢路 2.6ms），但表原来只在进程内存里 ——
+   * 桌面每次重启，150 多个位图源都要重付一遍。掩码本身早就在磁盘上，缺的只是这座桥。
+   * 两个键都是**内容**哈希（srcKey 含源图内容+绘制状态，内容键含模型输入），所以这份表
+   * 不引入"按包名/资源身份"的旧答案风险；文件坏了整份丢（CRC），绝不半份上屏。
+   * 与掩码同目录 ⇒ 自带装机身份；格式再带版本号。
+   */
+  private const val SRC_MAP_NAME = "srcmap.bin"
+  private var srcWarned = 0
+
   /** 本进程已经记过归属的 (键, 边长)：一次会话里同一张会被 bind 上百次，只记第一遍。 */
   private val seenOwner = HashSet<String>()
 
@@ -108,6 +120,48 @@ internal object MonoCache {
     px: IntArray, under: IntArray?, edge: Int, adaptive: Boolean, flatten: Boolean, circle: Boolean,
     shortcut: Boolean = false,
   ): Long = MonoKey.keyOf(px, under, edge, adaptive, flatten, circle, shortcut)
+
+  /**
+   * 磁盘层是否已经就绪。用来区分**“还没有表文件”**与**“Context 还没来”**：后者不能把
+   * `loaded` 置死，否则这个进程余下每一次 bind 都用不到跨进程快键表（attach 阶段头几次
+   * bind 正好落在那个窗口里，见 [dir] 的注释）。
+   */
+  @Synchronized
+  internal fun cacheDirReady(): Boolean = dir() != null
+
+  /**
+   * 载入**源内容快键表**（跨进程）；没有文件/文件坏了返回 null（只慢，不会给错答案）。
+   * 文件判定（magic / 版本 / 条数 / 长度 / CRC）全在 [SrcMapCodec.decode] —— 那份是纯函数，
+   * 判据台的 `SelfTest` 逐条钉过。
+   */
+  @Synchronized
+  internal fun loadSrcMap(): HashMap<Long, Long>? = runCatching {
+    val d = dir() ?: return null
+    val f = File(d, SRC_MAP_NAME)
+    if (!f.isFile) return null
+    SrcMapCodec.decode(f.readBytes())
+  }.getOrNull()
+
+  /** 把源内容快键表整份落盘（先写 `.tmp` 再 rename；失败只慢，不删旧表）。 */
+  @Synchronized
+  internal fun storeSrcMap(map: Map<Long, Long>) {
+    if (map.isEmpty()) return
+    val d = dir() ?: return
+    runCatching {
+      val to = File(d, SRC_MAP_NAME)
+      val tmp = File(d, "$SRC_MAP_NAME.tmp")
+      tmp.writeBytes(SrcMapCodec.encode(map))
+      if (!tmp.renameTo(to)) {
+        to.delete()
+        if (!tmp.renameTo(to)) {
+          tmp.delete()
+          error("rename failed")
+        }
+      }
+    }.onFailure {
+      if (srcWarned++ < 3) Log.w(TAG, "Mono: 快键表落盘失败 ${it.message}")
+    }
+  }
 
   /**
    * 查这一张。命中返回 [Entry]（`mask == null` 是负缓存，调用方照旧返回 null），没命中返回 null。
@@ -305,6 +359,9 @@ internal object MonoCache {
       // ⚠ 归属索引**不删也不计进体积**：它不是掩码，被按最旧删掉就等于把"这张是谁的"又扔回
       //   那个会滚的 logcat 窗口；而它一行才几十字节，计进预算只会挤掉真掩码。
       if (k.name == OWNER_INDEX) continue
+      // 源内容快键表同理：它是"跳过光栅化"的桥，删了只慢不坏；也别让它占掩码的预算
+      // （这几 KB 会把真掩码挤出去，正好反了）。
+      if (k.name == SRC_MAP_NAME) continue
       total += k.length()
       files.add(k)
     }

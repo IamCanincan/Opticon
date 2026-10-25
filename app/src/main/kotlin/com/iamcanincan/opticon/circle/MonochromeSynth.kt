@@ -292,6 +292,34 @@ internal object MonochromeSynth {
   private var srcHashHits = 0
   private var srcPx: IntArray? = null
 
+  /**
+   * 跨进程快键表（2026-10-26）：进程内这张表以前活不过桌面重启，150 多个位图源每次重启
+   * 都要重付一遍 384 光栅化 + 内容键。现在从 [MonoCache.loadSrcMap] 读回来、按 N 条新映射
+   * 节流落盘。源哈希本身就是内容，所以表跨进程安全；文件坏了整份丢。
+   */
+  private var srcMapLoaded = false
+  private var srcMapDirty = 0
+
+  /** 表条数上限 / 每 N 条新映射落一次盘（整份很小，写一次是几 KB）。 */
+  private const val SRC_MAP_MAX = 4096
+  private const val SRC_FLUSH_EVERY = 16
+
+  /**
+   * 载入跨进程快键表，**每个进程只试到目录就绪为止**。
+   *
+   * ⚠ 不能在 `currentApplication()` 还没就绪时把 `loaded` 置死：attach 阶段头几次 bind 正好落在
+   * 那个窗口里（见 `MonoCache.dir` 的注释），置死等于整进程都不用这张表。
+   */
+  private fun ensureSrcMap() {
+    if (srcMapLoaded) return
+    if (!MonoCache.cacheDirReady()) return
+    srcMapLoaded = true
+    val saved = MonoCache.loadSrcMap() ?: return
+    if (saved.isEmpty()) return
+    srcKeyMap.putAll(saved)
+    Log.d(TAG, "Mono: 快键表载入 ${saved.size} 条（跨进程，跳过首见源的 384 光栅化）")
+  }
+
   private fun mix(h: Long, v: Long): Long = (h xor v) * 0x100000001b3L
 
   private fun hashSource(px: IntArray, n: Int, h0: Long): Long {
@@ -405,6 +433,7 @@ internal object MonochromeSynth {
   @Synchronized
   fun render(source: Drawable, edge: Int, shortcut: Boolean = false): Bitmap? {
     if (edge <= 0) return null
+    ensureSrcMap()
     val t0 = System.nanoTime()
     return runCatching {
       val adaptive = source is AdaptiveIconDrawable
@@ -590,8 +619,15 @@ internal object MonochromeSynth {
         else MonoCache.keyOf(pixels, underPx, edge, adaptive, flatten, circle, shortcut)
       // 源内容快键与内容键一起落：下一次同一张源图 + 同一套状态直接取掩码。
       if (srcKey != null) {
-        if (srcKeyMap.size > 512) srcKeyMap.clear()
-        srcKeyMap[srcKey] = key
+        if (srcKeyMap.size >= SRC_MAP_MAX) srcKeyMap.clear()
+        val old = srcKeyMap.put(srcKey, key)
+        if (old != key) {
+          srcMapDirty++
+          if (srcMapDirty >= SRC_FLUSH_EVERY) {
+            srcMapDirty = 0
+            MonoCache.storeSrcMap(srcKeyMap)
+          }
+        }
       }
       val tKey = System.nanoTime()
       MonoCache.lookup(key, edge)?.let { hit ->

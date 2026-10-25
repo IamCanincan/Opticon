@@ -22,6 +22,7 @@ SRC="../app/src/main/kotlin/com/iamcanincan/opticon/circle/MonochromeMask.kt \
      ../app/src/main/kotlin/com/iamcanincan/opticon/circle/IntIntMap.kt \
      ../app/src/main/kotlin/com/iamcanincan/opticon/circle/IconCropWindow.kt \
      ../app/src/main/kotlin/com/iamcanincan/opticon/circle/MonoKey.kt \
+     ../app/src/main/kotlin/com/iamcanincan/opticon/circle/SrcMapCodec.kt \
      ../app/src/main/kotlin/com/iamcanincan/opticon/circle/MonoVeto.kt \
      ../app/src/main/kotlin/com/iamcanincan/opticon/circle/IconLabel.kt \
      ../app/src/main/kotlin/com/iamcanincan/opticon/circle/IconRough.kt \
