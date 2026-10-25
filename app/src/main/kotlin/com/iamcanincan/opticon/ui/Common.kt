@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
@@ -27,6 +28,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -41,6 +43,7 @@ import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -364,6 +367,74 @@ internal fun HeroCard(
           Spacer(modifier = Modifier.width(8.dp))
           trailing()
         }
+      }
+    }
+  }
+}
+
+/**
+ * 三个功能页共用的**功能开关卡**（2026-10-26 统一）。
+ *
+ * 主色 container + 反色图标方块 + 标题 / 开关一行 + **整宽说明** + 同语义水印。
+ * 为什么不直接用 [HeroCard]：HeroCard 的正文和标题挤在同一个 Row 里，正文会被右侧开关压窄；
+ * 功能说明比模块状态长（单色那条尤其），必须让正文占满整宽。这里保留 HeroCard 的色彩与水印语言，
+ * 只把正文放到下一行 —— 三个功能页因此长得一模一样。
+ *
+ * 语义：整张卡 `toggleable`（读屏只报一站），内部 Switch 只做展示。
+ */
+@Composable
+internal fun FeatureSwitchCard(
+  icon: ImageVector,
+  title: String,
+  body: String,
+  checked: Boolean,
+  onCheckedChange: (Boolean) -> Unit,
+) {
+  val scheme = MaterialTheme.colorScheme
+  val toggle = Modifier.toggleable(
+    value = checked,
+    role = Role.Switch,
+    onValueChange = onCheckedChange,
+  )
+  OpticonCard(
+    modifier = toggle,
+    containerColor = scheme.primaryContainer,
+    contentColor = scheme.onPrimaryContainer,
+    padding = 0.dp,
+  ) {
+    Box(modifier = Modifier.clip(MaterialTheme.shapes.large)) {
+      Icon(
+        imageVector = icon,
+        contentDescription = null,
+        tint = scheme.onPrimaryContainer.copy(alpha = 0.10f),
+        modifier =
+          Modifier.size(132.dp)
+            .align(Alignment.CenterEnd)
+            .offset(x = 30.dp),
+      )
+      Column(modifier = Modifier.padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          IconTile(
+            icon = icon,
+            containerColor = scheme.onPrimaryContainer,
+            contentColor = scheme.primaryContainer,
+          )
+          Spacer(modifier = Modifier.width(14.dp))
+          Text(
+            text = title,
+            style = MaterialTheme.typography.titleMedium,
+            color = scheme.onPrimaryContainer,
+            modifier = Modifier.weight(1f),
+          )
+          Spacer(modifier = Modifier.width(8.dp))
+          Switch(checked = checked, onCheckedChange = null)
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+          text = body,
+          style = MaterialTheme.typography.bodyMedium,
+          color = scheme.onPrimaryContainer.copy(alpha = 0.82f),
+        )
       }
     }
   }

@@ -10,12 +10,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -28,12 +26,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.runtime.ModulePrefs
 import com.iamcanincan.opticon.ui.CommandRow
-import com.iamcanincan.opticon.ui.HeroCard
+import com.iamcanincan.opticon.ui.FeatureSwitchCard
 import com.iamcanincan.opticon.ui.OpticonCard
 import com.iamcanincan.opticon.ui.ScreenList
 import com.iamcanincan.opticon.ui.Section
@@ -41,18 +38,14 @@ import com.iamcanincan.opticon.ui.Section
 /**
  * 「通知」页。
  *
- * 2026-10-26 按"界面要统一整齐"并回其它三页的脚手架：
- * [ScreenList]（16dp 边距 / 20dp 组距）、[Section] 小标题、[HeroCard] 状态卡。
- * 卡片仍是 [OpticonCard]；左侧图标底板统一 40dp（与共享 `IconTile` 同尺寸），
- * 图标本身保留本页的 drawable（它画的是可选项的语义，和 `IconTile` 不是一回事）。
- *
- * 本页只有一个开关 —— 通知小图标修不修。每次改动立即落盘，
- * 模块侧下次被挂钩时就能读到，不需要点"保存"。
+ * 2026-10-26 三个功能分页后：开关卡与裁圆 / 单色共用 [FeatureSwitchCard]，
+ * 说明区与其它页共用 [ScreenList]/[Section]。本页只有一个开关 —— 通知小图标是否修复。
+ * 设置即时写入，模块侧下次读取配置时生效，无需额外保存动作。
  */
 @Composable
 fun NotifyScreen(onNotify: (String) -> Unit) {
     val context = LocalContext.current
-    // 默认配置由外壳（OpticonApp）在首次打开时落盘，这里只读。
+    // 默认配置由外壳（OpticonApp）在首次打开时写入，这里只读。
     val prefs = remember { ModulePrefs.of(context) }
 
     var enabled by remember {
@@ -60,33 +53,17 @@ fun NotifyScreen(onNotify: (String) -> Unit) {
     }
 
     ScreenList {
-        item { StatusCard(enabled = enabled) }
-
         item {
-            Section(text = stringResource(R.string.notify_section_switch)) {
-                // 开关的语义在**整张卡**上（`toggleable` + `Switch(onCheckedChange = null)`）：
-                // 名字不要另挂 `contentDescription`，也不要加 `mergeDescendants` —— 真机上那两种写法
-                // 都会多出一个同尺寸的第二语义节点（读屏分两站念）。三条做法的实测记录见
-                // CropScreen 里 MasterSwitchCard 那段注释。
-                OpticonCard(
-                    padding = 0.dp,
-                    modifier = Modifier.toggleable(
-                        value = enabled,
-                        role = Role.Switch,
-                        onValueChange = {
-                            enabled = it
-                            prefs.edit().putBoolean(ModulePrefs.KEY_NOTIFY_ENABLED, it).apply()
-                        },
-                    )
-                ) {
-                    SwitchRow(
-                        icon = R.drawable.ic_power,
-                        title = stringResource(R.string.notify_switch_title),
-                        description = stringResource(R.string.notify_switch_desc),
-                        checked = enabled,
-                    )
-                }
-            }
+            FeatureSwitchCard(
+                icon = Icons.Default.Notifications,
+                title = stringResource(R.string.notify_switch_title),
+                body = stringResource(R.string.notify_switch_body),
+                checked = enabled,
+                onCheckedChange = { value ->
+                    enabled = value
+                    prefs.edit().putBoolean(ModulePrefs.KEY_NOTIFY_ENABLED, value).apply()
+                },
+            )
         }
 
         item {
@@ -94,26 +71,9 @@ fun NotifyScreen(onNotify: (String) -> Unit) {
         }
 
         item {
-            Section(text = stringResource(R.string.notify_section_verify)) { VerifyCard(onNotify) }
+            Section(text = stringResource(R.string.section_verify)) { VerifyCard(onNotify) }
         }
     }
-}
-
-/**
- * 状态卡：与「图标」「模块」两页开头的 HeroCard 同一形状（图标方块 + 标题 + 一句说明），
- * 只换语义与颜色。2026-10-26 统一整齐：原来这里是本页自己铺的一块 Surface，边距与字号
- * 都和另外两页对不上。
- */
-@Composable
-private fun StatusCard(enabled: Boolean) {
-    val scheme = MaterialTheme.colorScheme
-    HeroCard(
-        icon = Icons.Default.Notifications,
-        containerColor = if (enabled) scheme.primaryContainer else scheme.surfaceContainerHighest,
-        contentColor = if (enabled) scheme.onPrimaryContainer else scheme.onSurfaceVariant,
-        title = stringResource(if (enabled) R.string.notify_status_on else R.string.notify_status_off),
-        body = stringResource(R.string.notify_status_hint),
-    )
 }
 
 /** 可选项左侧的图标底板。与共享 `IconTile` 同尺寸（40dp），图标本身仍用本页 drawable。 */
@@ -143,35 +103,6 @@ private fun IconBadge(
             modifier = Modifier.size(22.dp),
             tint = if (selected) scheme.onPrimary else scheme.onSurfaceVariant
         )
-    }
-}
-
-@Composable
-private fun SwitchRow(
-    @DrawableRes icon: Int,
-    title: String,
-    description: String,
-    checked: Boolean,
-) {
-    Row(
-        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 16.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // 底板跟着开关走：打开时是品牌色，关闭时是中性灰，状态一眼可见
-        IconBadge(icon = icon, selected = checked)
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(3.dp))
-            Text(
-                description,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        Spacer(Modifier.width(12.dp))
-        // 只做展示：语义（Role.Switch + 标题 + 状态）由外层整张卡承担
-        Switch(checked = checked, onCheckedChange = null)
     }
 }
 

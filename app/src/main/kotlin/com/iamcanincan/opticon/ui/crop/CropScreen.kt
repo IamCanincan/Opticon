@@ -23,7 +23,6 @@ import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -36,12 +35,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.runtime.ModulePrefs
-import com.iamcanincan.opticon.ui.HeroCard
+import com.iamcanincan.opticon.ui.FeatureSwitchCard
 import com.iamcanincan.opticon.ui.NoteList
 import com.iamcanincan.opticon.ui.OpticonCard
 import com.iamcanincan.opticon.ui.ScreenList
@@ -80,13 +78,13 @@ fun CropScreen(onNotify: (String) -> Unit) {
 
 
 /**
- * 圆形图标的总开关。
+ * 裁圆总开关。
  *
- * 写进 SharedPreferences 就完事 —— 模块侧按 TTL 自己重读（见 `ModuleRuntime`），
- * 不需要广播、也不需要重启进程。
+ * 写进 SharedPreferences 即可，模块侧按 TTL 自行重读（见 `ModuleRuntime`），
+ * 无需广播或重启进程。
  *
- * ⚠ 关掉之后**已经画在桌面上的图标不会立刻变回去**：桌面有图标缓存，
- * 要等缓存重建（用「模块」页运维操作里的清缓存按钮，或重启桌面）。
+ * ⚠ 关闭后，**已绘制在桌面上的图标不会立即恢复**：桌面存在图标缓存，
+ * 需在「模块」页的运维操作中清除缓存或重启桌面。
  */
 @Composable
 private fun MasterSwitchCard(onNotify: (String) -> Unit) {
@@ -97,39 +95,17 @@ private fun MasterSwitchCard(onNotify: (String) -> Unit) {
   }
   val savedHint = stringResource(R.string.switch_saved_hint)
 
-  val title = stringResource(R.string.circle_switch_title)
-
-  // ⚠ 开关的语义：**整张卡 `toggleable`、`Switch` 只做展示**（`onCheckedChange = null`）。
-  //   顺带把触控目标从 52dp 的开关扩到整张卡。
-  //
-  //   2026-09-30 真机逐项核对了语义树，记下三条试过的做法，别再走回头路：
-  //   ① `contentDescription` 挂在 `Switch` 上 → 它落到可勾选节点的**子节点**上，
-  //      读屏分两站念，而"开关，已开启"那一站没有名字；
-  //   ② 再加 `mergeDescendants = true` → Compose 会**另建一个同 bounds 的节点**承载那个
-  //      描述（实测：checkable 的节点 desc 仍为空，旁边多出一个 `d='强制圆形图标'` 的同尺寸
-  //      节点）—— 等于把①的毛病换了个位置，还是两站；
-  //   ③ 现在这样（只 `toggleable`）→ 一个可勾选节点盖住整张卡、状态是 `checked`、
-  //      角色 `Role.Switch`，标题与说明是它的非聚焦子节点（`focusable=false`，不会多出停顿）。
-  //      读屏念这一站时会带上子树里的标题与说明，这就是我们要的形态。
-  val toggle = Modifier.toggleable(
-    value = enabled,
-    role = Role.Switch,
-    onValueChange = { value ->
+  FeatureSwitchCard(
+    icon = Icons.Default.Circle,
+    title = stringResource(R.string.circle_switch_title),
+    body = stringResource(R.string.circle_switch_body),
+    checked = enabled,
+    onCheckedChange = { value ->
       enabled = value
       prefs.edit().putBoolean(ModulePrefs.KEY_CIRCLE_ENABLED, value).apply()
-      // 桌面有预渲染缓存：不提醒的话，用户会以为"开关没生效"（本仓吃过两次）。
+      // 桌面持有预渲染缓存；提示用户清除后才会反映新设置。
       onNotify(savedHint)
     },
-  )
-
-  HeroCard(
-    icon = Icons.Default.Circle,
-    containerColor = MaterialTheme.colorScheme.primaryContainer,
-    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-    title = title,
-    body = stringResource(R.string.circle_switch_body),
-    modifier = toggle,
-    trailing = { Switch(checked = enabled, onCheckedChange = null) },
   )
 }
 

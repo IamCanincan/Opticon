@@ -1,7 +1,7 @@
 <!--
     「怎么确认生效」的图标：对勾。
 
-    一笔折线，圆头圆角，与 ic_power / ic_scope 同一套描边风格（1.9 描边、24 视口）。
+    一笔折线，圆头圆角，与 ic_scope 同一套描边风格（1.9 描边、24 视口）。
     与其它图标一样是纯黑，实际颜色由 Compose 侧的 tint 决定。
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
