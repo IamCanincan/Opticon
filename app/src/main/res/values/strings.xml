@@ -192,6 +192,11 @@
     <string name="notify_switch_title">修复通知小图标</string>
     <string name="notify_switch_desc">关闭后所有通知都不处理</string>
 
+    <!-- 通知页区块小标题：2026-10-26 与其它三页统一成 Section（开关 / 作用域 / 验证） -->
+    <string name="notify_section_switch">开关</string>
+    <string name="notify_section_scope">作用域</string>
+    <string name="notify_section_verify">验证</string>
+
     <string name="notify_status_on">已启用</string>
     <string name="notify_status_off">已停用</string>
     <string name="notify_status_hint">改动立即生效，新收到的通知会按新设置处理；已经在通知栏里的那条要等它重新加载</string>

@@ -56,9 +56,9 @@ import kotlinx.coroutines.launch
  * 两边都要用，各写一份迟早会长歪（间距、字号会不会一致）。
  * 后来列表脚手架、主卡也同理 —— 「图标」「模块」「关于」三页抄的是同一份东西。
  *
- * ⚠ 「通知」页**不**用这里的多数组件：它的底板尺寸、间距、卡片语言都不一样，
- *   细节见各个组件上的说明。别顺手把它一起统一了，那是改视觉不是去重。
- *   唯一例外是 [CommandRow] —— 两页的验证命令必须同一种样子（2026-10-26）。
+ * ⚠ 「通知」页 2026-10-26 起也并回了 [ScreenList]/[Section]/[HeroCard]（主人：「界面要统一整齐」）；
+ *   它仍保留自己的 `IconBadge`（drawable 语义图标，尺寸统一 40dp）和 `InfoCard` 形状。
+ *   [CommandRow] 是两页共用的验证命令块。
  */
 
 /**
@@ -92,8 +92,8 @@ internal val FloatingNavSpace = 96.dp
  * 组与组之间 20dp；小标题与它自己的卡片之间只有 10dp（见 [Section]），
  * 这样「标题领着哪张卡」一眼能看出来。
  *
- * ⚠ 「通知」页用的是竖排 `Column` + `verticalScroll`，间距 14dp、左右 20dp，
- *   跟这里不一致 —— 那是视觉差异，不是漏改，别拿 [ScreenList] 去套它。
+ * ⚠ 「通知」页 2026-10-26 起也用这份脚手架（16dp / 20dp）；它原来那套 20dp 边距、
+ *   14dp 内边距已并回，别再用"通知页不一样"当理由另写一套。
  */
 @Composable
 internal fun ScreenList(content: LazyListScope.() -> Unit) {
@@ -240,7 +240,7 @@ internal fun SectionLabel(text: String) {
  * （搬页的时候会跟着断掉，编译才报）。
  *
  * ⚠ 「通知」页里有个**同名**的 `IconBadge`，签名不同（它收 drawable 资源 id
- * 和选中态）。那个留在通知页私有即可，别把两个合并 —— 它们服务的视觉语义不一样：
+ * 和选中态），尺寸已统一到 40dp。那个留在通知页私有即可，别把两个合并 —— 它们服务的视觉语义不一样：
  * 这个画的是「语义图标」，那个画的是「可选项的图标底板」。
  */
 @Composable
