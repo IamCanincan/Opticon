@@ -40,6 +40,8 @@
     <!-- 裁圆总开关 -->
     <string name="circle_switch_title">强制圆形图标</string>
     <string name="circle_switch_body">应用图标（含自适应图标）统一裁成正圆；桌面、应用列表、最近任务都生效。</string>
+    <!-- 开关切换后的 Snackbar：桌面有预渲染缓存，不提醒的话用户会以为开关没生效 -->
+    <string name="switch_saved_hint">已保存。桌面上已经画好的图标要清一次缓存才会重画（在下面「运维」里）。</string>
 
     <!-- 状态卡 -->
     <string name="status_title">模块启用状态</string>
@@ -111,11 +113,11 @@
     <string name="section_tools">运维操作</string>
     <string name="tools_body">这些操作由模块在目标进程内部执行，不需要 root，也不会执行 shell 命令。</string>
     <string name="cache_title">清除桌面图标缓存</string>
-    <string name="cache_body">桌面把图标位图缓存在自己的数据库里，开关或模块变化后可能不重画。点下面按钮删掉这份缓存并重启桌面；模块自己的剪影缓存会自动作废，不用清。</string>
+    <string name="cache_body">桌面把图标位图缓存在自己的数据库里，开关或模块变化后可能不重画。点下面按钮删掉这份缓存并重启桌面（桌面会闪一下）；模块自己的剪影缓存会自动作废，不用清。</string>
     <string name="action_clear_launcher">清除缓存并重启桌面</string>
-    <string name="action_restart_systemui">重启 SystemUI</string>
-    <string name="action_restart_others">重启其他进程</string>
-    <string name="cache_sent">已发送：桌面即将重启并重建图标</string>
+    <string name="action_restart_systemui">重启状态栏</string>
+    <string name="action_restart_others">重启设置等进程</string>
+    <string name="cache_sent">已发送：桌面会闪一下，然后按当前设置重建图标</string>
     <string name="restart_sent">已发送：目标进程即将重启</string>
     <string name="tools_hint">一般只在图标没跟上变化时才点。点了没反应 = 该进程没注入模块，去「模块」页确认作用域。</string>
 

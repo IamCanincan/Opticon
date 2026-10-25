@@ -83,9 +83,9 @@ private val OTHER_RESTARTABLE =
 @Composable
 fun IconScreen(onNotify: (String) -> Unit) {
   ScreenList {
-    item { MasterSwitchCard() }
+    item { MasterSwitchCard(onNotify) }
     item { Section(text = stringResource(R.string.section_effect)) { EffectCard() } }
-    item { Section(text = stringResource(R.string.section_mono)) { MonoInvertCard() } }
+    item { Section(text = stringResource(R.string.section_mono)) { MonoInvertCard(onNotify) } }
     item { Section(text = stringResource(R.string.section_tools)) { ToolsCard(onNotify) } }
 
     item { Section(text = stringResource(R.string.section_notes)) { NotesCard() } }
@@ -104,12 +104,13 @@ fun IconScreen(onNotify: (String) -> Unit) {
  * 要等缓存重建（用下面「运维」里的清缓存按钮，或重启桌面）。
  */
 @Composable
-private fun MasterSwitchCard() {
+private fun MasterSwitchCard(onNotify: (String) -> Unit) {
   val context = LocalContext.current
   val prefs = remember { ModulePrefs.of(context) }
   var enabled by remember {
     mutableStateOf(prefs.getBoolean(ModulePrefs.KEY_CIRCLE_ENABLED, ModulePrefs.DEFAULT_CIRCLE_ENABLED))
   }
+  val savedHint = stringResource(R.string.switch_saved_hint)
 
   val title = stringResource(R.string.circle_switch_title)
 
@@ -131,6 +132,8 @@ private fun MasterSwitchCard() {
     onValueChange = { value ->
       enabled = value
       prefs.edit().putBoolean(ModulePrefs.KEY_CIRCLE_ENABLED, value).apply()
+      // 桌面有预渲染缓存：不提醒的话，用户会以为"开关没生效"（本仓吃过两次）。
+      onNotify(savedHint)
     },
   )
 
@@ -167,12 +170,13 @@ private fun MasterSwitchCard() {
  * 但已经缓存下来的图标要等重建，用下面「运维」里的清缓存按钮。
  */
 @Composable
-private fun MonoInvertCard() {
+private fun MonoInvertCard(onNotify: (String) -> Unit) {
   val context = LocalContext.current
   val prefs = remember { ModulePrefs.of(context) }
   var enabled by remember {
     mutableStateOf(prefs.getBoolean(ModulePrefs.KEY_MONO_INVERT, ModulePrefs.DEFAULT_MONO_INVERT))
   }
+  val savedHint = stringResource(R.string.switch_saved_hint)
 
   // 同上：标题既当卡上的字，也当开关的读屏名字（整行 toggleable，见 MasterSwitchCard 那段）
   val title = stringResource(R.string.mono_switch_title)
@@ -183,6 +187,7 @@ private fun MonoInvertCard() {
     onValueChange = { value ->
       enabled = value
       prefs.edit().putBoolean(ModulePrefs.KEY_MONO_INVERT, value).apply()
+      onNotify(savedHint)
     },
   )
 
