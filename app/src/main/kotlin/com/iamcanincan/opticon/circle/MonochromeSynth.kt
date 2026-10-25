@@ -543,8 +543,27 @@ internal object MonochromeSynth {
       //   `label` 的第一段是 `IconNames.of(source)`，两种形式都要认（`包名/类型/入口名` 与
       //   `pm:包名`）—— 只配前一种的话，快捷方式那一批永远开不了火，见 [IconNames.matchesPkg]。
       val trimOn = MonochromeMask.TRIM_PKGS.any { IconNames.matchesPkg(label, it) }
-      val out = MonochromeMask.build(pxIn, edge, edge, plateLayer, underIn, plateSubject,
+      var out = MonochromeMask.build(pxIn, edge, edge, plateLayer, underIn, plateSubject,
         trimSubject = trimOn)
+      // ── 细环满幅快捷方式：淡灰盘不是墨（2026-10-25）──
+      // 这一档（拼多多四条）的淡灰盘是**底** —— 彩色那支由桌面自己的主题盘代替，但模型偶尔把它
+      // 交成墨：`search_express` 首张掩码占 65% 画布（还会带出一圈点状环），另外三条只有 29–32%
+      // 的线稿。判据只在这一档、且**首张自己就占了半张画布**时才重算一次：把低彩度（max-min<30）
+      // 的像素从输入里去掉再判；只有结果落回线稿（10–50%）才采用。三条线稿（29–32%）**不会**
+      // 走到这里 ⇒ 它们交出的掩码逐字节不变。离线表：`_harness/RingShapeKt.kt`。
+      if (ringBleed && !adaptive && out.mask != null) {
+        val fill = maskFill(out.mask, edge)
+        if (fill >= RING_DISH_FILL) {
+          val alt = MonochromeMask.build(chromaClean(pxIn), edge, edge, plateLayer, underIn,
+            plateSubject, trimSubject = trimOn)
+          val af = alt.mask?.let { maskFill(it, edge) } ?: -1f
+          if (af in 0.1f..RING_DISH_FILL) {
+            Log.d(TAG, "Mono: 细环满幅 去淡灰盘 $label 占盘 ${"%.0f".format(fill * 100)}% → " +
+              "${"%.0f".format(af * 100)}%")
+            out = alt
+          }
+        }
+      }
       // H0 的射程跟着记：见 [noteSynthesized] 那条汇总为什么带它。
       noteH0(out.h0why)
       noteVeto(out.veto)
@@ -1230,6 +1249,43 @@ internal object MonochromeSynth {
     }
     mask.copyPixelsFromBuffer(ByteBuffer.wrap(bytes))
     return mask
+  }
+
+  /**
+   * 细环满幅那一档，首张掩码占画布 ≥ 这个比例 ⇒ 模型把淡灰盘交成了墨（`search_express` 65%，
+   * 另外三条线稿 29–32%）。见 [render] 里那一次重算；`0.5` 取在两组之间，离两边都远。
+   */
+  private const val RING_DISH_FILL = 0.5f
+
+  /** 掩码外接框（取长边）占画布的比例；空掩码 = 0。 */
+  private fun maskFill(mask: IntArray, edge: Int): Float {
+    var x0 = edge; var y0 = edge; var x1 = -1; var y1 = -1
+    for (y in 0 until edge) {
+      val row = y * edge
+      for (x in 0 until edge) {
+        if ((mask[row + x] ushr 24) < 8) continue
+        if (x < x0) x0 = x
+        if (x > x1) x1 = x
+        if (y < y0) y0 = y
+        if (y > y1) y1 = y
+      }
+    }
+    if (x1 < 0) return 0f
+    return maxOf(x1 - x0 + 1, y1 - y0 + 1).toFloat() / edge
+  }
+
+  /** 去掉低彩度像素（淡灰盘 / 灰环）；拼多多线稿的红彩度 ≈190，碰不到。 */
+  private fun chromaClean(px: IntArray): IntArray {
+    val out = px.copyOf()
+    for (i in out.indices) {
+      val p = out[i]
+      if ((p ushr 24) == 0) continue
+      val r = (p shr 16) and 0xff
+      val g = (p shr 8) and 0xff
+      val b = p and 0xff
+      if (maxOf(r, g, b) - minOf(r, g, b) < 30) out[i] = 0
+    }
+    return out
   }
 }
 
