@@ -249,9 +249,13 @@ private class ViewportDrawable(private val inner: Drawable) : Drawable() {
  *    整幅缩进圆里，圆内先铺一层白底（[plateWhite]），盖不满的地方由它补上，圆于是始终是完整的。
  *    缩多少由三条尺子里**最严**的那条定：主体进安全区（[SAFE_ZONE]）、尖角不贴边（[TIP_FLOOR]）、
  *    墨量对齐（[PLATE_INK]），最后再乘一刀 [SHRINK_EXTRA]。
+ *  - **例外：无底盘快捷方式**（细环 + 图案在圆内，2026-10-26）→ 几何按**满幅、不缩**，
+ *    但"原图没有实色底"这件事照同一条道理补上：铺**同一块白底**（主人：「不应该和别的不规则图标
+ *    同个道理吗」）。它不是第三档 —— 几何走满幅，只有"补底"借用这一档的白盘。
  *
  * ⚠ 第三轮曾经把"收一刀薄边 + 铺白底"做成**全局**的（主人那句"不要贴着边缘"与"稍微小一点"），
- *   第四轮被"我刚才说的都是针对不规则图标"收回 —— 所以现在**只有裁不动那一档**有白边、才被缩小。
+ *   第四轮被"我刚才说的都是针对不规则图标"收回 —— 所以现在**只有没有实色底的那两类**铺白底，
+ *   而**缩小只给裁不动那一档**（无底盘快捷方式按满幅、不缩）。
  *   白底画在**前景层的位图里**，绝不动 `AdaptiveIconDrawable` 的背景层：那一层的颜色是给
  *   取色合成器当盘色用的（10-09 定案），换掉它会连带改单色那一支的输出。
  */
@@ -266,6 +270,15 @@ private class MaskedDrawable(
 
   /** 圆内的那层白底（见 [draw] 里那一段）。 */
   private val platePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+
+  /**
+   * **无底盘快捷方式**（细环 + 图案在圆内，原图圆外透明）也要底盘（2026-10-26）。
+   *
+   * 主人先要求「那应该也给它补上底盘」；我第一版铺的是主题盘色，他当场纠回：
+   * 「不应该和别的不规则图标同个道理吗」—— 所以这里**不另起一种颜色**，直接用
+   * [platePaint] 那同一块白底（不规则图标用的就是它）。图案仍按满幅、不缩。
+   */
+  private var plateShortcut = false
 
   /**
    * 位图 / 画布 / 遮罩路径按尺寸缓存，三者一起换。
@@ -290,9 +303,11 @@ private class MaskedDrawable(
   private var boxWin: IconCropWindow.Window? = null
 
   /**
-   * 这张走的是"裁不动 → 不裁 + 圆内补白底"那条路。
-   * ⚠ 白底**只给这一类**（主人："我刚才说的都是针对不规则图标"）—— 原本裁得好的图标
-   * 恢复原样：内切到圆、填满、圆外透明、没有白边。
+   * 这张要铺圆内白底。两个来源，**铺的是同一块**：
+   *  - "裁不动 → 不裁、缩进圆里"那一档（[IconCropWindow.Window.plate]）；
+   *  - **无底盘快捷方式**（细环 + 图案在圆内，[plateShortcut]）—— 不缩，只补底盘。
+   * 主人对后者的判词：「不应该和别的不规则图标同个道理吗」（2026-10-26）—— 所以不另起一种盘色。
+   * ⚠ 原本裁得好、本来就有实色底的图标一个像素都不铺 —— 铺了就是白边。
    */
   private var plateWhite = false
 
@@ -333,8 +348,9 @@ private class MaskedDrawable(
       cacheInset = inset
     }
 
-    // 圆内白底：**只给"裁不动"那类**（[plateWhite]，见 [IconCropWindow] ③）。它们不裁、
-    // 缩进圆里，盖不满的地方补上的就是这层。裁得好的图标一个像素都不铺 —— 铺了就是白边。
+    // 圆内白底：**只给没有实色底的图标**（[plateWhite]）—— "裁不动 → 缩进圆里"那一档，
+    // 以及**无底盘快捷方式**（细环 + 图案在圆内；不缩、只补盘，与前者同一块白底）。
+    // 本来就有实色底、裁得好的图标一个像素都不铺 —— 铺了就是白边。
     // ⚠ 白底画在**前景层的位图里**，不动 AdaptiveIconDrawable 的背景层：那一层的颜色
     //   是给取色合成器当盘色用的（10-09 定案），换掉它会连带改单色那一支的输出。
     if (plateWhite) layer.drawCircle(width / 2f, height / 2f, minOf(width, height) / 2f, platePaint)
@@ -383,7 +399,9 @@ private class MaskedDrawable(
       boxMeasured = true
       val t0 = System.nanoTime()
       boxWin = runCatching { measureWindow(iw, ih, canonical) }.getOrNull()
-      plateWhite = boxWin?.plate == true
+      // 快捷方式的满幅分支返回 null（窗口那格不用），底盘这件事由 [plateShortcut] 带出来 ——
+      // 必须在 [measureWindow] 之后合，否则会被这一行的 `== true` 覆盖掉。
+      plateWhite = boxWin?.plate == true || plateShortcut
       // 这张小图是**每个图标多出来的一次绘制**，所以成本要能看见（本仓吃过"只报数不量毫秒"的亏）。
       // 这一行也要带包名：它是**唯一一条"这张没动"的读数** —— 不带名字就没法回答
       // "某张在彩色那支到底动没动"（2026-10-14 判元宝时正是卡在这里，只能靠反推）。
@@ -443,7 +461,10 @@ private class MaskedDrawable(
     //   也要读同一个结论，否则同一张图彩色按满幅、单色被窗口缩一圈（见那里的文档）。
     if (trimEdgeRing && win.plate && win.keepPct == 0) {
       if (IconCropWindow.shortcutFullBleed(win, px, sw, sh)) {
-        Log.d(TAG, "裁圆外框: ${IconNames.of(icon)} 快捷方式：细环 + 图案在圆内 → 按满幅：不缩、不补白")
+        // 原图没有实色底盘（圆外透明）→ 图案按满幅、不缩；底盘铺**与不规则图标同一块白盘**
+        //（主人 2026-10-26：「不应该和别的不规则图标同个道理吗」）。
+        plateShortcut = true
+        Log.d(TAG, "裁圆外框: ${IconNames.of(icon)} 快捷方式：细环 + 图案在圆内 → 按满幅：不缩，铺白盘（同不规则图标）")
         return null
       }
       if (edgeRing) Log.d(TAG, "裁圆外框: ${IconNames.of(icon)} 快捷方式：图案碰到圆外 → 保留缩小+补白")
