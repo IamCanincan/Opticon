@@ -525,7 +525,9 @@ private class MaskedDrawable(
   override fun getConstantState(): ConstantState? =
     icon.constantState?.let { src ->
       object : ConstantState() {
-        override fun newDrawable(): Drawable = MaskedDrawable(src.newDrawable())
+        // ⚠ `trimEdgeRing` 必须一起带过去（2026-10-26 全量检查）：这层自己的副本以前也丢它，
+        //   和顶层 `CircleIconDrawable.getConstantState` 那次是同一类洞（见那边的注释）。
+        override fun newDrawable(): Drawable = MaskedDrawable(src.newDrawable(), trimEdgeRing)
 
         override fun getChangingConfigurations(): Int = src.changingConfigurations
       }
