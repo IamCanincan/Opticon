@@ -53,6 +53,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -166,11 +167,30 @@ fun OpticonApp() {
     // 跳转失败的提示语。三条跳转（顶栏、「关于」页两块）共用这一句。
     val openLinkFailed = stringResource(R.string.open_link_failed)
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier.fillMaxSize().background(
+            // 极淡的环境色：顶部 surfaceContainerLow → 页面 background。
+            // 卡片本身是不透明色，这条只负责在卡与卡之间、顶栏后面形成一点纵深；
+            // 不引入品牌色，避免和 primaryContainer 的功能卡抢。
+            Brush.verticalGradient(
+                colors = listOf(
+                    MaterialTheme.colorScheme.surfaceContainerLow,
+                    MaterialTheme.colorScheme.background,
+                )
+            )
+        )
+    ) {
         Scaffold(
             modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+            containerColor = Color.Transparent,
             topBar = {
                 TopAppBar(
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        // 与渐变顶端同色：顶栏不透明，滚动内容不会从标题后面透出来；
+                        // 颜色与 Box 渐变的第一个色标一致，视觉上仍是一整块。
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                        scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                    ),
                     title = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             BrandMark()

@@ -56,6 +56,8 @@
     <string name="scope_tag_required">必选</string>
     <string name="scope_tag_recommended">推荐</string>
     <string name="scope_tag_optional">可选</string>
+    <string name="scope_copy">复制包名</string>
+    <string name="scope_copied">已复制：%1$s</string>
 
     <!-- 10 个推荐作用域（标题 + 描述 + 标签档位）-->
     <string name="scope_system_title">android（system_server）</string>

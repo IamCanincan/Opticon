@@ -1,7 +1,9 @@
 package com.iamcanincan.opticon.ui.module
 
+import android.content.ClipData
 import android.content.Intent
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.CleaningServices
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Memory
@@ -39,11 +42,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -57,6 +63,7 @@ import com.iamcanincan.opticon.ui.IconTile
 import com.iamcanincan.opticon.ui.OpticonCard
 import com.iamcanincan.opticon.ui.ScreenList
 import com.iamcanincan.opticon.ui.Section
+import kotlinx.coroutines.launch
 
 private const val LAUNCHER_AOSP = "com.android.launcher3"
 private const val LAUNCHER_PIXEL = "com.google.android.apps.nexuslauncher"
@@ -86,7 +93,7 @@ fun ModuleScreen(onNotify: (String) -> Unit) {
   ScreenList {
     item { StatusCard() }
 
-    item { Section(text = stringResource(R.string.section_scope)) { ScopeGroup() } }
+    item { Section(text = stringResource(R.string.section_scope)) { ScopeGroup(onNotify) } }
 
     item { Section(text = stringResource(R.string.section_steps)) { StepsCard() } }
 
@@ -115,7 +122,7 @@ private fun StatusCard() {
 /** 作用域清单：一张卡片里 10 行，每行 = 图标方块 + 标题 + 描述 + 标签。 */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun ScopeGroup() {
+private fun ScopeGroup(onNotify: (String) -> Unit) {
   val scopes =
     listOf(
       ScopeItem(
@@ -123,12 +130,14 @@ private fun ScopeGroup() {
         R.string.scope_system_title,
         R.string.scope_system_desc,
         ScopeTag.RECOMMENDED,
+        copyText = "android",
       ),
       ScopeItem(
         Icons.Default.Memory,
         R.string.scope_systemprocess_title,
         R.string.scope_systemprocess_desc,
         ScopeTag.OPTIONAL,
+        copyText = "system",
       ),
       ScopeItem(
         Icons.Default.Apps,
@@ -209,7 +218,7 @@ private fun ScopeGroup() {
       HorizontalDivider()
       visible.forEachIndexed { index, item ->
         if (index > 0) HorizontalDivider()
-        ScopeRow(item)
+        ScopeRow(item, onNotify)
       }
       HorizontalDivider()
       // 用**左右分段按钮**而不是一个"展开 / 收起"的文字按钮：
@@ -252,12 +261,27 @@ private data class ScopeItem(
   val titleRes: Int,
   val descRes: Int,
   val tag: ScopeTag,
+  /** 复制到剪贴板的包名；null = 标题本身就是包名。system_server 那行标题带说明，需单独给。 */
+  val copyText: String? = null,
 )
 
 @Composable
-private fun ScopeRow(item: ScopeItem) {
+private fun ScopeRow(item: ScopeItem, onNotify: (String) -> Unit) {
+  val clipboard = LocalClipboard.current
+  val scope = rememberCoroutineScope()
+  val copyLabel = stringResource(R.string.scope_copy)
+  val pkg = item.copyText ?: stringResource(item.titleRes)
+  val copied = stringResource(R.string.scope_copied, pkg)
   Row(
-    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+    modifier = Modifier
+      .fillMaxWidth()
+      .clickable(onClickLabel = copyLabel) {
+        scope.launch {
+          clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(null, pkg)))
+          onNotify(copied)
+        }
+      }
+      .padding(horizontal = 16.dp, vertical = 12.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
     IconTile(
@@ -272,13 +296,24 @@ private fun ScopeRow(item: ScopeItem) {
     )
     Spacer(modifier = Modifier.width(14.dp))
     Column(modifier = Modifier.weight(1f)) {
-      Text(
-        text = stringResource(item.titleRes),
-        style = MaterialTheme.typography.bodyLarge,
-        color = MaterialTheme.colorScheme.onSurface,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-      )
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+          text = stringResource(item.titleRes),
+          style = MaterialTheme.typography.bodyLarge,
+          color = MaterialTheme.colorScheme.onSurface,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+          modifier = Modifier.weight(1f),
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        // 整行可点复制包名；这枚小图标只作提示，语义由 row 的 onClickLabel 承担。
+        Icon(
+          imageVector = Icons.Default.ContentCopy,
+          contentDescription = null,
+          tint = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.size(14.dp),
+        )
+      }
       Spacer(modifier = Modifier.height(2.dp))
       Text(
         text = stringResource(item.descRes),
