@@ -198,6 +198,12 @@
 
     <string name="notify_switch_title">通知小图标修复</string>
     <string name="notify_switch_body">关闭后不再处理任何通知。设置即时生效；已显示的通知需重新加载后应用。</string>
+    <!-- 通知页示意卡：左=灰白色块，右=修复后的可辨识图标 -->
+    <string name="notify_effect_title">通知小图标示意</string>
+    <string name="notify_effect_body">部分通知的小图标在内容区显示为灰白色块；模块按应用图标生成可辨识的剪影。状态栏图标由系统统一着色，不在此列。</string>
+    <string name="notify_sample_before_detail">灰白色块</string>
+    <string name="notify_sample_after_title">修复后</string>
+    <string name="notify_sample_after_detail">可辨识图标</string>
 
     <string name="notify_scope_title">通知仅需系统界面</string>
     <string name="notify_scope_body">通知图标由系统界面（com.android.systemui）绘制，因此该功能仅需注入该进程；为其他进程配置作用域不影响此项。若未生效，请在框架的模块详情页重新应用作用域并重启设备。</string>

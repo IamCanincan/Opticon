@@ -480,6 +480,33 @@ internal fun SampleTile(
 }
 
 /**
+ * 功能示意卡的外框：样本（调用方提供）+ 标题 + 客观说明。
+ * 单色 / 通知两页共用，保证卡片内边距与文字层级一致（2026-10-26）。
+ */
+@Composable
+internal fun EffectShowcaseCard(
+  title: String,
+  body: String,
+  samples: @Composable () -> Unit,
+) {
+  OpticonCard {
+    samples()
+    Spacer(modifier = Modifier.height(18.dp))
+    Text(
+      text = title,
+      style = MaterialTheme.typography.titleMedium,
+      color = MaterialTheme.colorScheme.onSurface,
+    )
+    Spacer(modifier = Modifier.height(6.dp))
+    Text(
+      text = body,
+      style = MaterialTheme.typography.bodyMedium,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+  }
+}
+
+/**
  * 打开外部链接，**打不开也不崩**。
  *
  * ⚠ 为什么必须包这一层：[androidx.compose.ui.platform.AndroidUriHandler.openUri] 只捕

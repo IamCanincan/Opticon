@@ -2,14 +2,17 @@ package com.iamcanincan.opticon.ui.notify
 
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.Icon
@@ -30,8 +33,10 @@ import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.runtime.ModulePrefs
 import com.iamcanincan.opticon.ui.CommandRow
+import com.iamcanincan.opticon.ui.EffectShowcaseCard
 import com.iamcanincan.opticon.ui.FeatureSwitchCard
 import com.iamcanincan.opticon.ui.OpticonCard
+import com.iamcanincan.opticon.ui.SampleTile
 import com.iamcanincan.opticon.ui.ScreenList
 import com.iamcanincan.opticon.ui.Section
 
@@ -67,11 +72,74 @@ fun NotifyScreen(onNotify: (String) -> Unit) {
         }
 
         item {
+            Section(text = stringResource(R.string.section_effect)) { NotifyEffectCard() }
+        }
+
+        item {
             Section(text = stringResource(R.string.section_scope)) { ScopeCard() }
         }
 
         item {
             Section(text = stringResource(R.string.section_verify)) { VerifyCard(onNotify) }
+        }
+    }
+}
+
+/**
+ * 通知小图标示意：左=灰白色块（无法辨识），右=修复后的应用图标剪影。
+ * 与单色页共用 [EffectShowcaseCard] / [SampleTile]，三页示意语言一致。
+ */
+@Composable
+private fun NotifyEffectCard() {
+    val scheme = MaterialTheme.colorScheme
+    EffectShowcaseCard(
+        title = stringResource(R.string.notify_effect_title),
+        body = stringResource(R.string.notify_effect_body),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            SampleTile(
+                modifier = Modifier.weight(1f),
+                title = stringResource(R.string.effect_caption_before),
+                detail = stringResource(R.string.notify_sample_before_detail),
+            ) {
+                Box(
+                    modifier =
+                        Modifier.size(40.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(scheme.surfaceVariant),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(
+                        modifier =
+                            Modifier.size(22.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(scheme.outlineVariant)
+                    )
+                }
+            }
+            SampleTile(
+                modifier = Modifier.weight(1f),
+                title = stringResource(R.string.notify_sample_after_title),
+                detail = stringResource(R.string.notify_sample_after_detail),
+            ) {
+                Box(
+                    modifier =
+                        Modifier.size(40.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(scheme.primaryContainer),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Notifications,
+                        contentDescription = null,
+                        tint = scheme.onPrimaryContainer,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            }
         }
     }
 }
