@@ -29,6 +29,16 @@ import java.util.Locale
  */
 internal object MonoDump {
 
+  /**
+   * 自动「可疑」转储的开关（2026-10-25）：默认**关**。
+   *
+   * 为什么：每次冷启动都会把几十张可疑图压 PNG + base64 灌进 logcat（真机 `dump#40` 那一串），
+   * 既占冷路径（一张十几到几十毫秒），也把 256KB 的环形缓冲冲掉 —— 快键/命中窗那些真正要看的
+   * 读数被挤没了。**点名**（[WATCH]）那几张仍然照带：它们才是排查具体问题时要的东西。
+   * 需要自动扫新问题时，把这一个常量改成 true 重编诊断包即可，不改别的。
+   */
+  internal const val AUTO_SUSPICIOUS = false
+
   /** 每进程最多带回来几张。PNG 压完一张十几 KB、六到十八行日志，所以这个数可以比想象中大。 */
   private const val MAX_ICONS = 48
 

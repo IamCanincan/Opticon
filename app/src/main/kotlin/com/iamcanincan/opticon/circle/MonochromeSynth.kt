@@ -741,7 +741,7 @@ internal object MonochromeSynth {
       // ⚠ 但只按 `suspicious` 会把他**点名**的那几张漏掉：一块灰框在形状体检里是"规整、连通、
       // 面积合适"的好形状，一个可疑指标都不触发 —— 而它恰恰是要看的东西。所以点名的必带。
       // 带不带还得过预算那一关，见 [MonoDump.maybe] 里 `WATCH_RESERVE_KB` 那一段。
-      if (MonoDump.suspicious(out) || isWatched) dump()
+      if (isWatched || (MonoDump.AUTO_SUSPICIOUS && MonoDump.suspicious(out))) dump()
       val ramp = out.mask
       if (ramp == null) {
         // 判据不成立 = 这张以后再问还是一样，记个负缓存（只进内存，见 [MonoCache]）。
