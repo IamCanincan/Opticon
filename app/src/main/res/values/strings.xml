@@ -198,5 +198,5 @@
     <string name="notify_scope_body">通知由系统界面绘制，所以这一路只需注入 com.android.systemui；额外勾选别的进程不影响它。不生效时，到框架的模块详情页点一次「应用」，再重启设备。</string>
 
     <string name="notify_verify_title">怎么确认生效</string>
-    <string name="notify_verify_body">下拉通知栏看内容区那个小图标：原来是灰白色块的，现在应该能认出是哪个应用。状态栏那一行本来就被系统压成单色，别在那里找差异。\n\n日志确认（adb logcat -s Opticon）：出现 patched &lt;包名&gt; 2-&gt;1 就是替换成功了。</string>
+    <string name="notify_verify_body">下拉通知栏看内容区那个小图标：原来是灰白色块的，现在应该能认出是哪个应用。状态栏那一行本来就被系统压成单色，别在那里找差异。\n\n日志确认：出现 patched &lt;包名&gt; 2-&gt;1 就是替换成功了。下面的命令可以直接复制。</string>
 </resources>

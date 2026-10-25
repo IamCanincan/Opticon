@@ -1,5 +1,6 @@
 package com.iamcanincan.opticon.ui
 
+import android.content.ClipData
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -18,6 +19,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -26,16 +29,23 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.UriHandler
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.iamcanincan.opticon.R
+import kotlinx.coroutines.launch
 
 
 /**
@@ -47,6 +57,7 @@ import androidx.compose.ui.unit.dp
  *
  * ⚠ 「通知」页**不**用这里的多数组件：它的底板尺寸、间距、卡片语言都不一样，
  *   细节见各个组件上的说明。别顺手把它一起统一了，那是改视觉不是去重。
+ *   唯一例外是 [CommandRow] —— 两页的验证命令必须同一种样子（2026-10-26）。
  */
 
 /**
@@ -136,10 +147,56 @@ internal fun OpticonCard(
   }
 }
 
+/**
+ * 等宽命令块 + 一键复制。**模块页和通知页共用**（2026-10-26）。
+ *
+ * 为什么抽出来：两页的"怎么确认生效"都要用户跑 `adb logcat -s Opticon`，原来模块页可复制、
+ * 通知页只在段落里写了一遍命令 —— 同一件事两种做法，排查时还得手敲。形状沿用模块页那块：
+ * `surfaceContainerHighest`（比卡面亮一档，见 [OpticonCard] 的说明）+ 等宽字体 + 右侧复制图标；
+ * 点击整块生效（原来只有右侧 48dp 图标能按，命中面积太小）。
+ *
+ * ⚠ 复制成功走外壳的 Snackbar（[onNotify]）：`setClipEntry` 是 suspend 的，提示必须排在写入之后，
+ *   不能先弹再写（写失败会变成假阳性）。
+ */
+@Composable
+internal fun CommandRow(command: String, onNotify: (String) -> Unit) {
+  val copiedMessage = stringResource(R.string.verify_copied)
+  val clipboard = LocalClipboard.current
+  val scope = rememberCoroutineScope()
+  Surface(
+    onClick = {
+      scope.launch {
+        clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(null, command)))
+        onNotify(copiedMessage)
+      }
+    },
+    shape = MaterialTheme.shapes.medium,
+    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+  ) {
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Text(
+        text = command,
+        style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+        color = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.weight(1f),
+      )
+      Spacer(modifier = Modifier.width(10.dp))
+      Icon(
+        imageVector = Icons.Default.ContentCopy,
+        contentDescription = stringResource(R.string.verify_copy),
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.size(20.dp),
+      )
+    }
+  }
+}
+
 /** 小标题 + 它领的那张卡。分成一个 item，才能把组内间距压到比组间距小。 */
 @Composable
-internal fun Section(text: String, content: @Composable () -> Unit) {
-  Column {
+internal fun Section(text: String, content: @Composable () -> Unit) {  Column {
     SectionLabel(text = text)
     Spacer(modifier = Modifier.height(12.dp))
     content()

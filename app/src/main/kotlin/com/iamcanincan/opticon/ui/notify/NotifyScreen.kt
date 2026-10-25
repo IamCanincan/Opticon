@@ -37,6 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.runtime.ModulePrefs
+import com.iamcanincan.opticon.ui.CommandRow
 import com.iamcanincan.opticon.ui.FloatingNavSpace
 import com.iamcanincan.opticon.ui.OpticonCard
 
@@ -55,7 +56,7 @@ import com.iamcanincan.opticon.ui.OpticonCard
  *   模块侧下次被挂钩时就能读到，不需要点"保存"。
  */
 @Composable
-fun NotifyScreen() {
+fun NotifyScreen(onNotify: (String) -> Unit) {
     val context = LocalContext.current
     // 默认配置由外壳（OpticonApp）在首次打开时落盘，这里只读。
     val prefs = remember { ModulePrefs.of(context) }
@@ -101,7 +102,7 @@ fun NotifyScreen() {
         }
 
         ScopeCard()
-        VerifyCard()
+        VerifyCard(onNotify)
     }
 }
 
@@ -228,6 +229,7 @@ private fun InfoCard(
     @DrawableRes icon: Int,
     title: String,
     description: String,
+    footer: (@Composable () -> Unit)? = null,
 ) {
     OpticonCard {
         Row(
@@ -239,7 +241,7 @@ private fun InfoCard(
                 selected = false,
             )
             Spacer(Modifier.width(14.dp))
-            Column {
+            Column(Modifier.weight(1f)) {
                 Text(
                     text = title,
                     style = MaterialTheme.typography.titleMedium,
@@ -251,6 +253,10 @@ private fun InfoCard(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (footer != null) {
+                    Spacer(Modifier.height(12.dp))
+                    footer()
+                }
             }
         }
     }
@@ -267,10 +273,12 @@ private fun ScopeCard() {
 
 /** 怎么确认它真的生效了 —— 通知栏看不出差异时，日志是唯一可靠的判据。 */
 @Composable
-private fun VerifyCard() {
+private fun VerifyCard(onNotify: (String) -> Unit) {
     InfoCard(
         icon = R.drawable.ic_verify,
         title = stringResource(R.string.notify_verify_title),
         description = stringResource(R.string.notify_verify_body)
-    )
+    ) {
+        CommandRow(command = stringResource(R.string.verify_logcat), onNotify = onNotify)
+    }
 }

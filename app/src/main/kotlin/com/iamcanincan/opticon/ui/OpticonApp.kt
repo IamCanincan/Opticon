@@ -178,7 +178,7 @@ fun OpticonApp() {
                 ) { page ->
                     when (page) {
                         TAB_ICON -> IconScreen(onNotify = notify)
-                        TAB_NOTIFY -> NotifyScreen()
+                        TAB_NOTIFY -> NotifyScreen(onNotify = notify)
                         TAB_MODULE -> ModuleScreen(onNotify = notify)
                         else -> AboutScreen(state = updateState, onCheck = checkUpdate, onNotify = notify)
                     }

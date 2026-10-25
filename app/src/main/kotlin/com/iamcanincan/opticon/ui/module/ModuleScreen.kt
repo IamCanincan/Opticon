@@ -1,6 +1,5 @@
 package com.iamcanincan.opticon.ui.module
 
-import android.content.ClipData
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,7 +13,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.Apps
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Memory
@@ -26,7 +24,6 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -36,25 +33,21 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.ClipEntry
-import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.R
+import com.iamcanincan.opticon.ui.CommandRow
 import com.iamcanincan.opticon.ui.HeroCard
 import com.iamcanincan.opticon.ui.IconTile
 import com.iamcanincan.opticon.ui.OpticonCard
 import com.iamcanincan.opticon.ui.ScreenList
 import com.iamcanincan.opticon.ui.Section
-import kotlinx.coroutines.launch
 
 /**
  * 「模块」页：三个功能共用的东西 —— 作用域、启用步骤、验证方式、运维操作。
@@ -340,19 +333,13 @@ private fun StepsCard() {
 }
 
 /**
- * 验证卡：等宽字体的 logcat 命令 + 一键复制。
+ * 验证卡：说明 + 共享的等宽命令块（[CommandRow]，通知页用的是同一块）。
  *
  * ⚠ [onNotify] 走外壳的作用域 —— Snackbar 要挂满整个展示时长，而页面切走就被销毁。
- * 这里留下的 `scope` 只服务剪贴板那一次 suspend 写入。
  */
 @Composable
 private fun VerifyCard(onNotify: (String) -> Unit) {
   val command = stringResource(R.string.verify_logcat)
-  val copiedMessage = stringResource(R.string.verify_copied)
-  // 用 LocalClipboard 而不是已废弃的 LocalClipboardManager：新 API 的写入是 suspend 的，
-  // 所以要放进协程里；顺带把「复制成功」的提示也放进去，保证它一定在写入之后才弹。
-  val clipboard = LocalClipboard.current
-  val scope = rememberCoroutineScope()
 
   OpticonCard {
     Column {
@@ -363,36 +350,7 @@ private fun VerifyCard(onNotify: (String) -> Unit) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
       Spacer(modifier = Modifier.height(12.dp))
-      // 整块可点：原来只有右侧一个 48dp 的图标按钮能按，命中面积太小。
-      Surface(
-        onClick = {
-          scope.launch {
-            clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(null, command)))
-            onNotify(copiedMessage)
-          }
-        },
-        shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.surfaceContainerHighest,
-      ) {
-        Row(
-          modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Text(
-            text = command,
-            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f),
-          )
-          Spacer(modifier = Modifier.width(10.dp))
-          Icon(
-            imageVector = Icons.Default.ContentCopy,
-            contentDescription = stringResource(R.string.verify_copy),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(20.dp),
-          )
-        }
-      }
+      CommandRow(command = command, onNotify = onNotify)
     }
   }
 }
