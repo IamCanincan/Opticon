@@ -70,6 +70,10 @@ internal fun AboutScreen(state: UpdateState, onCheck: () -> Unit, onNotify: (Str
   }
 
   ScreenList {
+    // 品牌卡先行：这一页叫「关于」，先给身份与版本，再给更新与隐私。
+    // 2026-10-26 之前是"更新 → 隐私 → 关于"，品牌卡压在最底下，首屏只有一个长说明卡。
+    item { AboutCard(onOpen = open) }
+
     item { Section(text = stringResource(R.string.section_update)) {
       UpdateCard(
         version = version,
@@ -80,8 +84,6 @@ internal fun AboutScreen(state: UpdateState, onCheck: () -> Unit, onNotify: (Str
     } }
 
     item { Section(text = stringResource(R.string.section_privacy)) { PrivacyCard() } }
-
-    item { Section(text = stringResource(R.string.tab_about)) { AboutCard(onOpen = open) } }
   }
 }
 
