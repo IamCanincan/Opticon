@@ -76,7 +76,6 @@ internal fun AboutScreen(state: UpdateState, onCheck: () -> Unit, onNotify: (Str
 
     item { Section(text = stringResource(R.string.section_update)) {
       UpdateCard(
-        version = version,
         state = state,
         onCheck = onCheck,
         onOpenPage = open,
@@ -237,7 +236,6 @@ internal fun UpdateChecker.Result.toState(ctx: android.content.Context, current:
  */
 @Composable
 private fun UpdateCard(
-  version: String,
   state: UpdateState,
   onCheck: () -> Unit,
   onOpenPage: (String) -> Unit,
@@ -251,19 +249,12 @@ private fun UpdateCard(
           contentColor = MaterialTheme.colorScheme.onPrimary,
         )
         Spacer(modifier = Modifier.width(14.dp))
-        Column {
-          Text(
-            text = stringResource(R.string.update_title),
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-          )
-          Spacer(modifier = Modifier.height(2.dp))
-          Text(
-            text = stringResource(R.string.update_current, version),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
+        // 当前版本已由上面的品牌卡展示，这里不再重复一行。
+        Text(
+          text = stringResource(R.string.update_title),
+          style = MaterialTheme.typography.titleMedium,
+          color = MaterialTheme.colorScheme.onSurface,
+        )
       }
 
       Spacer(modifier = Modifier.height(12.dp))

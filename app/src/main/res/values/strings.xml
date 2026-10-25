@@ -167,7 +167,6 @@
     <!-- 卡片标题和按钮共用这一句 -->
     <string name="update_title">检查更新</string>
     <string name="action_open_repo">在 GitHub 上查看</string>
-    <string name="update_current">当前版本 %1$s</string>
     <string name="update_checking">检查中…</string>
     <string name="update_go_download">打开发布页</string>
     <string name="update_disclaimer">仅当点击下方按钮时建立网络连接：优先直连 GitHub，失败后使用公共镜像。这是本应用唯一的网络行为，不包含统计或上报。</string>
