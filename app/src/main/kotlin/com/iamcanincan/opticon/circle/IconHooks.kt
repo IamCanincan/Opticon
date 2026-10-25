@@ -196,7 +196,7 @@ private fun installHooks(xposed: XposedInterface, classLoader: ClassLoader, pack
   if (!gate) {
     Log.e(
       TAG,
-      "ParcelWrite 还原挂不上 → 本进程**不打任何图标标记**（打过的 0x6e id 泄漏到未注入进程" +
+      "ParcelWrite 还原挂不上 → 本进程**不打任何图标标记**（打过的 0x6e id 泄漏到未注入进程，" +
         "会在 Activity.onCreate 崩应用）。代价：裁圆的批量/构造通道在这里不生效。"
     )
   } else {

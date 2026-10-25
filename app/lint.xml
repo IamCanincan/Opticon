@@ -76,5 +76,24 @@
         显式的 lambda 参数名（如 `content`）以避免隐式 `it` 的歧义，但 trailing
         这个位置语义很明确，没必要为了 lint 建议换个更没信息量的名字。
     -->
+    <!--
+        Common.kt 里 InfoCard 的 trailing slot 是可选的尾部内容位（图标卡右侧的
+        可选按钮、状态文字等），命名 `trailing` 已经把用途说清楚。lint 想要的是
+        显式的 lambda 参数名（如 `content`）以避免隐式 `it` 的歧义，但 trailing
+        这个位置语义很明确，没必要为了 lint 建议换个更没信息量的名字。
+    -->
     <issue id="ComposableLambdaParameterNaming" severity="ignore" />
+
+    <!--
+        宿主的 `themed_icon_background_color` 只能按名字取（模块里没有它的 R），语料抓取同理
+        （资源名来自被注入的宿主）。这两处是**刻意**的反射查找，不是随手用慢 API；
+        返回值有兜底（取不到就用白色 / 跳过那一张）。
+    -->
+    <issue id="DiscouragedApi" severity="ignore" />
+
+    <!--
+        Gradle 本体版本与 AGP/Kotlin 编译器是配套钉死的（见 libs.versions.toml 顶部）；
+        升级 Gradle 必须同时核对三者的兼容窗口，不能跟着 lint 的即时建议走。
+    -->
+    <issue id="AndroidGradlePluginVersion" severity="ignore" />
 </lint>

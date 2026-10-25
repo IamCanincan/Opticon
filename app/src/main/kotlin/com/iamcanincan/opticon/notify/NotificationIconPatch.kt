@@ -124,7 +124,9 @@ object NotificationIconPatch {
         //   正向：我们已经造好的那张 Icon，命中直接装回 —— 不重新解码、也不重新合成。
         //   负向：上次判成「已适配 / 放弃」的，这次**连解码都不做** —— 已适配是大多数
         //   （framework 的 stat_* 与做过主题适配的应用），也恰好是更新最频繁的那批。
-        val resId = runCatching { smallIcon.resId }.getOrDefault(0)
+        // `Icon.getResId` 是 API 28 才公开的；26/27 上没有这个方法，按"没有资源 id"兜底。
+        val resId = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P)
+            runCatching { smallIcon.resId }.getOrDefault(0) else 0
         val cacheKey = if (resId > 0) "$pkg:$resId" else null
         if (cacheKey != null) {
             val hit = shapeCache[cacheKey]
@@ -189,7 +191,7 @@ object NotificationIconPatch {
             if (rulerSeen.size < RULER_MAX && rulerSeen.putIfAbsent("带诊断 $pkg", true) == null)
                 ModuleRuntime.logI("通知带诊断 $pkg ${IconBitmap.bandDebug(bitmap)}" +
                     " ｜icon type=${iconType(smallIcon)} resId=$resId" +
-                    " resPkg=${runCatching { smallIcon.resPackage }.getOrNull()}" +
+                    " resPkg=${if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) runCatching { smallIcon.resPackage }.getOrNull() else "api<28"}" +
                     " ｜drawable=${runCatching { IconBitmap.describeResource(context, smallIcon) }.getOrNull()}")
             noteRuler(pkg, "已适配", bitmap, null)
             if (cacheKey != null) skipCache[cacheKey] = true

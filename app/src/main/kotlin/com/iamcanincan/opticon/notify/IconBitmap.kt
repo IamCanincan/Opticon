@@ -717,6 +717,8 @@ object IconBitmap {
 
     /** 诊断用：这条资源解出来的 drawable **是什么类、多大**（一句话，不含像素）。 */
     fun describeResource(context: Context, icon: Icon): String = runCatching {
+        // `Icon.getResId` 是 API 28+；26/27 上返回"不可用"，别让诊断本身崩在旧机上。
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return@runCatching "api<28"
         val d = ResourcesCompat.getDrawable(context.resources, icon.resId, null)
         "${d?.javaClass?.simpleName} ${d?.intrinsicWidth}x${d?.intrinsicHeight}"
     }.getOrElse { "err:${it.message}" }
@@ -729,6 +731,7 @@ object IconBitmap {
      * **必须在撑之前判**——撑完就只剩一张 96×96、信息已经没了。
      */
     fun resourceEdge(context: Context, icon: Icon): Int = runCatching {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return@runCatching -1
         val d = ResourcesCompat.getDrawable(context.resources, icon.resId, null) ?: return -1
         minOf(d.intrinsicWidth, d.intrinsicHeight)
     }.getOrDefault(-1)
