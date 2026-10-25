@@ -39,7 +39,7 @@
 
     <!-- 裁圆总开关 -->
     <string name="circle_switch_title">强制圆形图标</string>
-    <string name="circle_switch_body">应用图标（含自适应图标）一律裁成正圆；关掉后保持系统原样</string>
+    <string name="circle_switch_body">应用图标（含自适应图标）统一裁成正圆；桌面、应用列表、最近任务都生效。</string>
 
     <!-- 状态卡 -->
     <string name="status_title">模块启用状态</string>
@@ -109,21 +109,20 @@
 
     <!-- 运维操作：清缓存 / 重启进程（全部由模块在目标进程内部执行，不需要 root） -->
     <string name="section_tools">运维操作</string>
-    <string name="tools_body">下面这些操作全部由模块在目标进程内部完成（删自己的缓存、重启自己），不需要 root，也不会执行任何 shell 命令。</string>
+    <string name="tools_body">这些操作由模块在目标进程内部执行，不需要 root，也不会执行 shell 命令。</string>
     <string name="cache_title">清除桌面图标缓存</string>
-    <string name="cache_body">桌面把图标位图缓存在自己的数据库里，而且只按“目标 App 的版本”更新 —— 所以开关改了、模块升级了之后，桌面可能仍旧显示上一次渲染出来的图。点下面的按钮删掉缓存并重启桌面，图标会按当前设置重新生成。这个按钮清的是桌面那一份渲染结果；模块自己压出来的那张剪影另有一层缓存（见下面「说明」里那条），它按图标内容和模块的装机身份自动作废，不用你手动清。</string>
+    <string name="cache_body">桌面把图标位图缓存在自己的数据库里，开关或模块变化后可能不重画。点下面按钮删掉这份缓存并重启桌面；模块自己的剪影缓存会自动作废，不用清。</string>
     <string name="action_clear_launcher">清除缓存并重启桌面</string>
     <string name="action_restart_systemui">重启 SystemUI</string>
     <string name="action_restart_others">重启其他进程</string>
     <string name="cache_sent">已发送：桌面即将重启并重建图标</string>
     <string name="restart_sent">已发送：目标进程即将重启</string>
-    <string name="tools_hint">模块不会自动清理：什么时候清由你决定，一般只在桌面图标没跟上变化时才需要点。
-        点了没反应 = 那个进程没有注入本模块（去「模块」页确认作用域里勾选过，并重启过设备）。</string>
+    <string name="tools_hint">一般只在图标没跟上变化时才点。点了没反应 = 该进程没注入模块，去「模块」页确认作用域。</string>
 
     <!-- 效果示意（形状对比图）-->
     <string name="section_effect">效果</string>
     <string name="effect_title">一律裁成正圆</string>
-    <string name="effect_body">桌面、应用列表、最近任务里的图标都会变成圆形。图案铺得满的直接裁成正圆、圆外透明；个别“裁不动”的（宽幅式、空心一类）保持图案完整 —— 缩进圆里、圆内补白底。</string>
+    <string name="effect_body">图案铺得满的直接裁成正圆；裁不动的保持完整、缩进圆里并补白底；透明底的快捷方式按原大小铺在白底上。</string>
 
     <!--
         单色遮罩极性修正。这条和裁圆是**两个独立开关**：它管的是 Android 16 强制取色下
@@ -131,7 +130,7 @@
     -->
     <string name="section_mono">单色图标</string>
     <string name="mono_switch_title">未适配图标：本模块补单色层</string>
-    <string name="mono_switch_body">Android 16 强制取色时，没做单色适配的应用由本模块现场压一张剪影交给桌面。关掉 = 完全不介入，桌面会照它自己的算法压（把亮度当不透明度，等于假定「亮的就是墨」），那与主题图标的约定正好相反，屏幕上这批图标就是反的 —— 所以这一条是整体逃生口，不是口味开关。</string>
+    <string name="mono_switch_body">Android 16 强制取色时，给未适配的应用补一张极性正确的剪影。关掉会退回桌面自己的算法，那批图标会整体反色。</string>
     <!-- 效果示意图两块色块下面那行小字：左=系统原样、右=裁完。用短词，别和 effect_title 重复 -->
     <string name="effect_caption_before">原样</string>
     <string name="effect_caption_after">裁圆</string>
@@ -140,7 +139,7 @@
     <string name="section_notes">说明</string>
     <string name="note_adaptive">自适应图标也会被强制裁成圆形：系统给它的形状（圆角方、水滴等）不一定是圆。</string>
     <string name="note_tiles">快捷设置磁贴画的是单色小图形，被排除在外。</string>
-    <string name="note_mono_cache">剪影缓存在哪里：没做单色适配的图标，那张剪影由模块现压一次，然后按图标内容缓存进桌面自己的缓存目录（上限 48 MB，系统存储紧张时会被清）。换了模块版本、或图标本身更新过，这一层自动重压，不用你管。所以升级模块后重启桌面的那一次会慢一些，之后就快了。</string>
+    <string name="note_mono_cache">剪影按图标内容缓存在桌面自己的缓存目录（上限 48 MB，系统存储紧张时会被清）。换模块版本或图标更新后自动重压，所以升级后第一次重启会慢一些。</string>
     <string name="note_launcher3">Android 16 及以上会关掉桌面自带的背景板；圆形（以及少数图标圆内那层白底）都由模块自己画。</string>
     <string name="note_themed_icon">本 App 图标已提供 monochrome 层，在 Android 13+ 启动器的“主题图标”开关下会染成壁纸取色。</string>
 
@@ -189,7 +188,7 @@
     <string name="notify_status_hint">改动立即生效，新收到的通知会按新设置处理；已经在通知栏里的那条要等它重新加载</string>
 
     <string name="notify_scope_title">关于作用域</string>
-    <string name="notify_scope_body">通知是系统界面画出来的，所以这一路只注入「系统界面」（com.android.systemui）。作用域整体不固定 —— 图标裁圆需要覆盖桌面、设置等更多进程，你在框架里额外勾选别的应用不会影响这里。如果发现不生效，到框架的模块详情页点一次「应用」（右上角开关 → 底部「应用」），然后重启设备。</string>
+    <string name="notify_scope_body">通知由系统界面绘制，所以这一路只需注入 com.android.systemui；额外勾选别的进程不影响它。不生效时，到框架的模块详情页点一次「应用」，再重启设备。</string>
 
     <string name="notify_verify_title">怎么确认生效</string>
     <string name="notify_verify_body">下拉通知栏看内容区那个小图标：原来是灰白色块的，现在应该能认出是哪个应用。状态栏那一行本来就被系统压成单色，别在那里找差异。\n\n日志确认（adb logcat -s Opticon）：出现 patched &lt;包名&gt; 2-&gt;1 就是替换成功了。</string>
