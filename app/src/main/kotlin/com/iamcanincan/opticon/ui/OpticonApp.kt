@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -121,6 +122,18 @@ fun OpticonApp() {
     val uriHandler = LocalUriHandler.current
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
 
+    // 顶栏标题跟随 Pager：小号 App 名在上，当前页标题在下。
+    // 原来顶栏永远只写"Opticon"，页面身份只能从底栏选中态读；五页之后这种读法更费劲。
+    val pageTitle = stringResource(
+        when (pagerState.currentPage) {
+            TAB_CROP -> R.string.tab_crop
+            TAB_MONO -> R.string.tab_mono
+            TAB_NOTIFY -> R.string.tab_notify
+            TAB_MODULE -> R.string.tab_module
+            else -> R.string.tab_about
+        }
+    )
+
     // 首次打开就把默认配置落盘。放在外壳而不是各页面里：默认打开的是「图标」页，而模块侧有
     // 几条回退通道要先认「这份文件是不是 Opticon 的配置」—— 判据是
     // `ModulePrefs.CONFIG_KEYS` 里**任意一个键存在**（见 looksLikeConfig）。从没打开过界面的
@@ -162,7 +175,18 @@ fun OpticonApp() {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             BrandMark()
                             Spacer(Modifier.width(10.dp))
-                            Text(text = stringResource(R.string.app_name))
+                            Column {
+                                Text(
+                                    text = stringResource(R.string.app_name),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Text(
+                                    text = pageTitle,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
                         }
                     },
                     actions = {
