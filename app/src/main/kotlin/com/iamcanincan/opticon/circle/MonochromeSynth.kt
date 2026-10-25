@@ -306,6 +306,31 @@ internal object MonochromeSynth {
   }
 
   private fun sourceFastKey(d: Drawable, edge: Int, flags: Int, bgColor: Int?): Long? {
+    var seed = 0x9E3779B97F4A7C15UL.toLong()
+    seed = mix(seed, flags.toLong())
+    seed = mix(seed, edge.toLong())
+    seed = mix(seed, ((bgColor ?: -1).toLong() and 0xffffffffL))
+    return hashLayer(d, edge, seed)
+  }
+
+  /**
+   * flatten（自适应 + 真实背景）的合成图 = 背景层 + 前景层各画一次（`rasterizeLayers`），
+   * 所以两层都是**精确 BitmapDrawable** 时，合成图也是两层内容+绘制状态的确定性函数：
+   * 先哈希背景层、把它的哈希混进种子，再哈希前景层。`under` 就是背景层那张，内容已覆盖。
+   * 任一层不是 BitmapDrawable / tint / 平铺 / 大图 → 返回 null，走慢路。
+   */
+  private fun flattenFastKey(source: AdaptiveIconDrawable, edge: Int, flags: Int): Long? {
+    val bg = source.background ?: return null
+    val fg = source.foreground ?: return null
+    var seed = 0x9E3779B97F4A7C15UL.toLong()
+    seed = mix(seed, flags.toLong())
+    seed = mix(seed, edge.toLong())
+    val hb = hashLayer(bg, edge, seed) ?: return null
+    return hashLayer(fg, edge, mix(hb, 0x5BD1E995L))
+  }
+
+  /** 一张精确 BitmapDrawable 的内容+状态哈希；不合格（子类/tint/平铺/大图）返回 null。 */
+  private fun hashLayer(d: Drawable, edge: Int, seed0: Long): Long? {
     if (d.javaClass != BitmapDrawable::class.java) return null
     val bd = d as BitmapDrawable
     if (bd.colorFilter != null) return null
@@ -319,16 +344,13 @@ internal object MonochromeSynth {
     val n = w * h
     val px = srcPx?.takeIf { it.size >= n } ?: IntArray(n).also { srcPx = it }
     bmp.getPixels(px, 0, w, 0, 0, w, h)
-    var seed = 0x9E3779B97F4A7C15UL.toLong()
-    seed = mix(seed, flags.toLong())
-    seed = mix(seed, edge.toLong())
+    var seed = seed0
     seed = mix(seed, bd.alpha.toLong())
     seed = mix(seed, bd.gravity.toLong())
     seed = mix(seed, ((w.toLong() shl 20) or h.toLong()))
     seed = mix(seed, (bd.intrinsicWidth.toLong() shl 32) xor bd.intrinsicHeight.toLong())
     seed = mix(seed, (if (p.isFilterBitmap) 1L else 0L) or (if (p.isDither) 2L else 0L) or
       (if (p.isAntiAlias) 4L else 0L) or (if (bd.isAutoMirrored) 8L else 0L))
-    seed = mix(seed, ((bgColor ?: -1).toLong() and 0xffffffffL))
     return hashSource(px, n, seed)
   }
 
@@ -434,7 +456,8 @@ internal object MonochromeSynth {
       // tint/shader/平铺、大图）都返回 null，照旧走慢路。
       val flags = (if (adaptive) 1 else 0) or (if (flatten) 2 else 0) or
         (if (circle) 4 else 0) or (if (shortcut) 8 else 0)
-      val srcKey = sourceFastKey(target, edge, flags, if (adaptive) bgColor else null)
+      val srcKey = if (adaptive && flatten) flattenFastKey(source as AdaptiveIconDrawable, edge, flags)
+        else sourceFastKey(target, edge, flags, if (adaptive) bgColor else null)
       if (srcKey != null) {
         srcHashQueries++
         val ck = srcKeyMap[srcKey]
