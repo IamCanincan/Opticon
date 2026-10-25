@@ -11,6 +11,7 @@ import android.graphics.PorterDuff
 import android.graphics.PorterDuffColorFilter
 import android.graphics.Rect
 import android.graphics.drawable.AdaptiveIconDrawable
+import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
@@ -19,10 +20,10 @@ import android.util.Log
 import com.iamcanincan.opticon.runtime.ModuleRuntime
 import com.iamcanincan.opticon.runtime.TAG
 import java.nio.ByteBuffer
+import java.util.HashMap
 import java.util.IdentityHashMap
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
-
 /**
  * 给「没提供单色图标的应用」合成一个单色层。
  *
@@ -275,6 +276,69 @@ internal object MonochromeSynth {
   // ⚠ 数组只在这一次调用里用（取像素 → 键 → 模型/日志），不许被任何异步路径留住。
   private var scratchPixels: IntArray? = null
 
+  /**
+   * BitmapDrawable 的**源内容快键**（2026-10-25 第二版）：直接对**源位图自己的像素**做哈希，
+   * 再混进绘制状态（alpha / gravity / filter / dither / AA / 镜像 / 固有尺寸 / edge / 开关 /
+   * 纯色盘色），得到「这一张源图 + 这一套状态」的身份。384 光栅化是它们的确定性函数，
+   * 所以同一个键可以直接去 `MonoCache` 取第一次算好的掩码，**跳过 384 绘制与哈希**。
+   *
+   * 为什么不是上一版（按 Bitmap 对象身份）：那个在真机上 0 命中 —— 桌面每 bind 重新加载，
+   * 位图对象每次都是新的。**内容哈希跨对象稳定**，同一张源图（哪怕对象换了）会命中。
+   * 键里有像素内容：改一个像素就换键，不会给旧掩码；大图（>2×edge²）哈希比 384 绘制还贵，直接走慢路。
+   * ⚠ 这是非自适应 BitmapDrawable 的专用快路；fgOnly 的纯色盘色也进种子（模型吃 under）。
+   */
+  private val srcKeyMap = HashMap<Long, Long>()
+  private var srcHashQueries = 0
+  private var srcHashHits = 0
+  private var srcPx: IntArray? = null
+
+  private fun mix(h: Long, v: Long): Long = (h xor v) * 0x100000001b3L
+
+  private fun hashSource(px: IntArray, n: Int, h0: Long): Long {
+    var h = h0
+    var i = 0
+    while (i + 1 < n) {
+      h = (h xor ((px[i].toLong() shl 32) or (px[i + 1].toLong() and 0xffffffffL))) * 0x100000001b3L
+      i += 2
+    }
+    if (i < n) h = (h xor px[i].toLong()) * 0x100000001b3L
+    return h
+  }
+
+  private fun sourceFastKey(d: Drawable, edge: Int, flags: Int, bgColor: Int?): Long? {
+    if (d.javaClass != BitmapDrawable::class.java) return null
+    val bd = d as BitmapDrawable
+    if (bd.colorFilter != null) return null
+    val bmp = bd.bitmap ?: return null
+    val p = bd.paint
+    if (p.colorFilter != null || p.shader != null || p.xfermode != null) return null
+    if (bd.tileModeX != null || bd.tileModeY != null) return null
+    val w = bmp.width
+    val h = bmp.height
+    if (w <= 0 || h <= 0 || w.toLong() * h > edge.toLong() * edge * 2) return null
+    val n = w * h
+    val px = srcPx?.takeIf { it.size >= n } ?: IntArray(n).also { srcPx = it }
+    bmp.getPixels(px, 0, w, 0, 0, w, h)
+    var seed = 0x9E3779B97F4A7C15UL.toLong()
+    seed = mix(seed, flags.toLong())
+    seed = mix(seed, edge.toLong())
+    seed = mix(seed, bd.alpha.toLong())
+    seed = mix(seed, bd.gravity.toLong())
+    seed = mix(seed, ((w.toLong() shl 20) or h.toLong()))
+    seed = mix(seed, (bd.intrinsicWidth.toLong() shl 32) xor bd.intrinsicHeight.toLong())
+    seed = mix(seed, (if (p.isFilterBitmap) 1L else 0L) or (if (p.isDither) 2L else 0L) or
+      (if (p.isAntiAlias) 4L else 0L) or (if (bd.isAutoMirrored) 8L else 0L))
+    seed = mix(seed, ((bgColor ?: -1).toLong() and 0xffffffffL))
+    return hashSource(px, n, seed)
+  }
+
+  private fun noteSourceFastHit() {
+    srcHashHits++
+    if (srcHashHits <= LOG_FIRST || srcHashHits % LOG_EVERY == 0) {
+      Log.d(TAG, "Mono: 快键命中 $srcHashHits/$srcHashQueries（源位图内容哈希，跳过 384 光栅化）")
+    }
+  }
+
 
   private fun noteHitCost(ns: Long, raster: Long, key: Long) {
     hitNanos.addAndGet(ns)
@@ -359,10 +423,28 @@ internal object MonochromeSynth {
       // 再把它整块铺到前景底下（见 `bgOn` 那一段与 [bgMarks]）。
       val bgColor = (bg as? ColorDrawable)?.color
       val flatten = adaptive && !bgIsPlate
+      val circle = ModuleRuntime.options().circleEnabled
       val target = if (adaptive && !flatten) source.foreground else source
       if (target == null) {
         noteGiveUp(edge, label, "取不到前景层")
         return@runCatching null
+      }
+      // 源内容快键：BitmapDrawable 的源位图哈希 + 绘制状态。命中就直接取已算好的掩码，
+      // 跳过 384 光栅化与内容键（真机命中路径的大头）。概率外的一切（非 BitmapDrawable、
+      // tint/shader/平铺、大图）都返回 null，照旧走慢路。
+      val flags = (if (adaptive) 1 else 0) or (if (flatten) 2 else 0) or
+        (if (circle) 4 else 0) or (if (shortcut) 8 else 0)
+      val srcKey = sourceFastKey(target, edge, flags, if (adaptive) bgColor else null)
+      if (srcKey != null) {
+        srcHashQueries++
+        val ck = srcKeyMap[srcKey]
+        if (ck != null) {
+          val hit = MonoCache.lookup(ck, edge)
+          if (hit != null) {
+            noteSourceFastHit()
+            return@runCatching hit.mask
+          }
+        }
       }
       // ⚠ 整张那一路**不能**用 `rasterize(source)`：`AdaptiveIconDrawable.draw()` 按视口画，
       //   会把图标放大 1.5 倍再裁掉四边（主人 2026-10-09「不少图标被裁切放大了」）。
@@ -401,7 +483,7 @@ internal object MonochromeSynth {
       //   1.893 / 2.263 与这两个对得上。**它量的是"倍数"，本条改的是"搬不搬"，两件事** —— 倍数口径一字未动。
       //   （今晚我在这儿加过 1.82 又删掉，是因为拿 20:14 之后那一版的日志当 19:45 的账 —— 那一版
       //   改成量整图标，元宝在它那里是 `满幅`。同一个字段名、两本账，别再对串了。）
-      val circle = ModuleRuntime.options().circleEnabled
+      // `circle` 已在 `target` 之前取（快键 flags 要用），这里不再重复 val。
       // 「只给前景层」= 自适应且背景是纯色盘（`flatten` = false）。见上面那条。
       val fgOnly = adaptive && !flatten
       // 窗口**照量**（几何那一档与日志还要用它，见下），搬不搬由 `win` 定。
@@ -483,6 +565,11 @@ internal object MonochromeSynth {
       //   仍然付一次光栅化（几毫秒），省下的是整条模型（三百多毫秒）。
       val key = if (flatUnder) MonoKey.keyOfFlat(pixels, bgColor!!, edge, adaptive, flatten, circle, shortcut)
         else MonoCache.keyOf(pixels, underPx, edge, adaptive, flatten, circle, shortcut)
+      // 源内容快键与内容键一起落：下一次同一张源图 + 同一套状态直接取掩码。
+      if (srcKey != null) {
+        if (srcKeyMap.size > 512) srcKeyMap.clear()
+        srcKeyMap[srcKey] = key
+      }
       val tKey = System.nanoTime()
       MonoCache.lookup(key, edge)?.let { hit ->
         // 负缓存（`mask == null`）= 这张判据不成立，照旧交 null 给桌面走它自己的路。
