@@ -418,7 +418,24 @@ internal object MonochromeSynth {
       // **窗口本身不改**：细环那档的模型输入与主人已验收的那版逐字相同（拼多多四条）。
       // 只有"要不要再收一道可见区"按这个结论逐张定（见下面 `placed`）。
       val ringBleed by lazy(LazyThreadSafetyMode.NONE) { winColour?.fullBleed == true }
-      val win by lazy(LazyThreadSafetyMode.NONE) { if (fgOnly) null else winMeasured }
+      // ── 单色的几何窗口：非自适应读**彩色那一本**（2026-10-25，全量 A/B 之后）──
+      // 现状曾经是两格各量各的：彩色在 `scanSize`（≤128）上量，单色在 384 判据格上量。
+      // 语料 A/B（`_harness/WinABKt.kt`）：86 张应用图标里 83 张窗口逐位相同，但
+      // `com.fbclient.app` 差 2 个点（64% vs 66%，掩码差 1.7 万格）；45 张快捷方式里
+      // 34 张相同、7 张非细环的差 1–2 个点（掩码几千格，最大 255）—— 模型对窗口边界很敏感。
+      // 所以**非自适应且非细环满幅**的几何窗口改用彩色那份：与彩色画的是同一个窗口，
+      // 不再有两格风险。细环满幅那档保持已验收的 `winMeasured`（输入逐字不动）。
+      // 自适应仍用 `winMeasured`：彩色的窗口在展开图标（1.5×）坐标系里，两种窗口在
+      // `DeckKt` 上已核对为等价，改它只会动 taobao/me.ele 的掩码形状。
+      val win by lazy(LazyThreadSafetyMode.NONE) {
+        when {
+          fgOnly -> null
+          adaptive -> winMeasured
+          ringBleed -> winMeasured
+          winColour != null -> winColour!!.win
+          else -> winMeasured
+        }
+      }
       // 极性的取数（彩色那一本账）**不在这里算**：它要额外画一张，而这一趟在 `MonoCache.lookup` 之前 ——
       // 命中那条路今天也要付钱就白付了（真机一次重启 1594 次 bind、只有 209 种内容）。
       // 它只在缓存未命中之后、`plateSubject` 那一段现算。见下面 🔴 那段。
