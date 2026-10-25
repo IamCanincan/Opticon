@@ -88,6 +88,7 @@ fun main(args: Array<String>) {
     }
   }
   println("共 $n 张（fgOnly 不参与）；有差 $bad 张；其中\"满幅/有窗\"或档位相反 $branchDiff 张")
+  if (bad > 0) kotlin.system.exitProcess(1)
 }
 
 private fun span(w: IconCropWindow.Window) = max(w.r - w.l, w.b - w.t)

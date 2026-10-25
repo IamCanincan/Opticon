@@ -537,4 +537,15 @@ TAILFLAT=$(grep -c '^FLAT n=[1-9]' bench/reg/flat.txt 2>/dev/null)
 
 # ⚠ **判定表必须排在所有闸之后**（2026-10-17 加第 17 闸时排错过一次：新闸落在
 #   `_regress.cjs` 后面，于是那张表先印"全绿"、第 17 闸才跑 —— 正是本仓反复拦的"没跑却报绿"的形状。）
+# —— 附三闸：**几何两格对表**（2026-10-25 加，当场断言 0 差；不落基线 pin，输出文件名不与既有冲突）
+#   为什么要有：快捷方式那轮发现同一条判据在"彩色格（≤128）"与"384 判据格"上会给出相反结论
+#   （45 张里 2 张）；应用图标与应用窗口的"跨副本共享"也各量过一次负结果。这三张表把
+#   "彩色与单色的最终几何"钉成常设闸，以后再改窗口/可见区/细环判据会当场红。
+run harness.AlignKtKt "$SHOTBITCORPUS" > bench/reg/align.txt || {
+  echo "!! 快捷方式细环判据在彩色格/判据格上不一致（见 bench/reg/align.txt）"; exit 1; }
+run harness.AlignSizeKtKt "$SHOTBITCORPUS" > bench/reg/alignsize.txt || {
+  echo "!! 快捷方式彩色/单色屏上尺寸差 >4 个点（见 bench/reg/alignsize.txt）"; exit 1; }
+run harness.AppGeomKtKt rec_model corpus_runtime > bench/reg/appgeom.txt || {
+  echo "!! 应用图标彩色格/判据格窗口有差（见 bench/reg/appgeom.txt）"; exit 1; }
+
 node _regress.cjs "$@" --corpus="$CORPUS"
