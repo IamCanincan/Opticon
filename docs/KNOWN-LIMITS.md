@@ -717,3 +717,18 @@
     - 设计师参照 62 对 A/B：只有 `com.limelight.qiin` 变——雾 67.1→38.1pp、墨 92.3→62.8%、
       IoU 0.18→0.26；其余 61 对一格未动。未适配语料生产路径：tieba 59 / kazumi 18 / 混元 3 格，拼多多 0。
     - ⚠ 边界没变：**乙类（真背景层）仍无尺**，这条规则对它们不开；qiin 也只降了一半雾。
+
+- **SplashScreen 启动图标：本机 ROM 把钩子类削成空壳，属已知边界（2026-10-26）**。
+  SystemUI 的 `SplashscreenContentDrawer$ColorCache$IconColor` 在 Sony / Android 16 上被 R8
+  削成无构造器的空壳（真机日志 `ctors=0 hooked=0`），`hookSplashScreenIcon` 是登记过的空操作；
+  `CircleIconDrawable` 的背景层是**不透明主题盘色**（`ColorDrawable(themedPlateColor())`），
+  启动画面走图标自带背景，不依赖那条“透明底 → 强制复杂背景”的分支。**不是裁圆/单色的缺陷，
+  在这台 ROM 上也无法再挂**；参考项目同机同表现。
+
+- **「平色饼 A 型」不是可直接落规则的质量尺（2026-10-26，人眼复核负结果）**。
+  `ObjKt` 的 flat 账在 `rec_model` 6 张 / `corpus_runtime` 5 张；A 型（源 ≥4 档、交付 Neff≤2.5、
+  ≥3 个互不相连的大物体）9 张。按生产路径（带 `under` / 盘层判定）重跑并生成
+  `_harness/bench/flat/flat_sheet_rec.png`（左源 / 右交付）逐张看：多数是**正确的单色剪影** ——
+  背景/盘被丢掉，细节用负形保留（Taobao/Meituan 的文字、Hunyuan/SteamLink/Xbox 的负形孔）；
+  唯一明确的损失是 MobileTicket 的白色「中国铁路」文字（白 logo 压彩色底，不是 tone 问题）。
+  所以“按物体分档”这个假设不成立，**不落生产规则**；乙类仍以人眼判词为准，flat 指标只作诊断。

@@ -1083,7 +1083,9 @@ private fun hookSplashScreenIcon(xposed: XposedInterface, classLoader: ClassLoad
       .onFailure { lastError = it }
   }
   if (hooked > 0) Log.d(TAG, "SplashScreen: $hooked hooked")
-  else Log.w(TAG, "SplashScreen: ctors=${ctors.size} hooked=0 err=${lastError?.message}")
+  else Log.w(TAG, "SplashScreen: ctors=${ctors.size} hooked=0 err=${lastError?.message}" +
+    "（本 ROM 的 SystemUI 把该类削成空壳；CircleIconDrawable 自带不透明主题底色，" +
+    "启动画面走自带背景，不依赖这条透明底分支；不影响裁圆/单色）")
 }
 
 /**
