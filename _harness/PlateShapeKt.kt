@@ -61,9 +61,18 @@ fun main(args: Array<String>) {
   val edge = (args.firstOrNull { it.startsWith("--edge=") }?.substringAfter("=") ?: "384").toInt()
   val dir = File(args.firstOrNull { !it.startsWith("--") } ?: "rec_model")
   val all = args.contains("--all")
+  val rowsMode = args.contains("--rows")
+  val conn8 = args.contains("--conn8")
   // 第四道门摆在哪，要先看分布才准拍：`--dmin=0` = 只过前三道门，把 ΔE 那一列整串摊出来。
-  // 默认 70 = 与生产 `STRIP_DISTINCT_DE` 同一条线（41/47 一侧是同一块盘与主体，105/107 才是贴上去的）。
-  val dMin = (args.firstOrNull { it.startsWith("--dmin=") }?.substringAfter("=") ?: "70").toDouble()
+  // ⚠ 默认值**必须从生产反射读**（这里曾经手抄过 `18`/`70`/`95`/`30`/`1` 五个字面量）：
+  //   生产改线的那天，抄本不会跟着改，台子打的数就变成"上一版生产的答案"—— 本仓为第二份抄本交过三次假结论。
+  val dMin = (args.firstOrNull { it.startsWith("--dmin=") }?.substringAfter("=") ?: null)?.toDouble()
+    ?: const("STRIP_DISTINCT_DE").toDouble()
+  val wMin = const("STRIP_W_MIN"); val hMax = const("STRIP_H_MAX"); val areaMin = const("STRIP_AREA_MIN")
+  // 成员判据那条 ΔE 线（生产钉在 `STRIP_MEMBER_DE`）：`--tol=` 把它**只在探子里**改，
+  // 用来摊"这条线摆在几，开火集合才开始动"。
+  val memTol = (args.firstOrNull { it.startsWith("--tol=") }?.substringAfter("=") ?: null)?.toDouble()
+    ?: const("STRIP_MEMBER_DE").toDouble()
 
   val jobs = ArrayList<Pair<String, IntArray>>()
   if (args.contains("--calib")) jobs += "★标定：整幅方盘+通宽底栏+盘上字形" to calib(edge)
@@ -76,7 +85,6 @@ fun main(args: Array<String>) {
     println("!! 目录不存在：${dir.path}"); exitProcess(2)
   }
 
-  val distinct = const("CANDIDATE_DISTINCT")
   val rows = ArrayList<String>()
   var stripHits = 0
   var stripH1 = 0
@@ -121,8 +129,39 @@ fun main(args: Array<String>) {
           val i = row + x
           if (((src[i] ushr 24) and 0xff) != 255) continue
           val l = labOf(src[i] and 0xFFFFFF)
-          if (de2(fc, l) <= distinct.toLong() * distinct) inFam[i] = true
+          if (de2(fc, l) <= memTol.toLong() * memTol) inFam[i] = true
         }
+      }
+      // **密度稳定那一列的候选**（`--rows`）：不问连通，问"有没有连续几行，这一族几乎占满整行"。
+      //   行数/列数都是**占框的分数**，光栅化变粗只会让分数轻微漂，不会像连通性那样把一条带切成碎块。
+      //   认"贴在上下带里"代替"碰带的那一块"：带内的行才算承载边，中间的字形行不算。
+      var rowNote = ""
+      if (rowsMode) {
+        val fill = IntArray(bh)
+        var maxFill = 0
+        for (y in 0 until bh) {
+          val row = (box.top + y) * edge
+          var c = 0
+          for (x in box.left until box.right) if (inFam[row + x]) c++
+          fill[y] = c
+          if (c > maxFill) maxFill = c
+        }
+        var h = 0; var a = 0; var y0 = 0
+        var bestH = 0; var bestA = 0; var bestY = -1
+        while (h < bh) {
+          if (fill[h] * 100 < bw * wMin) { h++; continue }
+          var e = h
+          while (e + 1 < bh && fill[e + 1] * 100 >= bw * wMin) e++
+          if (h < band || e >= bh - band) {           // 贴上下带才算"边上的那一族"
+            var s = 0
+            for (k in h..e) s += fill[k]
+            if (s > bestA) { bestH = e - h + 1; bestA = s; bestY = h }
+          }
+          h = e + 1
+        }
+        rowNote = if (bestY < 0) " 行满0" else
+          " │行带 起%d%% 高%d%% 面积%d%%（最满行%d%%）".format(
+            bestY * 100 / bh, bestH * 100 / bh, bestA * 100 / boxN, maxFill * 100 / bw)
       }
       // 四邻连通，找**碰边界带**的那一块
       val seen = BooleanArray(edge * edge)
@@ -155,13 +194,23 @@ fun main(args: Array<String>) {
             if (kx < box.right - 1 && inFam[k2 + 1] && !seen[k2 + 1]) { seen[k2 + 1] = true; q[tail++] = k2 + 1 }
             if (ky > box.top && inFam[k2 - edge] && !seen[k2 - edge]) { seen[k2 - edge] = true; q[tail++] = k2 - edge }
             if (ky < box.bottom - 1 && inFam[k2 + edge] && !seen[k2 + edge]) { seen[k2 + edge] = true; q[tail++] = k2 + edge }
+            if (conn8) {
+              // 斜向四邻：只用来回答"384 那条带是**被 AA 斜切**碎的、还是本来就散"，不进生产。
+              for (dy in -1..1) for (dx in -1..1) {
+                if (dx == 0 && dy == 0) continue
+                val nx = kx + dx; val ny = ky + dy
+                if (nx < box.left || nx >= box.right || ny < box.top || ny >= box.bottom) continue
+                val n2 = ny * edge + nx
+                if (inFam[n2] && !seen[n2]) { seen[n2] = true; q[tail++] = n2 }
+              }
+            }
           }
           if (!touch) continue
           val cw = r0 - l0 + 1; val ch = b0 - t0 + 1
           val a = max(cw, ch).toDouble() / min(cw, ch)
           // **落码那一条判据**（与 MonochromeMask 里 `STRIP_*` 逐字同口径）：碰带这一块
           //   通宽 ≥95% 框、高 ≤30% 框、面积 ≥1% 框。宽高比不用单独问 —— 95/30 本身就 ⇒ 比 ≥3.17。
-          if (cw * 100 >= bw * 95 && ch * 100 <= bh * 30 && n * 100L >= boxN) {
+          if (cw * 100 >= bw * wMin && ch * 100 <= bh * hMax && n * 100L >= boxN * areaMin) {
             strip = true
             // 报数报**过门那一块**，不是最大宽高比那一块：一个族可以既有满幅的浅底、
             // 又有一条通宽的深色带（浙江在线就是这两块都有），报错了块后面没法核。
@@ -181,7 +230,7 @@ fun main(args: Array<String>) {
           if (plate[i] != 0.toByte()) gPlate++
         }
       }
-      if (bestN == 0) { parts += "族$j#${hex(famColor[j])} 无碰带块(全族$gp)"; continue }
+      if (bestN == 0) { parts += "族$j#${hex(famColor[j])} 无碰带块(全族$gp)$rowNote"; continue }
       // 第四道门（zjol 教的）：这一族与**剩下的那一族**差多少。浙江在线的两段蓝是同一块盘的深浅
       // （ΔE 35），淘宝的白带与橙盘是两个东西（ΔE 100）—— 只有后者才是"贴上去的"。
       var dOther = 999.0
@@ -194,7 +243,7 @@ fun main(args: Array<String>) {
       parts += "族$j#${hex(famColor[j])} 碰带块 宽%d%% 高%d%% 面积%d%% 贴%d边 在底%d%% ΔE%.0f%s".format(
         (if (sN > 0) sW else bestW) * 100 / bw, (if (sN > 0) sH else bestH) * 100 / bh,
         (if (sN > 0) sN else bestN) * 100 / boxN, Integer.bitCount(bestSides),
-        gPlate * 100 / gp.coerceAtLeast(1), dOther, if (strip) " ⇒横幅" else "")
+        gPlate * 100 / gp.coerceAtLeast(1), dOther, if (strip) " ⇒横幅" else "") + rowNote
       if (all) parts += "(碰带块$bestN/全族$gp)"
     }
     rows += "%-36s H%d 族%d 框%dx%d 带占%3d%% │ %s".format(

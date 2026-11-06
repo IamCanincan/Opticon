@@ -1,5 +1,5 @@
 #!/bin/sh
-# 回归台：一条命令跑完 **性质 48 条 + 语料指标 + 单调性审计 + 兼容性台 + 边长漂移**，
+# 回归台：一条命令跑完 **性质台 + 语料指标 + 单调性审计 + 兼容性台 + 边长漂移**，
 # 任何一项比基线差就**非零退出**（六段：编译 / 性质 / 语料 / 单调性 / 对表 / 兼容性）。
 #
 # 为什么要它：2026-09-29 一天里翻出两处"跑了、印了、没人拦"——
@@ -564,19 +564,22 @@ run harness.AppGeomKtKt rec_model corpus_runtime > bench/reg/appgeom.txt || {
 #   靠"跑一次、看它印没印出自己那一行读数"来钉：退码 0 而一声不响，同样是死。
 echo "== 23/23 反射子台活着账 =="
 # 23a) **参数普查**（`_refarity.cjs`）：把判据台里**每一处**反射调用生产的私有方法都数一遍参数个数。
-#   上面那 4 台是"跑一次看它印不印"，这一条是"整台仓一处不漏" —— 后者才挡得住第五台烂掉。
+#   上面那几台是"跑一次看它印不印"，这一条是"整台仓一处不漏" —— 后者才挡得住下一台烂掉。
 #   它自带两条自证：① `--selfcheck` 拿一个明知少给一个参数的假调用走同一条判定，必须报出来；
 #   ② 扫到的处数必须等于原文里 `.invoke(` 的总数（写错扫描式会让分母自己变小却报"全部对得上"，
 #      这台子第一跑就演过一次：18 处扫成 2 处，退码照样 0）。
 node _refarity.cjs --selfcheck || {
   echo "!! 反射调用的参数个数普查不通过（上面点名了文件:行）—— 那些子台现在就是抛 IllegalArgumentException 的状态"; exit 1; }
-# 23b) 那 4 台各自跑一次，必须印出自己那一行读数
+# 23b) 那 5 台各自跑一次，必须印出自己那一行读数
+#   （2026-11-07 加进第 5 台 `PlateShapeKt`：它同样靠反射读 `contentBounds`/`groundPass`/`Scratch`，
+#     死法是同一个 —— 生产加一个参数，它抛异常，而 22 道闸一台都不碰它。）
 PA_FIX=rec_model/com.able.wisdomtree_logo_149c234870d7.png
 [ -f "$PA_FIX" ] || { echo "!! fixture $PA_FIX 不在 —— 这一闸没牙（fixture 缺不许算过）"; exit 1; }
 PA_LIST='harness.RimDbgKt|--brief rec_model|盘实=[0-9]+
 harness.PixelDumpKt|PA_FIX|家族#[0-9]+
 harness.CellDumpKt|PA_FIX|分家的格子
-harness.FieldMixKtKt|PA_FIX|双峰的格'
+harness.FieldMixKtKt|PA_FIX|双峰的格
+harness.PlateShapeKtKt|--edge=96 rec_model|H[0-9] 族[0-9]+'
 PA_N=0; PA_DEAD=''
 PA_OLDIFS=$IFS; IFS='
 '
