@@ -605,4 +605,12 @@ if [ -n "$PA_DEAD" ]; then
 fi
 echo "   反射子台 $PA_N 台全部印出了自己的读数"
 
+# —— 第廿四闸：**两档退族一致账**（2026-11-07，清那笔密度债时补的）。
+#   判定本体在 _harness/memberlinegate.sh（**只有一份**：语义变异台 --case=23 调的是同一段）。
+#   为什么单列：那笔债的根是"哪些格子算同一族"借了选族的 18，症状是同一张图在 384 与 768 给相反判据，
+#   而以前只有 15 分钟一轮的四档全扫看得见 —— 太贵，贵到改一行常数没人跑。
+echo "== 24/24 两档退族一致账 =="
+. ./memberlinegate.sh
+memberline_gate || exit 1
+
 node _regress.cjs "$@" --corpus="$CORPUS"
