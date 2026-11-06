@@ -144,6 +144,32 @@ internal object MonochromeMask {
   private const val BAND_SOLID_MIN = 85
 
   /**
+   * 「贴在边上的横幅」那三道**形状**门（2026-11-06，`_harness/PlateShapeKt.kt` 全语料摊出来的）：
+   * 角上那一族里**碰边界带的那一块连通域**，通宽 ≥ [STRIP_W_MIN]% 内容框、高 ≤ [STRIP_H_MAX]% 内容框、
+   * 面积 ≥ [STRIP_AREA_MIN]% 框 ⇒ 它是一条横幅，不是承载整张的盘。
+   *
+   * 为什么"贴边"不够、还要形状这一问：促销皮肤（双 11 那一类）把一条通宽的白带贴在图标下沿，
+   * 于是**白族的敞开那一块确实够得着三条边** —— 现行"角族并集"据"够得着边"把它请进来当底，
+   * 洪泛就顺着它把同一个白色的字形一起吞了（`底占=0.88`）。在拓扑上那不算错：位图里那条带就是包在外面。
+   * 人眼分得开它们靠的是**这块东西铺不铺满整张**：盘是 1:1 的承载面，横幅是 6:1 的一条。
+   *
+   * ⚠ 三道形状门是**我选的**（语料里的断点：宽 99~100% ↔ 转转 86%，高 25% ↔ 云闪付/浙江在线 32~38%）。
+   *
+   * 第四道"色差"那条线（[STRIP_DISTINCT_DE]）**第一次放错过一次，数在这儿**：先用的是现成的 [TOL_MAX]=45
+   * （"一整块底自己最多能散多远"），看着最有来路 —— 但把三份语料里过前三道门的族全摊开，色差是
+   * **浙江在线 41 ｜ Steam 47 ‖ 淘宝新 105 ｜ 智慧树 107**：45 那条线落在 41↔47 之间，两边只差 6 个点，
+   * 而 47 那一侧是**主体**（Steam 那条青色就是管道本身，设计师自己画的单色层里它是底，IoU 0.975 为证）。
+   * 真正的空档是 **47 ↔ 105 这 58 个点**，所以线摆在档中 70。⚠ 这一族全语料只有 4 个样本，
+   * 这条线是**我选的**，不是推的 —— 它唯一的辩护是"两边各 2 个样本、中间 58 点没人站"。
+   */
+  private const val STRIP_W_MIN = 95
+  private const val STRIP_H_MAX = 30
+  private const val STRIP_AREA_MIN = 1
+
+  /** 横幅那一族与**剩下的角族**至少要差这么远（ΔE76 真值），才准退它的底。见 [STRIP_W_MIN] 那段。 */
+  private const val STRIP_DISTINCT_DE = 70
+
+  /**
    * 洪泛容差，单位 ΔE76 真值。[TOL_COARSE] 是第一轮（还没有色场、只有一个候选色）用的；
    * [TOL_MAX] 夹住自适应上界。之后每轮改用**色场自己量出来的散度**（底板像素距离分布的
    * [TOL_PCT] 分位）—— 这才是「局部底」这个模型能吃掉渐变的原因：全局一个颜色要容下整道渐变
@@ -818,6 +844,14 @@ internal object MonochromeMask {
     var grown = ByteArray(0)
     var visited = ByteArray(0)
     var queue = IntArray(0)
+    /** [dropStripFamilies] 的成员/已扫数组。**自己的数组，不借 [visited]** ——
+     *  "借来的数组留脏数据抓不住"这条在本仓写过三遍（[region] 那段是第二次）。 */
+    var stripSeen = ByteArray(0)
+    /** 这一遍要不要把"贴在边上的横幅"那一族从角族里退掉（见 [STRIP_W_MIN] 与 [dropStripFamilies]）。
+     *  由 [build] 每次进来按 `dropStrip` 重新赋值 —— 生产默认开，判据台 `--keep-strip` 关它。 */
+    var stripDrop = false
+    /** 这一遍真退掉了几个族（进日志，报"开没开火"用 —— 没印东西的旗标与没牙的闸输出完全一样）。 */
+    var stripKill = 0
     /** [regionGround] 的连通块编号：≥0 = 第几块，-1 = 还没走到，-2 = 求洞那一趟走过。
      *  **单独一块数组**：上一版借用 [visited]，探测本身没接手也改了后面两支的答案 —— 借来的
      *  数组留脏数据是抓不住的，自己的数组才谈得上"用完不用清"。 */
@@ -1011,6 +1045,7 @@ internal object MonochromeMask {
         dist = ShortArray(total)
         pass = ByteArray(total); plate = ByteArray(total)
         mark = ByteArray(total); grown = ByteArray(total); visited = ByteArray(total)
+        stripSeen = ByteArray(total)
         queue = IntArray(total); ref = IntArray(total)
         region = IntArray(total)
         body = ByteArray(total)
@@ -1121,7 +1156,11 @@ internal object MonochromeMask {
    *   真机 logcat 里 237 次合成**全部**是 384 档，所以这一条现在不上屏；但 `learnEdge`
    *   学到更大尺寸会重压，那时它就成了。 */
   fun build(pixels: IntArray, w: Int, h: Int, plateIsLayer: Boolean = false,
-    under: IntArray? = null, plateIsSubject: Boolean = false, trimSubject: Boolean = false): Output {
+    under: IntArray? = null, plateIsSubject: Boolean = false, trimSubject: Boolean = false,
+    /** 「横幅退族」那一刀开不开（见 [dropStripFamilies]）。**生产默认开**；
+     *  判据台拿 `--keep-strip` 传 `false` 跑"这一刀不存在时"的那一份，A/B 的负对照就是它 ——
+     *  与 [buildOnce] 里 `cutBorder` 同一个方向：默认值是真行为，旗标是反着的那一臂。 */
+    dropStrip: Boolean = true): Output {
     // ⚠ 这一遍**不切背景**，`picksRef` 拿到的就是"这一刀还不存在时"的那份成品 —— 与 SepTone
     //   那条 `sepOff` 同一个先例：**选支这件事必须与改动前完全同口径**。
     //   第一版把切背景直接写进交付循环，7 张（金山文档/高德/谷歌翻译/美的/拼多多/学信网/WebAPK）
@@ -1133,6 +1172,7 @@ internal object MonochromeMask {
     s.preAirDist = false; s.modelGround = null; s.modelBody = null
     s.modelCDepOn = null; s.modelCDepNull = null; s.modelUnderDone = false
     s.modelOutOn = null; s.modelOutNull = null
+    s.stripDrop = dropStrip
     val ramp = buildOnce(pixels, w, h, plateIsLayer, false, under, plateIsSubject = plateIsSubject,
       cutBorder = false)
     // 【底云】见 [plateCloudErase]。⚠ 与【广色度】同一条规矩：**只施加在交付的那几份成品上**，
@@ -2874,7 +2914,7 @@ internal object MonochromeMask {
     val cutDust = if (cutPlate && tonal != null) dustPct(out, w, h, s) else -1
     return Output(
       out, fill, st.hole, st.largest, st.components, st.smallShare, softShare(st, box),
-      "票=${s.voteErase}抹/${s.voteRaise}抬/${s.voteHits}块 带占=${s.bandSolid * 100 / 255} 底占=${pct(ground.share)} H=${ground.hyp} 族=${ground.families} 底厚=${ground.thick}" +
+      "票=${s.voteErase}抹/${s.voteRaise}抬/${s.voteHits}块 带占=${s.bandSolid * 100 / 255} 底占=${pct(ground.share)} H=${ground.hyp} 族=${ground.families} 退族=${s.stripKill} 底厚=${ground.thick}" +
       " 同色=${ground.inkSame}/${s.vetoSame} 拦=${s.veto}" +
       // 实心两半各多少格：`盘实<墨实` 就是"这块底比它承载的东西还小"，见 [thinPlate]。
       // 判据台上量过一次就够、日志上要能当场看见 —— 抖音那一张退掉之前是 6294/9614。
@@ -4733,6 +4773,7 @@ internal object MonochromeMask {
   ): Pass {
     val seed = s.mark      // 洪泛的种子掩码（measure 之前没人用这块）
     s.h0why = 0            // 这一张走到 H0 没有、被哪道拦下，逐张归零（见 [Scratch.h0why]）
+    s.stripKill = 0        // 同上：这一遍退掉过几族（见 [dropStripFamilies]）
     s.veto = 0; s.vetoSame = -1  // 同上：被"底墨同色"退掉过哪几支、被退那支自己的数（见 [Output.veto]）
     // H1 被否时**它自己的数**也要能进日志（与 H2 那条 `H2被否=` 同一做法）。
     // 判据台 2026-09-29 撞出来的缺口：`拦=16` 只说"被整框那道退了"，不说它吞到多少、
@@ -6088,7 +6129,88 @@ internal object MonochromeMask {
       s.famColor[s.fams] = color
       s.fams++
     }
+    if (s.stripDrop && s.fams > 1) dropStripFamilies(pixels, w, box, band, s)
     return s.fams
+  }
+
+  /**
+   * 把「贴在边上的横幅」那一族从角族里退掉 —— 判据、四道门各是什么、哪几个数是推的哪几个是我选的，
+   * 全写在 [STRIP_W_MIN] 那一段，这里只写实现为什么长这样。
+   *
+   * 为什么动的是**族**而不是"那一块"：淘宝新那张的白族有两块 —— 通宽的横幅（敞开、够得着边）与
+   * 被橙盘围住的「淘」字（岛）。上一轮试过只把岛挪出底，`极性 99.8/57.7 → 99.8/67.6 不翻`，
+   * 因为底那一侧剩下的还是横幅自己（L=99.8）。要翻过来只能让**整族**退出底。
+   *
+   * ⚠ 先判完所有族、再一次性压缩：边删边判会让后面那族的"与另一族最近多远"跟着删掉的族一起变，
+   *   同一张图两次进来给两个答案，A/B 与缓存就都没法核。
+   */
+  private fun dropStripFamilies(pixels: IntArray, w: Int, box: Rect, band: Int, s: Scratch) {
+    val bw = box.width(); val bh = box.height()
+    val boxN = bw.toLong() * bh
+    val seen = s.stripSeen; val q = s.queue
+    val drop = BooleanArray(CANDIDATE_K)
+    val lim = (CANDIDATE_DISTINCT shl 6).toLong()
+    val lim2 = lim * lim
+    for (j in 0 until s.fams) {
+      // 第四道门（色差）：这一族离**别的角族**最近有多远。摆在哪、为什么不是现成的 TOL_MAX，
+      // 全写在 [STRIP_W_MIN] 那一段末尾（41/47 一侧是同一块盘与主体，105/107 一侧才是贴上去的）。
+      var dOther = Int.MAX_VALUE
+      for (o in 0 until s.fams) if (o != j) {
+        val d = deltaE(s.famL[j], s.famA[j], s.famB[j], s.famL[o], s.famA[o], s.famB[o])
+        if (d < dOther) dOther = d
+      }
+      if (dOther <= STRIP_DISTINCT_DE shl 6) continue
+      for (y in box.top until box.bottom) {
+        val row = y * w
+        for (x in box.left until box.right) {
+          val i = row + x
+          seen[i] = if (Color.alpha(pixels[i]) == 255 &&
+            de2(s.labL[i].toInt(), s.labA[i].toInt(), s.labB[i].toInt(),
+              s.famL[j], s.famA[j], s.famB[j]) < lim2
+          ) 1 else 0
+        }
+      }
+      // 只有**碰边界带**的那一块才是"这一族凭什么当底"的那一块：被围住的字形够不着带，
+      // 它当不当底是洪泛的事，不是族选择的事。
+      for (y in box.top until box.bottom) {
+        if (drop[j]) break
+        val row = y * w
+        for (x in box.left until box.right) {
+          val i0 = row + x
+          if (seen[i0] != 1.toByte() || !inBand(x, y, box, band)) continue
+          var head = 0; var tail = 0
+          q[tail++] = i0; seen[i0] = 2
+          var n = 0L; var l0 = x; var r0 = x; var t0 = y; var b0 = y
+          while (head < tail) {
+            val i = q[head++]
+            val cy = i / w; val cx = i - cy * w
+            n++
+            if (cx < l0) l0 = cx
+            if (cx > r0) r0 = cx
+            if (cy < t0) t0 = cy
+            if (cy > b0) b0 = cy
+            if (cx > box.left && seen[i - 1] == 1.toByte()) { seen[i - 1] = 2; q[tail++] = i - 1 }
+            if (cx < box.right - 1 && seen[i + 1] == 1.toByte()) { seen[i + 1] = 2; q[tail++] = i + 1 }
+            if (cy > box.top && seen[i - w] == 1.toByte()) { seen[i - w] = 2; q[tail++] = i - w }
+            if (cy < box.bottom - 1 && seen[i + w] == 1.toByte()) { seen[i + w] = 2; q[tail++] = i + w }
+          }
+          val cw = (r0 - l0 + 1).toLong(); val ch = (b0 - t0 + 1).toLong()
+          if (cw * 100 >= bw * STRIP_W_MIN && ch * 100 <= bh * STRIP_H_MAX &&
+            n * 100 >= boxN * STRIP_AREA_MIN
+          ) { drop[j] = true; break }
+        }
+      }
+    }
+    var k = 0
+    for (j in 0 until s.fams) if (!drop[j]) {
+      if (k != j) {
+        s.famL[k] = s.famL[j]; s.famA[k] = s.famA[j]
+        s.famB[k] = s.famB[j]; s.famColor[k] = s.famColor[j]
+      }
+      k++
+    }
+    s.stripKill = s.fams - k
+    s.fams = k
   }
 
   /** 一块矩形里不透明像素的逐通道中位色；不透明像素不到四分之一 → null（这块是空的）。 */

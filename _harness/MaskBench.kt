@@ -140,8 +140,11 @@ fun main(args: Array<String>) {
       (trimArg == "--trim=all" || MonochromeMask.TRIM_PKGS.any { it == trimPkg })
     // `--plate-subject`：把"盘是图案"的极性直接传给模型。生产这一位由彩色那本账算
     //   （`IconCropWindow.polarityOf`），台子默认 false；这一个旗只用来单独摊极性这一维。
+    // `--keep-strip`：把【横幅退族】那一刀**关掉**（`MonochromeMask.dropStripFamilies`，四道门与数的
+    //   来源写在 `STRIP_W_MIN` 那段）。生产默认开，所以这一臂才是"这一刀不存在时"的那一份 ——
+    //   A/B 的**负对照**：不带旗的那一遍必须与这一臂逐张不同、且与上一轮的产物逐张相同。
     val r = MonochromeMask.build(src, edge, edge, plateLayer, under, trimSubject = trimOn,
-      plateIsSubject = args.contains("--plate-subject"))
+      plateIsSubject = args.contains("--plate-subject"), dropStrip = !args.contains("--keep-strip"))
     // `--cutPlate=t`：模拟第九轮「纯色盘 · 内部 · 近盘色 · 只压雾 → 归零」的波及面。
     //   **只在台子上，生产里一行都没有**（甲类参照 +5.3k/0 受伤，乙类净负，尚未落码）。
     args.firstOrNull { it.startsWith("--cutPlate=") }?.substringAfter("=")?.toIntOrNull()?.let { t ->

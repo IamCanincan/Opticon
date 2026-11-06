@@ -784,6 +784,38 @@ fun main() {
       "n=0x2020 (>MAX)")
   }
 
+  // ── 33. 促销横幅：通宽的一条白带贴在橙盘下面，它不许算一族底 ──
+  //     真机样本是淘宝双 11 那张（`com.taobao.taobao` sig `7bc0dc6db909`）：横幅与「淘」字**同一个白**，
+  //     角族并集把横幅请进来当底，洪泛就顺着它把字形也吞了（`底占=0.88`、屏幕上盘是整块墨、字被掏空）。
+  //     这一条钉的是那把刀的两端：**开旗横幅上墨、关旗横幅归空**，而字形与盘在两臂里都不许动。
+  //     ⚠ 关旗那一臂不是装饰：把 `dropStripFamilies` 的调用删掉，第 2 条断言照样过、
+  //        第 1 条当场红 —— 这条用例的牙就长在那一对上。
+  run {
+    val p = new()
+    rect(p, S, 20, 290, 364, 364, px(255, 255, 255, 255))            // 通宽白带：框的 100% 宽 × 21% 高
+    rect(p, S, 60, 20, 324, 300, px(255, 255, 86, 5))                // 橙盘（比带窄，所以带自己定义框的左右沿）
+    rect(p, S, 140, 100, 240, 200, px(255, 255, 255, 255))           // 盘上的白字形（被橙围着）
+    val on = MonochromeMask.build(p, S, S)
+    val off = MonochromeMask.build(p, S, S, dropStrip = false)
+    println("- 橙盘+通宽白横幅+白字形（开旗）  ${on.report}")
+    println("- 橙盘+通宽白横幅+白字形（关旗）  ${off.report}")
+    // 横幅中部一条（y 330..356，避开字形与盘的投影）
+    check("横幅在开旗那一臂上墨", meanAlpha(on.mask, S, 40, 330, 340, 356) > 200.0,
+      "带=${fmt(meanAlpha(on.mask, S, 40, 330, 340, 356))}")
+    check("横幅在关旗那一臂归空（这一刀改的就是它）",
+      meanAlpha(off.mask, S, 40, 330, 340, 356) < 30.0,
+      "带=${fmt(meanAlpha(off.mask, S, 40, 330, 340, 356))}")
+    check("开旗只退那一族：报告里 退族=1，关旗 =0",
+      on.report.contains("退族=1") && off.report.contains("退族=0"),
+      "开=${on.report.substringAfter("族=").substringBefore(" ")}")
+    check("两臂的字形都还是实心", meanAlpha(on.mask, S, 150, 110, 230, 190) > 200.0 &&
+      meanAlpha(off.mask, S, 150, 110, 230, 190) > 200.0,
+      "开=${fmt(meanAlpha(on.mask, S, 150, 110, 230, 190))} 关=${fmt(meanAlpha(off.mask, S, 150, 110, 230, 190))}")
+    check("两臂的橙盘都还是底（退族不许把盘请回墨里）",
+      meanAlpha(on.mask, S, 70, 30, 130, 80) < 30.0 && meanAlpha(off.mask, S, 70, 30, 130, 80) < 30.0,
+      "开=${fmt(meanAlpha(on.mask, S, 70, 30, 130, 80))} 关=${fmt(meanAlpha(off.mask, S, 70, 30, 130, 80))}")
+  }
+
   println(if (failed == 0) "全部通过" else "!! $failed 条不成立")
 }
 
