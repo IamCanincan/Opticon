@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -13,18 +14,27 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Circle
@@ -48,25 +58,43 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.changedToUp
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.invisibleToUser
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.iamcanincan.opticon.BuildConfig
 import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.runtime.ModulePrefs
@@ -78,6 +106,8 @@ import com.iamcanincan.opticon.ui.module.ModuleScreen
 import com.iamcanincan.opticon.ui.mono.MonoScreen
 import com.iamcanincan.opticon.ui.notify.NotifyScreen
 import com.iamcanincan.opticon.update.UpdateChecker
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -93,6 +123,41 @@ private const val TAB_ABOUT = 4
 /** 底栏格数 = Pager 的页数 */
 private const val PAGE_COUNT = 5
 
+// 底栏几何照搬 KeyLens 的 webui：药丸 6dp 内边距 + 每格 52dp + 44dp 圆形光晕 + 24dp 图标。
+// 五格在 360dp 屏上仍留边（展开文字那格约 98dp，其余 52dp，合计约 334dp）。
+private val NavPadding = 6.dp
+private val NavGap = 4.dp
+private val NavItemHeight = 52.dp
+private val NavHaloSize = 44.dp
+private val NavIconSize = 24.dp
+
+/**
+ * 药丸距系统导航栏的边距（收起动画的位移量也用它）。
+ *
+ * 和 KeyLens 的 `--inset-bottom + 24px` 对齐：24dp 比原来的 20dp 只高 4dp，
+ * 既离开底部手势判据一点，也不至于悬得太高。
+ */
+private val NavBottomInset = 24.dp
+
+/** 横向拖动拿起活动圆的手指位移（KeyLens 用 6px） */
+private val NavDragSlop = 6.dp
+
+/** 下滑超过这个量把药丸收起来；上滑同样的量再放出来 */
+private val NavScrollSlop = 6.dp
+
+/** 页面离顶不足这个距离时不收药丸（KeyLens 的 `y < 24`） */
+private val NavNearTop = 24.dp
+
+private class NavEntry(val index: Int, val icon: ImageVector, val labelRes: Int)
+
+private val NavEntries = listOf(
+    NavEntry(TAB_CROP, Icons.Default.Circle, R.string.tab_crop),
+    NavEntry(TAB_MONO, Icons.Default.InvertColors, R.string.tab_mono),
+    NavEntry(TAB_NOTIFY, Icons.Default.Notifications, R.string.tab_notify),
+    NavEntry(TAB_MODULE, Icons.Default.Extension, R.string.tab_module),
+    NavEntry(TAB_ABOUT, Icons.Default.Info, R.string.tab_about),
+)
+
 /**
  * 应用外壳：顶栏 + **悬浮药丸式**底部导航 + 五个页面。
  *
@@ -102,11 +167,12 @@ private const val PAGE_COUNT = 5
  * - 「关于」是**信息页** —— 检查更新与版本信息（"看看就好"的那类内容）。
  *
  * 底栏刻意做成**悬浮药丸**而不是通栏的 `NavigationBar`：页面内容从药丸后面滚过，
- * 视觉上更轻、也更贴合 M3 Expressive 的形态语言。选中项会展开文字
- * （未选中的只留图标），所以药丸宽度随当前页变化 —— 这正是它像"药丸"的原因。
+ * 视觉上更轻、也更贴合 M3 Expressive 的形态语言。几何与交互对齐 KeyLens 的 webui：
+ * 选中项是「44dp 圆形光晕 + 侧边文字」（未选中只留光晕里的图标），整颗药丸随当前页变宽；
+ * 长页下滑时药丸下沉缩小消失、上滑或回顶再出来；按住活动圆横向拖到另一格可直接切页。
  *
- * ⚠ 底栏是**五格**：三个功能 + 模块 + 关于。五格时把每格左右内边距收到 12dp，
- *   360dp 屏上药丸仍留出两侧空隙（16dp 那档在五格下会贴边）。
+ * ⚠ 底栏是**五格**：三个功能 + 模块 + 关于。每格固定 52dp（44dp 光晕 + 4dp 内边距），
+ *   360dp 屏上药丸仍留出两侧空隙。
  *
  * ⚠ 切页**会**销毁离屏那页的组合：Pager 只保留视口内的页。所以「跨页还要留着的东西」
  * 一律放在这里（外壳）而不是页面里 —— 目前有两个：检查更新的结果，和发 Snackbar 的作用域。
@@ -117,13 +183,57 @@ private const val PAGE_COUNT = 5
 @Composable
 fun OpticonApp() {
     // 页面状态交给 Pager —— 它就是「当前在第几页」的唯一真相：
-    // 左右滑动由 Pager 自己更新，点底栏则主动滚过去，两边不会各存一份而打架。
+    // 切页**只走底栏**（点击或拖拽），页面本身不响应左右滑动（见 HorizontalPager 的
+    // `userScrollEnabled = false`）：滑动会和系统边缘返回手势、页面内控件抢手势。
     // rememberPagerState 内部是 rememberSaveable，所以转屏后仍停在原来那页。
     val pagerState = rememberPagerState(pageCount = { PAGE_COUNT })
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val uriHandler = LocalUriHandler.current
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
+
+    // 底栏的「读完长页就收起来」：和 KeyLens 一样按滚动方向判 —— 向下累计 6dp 收起，
+    // 向上累计 6dp 放出；离顶不足 24dp 时不收（短页根本滚不动，也就不会触发）。
+    //
+    // ⚠ 这里单独挂一条 connection，只读 `consumed.y`（符号：向下滑为负），不动顶栏那条。
+    //   `contentOffset` 只用来判断"离顶多远"（EnterAlways 在 onPostScroll 里直接累加
+    //   consumed.y，等价于负的滚动距离）。
+    var navVisible by remember { mutableStateOf(true) }
+    val density = LocalDensity.current
+    val navScrollConnection = remember(scrollBehavior, density) {
+        val slop = with(density) { NavScrollSlop.toPx() }
+        val nearTop = with(density) { NavNearTop.toPx() }
+        object : NestedScrollConnection {
+            private var net = 0f
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource,
+            ): Offset {
+                val dy = consumed.y
+                if (dy != 0f) {
+                    // 手指一换向就重新计数，避免上下抖动被累加成一次"下滑"
+                    if (net != 0f && (dy > 0f) != (net > 0f)) net = 0f
+                    net += dy
+                    if (net >= slop) {
+                        navVisible = true
+                        net = 0f
+                    } else if (net <= -slop) {
+                        // 两道门都要过：离顶不足 24dp 不收（刚往下蹭一点就藏，更像坏了），
+                        // **这一页还往下滚得动也不收**（KeyLens 那句「短页不藏」，见 [NavScrollGate]）。
+                        if (-scrollBehavior.state.contentOffset >= nearTop && NavScrollGate.canScrollForward)
+                            navVisible = false
+                        net = 0f
+                    }
+                }
+                return Offset.Zero
+            }
+        }
+    }
+
+    // 切页时把底栏放出来（KeyLens 的 resetScrollState 同样做这件事）：
+    // 从滚动着的长页滑到新页，新页通常停在顶部，底栏不该继续隐身。
+    LaunchedEffect(pagerState.currentPage) { navVisible = true }
 
     // 顶栏标题跟随 Pager：小号 App 名在上，当前页标题在下。
     // 原来顶栏永远只写"Opticon"，页面身份只能从底栏选中态读；五页之后这种读法更费劲。
@@ -183,7 +293,9 @@ fun OpticonApp() {
         )
     ) {
         Scaffold(
-            modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+            modifier = Modifier
+                .nestedScroll(scrollBehavior.nestedScrollConnection)
+                .nestedScroll(navScrollConnection),
             containerColor = Color.Transparent,
             topBar = {
                 TopAppBar(
@@ -243,6 +355,8 @@ fun OpticonApp() {
                 HorizontalPager(
                     state = pagerState,
                     modifier = Modifier.fillMaxSize(),
+                    // 只能由底栏切页：页面横向滑动会和系统边缘返回手势抢事件
+                    userScrollEnabled = false,
                 ) { page ->
                     when (page) {
                         TAB_CROP -> CropScreen(onNotify = notify)
@@ -257,6 +371,8 @@ fun OpticonApp() {
 
         FloatingNavBar(
             selectedIndex = pagerState.currentPage,
+            entries = NavEntries,
+            visible = navVisible,
             onSelect = { index -> scope.launch { pagerState.animateScrollToPage(index) } },
             // ⚠ `navigationBarsPadding()` 不能省：本 Activity 是 edge-to-edge
             // （`enableEdgeToEdge()` + 系统栏透明），外层 Box 一直铺到屏幕底边，
@@ -266,19 +382,19 @@ fun OpticonApp() {
             // 落进手势条里。药丸要悬浮在**内容**之上，但不该钻进系统导航栏下面。
             modifier = Modifier.align(Alignment.BottomCenter)
                 .navigationBarsPadding()
-                .padding(bottom = 20.dp),
+                .padding(bottom = NavBottomInset),
         )
 
         // ⚠ Snackbar 必须放在悬浮底栏**之上**：这里既靠后绘制（z 序压过药丸），
-        // 又把位置抬到药丸上方（药丸顶边约 74dp、阴影到 ~84dp，抬到 92dp 留间隙）。
+        // 又把位置抬到药丸上方（药丸顶边 24 + 64 = 88dp、阴影到 ~98dp，抬到 104dp 留间隙）。
         // 否则默认贴底的 Snackbar 会被药丸挡住 / 截断（清缓存提示就中过招）。
-        // ⚠ 导航栏那一段同理要先让开：92dp 是**相对药丸**定的，药丸抬多高它就得抬多高，
+        // ⚠ 导航栏那一段同理要先让开：这个数是**相对药丸**定的，药丸抬多高它就得抬多高，
         // 否则两者的相对位置会随导航方式（三键 / 手势）变来变去。
         SnackbarHost(
             hostState = snackbarHostState,
             modifier = Modifier.align(Alignment.BottomCenter)
                 .navigationBarsPadding()
-                .padding(bottom = 92.dp),
+                .padding(bottom = 104.dp),
         )
     }
 }
@@ -310,58 +426,215 @@ private fun BrandMark() {
 /**
  * 悬浮药丸导航：五格（裁圆 / 单色 / 通知 / 模块 / 关于），选中那格展开文字。
  *
+ * 几何与交互照搬 KeyLens 的 webui 底栏：
+ * - 每格 52dp，图标永远在 44dp 圆形光晕的圆心；选中那格向左端扩出光晕圆、文字从右侧淡入；
+ * - 长页向下滑时整颗药丸下沉 + 缩到 0.94 + 淡出，向上滑或回顶再回来；
+ * - 按住活动圆横移超过 6dp 就"拿起来"，拖到另一格松手切页（拿起时轻震动一次）。
+ *
  * ## 底色为什么不是 `surface`
  * 这条原来写的是"用最亮的 `surface`（纯白）拉开明度差"，但两套配色下它都不成立：
  * 写死的浅色方案里 `surface` 与 `background` **是同一个值**（`0xFFFFF8F8`），
  * 动态取色下两者也几乎同色；深色下 `surface` 反而比背景更暗。也就是说药丸与背景的区分
  * 一直只靠 `shadowElevation` —— 而深色里阴影基本看不见（真机截图复核）。
  *
- * 现在用 `surfaceContainerHigh` + 1dp `outlineVariant` 描边：前者在两套主题下都与背景有
- * 一档明确差值，后者把边界钉死，不依赖阴影。**与卡片同一套做法**（见 [OpticonCard]）。
+ * 现在用 `surfaceContainer`（KeyLens 的 navigation-container 同一档）+ 38% `outlineVariant`
+ * 描边：前者在两套主题下都与背景有一档明确差值，后者把边界钉死，不依赖阴影。
+ * **与卡片同一套做法**（见 [OpticonCard]）。
  *
  * ⚠ 改底色时记住这条：**药丸必须在浅色和深色下都和背景有明显差值**，
  * 而"靠阴影"在深色下不算数。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun FloatingNavBar(
     selectedIndex: Int,
+    entries: List<NavEntry>,
+    visible: Boolean,
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(28.dp),
-        // 底色与描边的理由见 [FloatingNavBar] 的说明（不能再退回 `surface`）
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        shadowElevation = 8.dp,
+    val scheme = MaterialTheme.colorScheme
+    val motion = MaterialTheme.motionScheme
+    val density = LocalDensity.current
+    val haptic = LocalHapticFeedback.current
+
+    val hideFraction by animateFloatAsState(
+        targetValue = if (visible) 0f else 1f,
+        animationSpec = motion.defaultSpatialSpec(),
+        label = "navHide",
+    )
+
+    // 收起时要把药丸整个送出屏幕：自己的高度 + 底部边距 + 系统导航栏那一段
+    val navInsetPx = WindowInsets.navigationBars.getBottom(density).toFloat()
+    val bottomGapPx = with(density) { NavBottomInset.toPx() }
+
+    // 拖动切页：由活动格拿起，横向跨过其它格；松手才真正切页
+    var dragging by remember { mutableStateOf(false) }
+    var dragX by remember { mutableFloatStateOf(0f) }
+    var dragTarget by remember { mutableIntStateOf(selectedIndex) }
+    var navWidthPx by remember { mutableIntStateOf(0) }
+    // 每格实测宽度（onGloballyPositioned 写入），用于把手指 x 换算成最近的一格
+    val itemWidths = remember { IntArray(entries.size) }
+    val gapPx = with(density) { NavGap.toPx() }
+
+    fun nearestIndex(x: Float): Int {
+        var edge = 0f
+        var best = 0
+        var bestDist = Float.MAX_VALUE
+        entries.forEachIndexed { i, _ ->
+            val w = itemWidths[i].toFloat()
+            val center = edge + w / 2f
+            val d = abs(x - center)
+            if (d < bestDist) {
+                bestDist = d
+                best = i
+            }
+            edge += w + gapPx
+        }
+        return entries[best].index
+    }
+
+    Box(
+        modifier = modifier
+            .graphicsLayer {
+                val f = hideFraction.coerceIn(0f, 1f)
+                translationY = f * (size.height + bottomGapPx + navInsetPx)
+                val s = 1f - 0.06f * f
+                scaleX = s
+                scaleY = s
+                alpha = 1f - f
+            }
+            .onGloballyPositioned { navWidthPx = it.size.width }
+            // ⚠ 收起 ≠ 只是画到屏幕外：KeyLens 在 `nav-hidden` 上同时写 `aria-hidden` 与
+            //   `pointer-events:none`。少了这一条，TalkBack 仍能把焦点停在一个看不见的按钮上，
+            //   而过渡途中（半透明、正在下滑）也还能被点着。
+            .semantics { if (hideFraction > 0.5f) invisibleToUser() },
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        Surface(
+            shape = RoundedCornerShape(percent = 50),
+            color = scheme.surfaceContainer,
+            border = BorderStroke(1.dp, scheme.outlineVariant.copy(alpha = 0.38f)),
+            shadowElevation = 10.dp,
         ) {
-            NavItem(TAB_CROP, Icons.Default.Circle, R.string.tab_crop, selectedIndex, onSelect)
-            NavItem(TAB_MONO, Icons.Default.InvertColors, R.string.tab_mono, selectedIndex, onSelect)
-            NavItem(TAB_NOTIFY, Icons.Default.Notifications, R.string.tab_notify, selectedIndex, onSelect)
-            NavItem(TAB_MODULE, Icons.Default.Extension, R.string.tab_module, selectedIndex, onSelect)
-            NavItem(TAB_ABOUT, Icons.Default.Info, R.string.tab_about, selectedIndex, onSelect)
+            Row(
+                modifier = Modifier
+                    .padding(NavPadding)
+                    // 坐标相对 Row 的内容区（padding 之内），和鼠标/手指的 x 同一坐标系
+                    .pointerInput(selectedIndex, visible) {
+                        if (!visible) return@pointerInput
+                        awaitEachGesture {
+                            val down = awaitFirstDown(
+                                requireUnconsumed = false,
+                                pass = PointerEventPass.Initial,
+                            )
+                            // 只有按在活动格上才拿起（KeyLens 同样只认 .active）
+                            if (nearestIndex(down.position.x) != selectedIndex) return@awaitEachGesture
+                            val startX = down.position.x
+                            val startY = down.position.y
+                            var started = false
+                            while (true) {
+                                val event = awaitPointerEvent(PointerEventPass.Initial)
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                val dx = change.position.x - startX
+                                val dy = change.position.y - startY
+                                if (!started &&
+                                    abs(dx) > NavDragSlop.toPx() &&
+                                    abs(dx) > abs(dy)
+                                ) {
+                                    started = true
+                                    dragging = true
+                                    dragX = change.position.x
+                                    dragTarget = nearestIndex(change.position.x)
+                                    haptic.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+                                }
+                                // ⚠ 必须**先**判定抬起再 consume：`changedToUp()` 把"已消费"算作
+                                //   不是抬起（要忽略消费得用 IgnoreConsumed 版），先消费就永远
+                                //   走不到松手切页 —— 2026-11-05 真机上手势能拿起、松手没反应的根因。
+                                val isUp = change.changedToUp()
+                                if (started) {
+                                    dragX = change.position.x
+                                    dragTarget = nearestIndex(change.position.x)
+                                    // 吃掉后续事件，让下面的可点击 Surface 不再触发点击
+                                    change.consume()
+                                }
+                                if (isUp) {
+                                    if (started) {
+                                        val target = nearestIndex(change.position.x)
+                                        if (target != selectedIndex) onSelect(target)
+                                    }
+                                    break
+                                }
+                                if (!change.pressed) break
+                            }
+                            if (started) dragging = false
+                        }
+                    },
+                horizontalArrangement = Arrangement.spacedBy(NavGap),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                entries.forEachIndexed { i, entry ->
+                    NavItem(
+                        index = entry.index,
+                        icon = entry.icon,
+                        labelRes = entry.labelRes,
+                        selectedIndex = selectedIndex,
+                        dragging = dragging,
+                        dragTarget = dragTarget,
+                        // 收起过半就不许点（KeyLens 的 `pointer-events:none`）
+                        enabled = hideFraction <= 0.5f,
+                        onSelect = onSelect,
+                        onWidth = { itemWidths[i] = it },
+                    )
+                }
+            }
+        }
+
+        // 被拿起的活动圆：画在药丸之上，横向跟随手指并在两端收住
+        if (dragging) {
+            val haloPx = with(density) { NavHaloSize.toPx() }
+            val padPx = with(density) { NavPadding.toPx() }
+            val ghostTop = with(density) {
+                (NavPadding + (NavItemHeight - NavHaloSize) / 2f).toPx()
+            }
+            val ghostLeft = (padPx + dragX - haloPx / 2f)
+                .coerceIn(padPx, (navWidthPx - padPx - haloPx).coerceAtLeast(padPx))
+            Surface(
+                modifier = Modifier
+                    .offset { IntOffset(ghostLeft.roundToInt(), ghostTop.roundToInt()) }
+                    .size(NavHaloSize),
+                shape = CircleShape,
+                color = scheme.primaryContainer,
+                contentColor = scheme.onPrimaryContainer,
+                shadowElevation = 10.dp,
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = entries.first { it.index == selectedIndex }.icon,
+                        contentDescription = null,
+                        modifier = Modifier.size(NavIconSize),
+                    )
+                }
+            }
         }
     }
 }
 
 /**
- * 药丸里的一格：选中时是「图标 + 文字」的胶囊，未选中只有图标。
+ * 药丸里的一格：未选中只有圆形光晕里的图标，选中时右侧展开文字。
  *
  * ## 动效
- * 三件事一起动，缺一个都会显得"卡"：
- * 1. 胶囊底色 / 内容色 —— `animateColorAsState`，用主题的 `MotionScheme`
+ * 四件事一起动，缺一个都会显得"卡"：
+ * 1. 胶囊底色 / 光晕 / 内容色 —— `animateColorAsState`，用主题的 `MotionScheme`
  * 2. 整格的宽度 —— `animateContentSize()`（文字挤进来时把胶囊撑开）
  * 3. 文字本身 —— `AnimatedVisibility` 横向展开 + 淡入
+ * 4. 按下 —— 缩到 0.96（KeyLens 的 `:active`）
  *
  * ⚠ 时长与曲线一律取自 `MaterialTheme.motionScheme`，**不要自己写 tween(300)**：
  * Expressive 的弹簧参数是主题给的，硬编码会在换主题/换设备时和系统动效对不上。
  * 颜色与透明度用 `defaultEffectsSpec`，位置与尺寸用 `defaultSpatialSpec`。
+ *
+ * ⚠ 拖动切页时，源格的文字只**淡出**、不从布局里拿掉：拿掉会改变整颗药丸的宽度，
+ *   手指底下的格子会跟着移位（KeyLens 用 `opacity:0!important`，不移宽度）。
  *
  * ⚠ 「当前是第几页」这个参数叫 `selectedIndex` 而不是 `selected`：里面要写
  *   `Modifier.semantics { selected = … }`，参数同名会把那个语义属性整个遮蔽掉（编不过）。
@@ -373,44 +646,107 @@ private fun NavItem(
     icon: ImageVector,
     labelRes: Int,
     selectedIndex: Int,
+    dragging: Boolean,
+    dragTarget: Int,
+    enabled: Boolean,
     onSelect: (Int) -> Unit,
+    onWidth: (Int) -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
     val motion = MaterialTheme.motionScheme
     val isSelected = selectedIndex == index
+    val isSource = dragging && isSelected
+    val isTarget = dragging && dragTarget == index
 
     val containerColor by animateColorAsState(
-        targetValue = if (isSelected) scheme.secondaryContainer else Color.Transparent,
+        targetValue = when {
+            isSource -> scheme.secondaryContainer.copy(alpha = 0.42f)
+            isTarget -> scheme.primary.copy(alpha = 0.12f)
+            isSelected -> scheme.secondaryContainer
+            else -> Color.Transparent
+        },
         animationSpec = motion.defaultEffectsSpec(),
         label = "navItemContainer",
     )
+    val haloColor by animateColorAsState(
+        targetValue = when {
+            isTarget -> scheme.primary.copy(alpha = 0.22f)
+            isSelected -> scheme.surface.copy(alpha = 0.22f)
+            else -> Color.Transparent
+        },
+        animationSpec = motion.defaultEffectsSpec(),
+        label = "navHalo",
+    )
     val contentColor by animateColorAsState(
-        targetValue = if (isSelected) scheme.onSecondaryContainer else scheme.onSurfaceVariant,
+        targetValue = when {
+            isTarget -> scheme.primary
+            isSelected -> scheme.onSecondaryContainer
+            else -> scheme.onSurfaceVariant
+        },
         animationSpec = motion.defaultEffectsSpec(),
         label = "navItemContent",
     )
+    val labelAlpha by animateFloatAsState(
+        targetValue = if (isSource) 0f else 1f,
+        animationSpec = motion.defaultEffectsSpec(),
+        label = "navLabelAlpha",
+    )
+    val haloAlpha by animateFloatAsState(
+        targetValue = if (isSource) 0.25f else 1f,
+        animationSpec = motion.defaultEffectsSpec(),
+        label = "navHaloAlpha",
+    )
+
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(
+        targetValue = if (pressed) 0.96f else 1f,
+        animationSpec = motion.defaultEffectsSpec(),
+        label = "navPressScale",
+    )
 
     Surface(
-        // 「当前在哪一页」只靠高亮是给不了读屏用户的：不加 `selected`，四格在 TalkBack 里
+        // 「当前在哪一页」只靠高亮是给不了读屏用户的：不加 `selected`，五格在 TalkBack 里
         // 读起来一模一样（README 那句「当前在哪一页由底栏高亮表示」对视觉成立，对无障碍不成立）。
-        modifier = Modifier.semantics { selected = isSelected },
+        modifier = Modifier
+            .semantics { selected = isSelected }
+            .onGloballyPositioned { onWidth(it.size.width) }
+            .graphicsLayer {
+                scaleX = pressScale
+                scaleY = pressScale
+            },
         onClick = { onSelect(index) },
-        shape = RoundedCornerShape(50),
+        enabled = enabled,
+        shape = RoundedCornerShape(percent = 50),
         color = containerColor,
         contentColor = contentColor,
+        interactionSource = interaction,
     ) {
         Row(
             modifier = Modifier
+                .height(NavItemHeight)
                 .animateContentSize(animationSpec = motion.defaultSpatialSpec())
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+                .padding(horizontal = 4.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(
-                imageVector = icon,
-                // 选中时文字就在旁边，图标再报一次名字是重复朗读
-                contentDescription = if (isSelected) null else stringResource(labelRes),
-                modifier = Modifier.size(22.dp),
-            )
+            Box(
+                modifier = Modifier
+                    .size(NavHaloSize)
+                    // 被拿起的那一格：光晕连同里面的图标一起降到 25%（KeyLens
+                    // `.nav-dragging .nav-item.active .nav-halo{opacity:.25}` 就是这个意思——
+                    // 圆已经"离开"了这一格，浮到手指上）。
+                    .alpha(haloAlpha)
+                    .clip(CircleShape)
+                    .background(haloColor),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = icon,
+                    // 选中时文字就在旁边，图标再报一次名字是重复朗读
+                    contentDescription = if (isSelected) null else stringResource(labelRes),
+                    modifier = Modifier.size(NavIconSize),
+                )
+            }
             AnimatedVisibility(
                 visible = isSelected,
                 enter = expandHorizontally(animationSpec = motion.defaultSpatialSpec()) +
@@ -418,12 +754,22 @@ private fun NavItem(
                 exit = shrinkHorizontally(animationSpec = motion.defaultSpatialSpec()) +
                     fadeOut(animationSpec = motion.defaultEffectsSpec()),
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.alpha(labelAlpha),
+                ) {
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = stringResource(labelRes),
-                        style = MaterialTheme.typography.labelLarge,
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                        maxLines = 1,
+                        softWrap = false,
                     )
+                    // 活动格右端 16dp：4dp 内边距 + 这 12dp，随文字一起展开
+                    Spacer(modifier = Modifier.width(12.dp))
                 }
             }
         }

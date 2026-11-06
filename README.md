@@ -70,13 +70,15 @@
 | **模块** | 三个功能**共用**的东西：作用域清单、启用步骤、验证命令、运维按钮（清图标缓存 / 重启进程） |
 | **关于** | 检查更新与版本信息 |
 
-- **左右滑动也能切页**，和点底栏是双向联动的（当前页由 Pager 统一持有）。
-- 底栏是**悬浮药丸**：内容会从它后面滚过去，选中项展开文字、未选中只留图标。
-  五格是刻意定的 —— 三个功能各一页，再加「模块」与「关于」；每格左右内边距收到 12dp，
-  360dp 屏上药丸仍留出两侧空隙。
-  底色是 `surfaceContainerHigh` + 1dp `outlineVariant` 描边，**不是** `surface`
-  （理由见 `OpticonApp` 的说明：写死的浅色配色里 `surface` 与 `background` 是同一个值，
-  深色下 `surface` 还比背景暗 —— 靠阴影在两套主题下都不成立）。
+- **切页只走底栏**：页面本身不响应左右滑动（避免和系统边缘返回手势、页面内控件抢手势），
+  底栏点击或拖拽都能切页（当前页由 Pager 统一持有）。
+- 底栏是**悬浮药丸**（几何与交互对齐 KeyLens）：每格 52dp，选中项是 **44dp 圆形光晕 + 侧边文字**，
+  未选中只留光晕里的图标；**长页向下滑时药丸下沉缩小消失，向上滑或回到顶部再出现**；
+  按住活动圆横向拖到另一格松手也能切页。
+  五格是刻意定的 —— 三个功能各一页，再加「模块」与「关于」。
+  底色是 `surfaceContainer`（KeyLens 的 navigation-container 同一档）+ 38% `outlineVariant` 描边，
+  **不是** `surface`（理由见 `OpticonApp` 的说明：写死的浅色配色里 `surface` 与 `background`
+  是同一个值，深色下 `surface` 还比背景暗 —— 靠阴影在两套主题下都不成立）。
 - **各页不再自带品牌头**：顶栏左侧是品牌标记，右侧是**当前页标题**
   （裁圆 / 单色 / 通知 / 模块 / 关于），切换页面时标题淡入淡出；页面本身不重复 App 名。
   （唯一的例外是「关于」页页首那块**品牌卡**：它是身份说明，不重复 App 名，并带版本与仓库入口。）
@@ -665,7 +667,7 @@ com.iamcanincan.opticon
 │   └── OpticonLog             统一的日志 tag
 ├── ui/
 │   ├── MainActivity           入口 Activity（同时是桌面图标）
-│   ├── OpticonApp             外壳：顶栏 + 悬浮药丸导航 + Pager（左右滑动切页）
+│   ├── OpticonApp             外壳：顶栏 + 悬浮药丸导航 + Pager（底栏切页）
 │   ├── Common                 各页共用：ScreenList / Section / OpticonCard / HeroCard / IconTile / NoteList / CommandRow
 │   ├── crop/CropScreen        「裁圆」页（开关 / 效果示意 / 说明）
 │   ├── mono/MonoScreen        「单色」页（单色层开关 / 说明）

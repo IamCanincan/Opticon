@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -31,6 +32,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -75,10 +77,10 @@ import kotlinx.coroutines.launch
  *
  * ⚠ 药丸自己还要额外让开系统导航栏（见 `OpticonApp` 里那句 `navigationBarsPadding()`）。
  * 内容区的底边是由 `Scaffold` 的 innerPadding 顶到**导航栏上沿**的，而药丸在那之上
- * 再抬 20dp，所以它相对内容底边占到 `56 + 20 = 76dp`；下面 [ScreenList] 还多给 24dp，
- * 合计 120dp —— 96dp 这个数是按"药丸高度 + 20dp 边距 + 余量"留的，别往下砍到 76 以下。
+ * 再抬 24dp，所以它相对内容底边占到 `64 + 24 = 88dp`；下面 [ScreenList] 还多给 24dp，
+ * 合计 120dp —— 96dp 这个数是按"药丸高度 + 24dp 边距 + 8dp 余量"留的。
  *
- * = 药丸高度（约 56dp）+ 它距**导航栏**的边距（20dp）+ 一点余量。
+ * = 药丸高度（64dp：52dp 的格子 + 上下各 6dp）+ 它距**导航栏**的边距（24dp）+ 余量。
  *   （"距屏幕底部"是 [OpticonApp] 加上 `navigationBarsPadding()` 之前的旧口径，
  *   那个位置上药丸有一半压在系统导航栏底下，已改。）
  */
@@ -101,7 +103,13 @@ internal val FloatingNavSpace = 96.dp
  */
 @Composable
 internal fun ScreenList(content: LazyListScope.() -> Unit) {
+  // 「这一页还滚得动吗」只有列表自己知道，而收起底栏的决定在外壳那条 connection 里 ——
+  // 于是这一页把答案写进闸门，外壳去读。判据用平台自己的 `canScrollForward`，不拍新的数。
+  val listState = rememberLazyListState()
+  val forward = listState.canScrollForward
+  LaunchedEffect(forward) { NavScrollGate.canScrollForward = forward }
   LazyColumn(
+    state = listState,
     modifier = Modifier.fillMaxSize(),
     contentPadding = PaddingValues(
       start = 16.dp,
@@ -113,6 +121,20 @@ internal fun ScreenList(content: LazyListScope.() -> Unit) {
     verticalArrangement = Arrangement.spacedBy(20.dp),
     content = content,
   )
+}
+
+/**
+ * 底栏收起的闸门：**短页不许藏底栏**（KeyLens 原话：「页面没多少内容时底栏消失只会让人
+ * 以为界面坏了」）。写的人是 [ScreenList]（它手里有 `LazyListState`），读的人是外壳那条
+ * nestedScroll connection。
+ *
+ * ⚠ 故意用普通 `var` 而不是 `State`：读的一侧是滚动回调，不在组合期 —— 做成 State 只会
+ *   多一轮重组，还让人以为它能驱动界面。
+ * ⚠ 也故意**不挂 CompositionLocal**：全应用只有一个 Scaffold、五页都在同一个 Pager 里，
+ *   滑动时相邻页各写一次是良性的（谁在屏幕上谁最后写）。
+ */
+internal object NavScrollGate {
+  var canScrollForward = false
 }
 
 /**
