@@ -204,7 +204,7 @@ const CASES = [
     why: '把 `cornerFamilies` 末尾那句调用中和掉（`if (false && …)`）—— 这不是假想错法：这一刀由台架旗标 ' +
       '`dropStrip` 控制，**默认值一旦在某次重构里被改掉或那行被当成死开关删掉，屏上就退回"橙盘整块墨、白淘被掏空"，' +
       '而回归 23 道闸里没有一道量像素级极性**（第 16 闸量的是入口，第 13 闸的语料里根本没有促销皮）。' +
-      '现场读数：`rec_model` 64 张里开火 1 张（智慧树 `退族=1`）、`rec_promo` 65 张里 2 张（加淘宝新），' +
+      '现场读数：`rec_model` 64 张里开火 1 张（智慧树 `退族=1`）、`rec_promo`（2026-11-07 重建，61 张）里 2 张（加淘宝新），' +
       '淘宝新 `底占 0.88→0.49`、`盘实/墨实 59612/8509 → 33244/34877`。' +
       '⇒ 性质台第 33 条那对**两臂断言**必须当场变红（开旗臂横幅 `带=255`、关旗臂 `带=0`；' +
       '中和之后两臂都成 0 ⇒ 第一条红，`退族=1/0` 那条也红）。' +
@@ -212,6 +212,21 @@ const CASES = [
       '正是本轮改的那份 —— 所以它是**注册了但待跑**，提交之后 `node _semanticmut.cjs --case=22` 才算证过。',
     from: '    if (s.stripDrop && s.fams > 1) dropStripFamilies(pixels, w, box, band, s)\n',
     to: '    if (false && s.stripDrop && s.fams > 1) dropStripFamilies(pixels, w, box, band, s)\n',
+    gateCmd: 'run harness.SelfTestKt > bench/reg/selftest_raw_mut.txt || true; ' +
+      '. ./selftestgate.sh; selftest_gate bench/reg/selftest_raw_mut.txt _mut'
+  },
+  {
+    // 第 3 道（性质台）：**横幅那一族的成员线**必须有刀级证据（2026-11-07，清那笔密度债时补的）。
+    no: '23', gateNo: '2', gate: '2/7 性质台（成员线 = 第 34 条"带被 AA 切缝"断言）', file: MASK,
+    why: '把 `STRIP_MEMBER_DE` 退回选族那条互异线（`CANDIDATE_DISTINCT`=18）。这不是假想错法：18 与 45 都是' +
+      '"ΔE 容差"，下一次重构把它们并成一个常量是顺手的事，而并回去的代价本档已经量死过一次 —— ' +
+      '驾考宝典那张 384 读 `宽2% 高0%`、768 读 `宽100% 高28%`，**同一张图两档给相反判据**（漂移账 5→6 那行）。' +
+      '现场读数：`rec_model` 四档 × tol {18,25,32,45,55,65,70} 开火集合从 25 起一字不差；装机档 384 上七份语料' +
+      '（含重建后的 `rec_promo` 61 张与 `corpus_taobao_new`）18 与 45 两点逐字相同 ⇒ 这一退**不会**改变任何一张屏上表现，' +
+      '只会让量具重新自相矛盾，所以只有性质台第 34 条能抓住它。' +
+      '⇒ 退回 18 之后第 34 条"切了缝的横幅照样认得出是一条带：退族=1"当场红（带被缝切成碎块，过不了通宽门）。',
+    from: '  private const val STRIP_MEMBER_DE = 45\n',
+    to: '  private const val STRIP_MEMBER_DE = CANDIDATE_DISTINCT\n',
     gateCmd: 'run harness.SelfTestKt > bench/reg/selftest_raw_mut.txt || true; ' +
       '. ./selftestgate.sh; selftest_gate bench/reg/selftest_raw_mut.txt _mut'
   }

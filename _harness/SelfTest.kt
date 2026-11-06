@@ -45,9 +45,11 @@ private fun meanAlpha(mask: IntArray?, size: Int, x0: Int, y0: Int, x1: Int, y1:
 }
 
 private var failed = 0
+private var asserted = 0        // 由最后一行自己印出来：`regress.sh` 头上那句"性质 N 条"以前是手抄的，抄到 48 就停了
 
 private fun check(what: String, ok: Boolean, detail: String) {
   println("  ${if (ok) "PASS" else "FAIL"}  $what  [$detail]")
+  asserted++
   if (!ok) failed++
 }
 
@@ -816,7 +818,35 @@ fun main() {
       "开=${fmt(meanAlpha(on.mask, S, 70, 30, 130, 80))} 关=${fmt(meanAlpha(off.mask, S, 70, 30, 130, 80))}")
   }
 
-  println(if (failed == 0) "全部通过" else "!! $failed 条不成立")
+  // ── 34. 同一条横幅，但它被 AA 切成一格宽的缝 —— 成员线不许让"连通"跟着光栅化漂 ──
+  //     驾考宝典那张在 2026-11-06 的四档全扫里就是这么翻车的：近白带 384 读 `宽2% 高0%`、
+  //     768 读 `宽100% 高28%`，**同一张图两档给相反判据**（漂移账多出来的那行）。根因不是四道门的数，
+  //     是"哪些格子算这一族"借了**选族**那条互异线（18）—— 一条带自己的散度可以有 20 多点。
+  //     ⚠ 这条用例的牙：把 `STRIP_MEMBER_DE` 退回 18，带被缝切成碎块 ⇒ 过不了通宽那扇门，
+  //       第 1 条断言当场红；把缝画宽到真该判不出带，第 2 条会红。
+  run {
+    val p = new()
+    rect(p, S, 60, 20, 324, 300, px(255, 255, 86, 5))                // 橙盘（先画，缝才不会被它盖掉）
+    rect(p, S, 20, 290, 364, 364, px(255, 255, 255, 255))            // 通宽白横幅
+    for (x in 64 until 340 step 6) rect(p, S, x, 302, x + 1, 364, px(192, 192, 192, 255))  // ΔE76(白,灰)≈22
+    rect(p, S, 140, 100, 240, 200, px(255, 255, 255, 255))           // 盘上的白字形
+    val on = MonochromeMask.build(p, S, S)
+    val off = MonochromeMask.build(p, S, S, dropStrip = false)
+    println("- 白横幅被 AA 切一格宽的缝（开旗）  ${on.report}")
+    println("- 同上（关旗）                    ${off.report}")
+    check("切了缝的横幅照样认得出是一条带：退族=1", on.report.contains("退族=1"),
+      "开=${on.report.substringAfter("族=").substringBefore(" ")} 关=${off.report.substringAfter("族=").substringBefore(" ")}")
+    check("缝里那些格跟着带上墨（成员线一退就碎成几段，这条当场红）",
+      meanAlpha(on.mask, S, 40, 336, 340, 360) > 200.0,
+      "带=${fmt(meanAlpha(on.mask, S, 40, 336, 340, 360))}")
+    check("关旗那一臂仍然把带当底（擦掉）", meanAlpha(off.mask, S, 40, 336, 340, 360) < 30.0,
+      "带=${fmt(meanAlpha(off.mask, S, 40, 336, 340, 360))}")
+    check("字形仍是实心（退族不许把同色的字形一起擦掉）",
+      meanAlpha(on.mask, S, 150, 110, 230, 190) > 200.0,
+      "字=${fmt(meanAlpha(on.mask, S, 150, 110, 230, 190))}")
+  }
+
+  println(if (failed == 0) "全部通过（断言 $asserted 条）" else "!! $failed 条不成立（断言 $asserted 条）")
 }
 
 private fun fmt(v: Double): String = String.format(java.util.Locale.ROOT, "%.1f", v)

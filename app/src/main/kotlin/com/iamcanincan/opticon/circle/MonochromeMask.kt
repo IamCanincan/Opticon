@@ -170,6 +170,24 @@ internal object MonochromeMask {
   private const val STRIP_DISTINCT_DE = 70
 
   /**
+   * 「这一格算不算横幅那一族」的容差（ΔE76 真值）。⚠ 它**不是** [CANDIDATE_DISTINCT]：那条是**选族**
+   * 的互异线（两族差到 18 才分成两族），拿来问"同一族自己散到哪儿为止"借错了概念。借错的代价现量过：
+   * 同一张驾考图，18 让那条近白带在 384 碎成 `宽2% 高0%`、在 768 连成 `宽100% 高28%` ⇒ **同一张图两档
+   * 给相反判据**（漂移账 `driftN 5→6` 多出来的那行就是它）。换成 45 起两档读数一字不差，真实形状也
+   * 露出来是 `高68%` 的盘 —— 于是两档都不算横幅，那张本来就没被这一刀碰过。
+   *
+   * 数是怎么摆的：把这条线只在探子里改成 25 / 32 / 45 / 55 / 65 / 70 各跑一遍
+   * `rec_model`（96/192/384/768 四档）与 `corpus_taobao_new`（384/768），**开火集合从 25 起到 70 一字不差**
+   * ⇒ 平台是 [25, 70]；七份语料（rec_model / plate_model / shortcut_model / shortcut_bit / yard_model /
+   * rec_blank / corpus_taobao_new）在装机档 384 上只对了 **18 与 45 两个点**，逐字相同（含 `⇒横幅` 落在哪个族）。
+   * 45 摆在平台正中（下 20 点上 25 点），且与仓里"一整块底自己最多散多远"那个原意同值（[TOL_MAX]）。
+   * ⚠ **这一条是我选的**，但选在空档里 —— 与 [STRIP_DISTINCT_DE] 那次"顺手拿现成的 45"不同：
+   * 那次 45 落在 41↔47 六个点的缝里、把 Steam 的青管退成了底；这一把问的是族**内部**，
+   * 平台两端（25 与 70）在两份代表语料上验过不改变任何一张的归属。
+   */
+  private const val STRIP_MEMBER_DE = 45
+
+  /**
    * 洪泛容差，单位 ΔE76 真值。[TOL_COARSE] 是第一轮（还没有色场、只有一个候选色）用的；
    * [TOL_MAX] 夹住自适应上界。之后每轮改用**色场自己量出来的散度**（底板像素距离分布的
    * [TOL_PCT] 分位）—— 这才是「局部底」这个模型能吃掉渐变的原因：全局一个颜色要容下整道渐变
@@ -6149,7 +6167,7 @@ internal object MonochromeMask {
     val boxN = bw.toLong() * bh
     val seen = s.stripSeen; val q = s.queue
     val drop = BooleanArray(CANDIDATE_K)
-    val lim = (CANDIDATE_DISTINCT shl 6).toLong()
+    val lim = (STRIP_MEMBER_DE shl 6).toLong()
     val lim2 = lim * lim
     for (j in 0 until s.fams) {
       // 第四道门（色差）：这一族离**别的角族**最近有多远。摆在哪、为什么不是现成的 TOL_MAX，
