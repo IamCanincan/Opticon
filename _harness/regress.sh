@@ -12,8 +12,15 @@
 #   sh regress.sh --update        # 认账，把这一轮写成新基线
 #   EDGES=96,192,384,768 sh regress.sh   # 全扫：同一批真图在四档边长上各跑一遍，报漂移
 set -e
+# **站到自己那一层来跑。** 这一台从头到尾用的是相对路径（`sh build.sh`、`_kt.log`、`bench/reg/`、
+#   语料目录、`_shbacktick.cjs`），从仓库根 `sh _harness/regress.sh` 会一路踩空：2026-11-05 现量
+#   第一次报的是"shell 雷"，真因是那句 `node _shbacktick.cjs` 在根目录**根本找不到文件**（退码 1），
+#   而它下面 `build.sh` 同样会失败 —— 也就是"仪器没电"被打印成了"发现了雷"。
+SELF=$(dirname "$0")
+cd "$SELF" || { echo "!! 进不去 $SELF —— 这一闸没给出结论"; exit 2; }
 # classpath 与 `run()` 在 `gateenv.sh`（与语义变异台共用，别在这里再抄一份）。
-. "$(dirname "$0")/gateenv.sh"
+# ⚠ `cd` 之后 `$0` 还是**进来时那条路径**，再对它 `dirname` 一次就指向一个不存在的地方。
+. ./gateenv.sh
 EDGES=${EDGES:-384}
 # **语料按像素去重。** `rec3` 是逐轮 dump 攒下来的，同一个 drawable 每抓一次换一个后缀 ——
 # 2026-10-04 量到 113 个文件里 **51 个与别人逐字节相同**，真正不同的只有 62 张。
@@ -58,8 +65,9 @@ echo "== 1/7 编译 =="
 # 门里那句 `echo "… sh audit.sh …"`（反引号）把 `audit.sh` **真的执行了**，回归台没停住，反而去 pull 了手机。
 # 缺 node 就明说没查，不许装成查过（本仓那一族：0 命中常常是仪器读不了，不是没有）。
 if command -v node >/dev/null 2>&1; then
-  SB=0; node _shbacktick.cjs . > /dev/null 2>&1 || SB=$?
-  [ "$SB" = "0" ] || { echo "!! .sh 里有「双引号包反引号」的行 —— 那会被执行，不是排版；见 _shbacktick.cjs 的输出"; exit 1; }
+  SB=0; node ./_shbacktick.cjs . > /dev/null 2>&1 || SB=$?
+  # 退码分三种，别把它们并成一句"有雷"：1 = 真发现了雷；2/9 = 这台子自己没电（扫不到文件 / 目录不存在）。
+  [ "$SB" = "0" ] || { echo "!! shell 雷这一闸**没给出结论**（退码 $SB：1=双引号里真有反引号，2=扫到 0 个 .sh，9=目录不对）—— 这不是「查过且干净」，先修仪器"; exit 1; }
   echo "   shell 雷 0 处 ✓"
 else
   echo "   ⚠ 这台没有 node —— shell 雷这一项**没查**（不是查过且干净）"
@@ -547,5 +555,51 @@ run harness.AlignSizeKtKt "$SHOTBITCORPUS" > bench/reg/alignsize.txt || {
   echo "!! 快捷方式彩色/单色屏上尺寸差 >4 个点（见 bench/reg/alignsize.txt）"; exit 1; }
 run harness.AppGeomKtKt rec_model corpus_runtime > bench/reg/appgeom.txt || {
   echo "!! 应用图标彩色格/判据格窗口有差（见 bench/reg/appgeom.txt）"; exit 1; }
+
+# —— 第廿三闸：**反射子台活着账**（2026-11-06）。编号跳过 22：那个号是 2026-10-22 立、当天撤的「主体上墨账」，量错了轴，不复用。这一闸不量像素，量的是「这台仪器今天还通电吗」。
+#   为什么现在才有：`contentBounds` 加第 4 个参数（`airOut`）那天，`RimDbg` / `PixelDump` / `CellDump`
+#   / `FieldMix` 四台靠反射读模型内部（`plate` / `famColor` / `ref`）的子台**同时全废**，而前面 21 道闸
+#   一台都不碰它们 —— 一直没人发现，直到 2026-11-06 要用"逐色在底几分"那张表，才知道它只会抛
+#   "wrong number of arguments: 3 expected: 4"。反射调用的参数个数**编译期查不出来**，所以只能
+#   靠"跑一次、看它印没印出自己那一行读数"来钉：退码 0 而一声不响，同样是死。
+echo "== 23/23 反射子台活着账 =="
+# 23a) **参数普查**（`_refarity.cjs`）：把判据台里**每一处**反射调用生产的私有方法都数一遍参数个数。
+#   上面那 4 台是"跑一次看它印不印"，这一条是"整台仓一处不漏" —— 后者才挡得住第五台烂掉。
+#   它自带两条自证：① `--selfcheck` 拿一个明知少给一个参数的假调用走同一条判定，必须报出来；
+#   ② 扫到的处数必须等于原文里 `.invoke(` 的总数（写错扫描式会让分母自己变小却报"全部对得上"，
+#      这台子第一跑就演过一次：18 处扫成 2 处，退码照样 0）。
+node _refarity.cjs --selfcheck || {
+  echo "!! 反射调用的参数个数普查不通过（上面点名了文件:行）—— 那些子台现在就是抛 IllegalArgumentException 的状态"; exit 1; }
+# 23b) 那 4 台各自跑一次，必须印出自己那一行读数
+PA_FIX=rec_model/com.able.wisdomtree_logo_149c234870d7.png
+[ -f "$PA_FIX" ] || { echo "!! fixture $PA_FIX 不在 —— 这一闸没牙（fixture 缺不许算过）"; exit 1; }
+PA_LIST='harness.RimDbgKt|--brief rec_model|盘实=[0-9]+
+harness.PixelDumpKt|PA_FIX|家族#[0-9]+
+harness.CellDumpKt|PA_FIX|分家的格子
+harness.FieldMixKtKt|PA_FIX|双峰的格'
+PA_N=0; PA_DEAD=''
+PA_OLDIFS=$IFS; IFS='
+'
+for pa in $PA_LIST; do
+  # ⚠ 循环列表在 `for` 这一句就已经按"一行一项"切完了，进到体内就可以把 IFS 换回去 ——
+  #   不换的话 `$pa_args` 里的空格**不会被切开**，`--brief rec_model` 会当成一个文件名传进去，
+  #   于是这台闸自己错报"RimDbg 读不出东西"（2026-11-06 第一跑就是这么红的，被抓的是我这段 shell）。
+  IFS=$PA_OLDIFS
+  [ -n "$pa" ] || continue
+  pa_cls=${pa%%|*}; pa_rest=${pa#*|}; pa_args=${pa_rest%%|*}; pa_pat=${pa_rest#*|}
+  case "$pa_args" in PA_FIX) pa_args="$PA_FIX" ;; esac
+  PA_N=$((PA_N + 1))
+  pa_out=$(run "$pa_cls" $pa_args 2>&1) || true
+  printf '%s\n' "$pa_out" | grep -qE "$pa_pat" || PA_DEAD="$PA_DEAD $pa_cls"
+done
+IFS=$PA_OLDIFS
+[ "$PA_N" -gt 0 ] || { echo "!! 清单一条都没有 —— 这不是通过，是这台闸被删空了"; exit 1; }
+if [ -n "$PA_DEAD" ]; then
+  echo "!! 这几台反射子台今天读不出东西：$PA_DEAD"
+  echo "   多半是生产私有方法的参数个数变了（反射编译期查不出来）。逐台跑一次看它自己报什么："
+  echo "   sh run.sh harness.RimDbgKt --brief rec_model"
+  exit 1
+fi
+echo "   反射子台 $PA_N 台全部印出了自己的读数"
 
 node _regress.cjs "$@" --corpus="$CORPUS"

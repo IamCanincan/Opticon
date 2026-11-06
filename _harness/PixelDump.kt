@@ -36,7 +36,10 @@ fun main(args: Array<String>) {
   val img = ImageIO.read(f)
   val w = img.width; val h = img.height
   val px = IntArray(w * h); img.getRGB(0, 0, w, h, px, 0, w)
-  val box = m2(MM2, "contentBounds").invoke(MonochromeMask, px, w, h) as? Rect
+  // ⚠ 反射调用编译期查不出来：`contentBounds` 现在收 4 个参数（多了 `airOut`），少一个就抛
+  //   "wrong number of arguments: 3 expected: 4" —— 2026-11-06 现量，第 23 闸（`_gate23.sh`）钉着它。
+  //   这一行退回 3 个参数时第 23 闸当场红并点名这台子（变异测过，退码 1）。
+  val box = m2(MM2, "contentBounds").invoke(MonochromeMask, px, w, h, null) as? Rect
     ?: run { println("整张透明"); return }
   val short = min(box.width(), box.height())
   val band = (short / f2(MM2, "RING_BAND_DIV").getInt(null)).coerceIn(2, 8)
@@ -53,9 +56,9 @@ fun main(args: Array<String>) {
     labA[i] = MonochromeMask.labChannel(px[i], 1).toShort()
     labB[i] = MonochromeMask.labChannel(px[i], 2).toShort()
   }
-  // ⚠ 第 8 个参数 `plateIsLayer` 是 2026-10-09 加进 `groundPass` 的 —— 反射调用**编译期查不出来**，
-  //   漏了它这台子直接抛 "wrong number of arguments"（2026-10-10 抓 转转"不"字没了时才撞上）。
-  m2(MM2, "groundPass").invoke(MonochromeMask, px, w, h, box, band, g, s, false)
+  // ⚠ 第 8、9 个参数 `plateIsLayer` / `plateIsSubject` 反射里**不默认**（2026-10-10 撞过第 8 个，
+  //   2026-11-06 撞第 9 个）。这一臂两个都给 false ⇒ 装机那 10/62 张"盘在背景层"它没在跑。
+  m2(MM2, "groundPass").invoke(MonochromeMask, px, w, h, box, band, g, s, false, false)
 
   val plate = f2(SCR2, "plate").get(s) as ByteArray
   val pass = f2(SCR2, "pass").get(s) as ByteArray

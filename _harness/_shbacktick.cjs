@@ -24,4 +24,8 @@ for (const f of files) {
 console.log(`扫了 ${files.length} 个 .sh（${dirs.join(', ')}）：**双引号里带反引号的行 ${bad.length} 处**`);
 for (const b of bad) console.log('  🔴 ' + b);
 if (bad.length) console.log('  ⇒ 改成单引号，或把反引号换成别的引号；双引号里每一对 ` 都会被 shell 执行一次。');
+// ⚠ **扫到 0 个文件不是"干净"，是仪器没电**（本仓那条：0 命中常常是读不到，不是没有）。
+//   2026-11-05 现量：从仓库根跑 `node _harness/_shbacktick.cjs .` 就是这个 0 —— 它以前退 0，
+//   于是"路径写错"会被 `regress.sh` 读成"这一闸过了"。
+if (!files.length) { console.log('  !! 一个 .sh 都没扫到 —— 这不是通过，是这台子没电（退码 2）'); process.exit(2); }
 process.exit(bad.length ? 1 : 0);

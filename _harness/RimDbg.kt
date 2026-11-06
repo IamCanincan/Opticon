@@ -110,7 +110,11 @@ private fun passDesc(p: Any?): String {
 
 /** 跑两遍参照，各自留一份 plate。全程不碰 [MonochromeMask.build]，免得第二遍盖掉第一遍。 */
 private fun run(title: String, px: IntArray, n: Int): Run? {
-  val box = method(MM, "contentBounds").invoke(MonochromeMask, px, n, n) as? Rect ?: return null
+  // ⚠ 反射调用**编译期查不出来**：`contentBounds` 2026-10 加了第 4 个参数 `airOut` 那天，
+  //   这一台与 PixelDump / CellDump / FieldMix 一起当场抛 "wrong number of arguments: 3 expected: 4"，
+  //   而回归 21 闸一台都不碰它们 —— 没人发现，直到 2026-11-06 要用"逐色在底几分"那张表才发现读不到。
+  //   第 23 闸（regress.sh 末段 + `_gate23.sh`）现在钉着这件事：每台都必须印出自己那行读数。
+  val box = method(MM, "contentBounds").invoke(MonochromeMask, px, n, n, null) as? Rect ?: return null
   val short = min(box.width(), box.height())
   val band = (short / const("RING_BAND_DIV")).coerceIn(2, 8)
   val g = if (short >= const("FIELD_MIN_SIDE")) const("FIELD_GRID") else const("FIELD_GRID_MIN")
@@ -130,7 +134,11 @@ private fun run(title: String, px: IntArray, n: Int): Run? {
     labB[i] = MonochromeMask.labChannel(p, 2).toShort()
   }
   val sn = Snap(s)
-  val ground = method(MM, "groundPass").invoke(MonochromeMask, px, n, n, box, band, g, s)
+  // `groundPass` 现在收 9 个（第 8 个 `plateIsLayer`、第 9 个 `plateIsSubject`，都是默认参数 ——
+  //   默认参数在反射里**不默认**，少一个就是 IllegalArgumentException）。
+  // ⚠ 这一臂恒 `plateIsLayer=false`，也就是说装机那 10/62 张"盘在背景层"的图它**从定义上没在跑**
+  //   （见 [Inputs] 文件头那条同样的坑）；要覆盖那批得把 index 的位传进来，别把这里的数当装机口径。
+  val ground = method(MM, "groundPass").invoke(MonochromeMask, px, n, n, box, band, g, s, false, false)
   val plate1 = sn.b("plate")
   val dist1 = sn.sh("dist")
   val ref1 = sn.i("ref")

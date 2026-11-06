@@ -197,6 +197,23 @@ const CASES = [
     to: '    val shrink = minOf(1f, SCAN_EDGE.toFloat() / maxOf(iw, ih))\n',
     edges: '384',
     gateCmd: '. ./twobookgate.sh; twobook_gate _mut'
+  },
+  {
+    // 第 2 道（性质台）：**横幅退族那一刀**必须有刀级证据（2026-11-06，主人那句「单单挑这个特例没有用的」换来的）。
+    no: '22', gateNo: '2', gate: '2/7 性质台（横幅退族 = 第 33 条两臂断言）', file: MASK,
+    why: '把 `cornerFamilies` 末尾那句调用中和掉（`if (false && …)`）—— 这不是假想错法：这一刀由台架旗标 ' +
+      '`dropStrip` 控制，**默认值一旦在某次重构里被改掉或那行被当成死开关删掉，屏上就退回"橙盘整块墨、白淘被掏空"，' +
+      '而回归 23 道闸里没有一道量像素级极性**（第 16 闸量的是入口，第 13 闸的语料里根本没有促销皮）。' +
+      '现场读数：`rec_model` 64 张里开火 1 张（智慧树 `退族=1`）、`rec_promo` 65 张里 2 张（加淘宝新），' +
+      '淘宝新 `底占 0.88→0.49`、`盘实/墨实 59612/8509 → 33244/34877`。' +
+      '⇒ 性质台第 33 条那对**两臂断言**必须当场变红（开旗臂横幅 `带=255`、关旗臂 `带=0`；' +
+      '中和之后两臂都成 0 ⇒ 第一条红，`退族=1/0` 那条也红）。' +
+      '⚠ **这条用例今天还跑不动**：这台子的保险① 拒绝在有未提交改动的生产文件上动刀，而 `MonochromeMask.kt` ' +
+      '正是本轮改的那份 —— 所以它是**注册了但待跑**，提交之后 `node _semanticmut.cjs --case=22` 才算证过。',
+    from: '    if (s.stripDrop && s.fams > 1) dropStripFamilies(pixels, w, box, band, s)\n',
+    to: '    if (false && s.stripDrop && s.fams > 1) dropStripFamilies(pixels, w, box, band, s)\n',
+    gateCmd: 'run harness.SelfTestKt > bench/reg/selftest_raw_mut.txt || true; ' +
+      '. ./selftestgate.sh; selftest_gate bench/reg/selftest_raw_mut.txt _mut'
   }
 ];
 

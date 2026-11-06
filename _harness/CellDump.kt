@@ -42,7 +42,8 @@ fun main(args: Array<String>) {
     val img = ImageIO.read(File(f))
     val w = img.width; val h = img.height
     val px = IntArray(w * h); img.getRGB(0, 0, w, h, px, 0, w)
-    val box = methodOf(MM, "contentBounds").invoke(MonochromeMask, px, w, h) as? Rect
+    // ⚠ 反射调用编译期查不出来（`contentBounds` 现在 4 个参数，见 regress.sh 第 23 闸）。
+    val box = methodOf(MM, "contentBounds").invoke(MonochromeMask, px, w, h, null) as? Rect
     if (box == null) { println("${File(f).name}: 整张透明"); continue }
     val short = min(box.width(), box.height())
     val band = (short / constOf("RING_BAND_DIV")).coerceIn(2, 8)
@@ -58,7 +59,9 @@ fun main(args: Array<String>) {
       labA[i] = MonochromeMask.labChannel(px[i], 1).toShort()
       labB[i] = MonochromeMask.labChannel(px[i], 2).toShort()
     }
-    methodOf(MM, "groundPass").invoke(MonochromeMask, px, w, h, box, band, g, s)
+    // `groundPass` 现在 9 个参数（`plateIsLayer` / `plateIsSubject` 在反射里**不默认**）；
+    // 这一臂两个都给 false ⇒ 装机那 10/62 张"盘在背景层"它没在跑（见 [Inputs] 文件头同一个坑）。
+    methodOf(MM, "groundPass").invoke(MonochromeMask, px, w, h, box, band, g, s, false, false)
     val sn = CellSnap(s)
     val cov = sn.i("fCov").copyOf(); val top = sn.i("fTop").copyOf()
     val tot = sn.i("cellTot").copyOf(); val cn = sn.i("cellN").copyOf()
