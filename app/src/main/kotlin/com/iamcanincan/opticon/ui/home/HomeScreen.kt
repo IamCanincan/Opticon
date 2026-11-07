@@ -70,7 +70,7 @@ fun HomeScreen() {
         border = null,
       ) {
         Row(
-          modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
           verticalAlignment = Alignment.CenterVertically,
         ) {
           Icon(
@@ -176,7 +176,7 @@ private fun FeatureRow(spec: FeatureSpec, shape: androidx.compose.ui.graphics.Sh
   val on = spec.on
   OpticonCard(shape = shape, border = null, padding = 0.dp) {
     Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Icon(
@@ -230,7 +230,7 @@ private fun FeatureRow(spec: FeatureSpec, shape: androidx.compose.ui.graphics.Sh
 private fun TipRow(icon: ImageVector, title: Int, body: Int, shape: androidx.compose.ui.graphics.Shape) {
   OpticonCard(shape = shape, border = null, padding = 0.dp) {
     Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Icon(
