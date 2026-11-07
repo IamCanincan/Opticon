@@ -33,10 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -130,11 +127,11 @@ fun StatsScreen() {
 }
 
 /**
- * 三段图的配色：主色 → 三级色 → 次色。
+ * 图表配色：**跟随动态取色**（2026-11-08 主人：「你还是用动态取色吧，太丑了」）。
  *
- * ⚠ 顺序是量出来的：这套动态取色里 primary 与 secondary 都是青系，50% / 49% 两段挨在一起时
- *   屏幕上分不出界（2026-11-08 真机截图）。primary 与 tertiary 的色相差足够大，
- *   所以最大的两段用它们；第三段（通常很小）才用 secondary。
+ * 顺序 主色 → 三级色 → 次色：这套壁纸取出来的 primary 与 secondary 都是青系，
+ * 把 tertiary 放在第二位，两个大扇形之间才有色相差；第三段（通常很小）用 secondary。
+ * 饼不再切缝（相邻块直接相接），所以"灰"不会再被读成一道缝。
  */
 @Composable
 private fun chartColor(index: Int): Color {
@@ -142,13 +139,7 @@ private fun chartColor(index: Int): Color {
   return when (index % 3) {
     0 -> scheme.primary
     1 -> scheme.tertiary
-    // 第三段通常是 1% 那种极小的楔形：secondary 在这套深色主题里太闷（真机上几乎和缝一个色），
-    // 往 onSurfaceVariant 混一点提亮 —— 色相不变，深/浅两套主题下都看得见。
-    else -> androidx.compose.ui.graphics.lerp(
-      scheme.secondary,
-      scheme.onSurfaceVariant,
-      0.45f,
-    )
+    else -> scheme.secondary
   }
 }
 
@@ -278,35 +269,19 @@ private fun Pie(slices: List<Slice>, grand: Int, sweep: Float) {
       slices.forEachIndexed { i, s ->
         if (s.value > 0) {
           val deg = shown[i] * 360f / shownTotal
+          // 相邻两块之间重叠 0.4°：不画缝了，但两段各自抗锯齿会在接缝留一条发丝线，
+          // 重叠一点就没了（颜色差异足够大，不需要再靠缝区分）。
           drawArc(
             color = s.color,
             startAngle = start,
-            sweepAngle = deg * sweep,
+            sweepAngle = (deg + 0.4f) * sweep,
             useCenter = true,
           )
         }
         start += shown[i] * 360f / shownTotal
       }
 
-      val live = slices.count { it.value > 0 }
-      if (live <= 1) return@Canvas
 
-      // 每条边界盖一根等宽直条：从圆心到外缘，绕到该角度再画一条横线。
-      val cut = 2.dp.toPx()
-      start = -90f
-      slices.dropLast(1).forEachIndexed { i, _ ->
-        start += shown[i] * 360f / shownTotal
-        // 直线默认指向 3 点钟（0°），而 drawArc 的角度也是从 3 点钟起算的 —— 直接转 start。
-        rotate(degrees = start, pivot = c) {
-          drawLine(
-            color = scheme.surfaceContainerHigh,
-            start = c,
-            end = androidx.compose.ui.geometry.Offset(c.x + radius, c.y),
-            strokeWidth = cut,
-            cap = androidx.compose.ui.graphics.StrokeCap.Butt,
-          )
-        }
-      }
     }
   }
 }

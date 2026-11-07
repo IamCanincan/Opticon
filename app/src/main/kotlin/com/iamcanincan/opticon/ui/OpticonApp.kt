@@ -468,8 +468,8 @@ fun OpticonApp() {
  * 顶栏左侧的品牌标记：与桌面图标同源（背景 + 前景两层）。
  *
  * 加它的理由：整页是卡片叠卡片，顶栏只有一行字，视觉上没有任何"这是 Opticon"的锚点；
- * 而关于页已经在用同一张图标当品牌，这里只是把身份带到第一屏。尺寸 28dp ——
- * 和顶栏一行的高度相称，不抢标题。
+ * 而关于页已经在用同一张图标当品牌，这里只是把身份带到第一屏。
+ * 2026-11-08 主人「oi logo 稍微画大点」：34dp → **40dp**，字形占圆的比例不变（仍是 1.5×）。
  */
 @Composable
 private fun BrandMark() {
@@ -477,7 +477,7 @@ private fun BrandMark() {
   // 而不是彩色版的两层叠放（2026-11-07："还是和桌面图标不一样"）。
   Box(
     modifier =
-      Modifier.size(34.dp)
+      Modifier.size(40.dp)
         .clip(androidx.compose.foundation.shape.CircleShape)
         .background(MaterialTheme.colorScheme.primary),
     contentAlignment = androidx.compose.ui.Alignment.Center,
