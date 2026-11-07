@@ -14,8 +14,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.InvertColors
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -67,7 +69,7 @@ fun HomeScreen() {
         border = null,
       ) {
         Row(
-          modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 16.dp),
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
           verticalAlignment = Alignment.CenterVertically,
         ) {
           Icon(
@@ -130,13 +132,24 @@ fun HomeScreen() {
       }
     }
 
+    item { SectionLabel(stringResource(R.string.home_tips)) }
+
+    // 底部这一组是"常见疑问"：原来是页面底部一行小字，下面半屏全是空白（主人："每个板块都好空"）。
     item {
-      Text(
-        text = stringResource(R.string.home_hint, BuildConfig.VERSION_NAME),
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(horizontal = 4.dp, vertical = 10.dp),
-      )
+      Column(verticalArrangement = Arrangement.spacedBy(GroupGap)) {
+        TipRow(
+          icon = Icons.Default.Refresh,
+          title = R.string.home_tip_stale_title,
+          body = R.string.home_tip_stale_body,
+          shape = groupRowShape(0, 2),
+        )
+        TipRow(
+          icon = Icons.Default.Info,
+          title = R.string.home_tip_count_title,
+          body = R.string.home_tip_count_body,
+          shape = groupRowShape(1, 2),
+        )
+      }
     }
   }
 }
@@ -156,7 +169,7 @@ private fun FeatureRow(
   val scheme = MaterialTheme.colorScheme
   OpticonCard(shape = shape, border = null) {
     Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 16.dp),
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Icon(
@@ -196,6 +209,33 @@ private fun FeatureRow(
   }
 }
 
+
+/** 提示行：灰图标 + 标题 + 一行解释，与功能行同一套版式（没有右侧胶囊）。 */
+@Composable
+private fun TipRow(icon: ImageVector, title: Int, body: Int, shape: androidx.compose.ui.graphics.Shape) {
+  OpticonCard(shape = shape, border = null) {
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Icon(
+        imageVector = icon,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.size(24.dp),
+      )
+      Spacer(modifier = Modifier.size(14.dp))
+      Column(modifier = Modifier.weight(1f)) {
+        Text(stringResource(title), style = MaterialTheme.typography.titleMedium)
+        Text(
+          text = stringResource(body),
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+    }
+  }
+}
 /** 快照按功能分成两堆（裁圆 / 通知），再各给一个总数。 */
 private fun splitCounts(snapshot: String?): Triple<Int, Int, Int> {
   if (snapshot.isNullOrBlank()) return Triple(0, 0, 0)
