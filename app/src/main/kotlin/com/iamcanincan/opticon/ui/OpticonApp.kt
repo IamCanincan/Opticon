@@ -64,6 +64,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -247,9 +248,15 @@ fun OpticonApp() {
     //   现在改成**两屏**：底下铺一张主页（只在拖动时组合），当前页按手势进度整块右移，
     //   露出来的就是主页 —— 松手落到主页，取消再滑回来。全程不动 Pager 的滚动，不会卡死。
     val rootBack = remember { Animatable(0f) }
+    // 只在手势**开始/结束**翻一次：如果在组合里直接读 rootBack.value 来判"要不要铺主页"，
+    // 每帧都会重组那一块 —— 而 HomeScreen 的参数是个新建的 lambda，跟着一起每帧重组，
+    // 真机上就是"抽搐"（2026-11-08 主人报的）。
+    var previewing by remember { mutableStateOf(false) }
+    val nearHome by remember { derivedStateOf { rootBack.value > 0.45f } }
     PredictiveBackHandler(enabled = subPage == null && pagerState.currentPage != TAB_HOME) { progress ->
       var finished = false
       try {
+        previewing = true
         rootBack.snapTo(0f)
         progress.collect { rootBack.snapTo(it.progress) }
         finished = true
@@ -263,6 +270,7 @@ fun OpticonApp() {
           } else {
             rootBack.animateTo(0f)
           }
+          previewing = false
         }
       }
     }
@@ -347,19 +355,18 @@ fun OpticonApp() {
     // 跳转失败的提示语。三条跳转（顶栏、「关于」页两块）共用这一句。
     val openLinkFailed = stringResource(R.string.open_link_failed)
 
-    Box(
-        modifier = Modifier.fillMaxSize().background(
-            // 极淡的环境色：顶部 surfaceContainerLow → 页面 background。
-            // 卡片本身是不透明色，这条只负责在卡与卡之间、顶栏后面形成一点纵深；
-            // 不引入品牌色，避免和 primaryContainer 的功能卡抢。
-            Brush.verticalGradient(
-                colors = listOf(
-                    MaterialTheme.colorScheme.surfaceContainerLow,
-                    MaterialTheme.colorScheme.background,
-                )
-            )
+    // 极淡的环境色：顶部 surfaceContainerLow → 页面 background。
+    // 卡片本身是不透明色，这条只负责在卡与卡之间、顶栏后面形成一点纵深；
+    // 不引入品牌色，避免和 primaryContainer 的功能卡抢。
+    // ⚠ 滑动层（返回主页那段）也用同一把刷子：各页是透明的，滑走时若没有底色，
+    //   会透出底下那张主页、两层叠在一起发花（主人：「返回时是透明的，有点抽搐」）。
+    val pageBackground = Brush.verticalGradient(
+        colors = listOf(
+            MaterialTheme.colorScheme.surfaceContainerLow,
+            MaterialTheme.colorScheme.background,
         )
-    ) {
+    )
+    Box(modifier = Modifier.fillMaxSize().background(pageBackground)) {
         Scaffold(
             modifier = Modifier
                 .nestedScroll(scrollBehavior.nestedScrollConnection)
@@ -380,8 +387,10 @@ fun OpticonApp() {
                             Spacer(Modifier.width(12.dp))
                         }
                         Column {
+                            val barTitle =
+                                if (nearHome) stringResource(R.string.tab_home) else pageTitle
                             AnimatedContent(
-                                targetState = pageTitle,
+                                targetState = barTitle,
                                 transitionSpec = { fadeIn() togetherWith fadeOut() },
                                 label = "pageTitle",
                             ) { title ->
@@ -449,13 +458,14 @@ fun OpticonApp() {
             Box(modifier = Modifier.padding(inner)) {
                 // 返回主页的两屏预览：拖动时底下铺一张主页，当前页整块右移把它露出来。
                 // 只在手势进行中（rootBack > 0）才组合，平时一分钱不花。
-                if (rootBack.value > 0f) {
+                if (previewing) {
                     HomeScreen(onOpen = { subPage = it })
                 }
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .graphicsLayer { translationX = size.width * rootBack.value }
+                        .background(pageBackground)
                 ) {
                     // 一级页**一直**在组合里：二级页滑出时，底下露出来的就是它，
                     // 可预测返回才有东西可看（不然只会露出背景色）。
