@@ -416,14 +416,15 @@ private fun BrandMark() {
     modifier =
       Modifier.size(34.dp)
         .clip(androidx.compose.foundation.shape.CircleShape)
-        .background(MaterialTheme.colorScheme.primaryContainer),
+        .background(MaterialTheme.colorScheme.primary),
     contentAlignment = androidx.compose.ui.Alignment.Center,
   ) {
     androidx.compose.material3.Icon(
       painter = painterResource(R.drawable.ic_launcher_monochrome),
       contentDescription = null,
-      tint = MaterialTheme.colorScheme.onPrimaryContainer,
-      modifier = Modifier.fillMaxSize(0.92f),
+      tint = MaterialTheme.colorScheme.onPrimary,
+      // 单色层自带安全边距（字形只占视口中间一块），再放大 1.5× 才接近桌面图标的字占比。
+      modifier = Modifier.fillMaxSize(0.92f).graphicsLayer(scaleX = 1.5f, scaleY = 1.5f),
     )
   }
 }
