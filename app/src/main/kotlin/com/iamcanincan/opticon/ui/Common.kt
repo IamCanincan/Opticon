@@ -31,6 +31,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
@@ -82,6 +83,14 @@ import kotlinx.coroutines.launch
  *   那个位置上药丸有一半压在系统导航栏底下，已改。）
  */
 internal val FloatingNavSpace = 96.dp
+
+/**
+ * 这一页需要为底栏让出多少高度：一级页 = [FloatingNavSpace]，二级页 = 0。
+ *
+ * 二级页没有药丸（外壳把底栏藏了），再留 96dp 就是白白多出来的一段空白。
+ * 外壳只在二级页那层提供 0：一级页虽然还组合在底下，返回时它的滚动位置与留白都不跳。
+ */
+internal val LocalNavSpace = compositionLocalOf { FloatingNavSpace }
 
 /** 页面说明行的统一写法：四页都用它，别各自写一份间距和字号。 */
 @Composable
@@ -229,8 +238,9 @@ internal fun ScreenList(content: LazyListScope.() -> Unit) {
       start = 16.dp,
       end = 16.dp,
       top = 4.dp,
-      // 末尾让出悬浮药丸那一段，否则滚到底时最后一张卡会被它压住
-      bottom = 24.dp + FloatingNavSpace,
+      // 末尾让出悬浮药丸那一段，否则滚到底时最后一张卡会被它压住。
+      // 二级页没有药丸 → 外壳把 [LocalNavSpace] 置 0，不留那段空白。
+      bottom = 24.dp + LocalNavSpace.current,
     ),
     verticalArrangement = Arrangement.spacedBy(13.dp),
     content = content,

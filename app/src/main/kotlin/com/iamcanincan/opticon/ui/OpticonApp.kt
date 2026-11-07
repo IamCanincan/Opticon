@@ -63,6 +63,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -433,28 +434,32 @@ fun OpticonApp() {
 
                 val sub = subPage
                 if (sub != null) {
-                    // 二级页盖在一级页上：拖动时按手势进度右移并淡出，底下一级页露出来。
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .graphicsLayer {
-                                translationX = size.width * backProgress.value
-                                alpha = 1f - 0.25f * backProgress.value
+                    // 二级页没有底栏 → 列表不该再为药丸留 96dp（见 Common.kt 的 LocalNavSpace）。
+                    // ⚠ 只包这一层：一级页虽然还组合在下面，返回时它的留白与滚动位置都不跳。
+                    CompositionLocalProvider(LocalNavSpace provides 0.dp) {
+                        // 二级页盖在一级页上：拖动时按手势进度右移并淡出，底下一级页露出来。
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .graphicsLayer {
+                                    translationX = size.width * backProgress.value
+                                    alpha = 1f - 0.25f * backProgress.value
+                                }
+                                .background(MaterialTheme.colorScheme.background)
+                        ) {
+                            when (sub) {
+                                SubPage.CROP -> CropScreen(onNotify = notify)
+                                SubPage.MONO -> MonoScreen(onNotify = notify)
+                                SubPage.NOTIFY -> NotifyScreen(onNotify = notify)
+                                SubPage.SCOPE -> ScopeScreen(onNotify = notify)
+                                SubPage.SETUP -> SetupScreen(onNotify = notify)
+                                SubPage.TOOLS -> ToolsScreen(onNotify = notify)
+                                SubPage.ABOUT -> AboutScreen(
+                                    state = updateState,
+                                    onCheck = checkUpdate,
+                                    onNotify = notify,
+                                )
                             }
-                            .background(MaterialTheme.colorScheme.background)
-                    ) {
-                        when (sub) {
-                            SubPage.CROP -> CropScreen(onNotify = notify)
-                            SubPage.MONO -> MonoScreen(onNotify = notify)
-                            SubPage.NOTIFY -> NotifyScreen(onNotify = notify)
-                            SubPage.SCOPE -> ScopeScreen(onNotify = notify)
-                            SubPage.SETUP -> SetupScreen(onNotify = notify)
-                            SubPage.TOOLS -> ToolsScreen(onNotify = notify)
-                            SubPage.ABOUT -> AboutScreen(
-                                state = updateState,
-                                onCheck = checkUpdate,
-                                onNotify = notify,
-                            )
                         }
                     }
                 }
