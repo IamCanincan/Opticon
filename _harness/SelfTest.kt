@@ -692,6 +692,18 @@ fun main() {
       check("通知归一：满墨（100%）源**原样交回**、不再缩到 95%", ff === full,
         "同一对象=${ff === full}")
     }
+    // **不许交一块没有标识的色块**（2026-11-07 主人：「给你什么，你就做成黑白剪影，
+    // 不能是单纯无标识色块」）。纯色源压出来的剪影没有意义 —— 必须返回 null，
+    // 由调用方走「用应用图标兜底」那一支（再不行就原样放过，总之不交色块）。
+    run {
+      val solid = block(96, 96, 96, 96, 0, 0)      // 整幅单色
+      check("通知剪影：纯色源 → null（走应用图标兜底，不许交一整块色块）",
+        com.iamcanincan.opticon.notify.IconBitmap.monochrome(solid) == null, "纯色源")
+      val big = block(96, 96, 90, 90, 3, 3)        // 90×90 ≈ 88% 覆盖
+      check("通知剪影：覆盖 88% 的实心块 → null（>85% 不是图形，是块）",
+        com.iamcanincan.opticon.notify.IconBitmap.monochrome(big) == null, "88% 块")
+    }
+
     check("通知归一：整张透明 → null（调用方按『放弃』走，不交空图）",
       com.iamcanincan.opticon.notify.IconBitmap.fitInk(android.graphics.Bitmap.createBitmap(24, 24, cfg), 0.95f) == null,
       "空图必须 null")
