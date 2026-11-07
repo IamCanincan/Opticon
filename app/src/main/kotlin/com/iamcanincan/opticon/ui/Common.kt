@@ -97,6 +97,20 @@ internal fun PageRole(text: String) {
   )
 }
 
+/**
+ * 章节标题：KernelSU 的 SegmentedColumn 用 titleSmallEmphasized + 主色、左 16dp、下 8dp。
+ * 四页共用这一份，免得一页一个样。
+ */
+@Composable
+internal fun GroupTitle(text: String) {
+  Text(
+    text = text,
+    style = MaterialTheme.typography.titleSmallEmphasized,
+    color = MaterialTheme.colorScheme.primary,
+    modifier = Modifier.padding(start = 16.dp, bottom = 8.dp),
+  )
+}
+
 /** 分组列表的行间距：**相近但不贴在一起**（2026-11-07 主人）。 */
 internal val GroupGap = 2.dp
 

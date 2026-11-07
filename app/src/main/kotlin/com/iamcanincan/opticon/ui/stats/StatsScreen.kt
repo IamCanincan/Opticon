@@ -27,9 +27,9 @@ import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.ui.OpticonCard
 import com.iamcanincan.opticon.ui.PageRole
 import com.iamcanincan.opticon.ui.GroupGap
+import com.iamcanincan.opticon.ui.GroupTitle
 import com.iamcanincan.opticon.ui.ScreenList
 import com.iamcanincan.opticon.ui.groupRowShape
-import com.iamcanincan.opticon.ui.SectionLabel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -81,7 +81,7 @@ fun StatsScreen() {
       )
     }
     groups.forEach { (feature, rows) ->
-      item(key = "h:$feature") { SectionLabel(feature) }
+      item(key = "h:$feature") { GroupTitle(feature) }
       items(rows.size, key = { i -> "$feature:${rows[i].first}" }) { i ->
         val (label, n) = rows[i]
         BarRow(label = label, value = n, max = rows.maxOf { it.second },
