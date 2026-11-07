@@ -37,7 +37,6 @@ import com.iamcanincan.opticon.ui.GroupGap
 import com.iamcanincan.opticon.ui.PageRole
 import com.iamcanincan.opticon.ui.groupRowShape
 import com.iamcanincan.opticon.ui.ScreenList
-import com.iamcanincan.opticon.ui.SectionLabel
 import com.iamcanincan.opticon.ui.stats.StatsStore
 
 /**
@@ -108,7 +107,7 @@ fun HomeScreen() {
       }
     }
 
-    item { SectionLabel(stringResource(R.string.home_features)) }
+    item { GroupTitle(stringResource(R.string.home_features)) }
 
     // 功能列表：灰图标 + 标题 + 副标题 + 右侧开/关小胶囊
     item {
@@ -125,7 +124,7 @@ fun HomeScreen() {
       }
     }
 
-    item { SectionLabel(stringResource(R.string.home_tips)) }
+    item { GroupTitle(stringResource(R.string.home_tips)) }
 
     // 底部这一组是"常见疑问"：原来是页面底部一行小字，下面半屏全是空白（主人："每个板块都好空"）。
     // 顶栏收回普通高度后，两行提示也能完整落在药丸上方（之前大标题栏时第二行会被压住）。
@@ -174,7 +173,7 @@ private fun FeatureRow(spec: FeatureSpec, shape: androidx.compose.ui.graphics.Sh
   val title = spec.title
   val subtitle = spec.subtitle
   val on = spec.on
-  OpticonCard(shape = shape, border = null, padding = 0.dp, containerColor = MaterialTheme.colorScheme.surfaceBright) {
+  OpticonCard(shape = shape, border = null, padding = 0.dp, containerColor = MaterialTheme.colorScheme.surfaceContainerHigh) {
     Row(
       modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
       verticalAlignment = Alignment.CenterVertically,
@@ -228,7 +227,7 @@ private fun FeatureRow(spec: FeatureSpec, shape: androidx.compose.ui.graphics.Sh
 /** 提示行：灰图标 + 标题 + 一行解释，与功能行同一套版式（没有右侧胶囊）。 */
 @Composable
 private fun TipRow(icon: ImageVector, title: Int, body: Int, shape: androidx.compose.ui.graphics.Shape) {
-  OpticonCard(shape = shape, border = null, padding = 0.dp, containerColor = MaterialTheme.colorScheme.surfaceBright) {
+  OpticonCard(shape = shape, border = null, padding = 0.dp, containerColor = MaterialTheme.colorScheme.surfaceContainerHigh) {
     Row(
       modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
       verticalAlignment = Alignment.CenterVertically,
@@ -251,6 +250,17 @@ private fun TipRow(icon: ImageVector, title: Int, body: Int, shape: androidx.com
     }
   }
 }
+/** 章节标题：KSU 用 titleSmallEmphasized + 主色，左 16dp、下 8dp —— 照抄。 */
+@Composable
+private fun GroupTitle(text: String) {
+  Text(
+    text = text,
+    style = MaterialTheme.typography.titleSmallEmphasized,
+    color = MaterialTheme.colorScheme.primary,
+    modifier = Modifier.padding(start = 16.dp, bottom = 8.dp),
+  )
+}
+
 /** 快照按功能分成两堆（裁圆 / 通知），再各给一个总数。 */
 private fun splitCounts(snapshot: String?): Triple<Int, Int, Int> {
   if (snapshot.isNullOrBlank()) return Triple(0, 0, 0)

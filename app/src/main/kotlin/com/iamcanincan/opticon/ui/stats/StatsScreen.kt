@@ -103,7 +103,7 @@ private fun BarRow(
   // 与主页/设置同一套分组圆角：首尾大圆角、中间小圆角、行间 3dp 缝。
   OpticonCard(
     shape = shape,
-    containerColor = MaterialTheme.colorScheme.surfaceBright,
+    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
     padding = 0.dp,
     modifier = Modifier.padding(bottom = GroupGap),
   ) {

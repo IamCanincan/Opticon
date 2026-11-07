@@ -151,7 +151,7 @@ internal fun ScreenList(content: LazyListScope.() -> Unit) {
       // 末尾让出悬浮药丸那一段，否则滚到底时最后一张卡会被它压住
       bottom = 24.dp + FloatingNavSpace,
     ),
-    verticalArrangement = Arrangement.spacedBy(12.dp),
+    verticalArrangement = Arrangement.spacedBy(13.dp),
     content = content,
   )
 }
