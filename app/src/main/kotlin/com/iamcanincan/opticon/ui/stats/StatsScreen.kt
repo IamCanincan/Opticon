@@ -90,16 +90,16 @@ private fun BarRow(label: String, value: Int, max: Int) {
   Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
     Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
       Text(label, style = MaterialTheme.typography.bodyMedium)
-      Text("$value", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+      Text("$value", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
     }
     Spacer(modifier = Modifier.height(4.dp))
     Box(
-      modifier = Modifier.fillMaxWidth().height(8.dp)
-        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f), RoundedCornerShape(4.dp)),
+      modifier = Modifier.fillMaxWidth().height(10.dp)
+        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f), RoundedCornerShape(5.dp)),
     ) {
       Box(
-        modifier = Modifier.fillMaxWidth(frac).height(8.dp)
-          .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(4.dp)),
+        modifier = Modifier.fillMaxWidth(frac).height(10.dp)
+          .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(5.dp)),
       )
     }
   }

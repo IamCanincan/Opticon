@@ -56,8 +56,8 @@ fun HomeScreen() {
 
   ScreenList {
     item {
-      OpticonCard {
-        Column(modifier = Modifier.padding(18.dp)) {
+      OpticonCard(containerColor = MaterialTheme.colorScheme.tertiaryContainer, contentColor = MaterialTheme.colorScheme.onTertiaryContainer) {
+        Column(modifier = Modifier.padding(22.dp)) {
           Text(
             text = stringResource(R.string.home_role),
             style = MaterialTheme.typography.labelMedium,
@@ -67,9 +67,9 @@ fun HomeScreen() {
           Row(verticalAlignment = Alignment.Bottom) {
             Text(
               text = if (total > 0) "$total" else "—",
-              fontSize = 44.sp,
+              fontSize = 57.sp,
               fontWeight = FontWeight.SemiBold,
-              color = MaterialTheme.colorScheme.primary,
+              color = MaterialTheme.colorScheme.onTertiaryContainer,
             )
             Spacer(modifier = Modifier.size(8.dp))
             Text(
@@ -119,11 +119,11 @@ private fun StatusTile(icon: ImageVector, title: String, on: Boolean) {
     contentColor = if (on) scheme.onPrimaryContainer else scheme.onSurfaceVariant,
   ) {
     Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 16.dp),
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 20.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Box(
-        modifier = Modifier.size(40.dp)
+        modifier = Modifier.size(46.dp)
           .background(
             if (on) scheme.onPrimaryContainer.copy(alpha = 0.12f)
             else scheme.onSurface.copy(alpha = 0.08f),
@@ -131,7 +131,7 @@ private fun StatusTile(icon: ImageVector, title: String, on: Boolean) {
           ),
         contentAlignment = Alignment.Center,
       ) {
-        Icon(icon, contentDescription = null, modifier = Modifier.size(22.dp))
+        Icon(icon, contentDescription = null, modifier = Modifier.size(26.dp))
       }
       Spacer(modifier = Modifier.size(14.dp))
       Text(
