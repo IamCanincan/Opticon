@@ -43,6 +43,11 @@
     <string name="stats_empty_body">到桌面划一划、随手开几个应用；桌面与系统界面每处理 20 次回报一次，之后这里就按功能列出次数。</string>
     <string name="stats_at">上次更新 %1$s（由桌面 / 系统界面上报）</string>
     <string name="stats_refresh">刷新</string>
+    <string name="stats_by_feature">按功能</string>
+    <string name="stats_total_unit">次处理</string>
+    <string name="stats_percent">%1$d%%</string>
+    <string name="stats_times">次</string>
+    <string name="stats_share">占 %1$d%%</string>
     <string name="home_sub">图标裁圆 · 单色极性 · 通知小图标，三项都可以单独开关。下面一眼看全当前状态。</string>
     <string name="home_features">功能状态</string>
     <string name="home_sub_crop">桌面图标统一裁成圆形</string>
@@ -77,7 +82,7 @@
     <string name="settings_tools_sub">清除桌面缓存、重启相关进程</string>
     <string name="settings_about_sub">版本与检查更新</string>
     <string name="action_back">返回</string>
-    <string name="stats_role">按功能分组，组内标出来源进程</string>
+    <string name="stats_role">总览占比，按功能列出来源</string>
     <string name="settings_role">作用域、运维与关于</string>
     <string name="stats_note">这些数字在说什么：裁圆 = 桌面裁过的图标次数；通知 · 被补 = 我们替应用把彩色通知图标改成黑白的次数；通知 · 已适配 = 应用本来就给黑白的次数（我们没动）。</string>
 
