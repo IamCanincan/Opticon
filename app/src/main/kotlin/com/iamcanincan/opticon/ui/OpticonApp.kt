@@ -314,9 +314,8 @@ fun OpticonApp() {
                     title = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             BrandMark()
-                            Spacer(Modifier.width(10.dp))
+                            Spacer(Modifier.width(12.dp))
                             Column {
-                                // 大标题栏里品牌名已经在左侧标志上，重复那行小字只会和标志挤在一起。
                                 AnimatedContent(
                                     targetState = pageTitle,
                                     transitionSpec = { fadeIn() togetherWith fadeOut() },
@@ -411,23 +410,20 @@ fun OpticonApp() {
  */
 @Composable
 private fun BrandMark() {
-  // 与桌面图标同构：background + foreground 两层都铺满（2026-11-07 主人："和桌面上的不一样，字符太小"）。
-  // ⚠ 前景矢量自带自适应图标的安全边距（"Oi" 只占中间一小块），单独铺满会显小；
-  //   必须连 background 一起按 108 视口画，才是桌面上那个样子。
+  // 主人桌面用的是**主题图标**：圆底取动态主色、字形取单色层。这里照那个渲染，
+  // 而不是彩色版的两层叠放（2026-11-07："还是和桌面图标不一样"）。
   Box(
     modifier =
       Modifier.size(30.dp)
-        .clip(androidx.compose.foundation.shape.CircleShape),
+        .clip(androidx.compose.foundation.shape.CircleShape)
+        .background(MaterialTheme.colorScheme.primaryContainer),
+    contentAlignment = androidx.compose.ui.Alignment.Center,
   ) {
-    Image(
-      painter = painterResource(R.drawable.ic_launcher_background),
+    androidx.compose.material3.Icon(
+      painter = painterResource(R.drawable.ic_launcher_monochrome),
       contentDescription = null,
-      modifier = Modifier.fillMaxSize(),
-    )
-    Image(
-      painter = painterResource(R.drawable.ic_launcher_foreground),
-      contentDescription = null,
-      modifier = Modifier.fillMaxSize(),
+      tint = MaterialTheme.colorScheme.onPrimaryContainer,
+      modifier = Modifier.fillMaxSize(0.62f),
     )
   }
 }
