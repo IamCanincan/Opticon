@@ -411,18 +411,23 @@ fun OpticonApp() {
  */
 @Composable
 private fun BrandMark() {
-  // 圆形底 + 图标缩到 72%：方底 + 1dp 描边在 28dp 上会显得脏（2026-11-07 主人："这个 oi logo 不够美观"）。
+  // 与桌面图标同构：background + foreground 两层都铺满（2026-11-07 主人："和桌面上的不一样，字符太小"）。
+  // ⚠ 前景矢量自带自适应图标的安全边距（"Oi" 只占中间一小块），单独铺满会显小；
+  //   必须连 background 一起按 108 视口画，才是桌面上那个样子。
   Box(
     modifier =
       Modifier.size(30.dp)
-        .clip(androidx.compose.foundation.shape.CircleShape)
-        .background(colorResource(R.color.opticon_icon_background)),
-    contentAlignment = androidx.compose.ui.Alignment.Center,
+        .clip(androidx.compose.foundation.shape.CircleShape),
   ) {
+    Image(
+      painter = painterResource(R.drawable.ic_launcher_background),
+      contentDescription = null,
+      modifier = Modifier.fillMaxSize(),
+    )
     Image(
       painter = painterResource(R.drawable.ic_launcher_foreground),
       contentDescription = null,
-      modifier = Modifier.fillMaxSize(0.72f),
+      modifier = Modifier.fillMaxSize(),
     )
   }
 }
