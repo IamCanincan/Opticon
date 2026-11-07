@@ -63,8 +63,8 @@ fun HomeScreen() {
     // 状态卡：图标 + 一行结论 + 一行数据 + 右侧胶囊（同 KernelSU 的"工作中 / 版本 / LKM"）
     item {
       OpticonCard(
-        containerColor = MaterialTheme.colorScheme.secondaryContainer,
-        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        containerColor = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
         shape = MaterialTheme.shapes.extraLarge,
         border = null,
       ) {
