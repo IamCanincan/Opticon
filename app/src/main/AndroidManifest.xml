@@ -121,6 +121,15 @@
             桌面删完图标缓存、准备重启自己时回报一声（免鉴权：桌面不持有我们的签名权限）。
             代价是任何应用都能伪造这一响——它只弹一句提示，不动任何配置。见 CacheAckReceiver。
         -->
+        <!-- 统计快照：宿主进程数好后广播过来（免鉴权，只影响统计页上的数字）。 -->
+        <receiver
+            android:name=".ui.stats.StatsReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.iamcanincan.opticon.STATS" />
+            </intent-filter>
+        </receiver>
+
         <receiver
             android:name=".runtime.CacheAckReceiver"
             android:exported="true">

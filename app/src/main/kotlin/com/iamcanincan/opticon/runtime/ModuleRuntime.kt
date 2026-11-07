@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.SystemClock
 import android.util.Log
+import com.iamcanincan.opticon.BuildConfig
 import android.util.Xml
 import io.github.libxposed.api.XposedInterface
 import org.xmlpull.v1.XmlPullParser
@@ -248,6 +249,24 @@ object ModuleRuntime {
             }
         } finally {
             refreshing.set(false)
+        }
+    }
+
+    /**
+     * 把统计快照广播给模块应用（「统计」页的数据来源）。
+     *
+     * 宿主进程读不到应用的数据目录、应用也读不到宿主的内存，实测能通的只有广播这一条
+     * （与  同一条路）。频次由 [Stats] 控制（每 20 次计数一次），这里不额外节流。
+     */
+    internal fun publishStats(snapshot: String) {
+        val ctx = hostContext() ?: return
+        runCatching {
+            val i = android.content.Intent(ACTION_STATS)
+                .setPackage(BuildConfig.APPLICATION_ID)
+                .putExtra("stats", snapshot)
+                .putExtra("at", System.currentTimeMillis())
+            i.addFlags(android.content.Intent.FLAG_RECEIVER_FOREGROUND)
+            ctx.sendBroadcast(i)
         }
     }
 

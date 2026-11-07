@@ -657,6 +657,7 @@ private val cropCount = java.util.concurrent.atomic.AtomicLong(0)
 private val cropDumps = java.util.concurrent.atomic.AtomicLong(0)
 
 private fun noteCrop(from: String) {
+  com.iamcanincan.opticon.runtime.Stats.bump("裁圆")
   val key = "$from ← $clipHost"
   cropTally.merge(key, 1) { a, b -> a + b }
   if (cropTally[key] == 1) Log.d(TAG, "裁圆新开 host=$clipHost 通道=$from（第一次）")

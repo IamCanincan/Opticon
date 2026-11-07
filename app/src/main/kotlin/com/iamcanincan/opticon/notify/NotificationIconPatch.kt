@@ -383,6 +383,7 @@ object NotificationIconPatch {
      * 而那正是主人问过的那句"通知图标适配得怎么样"。与 `裁圆累计` 同一个形状，换个分母。
      */
     private fun countBranch(kind: String) {
+        com.iamcanincan.opticon.runtime.Stats.bump("通知/" + kind)
         val n = synchronized(branchCounts) {
             branchCounts[kind] = (branchCounts[kind] ?: 0) + 1
             ++branchTotal
