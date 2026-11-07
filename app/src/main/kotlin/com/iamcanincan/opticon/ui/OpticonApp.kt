@@ -257,9 +257,12 @@ fun OpticonApp() {
         }
     }
 
-    // 切页时把底栏放出来（KeyLens 的 resetScrollState 同样做这件事）：
-    // 从滚动着的长页滑到新页，新页通常停在顶部，底栏不该继续隐身。
-    LaunchedEffect(pagerState.currentPage) { navVisible = true }
+    // 切页 / 进出二级页时都**强制把底栏放出来**（KeyLens 的 resetScrollState 同样做这件事）：
+    // 从滚动着的长页滑到新页、或从二级页返回，新画面通常停在顶部，底栏不该继续隐身。
+    // ⚠ 2026-11-08 主人报过：「二级界面上滑然后返回上一页后，底栏不见了」——
+    //   二级页里滚动照样会把它置成 false，而原来的 key 只有 currentPage（返回时没变），
+    //   所以那条 false 一直留到下一次切页。这里把 subPage 也放进 key。
+    LaunchedEffect(pagerState.currentPage, subPage) { navVisible = true }
 
     // 顶栏标题：一级页跟 Pager 走；二级页换成那一页的名字（左上角同时出现返回箭头）。
     val pageTitle = stringResource(
