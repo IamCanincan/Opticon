@@ -144,48 +144,56 @@ private fun ScopeGroup(onNotify: (String) -> Unit) {
         R.string.scope_launcher_title,
         R.string.scope_launcher_desc,
         ScopeTag.REQUIRED,
+        copyText = "com.android.launcher3",
       ),
       ScopeItem(
         Icons.Default.Home,
         R.string.scope_launcher_pixel_title,
         R.string.scope_launcher_pixel_desc,
         ScopeTag.REQUIRED,
+        copyText = "com.google.android.apps.nexuslauncher",
       ),
       ScopeItem(
         Icons.Default.Dashboard,
         R.string.scope_systemui_title,
         R.string.scope_systemui_desc,
         ScopeTag.RECOMMENDED,
+        copyText = "com.android.systemui",
       ),
       ScopeItem(
         Icons.Default.Settings,
         R.string.scope_settings_title,
         R.string.scope_settings_desc,
         ScopeTag.RECOMMENDED,
+        copyText = "com.android.settings",
       ),
       ScopeItem(
         Icons.Default.Search,
         R.string.scope_settings_intelligence_title,
         R.string.scope_settings_intelligence_desc,
         ScopeTag.OPTIONAL,
+        copyText = "com.google.android.settings.intelligence",
       ),
       ScopeItem(
         Icons.Default.Share,
         R.string.scope_intentresolver_title,
         R.string.scope_intentresolver_desc,
         ScopeTag.OPTIONAL,
+        copyText = "com.android.intentresolver",
       ),
       ScopeItem(
         Icons.Default.Security,
         R.string.scope_permissioncontroller_title,
         R.string.scope_permissioncontroller_desc,
         ScopeTag.OPTIONAL,
+        copyText = "com.android.permissioncontroller",
       ),
       ScopeItem(
         Icons.Default.Schedule,
         R.string.scope_wellbeing_title,
         R.string.scope_wellbeing_desc,
         ScopeTag.OPTIONAL,
+        copyText = "com.google.android.apps.wellbeing",
       ),
     )
 
@@ -314,6 +322,12 @@ private fun ScopeRow(item: ScopeItem, onNotify: (String) -> Unit) {
           modifier = Modifier.size(14.dp),
         )
       }
+      // 包名单独一行小字：标题给友好名，真正的在框架里勾哪个看这一行（整行可点复制）。
+      Text(
+        text = pkg,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
       Spacer(modifier = Modifier.height(2.dp))
       Text(
         text = stringResource(item.descRes),

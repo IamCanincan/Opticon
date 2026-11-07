@@ -89,34 +89,34 @@
     <string name="scope_copied">已复制：%1$s</string>
 
     <!-- 10 个推荐作用域（标题 + 描述 + 标签档位）-->
-    <string name="scope_system_title">android（system_server）</string>
-    <string name="scope_system_desc">系统服务；解析应用信息。</string>
+    <string name="scope_system_title">系统服务</string>
+    <string name="scope_system_desc">解析应用信息、把图标交给桌面时经过这里。</string>
 
-    <string name="scope_systemprocess_title">system</string>
+    <string name="scope_systemprocess_title">系统进程</string>
     <string name="scope_systemprocess_desc">系统进程；部分 ROM 在此解析图标。</string>
 
-    <string name="scope_launcher_title">com.android.launcher3</string>
+    <string name="scope_launcher_title">AOSP 桌面</string>
     <string name="scope_launcher_desc">桌面与应用抽屉（类原生 ROM）；Android 16 强制动态取色下，未适配应用的单色图标亦在此修正。</string>
 
-    <string name="scope_launcher_pixel_title">com.google.android.apps.nexuslauncher</string>
+    <string name="scope_launcher_pixel_title">Pixel 桌面</string>
     <string name="scope_launcher_pixel_desc">桌面与应用抽屉（Pixel / Nexus）；Android 16 强制动态取色下，未适配应用的单色图标亦在此修正。</string>
 
-    <string name="scope_systemui_title">com.android.systemui</string>
+    <string name="scope_systemui_title">系统界面</string>
     <string name="scope_systemui_desc">状态栏与最近任务；通知小图标的修复在此执行。</string>
 
-    <string name="scope_settings_title">com.android.settings</string>
+    <string name="scope_settings_title">设置</string>
     <string name="scope_settings_desc">设置中的应用列表。</string>
 
-    <string name="scope_settings_intelligence_title">com.google.android.settings.intelligence</string>
+    <string name="scope_settings_intelligence_title">设置智能建议</string>
     <string name="scope_settings_intelligence_desc">设置搜索与建议中的应用图标。</string>
 
-    <string name="scope_intentresolver_title">com.android.intentresolver</string>
+    <string name="scope_intentresolver_title">分享面板</string>
     <string name="scope_intentresolver_desc">分享与打开方式选择列表中的应用图标。</string>
 
-    <string name="scope_permissioncontroller_title">com.android.permissioncontroller</string>
+    <string name="scope_permissioncontroller_title">权限控制器</string>
     <string name="scope_permissioncontroller_desc">权限弹窗中的应用图标。</string>
 
-    <string name="scope_wellbeing_title">com.google.android.apps.wellbeing</string>
+    <string name="scope_wellbeing_title">数字健康</string>
     <string name="scope_wellbeing_desc">数字健康中的应用使用列表。</string>
 
     <!-- 作用域列表的左右两档（分段按钮）：常用那档只列必选 + 推荐 -->
