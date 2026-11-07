@@ -167,6 +167,7 @@
     <string name="cache_title">清除桌面图标缓存</string>
     <string name="cache_body">桌面将图标位图缓存于其数据库；开关或模块变更后，缓存可能不会自动更新。点击下方按钮可删除该缓存并重启桌面进程（屏幕会短暂闪烁）。模块的掩码缓存按内容与安装标识自动失效，无需手动清理。</string>
     <string name="action_clear_launcher">清除缓存并重启桌面</string>
+    <string name="notify_switch_hint">改完开关会自动重启一次系统界面；万一还是没变化，到「设置 → 运维操作」手动按一次。</string>
     <string name="feature_cache_hint">改完开关会自动清一次桌面缓存并重画图标；万一还是没变化，到「设置 → 运维操作」手动按一次。</string>
     <string name="restart_title">重启界面进程</string>
     <string name="restart_body">系统界面、设置、分享面板这些进程会自己缓存已经画好的图标；重启它们之后，下次打开会用当前设置重新绘制。</string>

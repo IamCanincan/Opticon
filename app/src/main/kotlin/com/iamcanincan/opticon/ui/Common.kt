@@ -510,6 +510,8 @@ internal fun FeatureSwitchCard(
   body: String,
   checked: Boolean,
   onCheckedChange: (Boolean) -> Unit,
+  /** 卡底那句"改完会怎样"。默认是清桌面缓存（裁圆 / 单色），通知页传重启系统界面那句。 */
+  hint: String = stringResource(R.string.feature_cache_hint),
 ) {
   val scheme = MaterialTheme.colorScheme
   OpticonCard(
@@ -553,7 +555,7 @@ internal fun FeatureSwitchCard(
         // 用户报过的那件事：改完开关，屏幕上没变化，以为开关没生效。三页共用这一张卡，提示就写在这里。
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-          text = stringResource(R.string.feature_cache_hint),
+          text = hint,
           style = MaterialTheme.typography.bodySmall,
           color = scheme.onPrimaryContainer.copy(alpha = 0.72f),
         )

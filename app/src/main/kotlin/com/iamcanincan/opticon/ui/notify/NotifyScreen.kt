@@ -65,6 +65,7 @@ fun NotifyScreen(onNotify: (String) -> Unit) {
                 icon = Icons.Default.Notifications,
                 title = stringResource(R.string.notify_switch_title),
                 body = stringResource(R.string.notify_switch_body),
+                hint = stringResource(R.string.notify_switch_hint),
                 checked = enabled,
                 onCheckedChange = { value ->
                     enabled = value
