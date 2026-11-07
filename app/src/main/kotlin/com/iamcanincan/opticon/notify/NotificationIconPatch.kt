@@ -372,7 +372,31 @@ object NotificationIconPatch {
      * 尺 = 墨外接框长边 ÷ 画布长边（槽位是 22dp 的 fitCenter，所以观感大小就是这个比值）。
      * 消息一次成型：**不拆成"前段" + "后段 %.2f".format(…)** —— 那样占位符会整体错位（本仓记过一次）。
      */
+    /** 各分支处理过多少次（`已适配` / `被补` / `代用应用图标` / `放弃` / `未解码` …）。 */
+    private val branchCounts = HashMap<String, Int>()
+    private var branchTotal = 0
+
+    /**
+     * 累计账：每 [CENSUS_EVERY] 次打一行分布，**第一次也打**（否则"这条日志活着没有"永远没法证）。
+     *
+     * 为什么需要它：逐条的 `通知尺 …首见` 只回答"这一家我们做了什么"，回答不了"整体里各占多少"——
+     * 而那正是主人问过的那句"通知图标适配得怎么样"。与 `裁圆累计` 同一个形状，换个分母。
+     */
+    private fun countBranch(kind: String) {
+        val n = synchronized(branchCounts) {
+            branchCounts[kind] = (branchCounts[kind] ?: 0) + 1
+            ++branchTotal
+        }
+        if (n != 1 && n % CENSUS_EVERY != 0) return
+        val line = synchronized(branchCounts) {
+            branchCounts.entries.sortedByDescending { it.value }.joinToString(" ") { "${it.key}=${it.value}" }
+        }
+        ModuleRuntime.logI("通知尺累计 $n 次：$line")
+    }
+
     private fun noteRuler(pkg: String, kind: String, src: android.graphics.Bitmap, out: android.graphics.Bitmap?) {
+        // 累计账先记：这一句必须在"每包只打一行"的早退之前，否则分母变成"见过的包"而不是"处理过的次数"。
+        countBranch(kind)
         if (rulerSeen.size >= RULER_MAX) return
         // ⚠ **键里必须带包名**（2026-10-22 现撞）：旧键是 `kind + 尺寸`，于是"已适配 96x96"被第一家的
         //   那一行占住，后面**所有**同尺寸的应用都不再打印 —— 排查 flyingbirdlite 时账里根本没有它，
@@ -386,6 +410,9 @@ object NotificationIconPatch {
     }
 
     /** 账的上限：这一族不该长成一本无限账（超出后停止扫描，也就不再印）。 */
+    /** 累计账每这么多次打一行（通知量小，20 一次）。 */
+    private const val CENSUS_EVERY = 20
+
     private const val RULER_MAX = 200
 
     /**
