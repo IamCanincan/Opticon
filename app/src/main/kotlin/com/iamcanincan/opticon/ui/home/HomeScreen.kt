@@ -63,6 +63,7 @@ fun HomeScreen() {
     // 状态卡：图标 + 一行结论 + 一行数据 + 右侧胶囊（同 KernelSU 的"工作中 / 版本 / LKM"）
     item {
       OpticonCard(
+        padding = 0.dp,
         containerColor = MaterialTheme.colorScheme.primaryContainer,
         contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
         shape = MaterialTheme.shapes.extraLarge,
@@ -134,13 +135,19 @@ fun HomeScreen() {
           icon = Icons.Default.Refresh,
           title = R.string.home_tip_stale_title,
           body = R.string.home_tip_stale_body,
-          shape = groupRowShape(0, 2),
+          shape = groupRowShape(0, 3),
         )
         TipRow(
           icon = Icons.Default.Info,
           title = R.string.home_tip_count_title,
           body = R.string.home_tip_count_body,
-          shape = groupRowShape(1, 2),
+          shape = groupRowShape(1, 3),
+        )
+        TipRow(
+          icon = Icons.Default.Info,
+          title = R.string.home_tip_off_title,
+          body = R.string.home_tip_off_body,
+          shape = groupRowShape(2, 3),
         )
       }
     }
@@ -167,7 +174,7 @@ private fun FeatureRow(spec: FeatureSpec, shape: androidx.compose.ui.graphics.Sh
   val title = spec.title
   val subtitle = spec.subtitle
   val on = spec.on
-  OpticonCard(shape = shape, border = null) {
+  OpticonCard(shape = shape, border = null, padding = 0.dp) {
     Row(
       modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
       verticalAlignment = Alignment.CenterVertically,
@@ -221,7 +228,7 @@ private fun FeatureRow(spec: FeatureSpec, shape: androidx.compose.ui.graphics.Sh
 /** 提示行：灰图标 + 标题 + 一行解释，与功能行同一套版式（没有右侧胶囊）。 */
 @Composable
 private fun TipRow(icon: ImageVector, title: Int, body: Int, shape: androidx.compose.ui.graphics.Shape) {
-  OpticonCard(shape = shape, border = null) {
+  OpticonCard(shape = shape, border = null, padding = 0.dp) {
     Row(
       modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
       verticalAlignment = Alignment.CenterVertically,

@@ -104,9 +104,10 @@ private fun BarRow(
   OpticonCard(
     shape = shape,
     containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+    padding = 0.dp,
     modifier = Modifier.padding(bottom = GroupGap),
   ) {
-  Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
+  Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp)) {
     Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
       Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
       Text("$value", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
