@@ -53,7 +53,7 @@ fun HomeScreen() {
   val context = LocalContext.current
   val options = ModulePrefs.read(ModulePrefs.of(context))
   val (snapshot, at) = StatsStore.load(context)
-  val total = totalCount(snapshot)
+  val (cropCount, notifyCount, total) = splitCounts(snapshot)
 
   ScreenList {
     item {
@@ -65,24 +65,13 @@ fun HomeScreen() {
             color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.85f),
           )
           Spacer(modifier = Modifier.height(10.dp))
-          Row(verticalAlignment = Alignment.Bottom) {
-            Text(
-              text = if (total > 0) "$total" else "—",
-              fontSize = 57.sp,
-              fontWeight = FontWeight.SemiBold,
-              color = MaterialTheme.colorScheme.onTertiaryContainer,
-            )
-            Spacer(modifier = Modifier.size(8.dp))
-            Text(
-              text = stringResource(R.string.home_total_unit),
-              style = MaterialTheme.typography.bodyMedium,
-              color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.85f),
-              modifier = Modifier.padding(bottom = 8.dp),
-            )
+          Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+            BigStat("裁圆", cropCount, Modifier.weight(1f))
+            BigStat("通知", notifyCount, Modifier.weight(1f))
           }
           Text(
             text = if (at == 0L) stringResource(R.string.home_total_none)
-            else stringResource(R.string.home_total_scope),
+            else (if (total > 0) "共 $total 次 · " else "") + stringResource(R.string.home_total_scope),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.75f),
           )
@@ -155,14 +144,38 @@ private fun StatusTile(icon: ImageVector, title: String, subtitle: String, on: B
   }
 }
 
-/** 快照里所有分支的次数之和（跨进程相加），只用于主页那个大数字。 */
-private fun totalCount(snapshot: String?): Int {
-  if (snapshot.isNullOrBlank()) return 0
-  var sum = 0
+/** 快照按功能分成两堆（裁圆 / 通知），再各给一个总数。 */
+private fun splitCounts(snapshot: String?): Triple<Int, Int, Int> {
+  if (snapshot.isNullOrBlank()) return Triple(0, 0, 0)
+  var crop = 0
+  var notify = 0
   for (part in snapshot.split(';')) {
     val eq = part.lastIndexOf('=')
     if (eq <= 0) continue
-    sum += part.substring(eq + 1).toIntOrNull() ?: 0
+    val n = part.substring(eq + 1).toIntOrNull() ?: continue
+    val branch = part.substring(0, eq).substringAfter('/')
+    when {
+      branch.startsWith("裁圆") -> crop += n
+      branch.startsWith("通知") -> notify += n
+    }
   }
-  return sum
+  return Triple(crop, notify, crop + notify)
+}
+
+/** 头图里的一个大数字 + 下面一行小字。 */
+@Composable
+private fun BigStat(label: String, value: Int, modifier: Modifier = Modifier) {
+  Column(modifier = modifier) {
+    Text(
+      text = if (value > 0) "$value" else "—",
+      fontSize = 40.sp,
+      fontWeight = FontWeight.SemiBold,
+      color = LocalContentColor.current,
+    )
+    Text(
+      text = label,
+      style = MaterialTheme.typography.bodySmall,
+      color = LocalContentColor.current.copy(alpha = 0.72f),
+    )
+  }
 }

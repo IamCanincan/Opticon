@@ -42,7 +42,7 @@ fun StatsScreen() {
   val context = LocalContext.current
   var tick by remember { mutableIntStateOf(0) }
   val loaded = remember(tick) { StatsStore.load(context) }
-  val groups = remember(loaded) { groupByProcess(loaded.first) }
+  val groups = remember(loaded) { groupByFeature(loaded.first) }
 
   ScreenList {
     item {
@@ -81,9 +81,9 @@ fun StatsScreen() {
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
       )
     }
-    groups.forEach { (proc, rows) ->
-      item(key = "h:$proc") { SectionLabel(friendlyProcess(proc)) }
-      items(rows.size, key = { i -> "$proc:${rows[i].first}" }) { i ->
+    groups.forEach { (feature, rows) ->
+      item(key = "h:$feature") { SectionLabel(feature) }
+      items(rows.size, key = { i -> "$feature:${rows[i].first}" }) { i ->
         val (label, n) = rows[i]
         BarRow(label = label, value = n, max = rows.maxOf { it.second })
       }
@@ -139,6 +139,33 @@ private fun groupByProcess(snapshot: String?): List<Pair<String, List<Pair<Strin
 }
 
 /** 包名对普通读者没有意义：桌面 / 系统界面 / 设置，其余保留原名。 */
+/**
+ * 按**功能**分组（裁圆 / 通知 / 其他），组内再按进程拆开。
+ *
+ * 按进程分组是给排障看的（桌面里发生了什么），而主人问的是各功能怎么样 ——
+ * 功能在前、进程在后，才和他脑子里的顺序一致。
+ */
+private fun groupByFeature(snapshot: String?): List<Pair<String, List<Pair<String, Int>>>> {
+  if (snapshot.isNullOrBlank()) return emptyList()
+  val byFeature = LinkedHashMap<String, MutableList<Pair<String, Int>>>()
+  for (part in snapshot.split(';')) {
+    val eq = part.lastIndexOf('=')
+    if (eq <= 0) continue
+    val n = part.substring(eq + 1).toIntOrNull() ?: continue
+    val key = part.substring(0, eq)
+    val slash = key.indexOf('/')
+    val proc = if (slash > 0) key.substring(0, slash) else "?"
+    val branch = if (slash > 0) key.substring(slash + 1) else key
+    val feature = branch.substringBefore('/')
+    val detail = if (branch.contains('/')) branch.substringAfter('/') else ""
+    val label = friendlyProcess(proc) + if (detail.isEmpty()) "" else " · $detail"
+    byFeature.getOrPut(feature) { ArrayList() }.add(label to n)
+  }
+  return byFeature.entries
+    .map { it.key to it.value.sortedByDescending { p -> p.second } }
+    .sortedByDescending { e -> e.second.sumOf { p -> p.second } }
+}
+
 private fun friendlyProcess(proc: String): String = when (proc) {
   "com.android.launcher3", "com.google.android.apps.nexuslauncher" -> "桌面"
   "com.android.systemui" -> "系统界面"
