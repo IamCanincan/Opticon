@@ -86,12 +86,19 @@ fun StatsScreen() {
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
       )
     }
+    // ⚠ 一组必须是**一个 item**：组的每一行如果各自是一个列表项，列表自己的 13dp 组间距
+    //   会把"首尾大圆角、中间贴紧 2dp"那套拆开 —— 2026-11-08 主人：「这个小圆角怎么靠这么远」。
     groups.forEach { (feature, rows) ->
-      item(key = "h:$feature") { GroupTitle(feature) }
-      items(rows.size, key = { i -> "$feature:${rows[i].first}" }) { i ->
-        val (label, n) = rows[i]
-        BarRow(label = label, value = n, max = rows.maxOf { it.second },
-          shape = groupRowShape(i, rows.size))
+      item(key = "g:$feature") {
+        Column {
+          GroupTitle(feature)
+          Column(verticalArrangement = Arrangement.spacedBy(GroupGap)) {
+            val max = rows.maxOf { it.second }
+            rows.forEachIndexed { i, (label, n) ->
+              BarRow(label = label, value = n, max = max, shape = groupRowShape(i, rows.size))
+            }
+          }
+        }
       }
     }
     // 没数据时下面半屏是空的（只有一张表头卡），补一条"怎么会才有数字"的说明卡。
@@ -141,7 +148,6 @@ private fun BarRow(
     shape = shape,
     containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
     padding = 0.dp,
-    modifier = Modifier.padding(bottom = GroupGap),
   ) {
   Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp)) {
     Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
