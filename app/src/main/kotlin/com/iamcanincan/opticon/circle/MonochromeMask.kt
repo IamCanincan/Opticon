@@ -2217,6 +2217,10 @@ internal object MonochromeMask {
           val a = ta * pa / 255
           if (a > 0) {
             out[i] = (a shl 24) or 0x00FFFFFF
+            // 不切的那一遍也要数：这几格**本来会**上墨，切了就没了。0 = 这张切了等于没切，
+            // [build] 拿它短路掉第二遍（省下的正是满幅支那 27 张里"底没上过墨"的那批）。
+            // ⚠ 计数只在满幅支这里：参照支那边以前也"数"过一次，但那里 tonal 已被过滤成 null，
+            //   tonal != null 恒假 —— 编译器 2026-11-07 报 "Condition is always 'false'"，当场删了。
             if (!cutPlate && s.plate[i] != 0.toByte()) plateInked++
           }
           continue
@@ -2298,9 +2302,6 @@ internal object MonochromeMask {
         }
         if (a > 0) {
           out[i] = (a shl 24) or 0x00FFFFFF
-          // 不切的那一遍也要数：这几格**本来会**上墨，切了就没了。0 = 这张切了等于没切，
-          // [build] 拿它短路掉第二遍（省下的正是满幅支那 27 张里"底没上过墨"的那批）。
-          if (!cutPlate && tonal != null && s.plate[i] != 0.toByte()) plateInked++
         }
       }
     }
