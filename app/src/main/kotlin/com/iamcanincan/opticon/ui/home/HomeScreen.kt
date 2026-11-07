@@ -167,10 +167,10 @@ private fun splitCounts(snapshot: String?): Triple<Int, Int, Int> {
 private fun BigStat(label: String, value: Int, modifier: Modifier = Modifier) {
   Column(modifier = modifier) {
     Text(
-      text = if (value > 0) "$value" else "—",
+      text = "$value",
       fontSize = 40.sp,
       fontWeight = FontWeight.SemiBold,
-      color = LocalContentColor.current,
+      color = LocalContentColor.current.copy(alpha = if (value > 0) 1f else 0.45f),
     )
     Text(
       text = label,

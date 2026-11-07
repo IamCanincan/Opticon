@@ -60,7 +60,7 @@
     <string name="home_total_scope">桌面与系统界面加起来的总次数，明细在「统计」页。</string>
     <string name="home_hint">Opticon %1$s · 开关在「功能」，明细在「统计」，配置与排查在「设置」。</string>
     <string name="features_role">三个开关与它们的效果说明</string>
-    <string name="stats_role">每个分支各处理了多少（按进程分开数）</string>
+    <string name="stats_role">按功能分组，组内标出来源进程</string>
     <string name="settings_role">作用域、排查与运维操作</string>
     <string name="stats_note">这些数字在说什么：裁圆 = 桌面裁过的图标次数；通知 · 被补 = 我们替应用把彩色通知图标改成黑白的次数；通知 · 已适配 = 应用本来就给黑白的次数（我们没动）。</string>
 
