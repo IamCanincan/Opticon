@@ -57,8 +57,10 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -195,7 +197,7 @@ fun OpticonApp() {
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val uriHandler = LocalUriHandler.current
-    val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
+    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(rememberTopAppBarState())
 
     // 底栏的「读完长页就收起来」：和 KeyLens 一样按滚动方向判 —— 向下累计 6dp 收起，
     // 向上累计 6dp 放出；离顶不足 24dp 时不收（短页根本滚不动，也就不会触发）。
@@ -302,7 +304,7 @@ fun OpticonApp() {
                 .nestedScroll(navScrollConnection),
             containerColor = Color.Transparent,
             topBar = {
-                TopAppBar(
+                LargeFlexibleTopAppBar(
                     colors = TopAppBarDefaults.topAppBarColors(
                         // 与渐变顶端同色：顶栏不透明，滚动内容不会从标题后面透出来；
                         // 颜色与 Box 渐变的第一个色标一致，视觉上仍是一整块。
@@ -314,11 +316,7 @@ fun OpticonApp() {
                             BrandMark()
                             Spacer(Modifier.width(10.dp))
                             Column {
-                                Text(
-                                    text = stringResource(R.string.app_name),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+                                // 大标题栏里品牌名已经在左侧标志上，重复那行小字只会和标志挤在一起。
                                 AnimatedContent(
                                     targetState = pageTitle,
                                     transitionSpec = { fadeIn() togetherWith fadeOut() },
@@ -326,7 +324,7 @@ fun OpticonApp() {
                                 ) { title ->
                                     Text(
                                         text = title,
-                                        style = MaterialTheme.typography.titleMedium,
+                                        style = MaterialTheme.typography.headlineMedium,
                                         color = MaterialTheme.colorScheme.onSurface,
                                     )
                                 }
