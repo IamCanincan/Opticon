@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.InvertColors
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -60,8 +61,8 @@ fun HomeScreen() {
         Column(modifier = Modifier.padding(22.dp)) {
           Text(
             text = stringResource(R.string.home_role),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.85f),
           )
           Spacer(modifier = Modifier.height(10.dp))
           Row(verticalAlignment = Alignment.Bottom) {
@@ -75,7 +76,7 @@ fun HomeScreen() {
             Text(
               text = stringResource(R.string.home_total_unit),
               style = MaterialTheme.typography.bodyMedium,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.85f),
               modifier = Modifier.padding(bottom = 8.dp),
             )
           }
@@ -83,7 +84,7 @@ fun HomeScreen() {
             text = if (at == 0L) stringResource(R.string.home_total_none)
             else stringResource(R.string.home_total_scope),
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.75f),
           )
         }
       }
@@ -93,9 +94,12 @@ fun HomeScreen() {
 
     item {
       Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        StatusTile(Icons.Default.Circle, stringResource(R.string.tab_crop), options.circleEnabled)
-        StatusTile(Icons.Default.InvertColors, stringResource(R.string.tab_mono), options.monoInvert)
-        StatusTile(Icons.Default.Notifications, stringResource(R.string.tab_notify), options.notifyEnabled)
+        StatusTile(Icons.Default.Circle, stringResource(R.string.tab_crop),
+          stringResource(R.string.home_sub_crop), options.circleEnabled)
+        StatusTile(Icons.Default.InvertColors, stringResource(R.string.tab_mono),
+          stringResource(R.string.home_sub_mono), options.monoInvert)
+        StatusTile(Icons.Default.Notifications, stringResource(R.string.tab_notify),
+          stringResource(R.string.home_sub_notify), options.notifyEnabled)
       }
     }
 
@@ -112,14 +116,14 @@ fun HomeScreen() {
 
 /** 一行状态：图标 + 功能名 + 开/关。开关状态用整块颜色表达，不靠读文字。 */
 @Composable
-private fun StatusTile(icon: ImageVector, title: String, on: Boolean) {
+private fun StatusTile(icon: ImageVector, title: String, subtitle: String, on: Boolean) {
   val scheme = MaterialTheme.colorScheme
   OpticonCard(
     containerColor = if (on) scheme.primaryContainer else scheme.surfaceContainerHigh,
     contentColor = if (on) scheme.onPrimaryContainer else scheme.onSurfaceVariant,
   ) {
     Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 20.dp),
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Box(
@@ -134,12 +138,14 @@ private fun StatusTile(icon: ImageVector, title: String, on: Boolean) {
         Icon(icon, contentDescription = null, modifier = Modifier.size(26.dp))
       }
       Spacer(modifier = Modifier.size(14.dp))
-      Text(
-        text = title,
-        style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.SemiBold,
-        modifier = Modifier.weight(1f),
-      )
+      Column(modifier = Modifier.weight(1f)) {
+        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Text(
+          text = subtitle,
+          style = MaterialTheme.typography.bodySmall,
+          color = LocalContentColor.current.copy(alpha = 0.72f),
+        )
+      }
       Text(
         text = stringResource(if (on) R.string.home_on else R.string.home_off),
         style = MaterialTheme.typography.titleMedium,

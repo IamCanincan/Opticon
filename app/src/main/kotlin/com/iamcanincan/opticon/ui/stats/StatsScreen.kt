@@ -73,8 +73,16 @@ fun StatsScreen() {
         }
       }
     }
+    item {
+      Text(
+        text = stringResource(R.string.stats_note),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+      )
+    }
     groups.forEach { (proc, rows) ->
-      item(key = "h:$proc") { SectionLabel(proc) }
+      item(key = "h:$proc") { SectionLabel(friendlyProcess(proc)) }
       items(rows.size, key = { i -> "$proc:${rows[i].first}" }) { i ->
         val (label, n) = rows[i]
         BarRow(label = label, value = n, max = rows.maxOf { it.second })
@@ -89,8 +97,9 @@ private fun BarRow(label: String, value: Int, max: Int) {
   val frac = if (max <= 0) 0f else (value.toFloat() / max).coerceIn(0f, 1f)
   Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
     Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-      Text(label, style = MaterialTheme.typography.bodyMedium)
-      Text("$value", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+      Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+      Text("$value", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.primary)
     }
     Spacer(modifier = Modifier.height(4.dp))
     Box(
@@ -127,6 +136,14 @@ private fun groupByProcess(snapshot: String?): List<Pair<String, List<Pair<Strin
   return byProc.entries
     .map { it.key to it.value.sortedByDescending { p -> p.second } }
     .sortedByDescending { it.second.take(1).sumOf { p -> p.second } }
+}
+
+/** 包名对普通读者没有意义：桌面 / 系统界面 / 设置，其余保留原名。 */
+private fun friendlyProcess(proc: String): String = when (proc) {
+  "com.android.launcher3", "com.google.android.apps.nexuslauncher" -> "桌面"
+  "com.android.systemui" -> "系统界面"
+  "com.android.settings" -> "设置"
+  else -> proc
 }
 
 private fun timeText(at: Long): String =
