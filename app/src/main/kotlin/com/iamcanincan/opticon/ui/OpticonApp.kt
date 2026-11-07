@@ -406,9 +406,20 @@ fun OpticonApp() {
                     }
                 }
                 val navIcon: @Composable () -> Unit = {
-                    // 只有二级页才有返回：一级页的"上一级"就是它自己。
-                    if (subPage != null) {
-                        IconButton(onClick = { subPage = null }) {
+                    // 返回的**入口**也要统一（2026-11-08 主人：「还有返回不统一」）：
+                    // 二级页有返回箭头，可是功能 / 统计 / 设置按返回也会回主页，却看不到箭头。
+                    // 现在凡"退得回去"的页面都画箭头：二级页 → 它的一级页；其它一级页 → 主页。
+                    val canGoBack = subPage != null || pagerState.currentPage != TAB_HOME
+                    if (canGoBack) {
+                        IconButton(
+                            onClick = {
+                                if (subPage != null) {
+                                    subPage = null
+                                } else {
+                                    scope.launch { pagerState.animateScrollToPage(TAB_HOME) }
+                                }
+                            }
+                        ) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                                 contentDescription = stringResource(R.string.action_back),

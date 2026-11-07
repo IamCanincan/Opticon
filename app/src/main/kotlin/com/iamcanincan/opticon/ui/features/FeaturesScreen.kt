@@ -145,9 +145,8 @@ internal fun FeaturesScreen(onNotify: (String) -> Unit, onOpen: (SubPage) -> Uni
           restartSystemUi(context)
           onNotify(appliedAll)
         },
+        // 中性底：上面三个开关"开着"就是主色方块，这个按钮再上主色会被读成第四个开着的东西。
         tile = true,
-        tileContainer = MaterialTheme.colorScheme.primary,
-        tileContent = MaterialTheme.colorScheme.onPrimary,
         showChevron = false,
       )
     }
