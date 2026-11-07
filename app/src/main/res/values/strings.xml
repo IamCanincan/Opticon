@@ -66,7 +66,7 @@
     <string name="home_tip_count_title">这些数字是什么？</string>
     <string name="home_tip_count_body">桌面与系统界面各处理了多少次，每 20 次回报一次；明细在「统计」页。</string>
     <string name="home_total_none">桌面与系统界面每处理 20 次回报一次，稍等就有数字。</string>
-    <string name="features_role">三个开关与它们的效果说明</string>
+    <string name="features_role">三个功能的开关；点行尾的箭头看效果与说明</string>
     <string name="features_group">三个功能</string>
     <string name="settings_group">配置与关于</string>
     <string name="features_all_on">全部开启</string>
@@ -84,7 +84,7 @@
     <string name="action_back">返回</string>
     <string name="stats_role">总览占比，按功能列出来源</string>
     <string name="settings_role">作用域、运维与关于</string>
-    <string name="stats_note">这些数字在说什么：裁圆 = 桌面裁过的图标次数；通知 · 被补 = 我们替应用把彩色通知图标改成黑白的次数；通知 · 已适配 = 应用本来就给黑白的次数（我们没动）。</string>
+    <string name="stats_note">这些数字在说什么：裁圆 = 裁过的图标次数（桌面 / 状态栏 / 最近任务都算）；单色 = 我们替应用生成单色层的张数；通知 · 被补 = 我们把彩色通知图标改成黑白的次数；通知 · 已适配 = 应用本来就给黑白的次数（我们没动）。</string>
 
     <!-- ============ 「图标」页 ============ -->
 
