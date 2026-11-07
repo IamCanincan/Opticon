@@ -197,7 +197,7 @@ fun OpticonApp() {
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val uriHandler = LocalUriHandler.current
-    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(rememberTopAppBarState())
+    val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
 
     // 底栏的「读完长页就收起来」：和 KeyLens 一样按滚动方向判 —— 向下累计 6dp 收起，
     // 向上累计 6dp 放出；离顶不足 24dp 时不收（短页根本滚不动，也就不会触发）。
@@ -304,7 +304,7 @@ fun OpticonApp() {
                 .nestedScroll(navScrollConnection),
             containerColor = Color.Transparent,
             topBar = {
-                LargeFlexibleTopAppBar(
+                TopAppBar(
                     colors = TopAppBarDefaults.topAppBarColors(
                         // 与渐变顶端同色：顶栏不透明，滚动内容不会从标题后面透出来；
                         // 颜色与 Box 渐变的第一个色标一致，视觉上仍是一整块。
@@ -324,7 +324,7 @@ fun OpticonApp() {
                                 ) { title ->
                                     Text(
                                         text = title,
-                                        style = MaterialTheme.typography.headlineMedium,
+                                        style = MaterialTheme.typography.titleMedium,
                                         color = MaterialTheme.colorScheme.onSurface,
                                     )
                                 }

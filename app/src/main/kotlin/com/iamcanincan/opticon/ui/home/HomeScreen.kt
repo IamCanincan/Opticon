@@ -94,15 +94,13 @@ fun HomeScreen() {
           }
           Box(
             modifier = Modifier
-              .background(
-                MaterialTheme.colorScheme.surface.copy(alpha = 0.25f),
-                RoundedCornerShape(50),
-              )
+              .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(50))
               .padding(horizontal = 10.dp, vertical = 4.dp),
           ) {
             Text(
               text = stringResource(R.string.home_state_chip, onCount),
               style = MaterialTheme.typography.labelMedium,
+              color = MaterialTheme.colorScheme.onPrimary,
             )
           }
         }
@@ -129,14 +127,22 @@ fun HomeScreen() {
     item { SectionLabel(stringResource(R.string.home_tips)) }
 
     // 底部这一组是"常见疑问"：原来是页面底部一行小字，下面半屏全是空白（主人："每个板块都好空"）。
-    // 只留一行：主人要"首屏内容不被底栏压住"，两行时第二行正好压在药丸下面。
+    // 顶栏收回普通高度后，两行提示也能完整落在药丸上方（之前大标题栏时第二行会被压住）。
     item {
-      TipRow(
-        icon = Icons.Default.Refresh,
-        title = R.string.home_tip_stale_title,
-        body = R.string.home_tip_stale_body,
-        shape = groupRowShape(0, 1),
-      )
+      Column(verticalArrangement = Arrangement.spacedBy(GroupGap)) {
+        TipRow(
+          icon = Icons.Default.Refresh,
+          title = R.string.home_tip_stale_title,
+          body = R.string.home_tip_stale_body,
+          shape = groupRowShape(0, 2),
+        )
+        TipRow(
+          icon = Icons.Default.Info,
+          title = R.string.home_tip_count_title,
+          body = R.string.home_tip_count_body,
+          shape = groupRowShape(1, 2),
+        )
+      }
     }
   }
 }
@@ -163,13 +169,13 @@ private fun FeatureRow(spec: FeatureSpec, shape: androidx.compose.ui.graphics.Sh
   val on = spec.on
   OpticonCard(shape = shape, border = null) {
     Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Icon(
         imageVector = icon,
         contentDescription = null,
-        tint = if (on) scheme.onSurfaceVariant else scheme.outline,
+        tint = if (on) scheme.primary else scheme.outline,
         modifier = Modifier.size(24.dp),
       )
       Spacer(modifier = Modifier.size(14.dp))
@@ -189,7 +195,7 @@ private fun FeatureRow(spec: FeatureSpec, shape: androidx.compose.ui.graphics.Sh
         Text(
           text = stringResource(R.string.home_count, spec.count),
           style = MaterialTheme.typography.labelMedium,
-          color = scheme.onSurfaceVariant,
+          color = if (on) scheme.primary else scheme.onSurfaceVariant,
           modifier = Modifier.padding(end = 10.dp),
         )
       }

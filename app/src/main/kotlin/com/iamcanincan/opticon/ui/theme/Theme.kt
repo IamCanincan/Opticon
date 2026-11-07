@@ -124,10 +124,14 @@ fun OpticonTheme(
     content: @Composable () -> Unit
 ) {
     val context = LocalContext.current
-    // **不跟随壁纸取色**（2026-11-07 主人："没有强调色"）：跟随动态取色时，整套界面会被
-    // 洗成壁纸那一种颜色，品牌色一点都看不见，看上去就是"没有重点"。用回自己的色板，
-    // 主色（洋红）才成为真正的强调色。
-    val colorScheme = if (darkTheme) DarkColors else LightColors
+    val colorScheme = when {
+        // Android 12+：跟随系统取色（壁纸取色）—— 主人 2026-11-07 明确要这个
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
+            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+
+        darkTheme -> DarkColors
+        else -> LightColors
+    }
 
     // MaterialExpressiveTheme 默认带 Expressive 的弹簧动效（MotionScheme.expressive）
     MaterialExpressiveTheme(
