@@ -191,8 +191,10 @@ private fun FeatureRow(
     subtitle = stringResource(spec.subtitle),
     shape = shape,
     onClick = onClick,
-    // 开着的用主色图标、关着的用灰图标 —— 状态压缩到图标颜色上，不再占一块胶囊。
-    iconTint = if (spec.on) scheme.primary else scheme.outline,
+    // 与功能 / 设置那些入口行同一个语言：40dp 图标方块。开着的用主色底，关着的用中性底。
+    tile = true,
+    tileContainer = if (spec.on) scheme.primary else scheme.surfaceContainerHighest,
+    tileContent = if (spec.on) scheme.onPrimary else scheme.onSurfaceVariant,
     trailing =
       if (spec.count >= 0) {
         {

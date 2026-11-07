@@ -145,7 +145,9 @@ internal fun FeaturesScreen(onNotify: (String) -> Unit, onOpen: (SubPage) -> Uni
           restartSystemUi(context)
           onNotify(appliedAll)
         },
-        iconTint = MaterialTheme.colorScheme.primary,
+        tile = true,
+        tileContainer = MaterialTheme.colorScheme.primary,
+        tileContent = MaterialTheme.colorScheme.onPrimary,
         showChevron = false,
       )
     }
@@ -161,7 +163,7 @@ internal fun FeaturesScreen(onNotify: (String) -> Unit, onOpen: (SubPage) -> Uni
         subtitle = stringResource(R.string.features_effect_body),
         shape = groupRowShape(0, 1),
         onClick = {},
-        iconTint = MaterialTheme.colorScheme.onSurfaceVariant,
+        tile = true,
         showChevron = false,
       )
     }

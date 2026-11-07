@@ -143,6 +143,10 @@ internal fun MenuRow(
   iconTint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
   trailing: (@Composable () -> Unit)? = null,
   showChevron: Boolean = true,
+  /** true = 图标放在 40dp 方块里（与作用域 / 功能页那些入口行同一个语言）。 */
+  tile: Boolean = false,
+  tileContainer: Color = MaterialTheme.colorScheme.surfaceContainerHighest,
+  tileContent: Color = MaterialTheme.colorScheme.onSurfaceVariant,
 ) {
   val scheme = MaterialTheme.colorScheme
   Card(
@@ -155,12 +159,16 @@ internal fun MenuRow(
       modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      Icon(
-        imageVector = icon,
-        contentDescription = null,
-        tint = iconTint,
-        modifier = Modifier.size(24.dp),
-      )
+      if (tile) {
+        IconTile(icon = icon, containerColor = tileContainer, contentColor = tileContent)
+      } else {
+        Icon(
+          imageVector = icon,
+          contentDescription = null,
+          tint = iconTint,
+          modifier = Modifier.size(24.dp),
+        )
+      }
       Spacer(modifier = Modifier.width(14.dp))
       Column(modifier = Modifier.weight(1f)) {
         Text(

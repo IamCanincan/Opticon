@@ -107,6 +107,7 @@ internal fun ModuleScreen(onOpen: (SubPage) -> Unit) {
             subtitle = stringResource(row.subtitle),
             shape = groupRowShape(i, rows.size),
             onClick = { onOpen(row.page) },
+            tile = true,
           )
         }
       }
