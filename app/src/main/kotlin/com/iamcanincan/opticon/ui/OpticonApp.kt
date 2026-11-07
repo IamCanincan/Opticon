@@ -103,6 +103,7 @@ import com.iamcanincan.opticon.BuildConfig
 import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.runtime.ModulePrefs
 import com.iamcanincan.opticon.ui.about.AboutScreen
+import com.iamcanincan.opticon.ui.home.HomeScreen
 import com.iamcanincan.opticon.ui.features.FeaturesScreen
 import com.iamcanincan.opticon.ui.stats.StatsScreen
 import com.iamcanincan.opticon.ui.about.UpdateState
@@ -362,10 +363,14 @@ fun OpticonApp() {
                     userScrollEnabled = false,
                 ) { page ->
                     when (page) {
-                        // 主页 = 模块状态与作用域（原来那页「模块」）；功能 = 三个开关页合成一页。
-                        TAB_HOME -> ModuleScreen(onNotify = notify)
+                        // 主页 = 一屏看全状态；功能 = 三个开关页合成一页；设置 = 原「模块」页。
+                        TAB_HOME -> HomeScreen(
+                            onOpenFeatures = { scope.launch { pagerState.animateScrollToPage(TAB_FEATURES) } },
+                            onOpenStats = { scope.launch { pagerState.animateScrollToPage(TAB_STATS) } },
+                        )
                         TAB_FEATURES -> FeaturesScreen(onNotify = notify)
                         TAB_STATS -> StatsScreen()
+                        TAB_SETTINGS -> ModuleScreen(onNotify = notify)
                         else -> AboutScreen(state = updateState, onCheck = checkUpdate, onNotify = notify)
                     }
                 }
