@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -96,6 +97,10 @@ internal fun PageRole(text: String) {
   )
 }
 
+/** 「上次上报 23:26」用的时刻格式。主页与功能页共用一个，别各写一份。 */
+internal fun timeHm(at: Long): String =
+  java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(at))
+
 /**
  * 章节标题：KernelSU 的 SegmentedColumn 用 titleSmallEmphasized + 主色、左 16dp、下 8dp。
  * 四页共用这一份，免得一页一个样。
@@ -112,6 +117,72 @@ internal fun GroupTitle(text: String) {
 
 /** 分组列表的行间距：**相近但不贴在一起**（2026-11-07 主人）。 */
 internal val GroupGap = 2.dp
+
+/**
+ * 一级页的入口行：图标 + 标题/副标题 + 可选尾随 + 右箭头。点进去是对应的二级页。
+ *
+ * 主页的三个功能、功能页的三个入口、设置页的四项，全用它 —— 一处定间距和字号，
+ * 四页的入口行才不会一页一个样。
+ *
+ * @param trailing 右侧附加内容（开关状态胶囊 / 次数），放在箭头左边
+ * @param showChevron 能不能点进去。为 false 时这一行只是展示（不画箭头）
+ */
+@Composable
+internal fun MenuRow(
+  icon: ImageVector,
+  title: String,
+  subtitle: String,
+  shape: androidx.compose.ui.graphics.Shape,
+  onClick: () -> Unit,
+  iconTint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+  trailing: (@Composable () -> Unit)? = null,
+  showChevron: Boolean = true,
+) {
+  val scheme = MaterialTheme.colorScheme
+  Card(
+    onClick = onClick,
+    modifier = Modifier.fillMaxWidth(),
+    shape = shape,
+    colors = CardDefaults.cardColors(containerColor = scheme.surfaceContainerHigh),
+  ) {
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Icon(
+        imageVector = icon,
+        contentDescription = null,
+        tint = iconTint,
+        modifier = Modifier.size(24.dp),
+      )
+      Spacer(modifier = Modifier.width(14.dp))
+      Column(modifier = Modifier.weight(1f)) {
+        Text(
+          text = title,
+          style = MaterialTheme.typography.titleMedium,
+          color = scheme.onSurface,
+        )
+        Text(
+          text = subtitle,
+          style = MaterialTheme.typography.bodyMedium,
+          color = scheme.onSurfaceVariant,
+        )
+      }
+      if (trailing != null) {
+        Spacer(modifier = Modifier.width(10.dp))
+        trailing()
+      }
+      if (showChevron) {
+        Icon(
+          imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+          contentDescription = null,
+          tint = scheme.onSurfaceVariant,
+          modifier = Modifier.size(20.dp),
+        )
+      }
+    }
+  }
+}
 
 /**
  * 分组列表的圆角：首行圆上两角、末行圆下两角，中间行四个小圆角。

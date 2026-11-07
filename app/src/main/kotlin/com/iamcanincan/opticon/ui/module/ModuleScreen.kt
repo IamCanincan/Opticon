@@ -17,13 +17,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Power
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
@@ -63,9 +66,11 @@ import com.iamcanincan.opticon.ui.GroupGap
 import com.iamcanincan.opticon.ui.GroupTitle
 import com.iamcanincan.opticon.ui.HeroCard
 import com.iamcanincan.opticon.ui.IconTile
+import com.iamcanincan.opticon.ui.MenuRow
 import com.iamcanincan.opticon.ui.OpticonCard
 import com.iamcanincan.opticon.ui.PageRole
 import com.iamcanincan.opticon.ui.ScreenList
+import com.iamcanincan.opticon.ui.SubPage
 import com.iamcanincan.opticon.ui.groupRowShape
 import kotlinx.coroutines.launch
 
@@ -83,39 +88,76 @@ private val OTHER_RESTARTABLE =
   )
 
 /**
- * 「模块」页：三个功能共用的东西 —— 作用域、启用步骤、验证方式、运维操作。
+ * 「设置」一级页：四项的入口 —— 作用域 / 启用与验证 / 运维操作 / 关于。
  *
- * 为什么单独成页：作用域清单里既有给图标那两路用的进程、也有给通知用的（SystemUI），
- * 它是**模块级**的；启用步骤和验证方式同理。塞进「图标」页会让那一页变成
- * 一个什么都有的长列表，「设置」和「说明书」混在一起。
- *
- * 检查更新与版本信息在「关于」页 —— 那类"看看就好"的内容跟这一页的
- * "怎么装、怎么验、怎么修"不是一回事。
+ * 2026-11-07 结构重做（主人：「可以做个二级界面的……一个界面不要太长」）：
+ * 这一页原来把四类内容全铺在一张长列表里（10 行作用域 + 4 步说明 + 命令块 + 三个按钮 +
+ * 关于四块），要滚很久才看得完，而且"配置"和"说明书"混在一起。现在这一页只回答
+ * 「这里能配什么」，内容都在二级页。
  */
 @Composable
-fun ModuleScreen(onNotify: (String) -> Unit) {
+internal fun ModuleScreen(onOpen: (SubPage) -> Unit) {
   ScreenList {
     item { PageRole(stringResource(R.string.settings_role)) }
 
     item { StatusCard() }
 
-    item { GroupTitle(stringResource(R.string.section_scope)) }
+    item { GroupTitle(stringResource(R.string.settings_group)) }
 
-    item { ScopeGroup(onNotify) }
-
-    item { GroupTitle(stringResource(R.string.section_steps)) }
-
-    item { StepsGroup() }
-
-    item { GroupTitle(stringResource(R.string.section_verify)) }
-
-    item { VerifyCard(onNotify) }
-
-    // 2026-10-26 三个功能分页：清缓存 / 重启这些跨功能操作从「裁圆」页搬到模块页。
-    item { GroupTitle(stringResource(R.string.section_tools)) }
-
-    item { ToolsCard(onNotify) }
+    item {
+      Column(verticalArrangement = Arrangement.spacedBy(GroupGap)) {
+        val rows =
+          listOf(
+            MenuSpec(SubPage.SCOPE, Icons.Default.Apps, R.string.section_scope, R.string.settings_scope_sub),
+            MenuSpec(SubPage.SETUP, Icons.Default.CheckCircle, R.string.settings_setup_title, R.string.settings_setup_sub),
+            MenuSpec(SubPage.TOOLS, Icons.Default.CleaningServices, R.string.section_tools, R.string.settings_tools_sub),
+            MenuSpec(SubPage.ABOUT, Icons.Default.Info, R.string.tab_about, R.string.settings_about_sub),
+          )
+        rows.forEachIndexed { i, row ->
+          MenuRow(
+            icon = row.icon,
+            title = stringResource(row.title),
+            subtitle = stringResource(row.subtitle),
+            shape = groupRowShape(i, rows.size),
+            onClick = { onOpen(row.page) },
+          )
+        }
+      }
+    }
   }
+}
+
+private data class MenuSpec(
+  val page: SubPage,
+  val icon: androidx.compose.ui.graphics.vector.ImageVector,
+  val title: Int,
+  val subtitle: Int,
+)
+
+/** 二级页「作用域」：10 行进程清单 + 底部分段（必选+推荐 / 全部）。 */
+@Composable
+internal fun ScopeScreen(onNotify: (String) -> Unit) {
+  ScreenList { item { ScopeGroup(onNotify) } }
+}
+
+/**
+ * 二级页「启用与验证」：4 步 + 一条 adb 命令。
+ *
+ * ⚠ 不再给第一段加 GroupTitle：顶栏标题已经是这一页的名字，页内再写一遍就是同一句话出现两次。
+ */
+@Composable
+internal fun SetupScreen(onNotify: (String) -> Unit) {
+  ScreenList {
+    item { StepsGroup() }
+    item { GroupTitle(stringResource(R.string.section_verify)) }
+    item { VerifyCard(onNotify) }
+  }
+}
+
+/** 二级页「运维操作」：清缓存 / 重启这些跨功能动作（标题在顶栏，页内不重复）。 */
+@Composable
+internal fun ToolsScreen(onNotify: (String) -> Unit) {
+  ScreenList { item { ToolsCard(onNotify) } }
 }
 
 /**
@@ -462,11 +504,14 @@ private fun VerifyCard(onNotify: (String) -> Unit) {
 }
 
 /**
- * 运维操作卡：清缓存 / 重启状态栏 / 重启设置等进程。
+ * 运维操作：拆成**两张卡** —— 「清缓存」（常规要用）与「重启进程」（出问题时才用）。
  *
  * 2026-10-26 三个功能分页：这些操作跨所有功能（清的是桌面那份渲染缓存），
- * 从「裁圆」页搬到「模块」页。删除和重启都由**目标进程里的模块**执行 ——
+ * 从「裁圆」页搬到设置页。删除和重启都由**目标进程里的模块**执行 ——
  * App 这里只是发一条广播点名，所以不需要 root，也不会执行任何 shell 命令。
+ *
+ * 2026-11-07 拆卡：这一页原来只有一张卡，二级页里显得空；而且两个动作的性质不同
+ * （一个是每次都该做的、一个是排障时才点的），分开摆也更好读。
  */
 @Composable
 private fun ToolsCard(onNotify: (String) -> Unit) {
@@ -474,104 +519,127 @@ private fun ToolsCard(onNotify: (String) -> Unit) {
   val cacheSent = stringResource(R.string.cache_sent)
   val restartSent = stringResource(R.string.restart_sent)
 
-  OpticonCard {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-      IconTile(
-        icon = Icons.Default.CleaningServices,
-        containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
-      )
-      Spacer(modifier = Modifier.width(14.dp))
+  Column(verticalArrangement = Arrangement.spacedBy(13.dp)) {
+    OpticonCard {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        IconTile(
+          icon = Icons.Default.CleaningServices,
+          containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+          contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+        )
+        Spacer(modifier = Modifier.width(14.dp))
+        Text(
+          text = stringResource(R.string.cache_title),
+          style = MaterialTheme.typography.titleMedium,
+          color = MaterialTheme.colorScheme.onSurface,
+        )
+      }
+
+      Spacer(modifier = Modifier.height(12.dp))
       Text(
-        text = stringResource(R.string.cache_title),
-        style = MaterialTheme.typography.titleMedium,
-        color = MaterialTheme.colorScheme.onSurface,
+        text = stringResource(R.string.cache_body),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
-    }
 
-    Spacer(modifier = Modifier.height(12.dp))
-    Text(
-      text = stringResource(R.string.cache_body),
-      style = MaterialTheme.typography.bodyMedium,
-      color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-
-    Spacer(modifier = Modifier.height(12.dp))
-    Text(
-      text = stringResource(R.string.tools_body),
-      style = MaterialTheme.typography.bodySmall,
-      color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-
-    Spacer(modifier = Modifier.height(16.dp))
-    // ⚠ 三个操作**只有一个是常规要用的**（清缓存重启桌面），它拿容器色（tonal）；
-    //   另外两个是"出问题时才点"的，用描边按钮。
-    FilledTonalButton(
-      onClick = {
-        // 桌面进程里注册的是动态接收器；再显式点两个已知桌面的包名，双保险（重复送达无害）。
-        // ⚠ **必须带 FLAG_RECEIVER_FOREGROUND**：这个按钮永远是在我们自己的设置界面里按的，
-        //   那一刻桌面是后台缓存进程（Android 14+ 还会被冻结），普通广播会被直接丢掉 ——
-        //   2026-11-07 真机现场：三个别的进程都打出 `clear request ignored`，**桌面一声不响**、
-        //   进程号没变、`app_icons.db` 一行没少。也就是说这个按钮一直是「点了没反应」，
-        //   而他看到的图标变化来自装新包之后桌面自己重启那次。前台标志让广播把接收方解冻。
-        runCatching {
-          context.sendBroadcast(Intent(ACTION_CLEAR_ICON_CACHE).addFlags(Intent.FLAG_RECEIVER_FOREGROUND))
-          context.sendBroadcast(Intent(ACTION_CLEAR_ICON_CACHE).setPackage(LAUNCHER_AOSP).addFlags(Intent.FLAG_RECEIVER_FOREGROUND))
-          context.sendBroadcast(Intent(ACTION_CLEAR_ICON_CACHE).setPackage(LAUNCHER_PIXEL).addFlags(Intent.FLAG_RECEIVER_FOREGROUND))
-        }
-        onNotify(cacheSent)
-      },
-      modifier = Modifier.fillMaxWidth(),
-      shape = MaterialTheme.shapes.large,
-    ) {
-      Icon(
-        imageVector = Icons.Default.Refresh,
-        contentDescription = null,
-        modifier = Modifier.size(18.dp),
+      Spacer(modifier = Modifier.height(12.dp))
+      Text(
+        text = stringResource(R.string.tools_body),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
-      Spacer(modifier = Modifier.width(8.dp))
-      Text(text = stringResource(R.string.action_clear_launcher))
-    }
 
-    Spacer(modifier = Modifier.height(12.dp))
-    Row(modifier = Modifier.fillMaxWidth()) {
-      OutlinedButton(
+      Spacer(modifier = Modifier.height(16.dp))
+      FilledTonalButton(
         onClick = {
+          // 桌面进程里注册的是动态接收器；再显式点两个已知桌面的包名，双保险（重复送达无害）。
+          // ⚠ **必须带 FLAG_RECEIVER_FOREGROUND**：这个按钮永远是在我们自己的设置界面里按的，
+          //   那一刻桌面是后台缓存进程（Android 14+ 还会被冻结），普通广播会被直接丢掉 ——
+          //   2026-11-07 真机现场：三个别的进程都打出 `clear request ignored`，**桌面一声不响**、
+          //   进程号没变、`app_icons.db` 一行没少。也就是说这个按钮一直是「点了没反应」，
+          //   而他看到的图标变化来自装新包之后桌面自己重启那次。前台标志让广播把接收方解冻。
           runCatching {
-            context.sendBroadcast(Intent(ACTION_RESTART_SELF).setPackage(SYSTEMUI)
-              .addFlags(Intent.FLAG_RECEIVER_FOREGROUND))
+            context.sendBroadcast(Intent(ACTION_CLEAR_ICON_CACHE).addFlags(Intent.FLAG_RECEIVER_FOREGROUND))
+            context.sendBroadcast(Intent(ACTION_CLEAR_ICON_CACHE).setPackage(LAUNCHER_AOSP).addFlags(Intent.FLAG_RECEIVER_FOREGROUND))
+            context.sendBroadcast(Intent(ACTION_CLEAR_ICON_CACHE).setPackage(LAUNCHER_PIXEL).addFlags(Intent.FLAG_RECEIVER_FOREGROUND))
           }
-          onNotify(restartSent)
+          onNotify(cacheSent)
         },
-        modifier = Modifier.weight(1f),
+        modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
       ) {
-        Text(text = stringResource(R.string.action_restart_systemui))
+        Icon(
+          imageVector = Icons.Default.Refresh,
+          contentDescription = null,
+          modifier = Modifier.size(18.dp),
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(text = stringResource(R.string.action_clear_launcher))
       }
-      Spacer(modifier = Modifier.width(10.dp))
-      OutlinedButton(
-        onClick = {
-          // 其余会画别的应用图标的进程。杀掉后系统会把它们拉起来，下次用到时重新注入。
-          runCatching {
-            for (pkg in OTHER_RESTARTABLE) {
-              context.sendBroadcast(Intent(ACTION_RESTART_SELF).setPackage(pkg)
+    }
+
+    OpticonCard {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        IconTile(
+          icon = Icons.Default.RestartAlt,
+          containerColor = MaterialTheme.colorScheme.secondaryContainer,
+          contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        )
+        Spacer(modifier = Modifier.width(14.dp))
+        Text(
+          text = stringResource(R.string.restart_title),
+          style = MaterialTheme.typography.titleMedium,
+          color = MaterialTheme.colorScheme.onSurface,
+        )
+      }
+
+      Spacer(modifier = Modifier.height(12.dp))
+      Text(
+        text = stringResource(R.string.restart_body),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+
+      Spacer(modifier = Modifier.height(16.dp))
+      Row(modifier = Modifier.fillMaxWidth()) {
+        OutlinedButton(
+          onClick = {
+            runCatching {
+              context.sendBroadcast(Intent(ACTION_RESTART_SELF).setPackage(SYSTEMUI)
                 .addFlags(Intent.FLAG_RECEIVER_FOREGROUND))
             }
-          }
-          onNotify(restartSent)
-        },
-        modifier = Modifier.weight(1f),
-        shape = MaterialTheme.shapes.large,
-      ) {
-        Text(text = stringResource(R.string.action_restart_others))
+            onNotify(restartSent)
+          },
+          modifier = Modifier.weight(1f),
+          shape = MaterialTheme.shapes.large,
+        ) {
+          Text(text = stringResource(R.string.action_restart_systemui))
+        }
+        Spacer(modifier = Modifier.width(10.dp))
+        OutlinedButton(
+          onClick = {
+            // 其余会画别的应用图标的进程。杀掉后系统会把它们拉起来，下次用到时重新注入。
+            runCatching {
+              for (pkg in OTHER_RESTARTABLE) {
+                context.sendBroadcast(Intent(ACTION_RESTART_SELF).setPackage(pkg)
+                  .addFlags(Intent.FLAG_RECEIVER_FOREGROUND))
+              }
+            }
+            onNotify(restartSent)
+          },
+          modifier = Modifier.weight(1f),
+          shape = MaterialTheme.shapes.large,
+        ) {
+          Text(text = stringResource(R.string.action_restart_others))
+        }
       }
-    }
 
-    Spacer(modifier = Modifier.height(14.dp))
-    Text(
-      text = stringResource(R.string.tools_hint),
-      style = MaterialTheme.typography.bodySmall,
-      color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
+      Spacer(modifier = Modifier.height(14.dp))
+      Text(
+        text = stringResource(R.string.tools_hint),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
   }
 }

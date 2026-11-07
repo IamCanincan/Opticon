@@ -36,13 +36,13 @@ import com.iamcanincan.opticon.runtime.ModulePrefs
 import com.iamcanincan.opticon.ui.OpticonCard
 import com.iamcanincan.opticon.ui.GroupGap
 import com.iamcanincan.opticon.ui.GroupTitle
+import com.iamcanincan.opticon.ui.MenuRow
 import com.iamcanincan.opticon.ui.PageRole
+import com.iamcanincan.opticon.ui.SubPage
+import com.iamcanincan.opticon.ui.timeHm
 import com.iamcanincan.opticon.ui.groupRowShape
 import com.iamcanincan.opticon.ui.ScreenList
 import com.iamcanincan.opticon.ui.stats.StatsStore
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /**
  * **主页 = 状态页**，版式对齐 KernelSU 管理器的首页（2026-11-07 主人："还是太丑了"）：
@@ -54,7 +54,7 @@ import java.util.Locale
  * 分工不变：主页只读状态；开关在「功能」，明细在「统计」，配置与排障在「设置」。
  */
 @Composable
-fun HomeScreen() {
+internal fun HomeScreen(onOpen: (SubPage) -> Unit) {
   val context = LocalContext.current
   val options = ModulePrefs.read(ModulePrefs.of(context))
   val (snapshot, at) = StatsStore.load(context)
@@ -99,7 +99,7 @@ fun HomeScreen() {
               text = when {
                 at == 0L -> stringResource(R.string.home_total_none)
                 fresh -> stringResource(R.string.home_state_data, total, cropCount, notifyCount)
-                else -> stringResource(R.string.home_state_stale, clock(at), total)
+                else -> stringResource(R.string.home_state_stale, timeHm(at), total)
               },
               style = MaterialTheme.typography.bodyMedium,
               color =
@@ -123,17 +123,17 @@ fun HomeScreen() {
 
     item { GroupTitle(stringResource(R.string.home_features)) }
 
-    // 功能列表：灰图标 + 标题 + 副标题 + 右侧开/关小胶囊
+    // 功能列表：点一行进对应功能的二级页（开关与效果都在那里）。
     item {
       // 首尾大圆角、中间小圆角，行间只留 2dp（2026-11-07 主人：小圆角的边要贴得更近点）。
       Column(verticalArrangement = Arrangement.spacedBy(GroupGap)) {
         val rows = listOf(
-          FeatureSpec(Icons.Default.Circle, R.string.tab_crop, R.string.home_sub_crop, options.circleEnabled, cropCount),
-          FeatureSpec(Icons.Default.InvertColors, R.string.tab_mono, R.string.home_sub_mono, options.monoInvert, -1),
-          FeatureSpec(Icons.Default.Notifications, R.string.tab_notify, R.string.home_sub_notify, options.notifyEnabled, notifyCount),
+          FeatureSpec(SubPage.CROP, Icons.Default.Circle, R.string.tab_crop, R.string.home_sub_crop, options.circleEnabled, cropCount),
+          FeatureSpec(SubPage.MONO, Icons.Default.InvertColors, R.string.tab_mono, R.string.home_sub_mono, options.monoInvert, -1),
+          FeatureSpec(SubPage.NOTIFY, Icons.Default.Notifications, R.string.tab_notify, R.string.home_sub_notify, options.notifyEnabled, notifyCount),
         )
         rows.forEachIndexed { i, row ->
-          FeatureRow(row, groupRowShape(i, rows.size))
+          FeatureRow(row, groupRowShape(i, rows.size)) { onOpen(row.page) }
         }
       }
     }
@@ -148,19 +148,13 @@ fun HomeScreen() {
           icon = Icons.Default.Refresh,
           title = R.string.home_tip_stale_title,
           body = R.string.home_tip_stale_body,
-          shape = groupRowShape(0, 3),
+          shape = groupRowShape(0, 2),
         )
         TipRow(
           icon = Icons.Default.Info,
           title = R.string.home_tip_count_title,
           body = R.string.home_tip_count_body,
-          shape = groupRowShape(1, 3),
-        )
-        TipRow(
-          icon = Icons.Default.Info,
-          title = R.string.home_tip_off_title,
-          body = R.string.home_tip_off_body,
-          shape = groupRowShape(2, 3),
+          shape = groupRowShape(1, 2),
         )
       }
     }
@@ -168,11 +162,14 @@ fun HomeScreen() {
 }
 
 /**
- * 一行功能：**灰色图标**（不带彩色底块）+ 标题/副标题 + 右侧状态胶囊。
- * 版式与 KernelSU 的「管理员版本 / 内核版本」那几行一致。
+ * 一行功能：**灰色图标** + 标题/副标题 + 右侧次数（只读）。
+ *
+ * ⚠ 这里**不再挂「开 / 关」胶囊**：那是「功能」页的事（2026-11-07 主人：「这界面功能怎么还重复了」）。
+ *   主页只回答"发生了什么"（次数），开关归功能页；两页因此不再摆同一块东西。
  */
 /** 一行功能的数据：图标、标题、副标题、开关状态、次数（-1 = 这一项没有计数）。 */
 private data class FeatureSpec(
+  val page: SubPage,
   val icon: ImageVector,
   val title: Int,
   val subtitle: Int,
@@ -181,60 +178,31 @@ private data class FeatureSpec(
 )
 
 @Composable
-private fun FeatureRow(spec: FeatureSpec, shape: androidx.compose.ui.graphics.Shape) {
+private fun FeatureRow(
+  spec: FeatureSpec,
+  shape: androidx.compose.ui.graphics.Shape,
+  onClick: () -> Unit,
+) {
   val scheme = MaterialTheme.colorScheme
-  val icon = spec.icon
-  val title = spec.title
-  val subtitle = spec.subtitle
-  val on = spec.on
-  OpticonCard(shape = shape, border = null, padding = 0.dp, containerColor = MaterialTheme.colorScheme.surfaceContainerHigh) {
-    Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Icon(
-        imageVector = icon,
-        contentDescription = null,
-        tint = if (on) scheme.primary else scheme.outline,
-        modifier = Modifier.size(24.dp),
-      )
-      Spacer(modifier = Modifier.size(14.dp))
-      Column(modifier = Modifier.weight(1f)) {
-        Text(
-          text = stringResource(title),
-          style = MaterialTheme.typography.titleMedium,
-          color = scheme.onSurface,
-        )
-        Text(
-          text = stringResource(subtitle),
-          style = MaterialTheme.typography.bodyMedium,
-          color = scheme.onSurfaceVariant,
-        )
-      }
+  MenuRow(
+    icon = spec.icon,
+    title = stringResource(spec.title),
+    subtitle = stringResource(spec.subtitle),
+    shape = shape,
+    onClick = onClick,
+    // 开着的用主色图标、关着的用灰图标 —— 状态压缩到图标颜色上，不再占一块胶囊。
+    iconTint = if (spec.on) scheme.primary else scheme.outline,
+    trailing =
       if (spec.count >= 0) {
-        Text(
-          text = stringResource(R.string.home_count, spec.count),
-          style = MaterialTheme.typography.labelMedium,
-          color = if (on) scheme.primary else scheme.onSurfaceVariant,
-          modifier = Modifier.padding(end = 10.dp),
-        )
-      }
-      Box(
-        modifier = Modifier
-          .background(
-            if (on) scheme.primaryContainer else scheme.surfaceContainerHighest,
-            RoundedCornerShape(50),
+        {
+          Text(
+            text = stringResource(R.string.home_count, spec.count),
+            style = MaterialTheme.typography.labelMedium,
+            color = if (spec.on) scheme.primary else scheme.onSurfaceVariant,
           )
-          .padding(horizontal = 10.dp, vertical = 3.dp),
-      ) {
-        Text(
-          text = stringResource(if (on) R.string.home_on else R.string.home_off),
-          style = MaterialTheme.typography.labelMedium,
-          color = if (on) scheme.onPrimaryContainer else scheme.onSurfaceVariant,
-        )
-      }
-    }
-  }
+        }
+      } else null,
+  )
 }
 
 
@@ -267,9 +235,6 @@ private fun TipRow(icon: ImageVector, title: Int, body: Int, shape: androidx.com
 
 /** 「近期有回报」的窗口：宿主每 20 次计数才回报一次，10 分钟内有回报就算在跑。 */
 private const val FRESH_MS = 10 * 60 * 1000L
-
-private fun clock(at: Long): String =
-  SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(at))
 
 /** 快照按功能分成两堆（裁圆 / 通知），再各给一个总数。 */
 private fun splitCounts(snapshot: String?): Triple<Int, Int, Int> {

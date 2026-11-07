@@ -1,6 +1,8 @@
 package com.iamcanincan.opticon.ui
 
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
@@ -37,6 +39,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Home
@@ -69,6 +72,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -105,13 +109,16 @@ import com.iamcanincan.opticon.BuildConfig
 import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.runtime.ModulePrefs
 import com.iamcanincan.opticon.ui.about.AboutScreen
+import com.iamcanincan.opticon.ui.about.UpdateState
 import com.iamcanincan.opticon.ui.home.HomeScreen
 import com.iamcanincan.opticon.ui.features.FeaturesScreen
 import com.iamcanincan.opticon.ui.stats.StatsScreen
-import com.iamcanincan.opticon.ui.about.UpdateState
 import com.iamcanincan.opticon.ui.about.toState
 import com.iamcanincan.opticon.ui.crop.CropScreen
 import com.iamcanincan.opticon.ui.module.ModuleScreen
+import com.iamcanincan.opticon.ui.module.ScopeScreen
+import com.iamcanincan.opticon.ui.module.SetupScreen
+import com.iamcanincan.opticon.ui.module.ToolsScreen
 import com.iamcanincan.opticon.ui.mono.MonoScreen
 import com.iamcanincan.opticon.ui.notify.NotifyScreen
 import com.iamcanincan.opticon.update.UpdateChecker
@@ -206,6 +213,23 @@ fun OpticonApp() {
     //   `contentOffset` 只用来判断"离顶多远"（EnterAlways 在 onPostScroll 里直接累加
     //   consumed.y，等价于负的滚动距离）。
     var navVisible by remember { mutableStateOf(true) }
+    // 二级页。null = 停在一级页（底栏的某一页）。一级页只把「点进去是哪一页」递上来，
+    // 渲染在这里按 [SubPage] 分派 —— 页面之间不互相引用，加一页只动这个枚举 + 下面那条 when。
+    var subPage by rememberSaveable { mutableStateOf<SubPage?>(null) }
+    // 可预测返回（Android 14+ 的预测式返回手势）：手势拖动时二级页跟着手指右移，
+    // 松手前能看见底下的一级页 —— 见下面 PredictiveBackHandler。
+    val backProgress = remember { Animatable(0f) }
+    PredictiveBackHandler(enabled = subPage != null) { progress ->
+      try {
+        backProgress.snapTo(0f)
+        progress.collect { backProgress.snapTo(it.progress) }
+        // 手势走完 = 用户确认返回
+        subPage = null
+      } finally {
+        // 中途撤销就把位移收回去；已完成时页面已经换了，这一步只是复位。
+        backProgress.animateTo(0f)
+      }
+    }
     val density = LocalDensity.current
     val navScrollConnection = remember(scrollBehavior, density) {
         val slop = with(density) { NavScrollSlop.toPx() }
@@ -242,10 +266,9 @@ fun OpticonApp() {
     // 从滚动着的长页滑到新页，新页通常停在顶部，底栏不该继续隐身。
     LaunchedEffect(pagerState.currentPage) { navVisible = true }
 
-    // 顶栏标题跟随 Pager：小号 App 名在上，当前页标题在下。
-    // 原来顶栏永远只写"Opticon"，页面身份只能从底栏选中态读；五页之后这种读法更费劲。
+    // 顶栏标题：一级页跟 Pager 走；二级页换成那一页的名字（左上角同时出现返回箭头）。
     val pageTitle = stringResource(
-        when (pagerState.currentPage) {
+        subPage?.titleRes ?: when (pagerState.currentPage) {
             TAB_HOME -> R.string.tab_home
             TAB_FEATURES -> R.string.tab_features
             TAB_STATS -> R.string.tab_stats
@@ -313,8 +336,11 @@ fun OpticonApp() {
                     ),
                     title = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            BrandMark()
-                            Spacer(Modifier.width(12.dp))
+                            // 二级页不画品牌标记：那个位置让给返回箭头，标题更贴近内容一点。
+                            if (subPage == null) {
+                                BrandMark()
+                                Spacer(Modifier.width(12.dp))
+                            }
                             Column {
                                 AnimatedContent(
                                     targetState = pageTitle,
@@ -327,6 +353,17 @@ fun OpticonApp() {
                                         color = MaterialTheme.colorScheme.onSurface,
                                     )
                                 }
+                            }
+                        }
+                    },
+                    navigationIcon = {
+                        // 只有二级页才有返回：一级页的"上一级"就是它自己。
+                        if (subPage != null) {
+                            IconButton(onClick = { subPage = null }) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = stringResource(R.string.action_back),
+                                )
                             }
                         }
                     },
@@ -353,6 +390,8 @@ fun OpticonApp() {
             // 内容要一直铺到屏幕底部、从药丸后面滚过去，那才是「悬浮」。
             // 让位交给各页列表自己的 contentPadding（见 FloatingNavSpace）。
             Box(modifier = Modifier.padding(inner)) {
+                // 一级页**一直**在组合里：二级页滑出时，底下露出来的就是它，
+                // 可预测返回才有东西可看（不然只会露出背景色）。
                 HorizontalPager(
                     state = pagerState,
                     modifier = Modifier.fillMaxSize(),
@@ -360,12 +399,39 @@ fun OpticonApp() {
                     userScrollEnabled = false,
                 ) { page ->
                     when (page) {
-                        // 主页 = 一屏看全状态；功能 = 三个开关页合成一页；设置 = 原「模块」页。
-                        TAB_HOME -> HomeScreen()
-                        TAB_FEATURES -> FeaturesScreen(onNotify = notify)
+                        // 四个一级页分工：主页「看」、功能「改」、统计「查」、设置「配」。
+                        TAB_HOME -> HomeScreen(onOpen = { subPage = it })
+                        TAB_FEATURES -> FeaturesScreen(onOpen = { subPage = it })
                         TAB_STATS -> StatsScreen()
-                        TAB_SETTINGS -> ModuleScreen(onNotify = notify)
-                        else -> AboutScreen(state = updateState, onCheck = checkUpdate, onNotify = notify)
+                        else -> ModuleScreen(onOpen = { subPage = it })
+                    }
+                }
+
+                val sub = subPage
+                if (sub != null) {
+                    // 二级页盖在一级页上：拖动时按手势进度右移并淡出，底下一级页露出来。
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                translationX = size.width * backProgress.value
+                                alpha = 1f - 0.25f * backProgress.value
+                            }
+                            .background(MaterialTheme.colorScheme.background)
+                    ) {
+                        when (sub) {
+                            SubPage.CROP -> CropScreen(onNotify = notify)
+                            SubPage.MONO -> MonoScreen(onNotify = notify)
+                            SubPage.NOTIFY -> NotifyScreen(onNotify = notify)
+                            SubPage.SCOPE -> ScopeScreen(onNotify = notify)
+                            SubPage.SETUP -> SetupScreen(onNotify = notify)
+                            SubPage.TOOLS -> ToolsScreen(onNotify = notify)
+                            SubPage.ABOUT -> AboutScreen(
+                                state = updateState,
+                                onCheck = checkUpdate,
+                                onNotify = notify,
+                            )
+                        }
                     }
                 }
             }
@@ -374,7 +440,9 @@ fun OpticonApp() {
         FloatingNavBar(
             selectedIndex = pagerState.currentPage,
             entries = NavEntries,
-            visible = navVisible,
+            // 二级页藏起底栏：这一页不属于任何一格，留着反而让人以为自己在某一格里。
+            // 回一级页靠顶栏的返回箭头或系统返回键。
+            visible = navVisible && subPage == null,
             onSelect = { index -> scope.launch { pagerState.animateScrollToPage(index) } },
             // ⚠ `navigationBarsPadding()` 不能省：本 Activity 是 edge-to-edge
             // （`enableEdgeToEdge()` + 系统栏透明），外层 Box 一直铺到屏幕底边，

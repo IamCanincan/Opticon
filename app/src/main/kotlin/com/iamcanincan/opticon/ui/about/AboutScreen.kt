@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
@@ -40,7 +41,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.BuildConfig
 import com.iamcanincan.opticon.R
-import com.iamcanincan.opticon.ui.GroupTitle
 import com.iamcanincan.opticon.ui.IconTile
 import com.iamcanincan.opticon.ui.NoteList
 import com.iamcanincan.opticon.ui.OpticonCard
@@ -50,11 +50,7 @@ import com.iamcanincan.opticon.ui.openExternalUrl
 import com.iamcanincan.opticon.update.UpdateChecker
 
 /**
- * 「关于」页：检查更新与版本信息。
- *
- * 从「模块」页拆出来的 —— 底栏加到四格之后，「模块」页只留跟"怎么装、怎么验、
- * 怎么修"直接相关的内容（作用域 / 步骤 / 验证），
- * 更新与版本这类"看看就好"的信息独立成页。
+ * 二级页「关于」：版本 + 功能范围 + 检查更新 + 隐私。从「设置」页那一行点进来。
  *
  * ⚠ 更新状态与检查动作都由外壳传进来（见 [UpdateState] 上的说明）—— 这页会被销毁。
  *   [onNotify] 同理：Snackbar 的作用域在外壳，这页只负责在跳转失败时把话递上去。
@@ -62,46 +58,53 @@ import com.iamcanincan.opticon.update.UpdateChecker
 @Composable
 internal fun AboutScreen(state: UpdateState, onCheck: () -> Unit, onNotify: (String) -> Unit) {
   val uriHandler = LocalUriHandler.current
-  val version = BuildConfig.VERSION_NAME
   val openFailed = stringResource(R.string.open_link_failed)
   // ⚠ 跳转一律走共享的 [openExternalUrl]：Compose 的 `openUri` 在没有浏览器的设备上会抛
   //   `IllegalArgumentException`（理由见那个函数的说明）—— 直接调就是崩应用。
   val open: (String) -> Unit = { url ->
     if (!openExternalUrl(uriHandler, url)) onNotify(openFailed)
   }
+  ScreenList { aboutItems(state, onCheck, onNotify, open) }
+}
 
-  ScreenList {
-    // 品牌卡先行：这一页叫「关于」，先给身份与版本，再给更新与隐私。
-    // 2026-10-26 之前是"更新 → 隐私 → 关于"，品牌卡压在最底下，首屏只有一个长说明卡。
-    item { AboutCard(onOpen = open) }
+/**
+ * 「关于」这一组的内容：版本卡、功能范围、检查更新、隐私。
+ *
+ * 抽成 [LazyListScope] 扩展是历史原因（它一度并进过「设置」页末尾）；
+ * 现在由二级页 [AboutScreen] 独自使用，按顺序铺开即可。
+ *
+ * ⚠ 更新状态与检查动作都由外壳传进来（见 [UpdateState] 上的说明）—— 这页会被销毁。
+ *   [onNotify] 同理：Snackbar 的作用域在外壳，这页只负责在跳转失败时把话递上去。
+ */
+internal fun LazyListScope.aboutItems(
+  state: UpdateState,
+  onCheck: () -> Unit,
+  onNotify: (String) -> Unit,
+  open: (String) -> Unit,
+) {
+  // 品牌卡先行：先给身份与版本，再给更新与隐私。
+  item { AboutCard(onOpen = open) }
 
-    item { GroupTitle(stringResource(R.string.section_feature_range)) }
-
-    item {
-      NoteList(
-        listOf(
-          R.string.range_crop,
-          R.string.range_mono,
-          R.string.range_notify,
-          R.string.range_scope,
-        )
+  item {
+    NoteList(
+      listOf(
+        R.string.range_crop,
+        R.string.range_mono,
+        R.string.range_notify,
+        R.string.range_scope,
       )
-    }
-
-    item { GroupTitle(stringResource(R.string.section_update)) }
-
-    item {
-      UpdateCard(
-        state = state,
-        onCheck = onCheck,
-        onOpenPage = open,
-      )
-    }
-
-    item { GroupTitle(stringResource(R.string.section_privacy)) }
-
-    item { PrivacyCard() }
+    )
   }
+
+  item {
+    UpdateCard(
+      state = state,
+      onCheck = onCheck,
+      onOpenPage = open,
+    )
+  }
+
+  item { PrivacyCard() }
 }
 
 

@@ -73,6 +73,7 @@
         android:description="@string/xposed_description"
         android:theme="@style/Theme.Opticon"
         android:supportsRtl="true"
+        android:enableOnBackInvokedCallback="true"
         tools:targetApi="34">
 
         <!--

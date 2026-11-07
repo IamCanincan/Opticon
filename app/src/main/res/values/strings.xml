@@ -75,8 +75,23 @@
     <string name="home_total_scope">桌面与系统界面加起来的总次数，明细在「统计」页。</string>
     <string name="home_hint">Opticon %1$s · 开关在「功能」，明细在「统计」，配置与排查在「设置」。</string>
     <string name="features_role">三个开关与它们的效果说明</string>
+    <string name="features_group">三个功能</string>
+    <string name="settings_group">配置与关于</string>
+    <string name="features_all_on">全部开启</string>
+    <string name="features_all_off">全部关闭</string>
+    <string name="features_all_hint">三个功能一起开 / 关；排查时先全关最省事。</string>
+    <string name="features_open_detail">查看这个功能的效果与说明</string>
+    <string name="features_note_group">开关什么时候生效</string>
+    <string name="features_effect_title">约一秒内生效</string>
+    <string name="features_effect_body">开关写入后模块每秒重读一次配置：新画的图标、新收到的通知立刻按新设置处理；已经显示出来的图标不会自己重画，那种情况清一次桌面图标缓存。</string>
+    <string name="settings_scope_sub">显示应用图标的进程在这里勾选</string>
+    <string name="settings_setup_title">启用与验证</string>
+    <string name="settings_setup_sub">四步启用、一条 adb 命令验证</string>
+    <string name="settings_tools_sub">清除桌面缓存、重启相关进程</string>
+    <string name="settings_about_sub">版本与检查更新</string>
+    <string name="action_back">返回</string>
     <string name="stats_role">按功能分组，组内标出来源进程</string>
-    <string name="settings_role">作用域、排查与运维操作</string>
+    <string name="settings_role">作用域、运维与关于</string>
     <string name="stats_note">这些数字在说什么：裁圆 = 桌面裁过的图标次数；通知 · 被补 = 我们替应用把彩色通知图标改成黑白的次数；通知 · 已适配 = 应用本来就给黑白的次数（我们没动）。</string>
 
     <!-- ============ 「图标」页 ============ -->
@@ -163,6 +178,8 @@
     <string name="cache_body">桌面将图标位图缓存于其数据库；开关或模块变更后，缓存可能不会自动更新。点击下方按钮可删除该缓存并重启桌面进程（屏幕会短暂闪烁）。模块的掩码缓存按内容与安装标识自动失效，无需手动清理。</string>
     <string name="action_clear_launcher">清除缓存并重启桌面</string>
     <string name="feature_cache_hint">改完开关后，已经显示的图标不会自己变 —— 到「设置」页按一次「清除缓存并重启桌面」。</string>
+    <string name="restart_title">重启界面进程</string>
+    <string name="restart_body">系统界面、设置、分享面板这些进程会自己缓存已经画好的图标；重启它们之后，下次打开会用当前设置重新绘制。</string>
     <string name="action_restart_systemui">重启系统界面</string>
     <string name="action_restart_others">重启设置等进程</string>
     <string name="cache_sent">请求已发送：桌面进程将重启，并按当前设置重建图标。</string>
