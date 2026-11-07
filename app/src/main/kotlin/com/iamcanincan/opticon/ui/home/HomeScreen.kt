@@ -116,18 +116,12 @@ fun HomeScreen() {
       // 首尾大圆角、中间小圆角，行间只留 2dp（2026-11-07 主人：小圆角的边要贴得更近点）。
       Column(verticalArrangement = Arrangement.spacedBy(GroupGap)) {
         val rows = listOf(
-          Triple(Icons.Default.Circle, R.string.tab_crop to R.string.home_sub_crop, options.circleEnabled),
-          Triple(Icons.Default.InvertColors, R.string.tab_mono to R.string.home_sub_mono, options.monoInvert),
-          Triple(Icons.Default.Notifications, R.string.tab_notify to R.string.home_sub_notify, options.notifyEnabled),
+          FeatureSpec(Icons.Default.Circle, R.string.tab_crop, R.string.home_sub_crop, options.circleEnabled, cropCount),
+          FeatureSpec(Icons.Default.InvertColors, R.string.tab_mono, R.string.home_sub_mono, options.monoInvert, -1),
+          FeatureSpec(Icons.Default.Notifications, R.string.tab_notify, R.string.home_sub_notify, options.notifyEnabled, notifyCount),
         )
         rows.forEachIndexed { i, row ->
-          FeatureRow(
-            icon = row.first,
-            title = row.second.first,
-            subtitle = row.second.second,
-            on = row.third,
-            shape = groupRowShape(i, rows.size),
-          )
+          FeatureRow(row, groupRowShape(i, rows.size))
         }
       }
     }
@@ -135,21 +129,14 @@ fun HomeScreen() {
     item { SectionLabel(stringResource(R.string.home_tips)) }
 
     // 底部这一组是"常见疑问"：原来是页面底部一行小字，下面半屏全是空白（主人："每个板块都好空"）。
+    // 只留一行：主人要"首屏内容不被底栏压住"，两行时第二行正好压在药丸下面。
     item {
-      Column(verticalArrangement = Arrangement.spacedBy(GroupGap)) {
-        TipRow(
-          icon = Icons.Default.Refresh,
-          title = R.string.home_tip_stale_title,
-          body = R.string.home_tip_stale_body,
-          shape = groupRowShape(0, 2),
-        )
-        TipRow(
-          icon = Icons.Default.Info,
-          title = R.string.home_tip_count_title,
-          body = R.string.home_tip_count_body,
-          shape = groupRowShape(1, 2),
-        )
-      }
+      TipRow(
+        icon = Icons.Default.Refresh,
+        title = R.string.home_tip_stale_title,
+        body = R.string.home_tip_stale_body,
+        shape = groupRowShape(0, 1),
+      )
     }
   }
 }
@@ -158,15 +145,22 @@ fun HomeScreen() {
  * 一行功能：**灰色图标**（不带彩色底块）+ 标题/副标题 + 右侧状态胶囊。
  * 版式与 KernelSU 的「管理员版本 / 内核版本」那几行一致。
  */
+/** 一行功能的数据：图标、标题、副标题、开关状态、次数（-1 = 这一项没有计数）。 */
+private data class FeatureSpec(
+  val icon: ImageVector,
+  val title: Int,
+  val subtitle: Int,
+  val on: Boolean,
+  val count: Int,
+)
+
 @Composable
-private fun FeatureRow(
-  icon: ImageVector,
-  title: Int,
-  subtitle: Int,
-  on: Boolean,
-  shape: androidx.compose.ui.graphics.Shape,
-) {
+private fun FeatureRow(spec: FeatureSpec, shape: androidx.compose.ui.graphics.Shape) {
   val scheme = MaterialTheme.colorScheme
+  val icon = spec.icon
+  val title = spec.title
+  val subtitle = spec.subtitle
+  val on = spec.on
   OpticonCard(shape = shape, border = null) {
     Row(
       modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
@@ -189,6 +183,14 @@ private fun FeatureRow(
           text = stringResource(subtitle),
           style = MaterialTheme.typography.bodyMedium,
           color = scheme.onSurfaceVariant,
+        )
+      }
+      if (spec.count >= 0) {
+        Text(
+          text = stringResource(R.string.home_count, spec.count),
+          style = MaterialTheme.typography.labelMedium,
+          color = scheme.onSurfaceVariant,
+          modifier = Modifier.padding(end = 10.dp),
         )
       }
       Box(

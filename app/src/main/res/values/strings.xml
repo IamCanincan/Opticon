@@ -58,6 +58,7 @@
     <string name="home_state_ok">运行中</string>
     <string name="home_state_data">共 %1$d 次 · 裁圆 %2$d · 通知 %3$d</string>
     <string name="home_state_chip">%1$d 项开启</string>
+    <string name="home_count">%1$d 次</string>
     <string name="home_tips">提示</string>
     <string name="home_tip_stale_title">改完开关没变化？</string>
     <string name="home_tip_stale_body">已经画好的图标不会自己变：到「设置」页按一次「清除缓存并重启桌面」。</string>
