@@ -253,6 +253,7 @@ fun OpticonApp() {
     // 真机上就是"抽搐"（2026-11-08 主人报的）。
     var previewing by remember { mutableStateOf(false) }
     val nearHome by remember { derivedStateOf { rootBack.value > 0.45f } }
+    val nearParent by remember { derivedStateOf { backProgress.value > 0.45f } }
     PredictiveBackHandler(enabled = subPage == null && pagerState.currentPage != TAB_HOME) { progress ->
       var finished = false
       try {
@@ -314,14 +315,15 @@ fun OpticonApp() {
     LaunchedEffect(pagerState.currentPage, subPage) { navVisible = true }
 
     // 顶栏标题：一级页跟 Pager 走；二级页换成那一页的名字（左上角同时出现返回箭头）。
-    val pageTitle = stringResource(
-        subPage?.titleRes ?: when (pagerState.currentPage) {
+    val rootTitle = stringResource(
+        when (pagerState.currentPage) {
             TAB_HOME -> R.string.tab_home
             TAB_FEATURES -> R.string.tab_features
             TAB_STATS -> R.string.tab_stats
             else -> R.string.tab_settings
         }
     )
+    val pageTitle = subPage?.let { stringResource(it.titleRes) } ?: rootTitle
 
     // 首次打开就把默认配置落盘。放在外壳而不是各页面里：默认打开的是「图标」页，而模块侧有
     // 几条回退通道要先认「这份文件是不是 Opticon 的配置」—— 判据是
@@ -387,8 +389,12 @@ fun OpticonApp() {
                             Spacer(Modifier.width(12.dp))
                         }
                         Column {
-                            val barTitle =
-                                if (nearHome) stringResource(R.string.tab_home) else pageTitle
+                            // 两套返回用同一套阈值：拖过半就换成"要回去的那一页"的标题。
+                            val barTitle = when {
+                                subPage != null && nearParent -> rootTitle
+                                subPage == null && nearHome -> stringResource(R.string.tab_home)
+                                else -> pageTitle
+                            }
                             AnimatedContent(
                                 targetState = barTitle,
                                 transitionSpec = { fadeIn() togetherWith fadeOut() },
@@ -475,7 +481,11 @@ fun OpticonApp() {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .graphicsLayer { translationX = size.width * rootBack.value }
+                        .graphicsLayer {
+                            // 与二级页那条完全同一套：位移 + 25% 淡出。
+                            translationX = size.width * rootBack.value
+                            alpha = 1f - 0.25f * rootBack.value
+                        }
                         .background(pageBackground)
                 ) {
                     // 一级页**一直**在组合里：二级页滑出时，底下露出来的就是它，
@@ -509,7 +519,8 @@ fun OpticonApp() {
                                     translationX = size.width * backProgress.value
                                     alpha = 1f - 0.25f * backProgress.value
                                 }
-                                .background(MaterialTheme.colorScheme.background)
+                                // 与一级页那条用同一道渐变：两条返回动画除了"底下是谁"以外完全同构。
+                                .background(pageBackground)
                         ) {
                             when (sub) {
                                 SubPage.CROP -> CropScreen(onNotify = notify)
