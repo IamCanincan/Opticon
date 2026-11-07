@@ -458,6 +458,13 @@ internal fun FeatureSwitchCard(
           style = MaterialTheme.typography.bodyMedium,
           color = scheme.onPrimaryContainer.copy(alpha = 0.82f),
         )
+        // 用户报过的那件事：改完开关，屏幕上没变化，以为开关没生效。三页共用这一张卡，提示就写在这里。
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+          text = stringResource(R.string.feature_cache_hint),
+          style = MaterialTheme.typography.bodySmall,
+          color = scheme.onPrimaryContainer.copy(alpha = 0.72f),
+        )
       }
     }
   }
