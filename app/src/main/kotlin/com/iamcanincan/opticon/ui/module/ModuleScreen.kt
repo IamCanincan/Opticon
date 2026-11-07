@@ -461,12 +461,16 @@ private fun ToolsCard(onNotify: (String) -> Unit) {
     //   另外两个是"出问题时才点"的，用描边按钮。
     FilledTonalButton(
       onClick = {
-        // 桌面进程里注册的是动态接收器，隐式广播送得到；
-        // 再显式点两个已知桌面的包名，双保险（重复送达无害：第二次 DB 已经不存在了）。
+        // 桌面进程里注册的是动态接收器；再显式点两个已知桌面的包名，双保险（重复送达无害）。
+        // ⚠ **必须带 FLAG_RECEIVER_FOREGROUND**：这个按钮永远是在我们自己的设置界面里按的，
+        //   那一刻桌面是后台缓存进程（Android 14+ 还会被冻结），普通广播会被直接丢掉 ——
+        //   2026-11-07 真机现场：三个别的进程都打出 `clear request ignored`，**桌面一声不响**、
+        //   进程号没变、`app_icons.db` 一行没少。也就是说这个按钮一直是「点了没反应」，
+        //   而他看到的图标变化来自装新包之后桌面自己重启那次。前台标志让广播把接收方解冻。
         runCatching {
-          context.sendBroadcast(Intent(ACTION_CLEAR_ICON_CACHE))
-          context.sendBroadcast(Intent(ACTION_CLEAR_ICON_CACHE).setPackage(LAUNCHER_AOSP))
-          context.sendBroadcast(Intent(ACTION_CLEAR_ICON_CACHE).setPackage(LAUNCHER_PIXEL))
+          context.sendBroadcast(Intent(ACTION_CLEAR_ICON_CACHE).addFlags(Intent.FLAG_RECEIVER_FOREGROUND))
+          context.sendBroadcast(Intent(ACTION_CLEAR_ICON_CACHE).setPackage(LAUNCHER_AOSP).addFlags(Intent.FLAG_RECEIVER_FOREGROUND))
+          context.sendBroadcast(Intent(ACTION_CLEAR_ICON_CACHE).setPackage(LAUNCHER_PIXEL).addFlags(Intent.FLAG_RECEIVER_FOREGROUND))
         }
         onNotify(cacheSent)
       },
@@ -487,7 +491,8 @@ private fun ToolsCard(onNotify: (String) -> Unit) {
       OutlinedButton(
         onClick = {
           runCatching {
-            context.sendBroadcast(Intent(ACTION_RESTART_SELF).setPackage(SYSTEMUI))
+            context.sendBroadcast(Intent(ACTION_RESTART_SELF).setPackage(SYSTEMUI)
+              .addFlags(Intent.FLAG_RECEIVER_FOREGROUND))
           }
           onNotify(restartSent)
         },
@@ -502,7 +507,8 @@ private fun ToolsCard(onNotify: (String) -> Unit) {
           // 其余会画别的应用图标的进程。杀掉后系统会把它们拉起来，下次用到时重新注入。
           runCatching {
             for (pkg in OTHER_RESTARTABLE) {
-              context.sendBroadcast(Intent(ACTION_RESTART_SELF).setPackage(pkg))
+              context.sendBroadcast(Intent(ACTION_RESTART_SELF).setPackage(pkg)
+                .addFlags(Intent.FLAG_RECEIVER_FOREGROUND))
             }
           }
           onNotify(restartSent)
