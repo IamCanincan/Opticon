@@ -51,6 +51,40 @@ object ModuleRuntime {
     private var lastSource: String? = null
 
     /**
+     * 当初把本模块这段代码装进内存的那份 APK。
+     *
+     * 用来区分「配置通道暂时不通」和「模块已经被卸载」—— 两者在日志里长得一样（都读不到），
+     * 但后者必须**失败时关闭**：钩子已经挂在宿主进程里，没人会替它摘下来。
+     * ⚠ 取法**必须**走框架给的 `moduleApplicationInfo.sourceDir`：2026-11-07 先用
+     *   `protectionDomain.codeSource` 取过一次，真机当场打出 `模块 APK = <解析不到>` —— LSPosed 的
+     *   模块类不是从普通 APK 的 code source 装的，那条判定等于哑闸。
+     * 取不到就返回 null，那条分支不生效（保守，等于维持旧行为）。
+     */
+    private fun moduleApkFile(): File? =
+        runCatching { module?.moduleApplicationInfo?.sourceDir?.let(::File) }.getOrNull()
+
+    /** 这条判定每进程只做一次（APK 判定为不在之后不会自己回来 —— 重装一定是新进程）。 */
+    private var apkExistsChecked = false
+
+    /** 自证那行每进程只打一次。 */
+    private var apkLogged = false
+
+    /**
+     * provider 查询抛的是「查无此 authority」——那只可能是模块应用被卸载了。
+     * 与「provider 拒绝我们」（空游标）必须分开：后者说明应用还在，只是没给我们读。
+     */
+    @Volatile private var providerMissing = false
+
+    /** 最近一次**真读到**配置的时刻；0 = 本进程还没读到过。 */
+    private var lastGoodAt = 0L
+
+    /** 本进程开始管配置的时刻（只用来给"从没读到过"那条分支计时）。 */
+    private val processStartedAt = SystemClock.elapsedRealtime()
+
+    /** 「读不到」要持续这么久才去判"模块是不是被卸载了"。进程刚起那一秒读不到是正常的。 */
+    private const val SILENT_CONFIG_MS = 20_000L
+
+    /**
      * 重读的互斥闸。
      *
      * options() 在热路径上被调，而 system_server 里 markIconResId 是**多个 binder 线程**
@@ -171,7 +205,41 @@ object ModuleRuntime {
             lastReadAt = now
 
             val m = module ?: return
-            val read = readOptions(m) ?: return
+            val read = readOptions(m)
+            if (read == null) {
+                // **卸载之后这个进程里还挂着钩子**：所有配置来源都读不到时，以前这里直接 return，
+                // `current` 就一直是 [ModuleOptions] 的默认值（三个开关全 true）—— 于是"删了也没用"。
+                // 判"模块还在不在"只认一个本地证据：**当初加载我们这段代码的那份 APK 还在不在盘上**。
+                // 在 ⇒ 只是配置通道暂时不通，保留旧值（与以前一致，坏 ROM 上的行为不变）；
+                // 不在 ⇒ 模块确实被卸载了，按"全部关闭"处理，钩子从此一个像素都不改。
+                val quietMs = now - (if (lastGoodAt != 0L) lastGoodAt else processStartedAt)
+                val apk = moduleApkFile()
+                val apkMissing = apk != null && !apk.exists()
+                if (quietMs >= SILENT_CONFIG_MS && !apkExistsChecked) {
+                    apkExistsChecked = true
+                    if (apkMissing || providerMissing) {
+                        current = ModuleOptions(circleEnabled = false, monoInvert = false, notifyEnabled = false)
+                        lastSource = "module-gone"
+                        logW("Config: 配置读不到，且" +
+                            (if (apkMissing) "加载本模块的那份 APK 已不在（${apk?.path}）"
+                             else "provider 已查不到（Unknown URL ⇒ 模块应用被卸载）") +
+                            " ⇒ 按**全部关闭**处理（卸载后进程还活着的唯一可救方向）。重装并重启宿主进程即恢复。")
+                    } else {
+                        logW("Config: ${SILENT_CONFIG_MS / 1000}s 读不到任何配置，但模块看起来还在" +
+                            (if (apk != null) "（${apk.path}）" else "（APK 路径解析不到）") +
+                            " ⇒ 保留上一次的值（不当作已卸载）")
+                    }
+                }
+                return
+            }
+            lastGoodAt = now
+            if (!apkLogged) {
+                // 自证：这条“卸载就全关”的判定依赖 moduleApk 能不能解析出来。解析成 null 就等于没装这道闸，
+                // 而它平时一声不响 —— 所以每进程打一次“我看见了哪份 APK、它还在不在”。
+                apkLogged = true
+                val a = moduleApkFile()
+                logI("Config: 模块 APK = " + (a?.path ?: "<解析不到>") + "（存在=" + (a?.exists() ?: false) + "）")
+            }
 
             if (force || read.options != current || read.source != lastSource) {
                 current = read.options
@@ -289,10 +357,13 @@ object ModuleRuntime {
                         cursor.getColumnIndexOrThrow(ModulePrefs.COLUMN_NOTIFY_ENABLED)
                     ) != 0
                 )
+                providerMissing = false
                 logStateChange("provider ok: ${options.describe()}")
                 options
             }
         }.onFailure {
+            // 查无此 authority = 应用真的没了；这一条不依赖任何包可见性规则。
+            if (it is IllegalArgumentException) providerMissing = true
             logStateChange(
                 "provider query failed: ${it::class.java.simpleName}: ${it.message}",
                 warn = true
