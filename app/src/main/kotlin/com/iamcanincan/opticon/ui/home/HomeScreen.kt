@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.InvertColors
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -39,6 +40,9 @@ import com.iamcanincan.opticon.ui.PageRole
 import com.iamcanincan.opticon.ui.groupRowShape
 import com.iamcanincan.opticon.ui.ScreenList
 import com.iamcanincan.opticon.ui.stats.StatsStore
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * **主页 = 状态页**，版式对齐 KernelSU 管理器的首页（2026-11-07 主人："还是太丑了"）：
@@ -56,6 +60,11 @@ fun HomeScreen() {
   val (snapshot, at) = StatsStore.load(context)
   val (cropCount, notifyCount, total) = splitCounts(snapshot)
   val onCount = listOf(options.circleEnabled, options.monoInvert, options.notifyEnabled).count { it }
+  val scheme = MaterialTheme.colorScheme
+  // 「运行中」必须是读数、不能是写死的一句话：模块被关掉 / 钩子没注入时，宿主就不会再回报计数。
+  // 判据用已有的「上次上报时间」，不新开探针 —— 桌面与系统界面每处理 20 次才回报一次，
+  // 所以窗口给 10 分钟：短于它多半是刚好在忙，长于它就是真的没动静了。
+  val fresh = at != 0L && System.currentTimeMillis() - at < FRESH_MS
 
   ScreenList {
     item { PageRole(stringResource(R.string.home_role)) }
@@ -64,8 +73,8 @@ fun HomeScreen() {
     item {
       OpticonCard(
         padding = 0.dp,
-        containerColor = MaterialTheme.colorScheme.primaryContainer,
-        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        containerColor = if (fresh) scheme.primaryContainer else scheme.surfaceContainerHigh,
+        contentColor = if (fresh) scheme.onPrimaryContainer else scheme.onSurface,
         shape = MaterialTheme.shapes.extraLarge,
         border = null,
       ) {
@@ -74,34 +83,38 @@ fun HomeScreen() {
           verticalAlignment = Alignment.CenterVertically,
         ) {
           Icon(
-            imageVector = Icons.Default.CheckCircle,
+            imageVector = if (fresh) Icons.Default.CheckCircle else Icons.Default.Schedule,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSecondaryContainer,
+            tint = if (fresh) scheme.onPrimaryContainer else scheme.onSurfaceVariant,
             modifier = Modifier.size(28.dp),
           )
           Spacer(modifier = Modifier.size(14.dp))
           Column(modifier = Modifier.weight(1f)) {
             Text(
-              text = stringResource(R.string.home_state_ok),
+              text = stringResource(if (fresh) R.string.home_state_ok else R.string.home_state_idle),
               style = MaterialTheme.typography.titleMedium,
               fontWeight = FontWeight.SemiBold,
             )
             Text(
-              text = if (at == 0L) stringResource(R.string.home_total_none)
-              else stringResource(R.string.home_state_data, total, cropCount, notifyCount),
+              text = when {
+                at == 0L -> stringResource(R.string.home_total_none)
+                fresh -> stringResource(R.string.home_state_data, total, cropCount, notifyCount)
+                else -> stringResource(R.string.home_state_stale, clock(at), total)
+              },
               style = MaterialTheme.typography.bodyMedium,
-              color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f),
+              color =
+                (if (fresh) scheme.onPrimaryContainer else scheme.onSurfaceVariant).copy(alpha = 0.8f),
             )
           }
           Box(
             modifier = Modifier
-              .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(50))
+              .background(scheme.primary, RoundedCornerShape(50))
               .padding(horizontal = 10.dp, vertical = 4.dp),
           ) {
             Text(
               text = stringResource(R.string.home_state_chip, onCount),
               style = MaterialTheme.typography.labelMedium,
-              color = MaterialTheme.colorScheme.onPrimary,
+              color = scheme.onPrimary,
             )
           }
         }
@@ -251,6 +264,13 @@ private fun TipRow(icon: ImageVector, title: Int, body: Int, shape: androidx.com
     }
   }
 }
+
+/** 「近期有回报」的窗口：宿主每 20 次计数才回报一次，10 分钟内有回报就算在跑。 */
+private const val FRESH_MS = 10 * 60 * 1000L
+
+private fun clock(at: Long): String =
+  SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(at))
+
 /** 快照按功能分成两堆（裁圆 / 通知），再各给一个总数。 */
 private fun splitCounts(snapshot: String?): Triple<Int, Int, Int> {
   if (snapshot.isNullOrBlank()) return Triple(0, 0, 0)

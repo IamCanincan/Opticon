@@ -39,7 +39,9 @@
     <string name="tab_stats">统计</string>
     <string name="tab_settings">设置</string>
     <string name="stats_title">各功能处理次数</string>
-    <string name="stats_empty">还没有数据：桌面与系统界面每处理 20 次才回报一次，正常使用一会儿再回来。</string>
+    <string name="stats_empty">还没有收到上报</string>
+    <string name="stats_empty_title">还没有计数</string>
+    <string name="stats_empty_body">到桌面划一划、随手开几个应用；桌面与系统界面每处理 20 次回报一次，之后这里就按功能列出次数。</string>
     <string name="stats_at">上次更新 %1$s（由桌面 / 系统界面上报）</string>
     <string name="stats_refresh">刷新</string>
     <string name="home_hello">Opticon %1$s</string>
@@ -56,7 +58,9 @@
     <string name="home_open_features">去调开关</string>
     <string name="home_role">当前状态</string>
     <string name="home_state_ok">运行中</string>
+    <string name="home_state_idle">等待上报</string>
     <string name="home_state_data">共 %1$d 次 · 裁圆 %2$d · 通知 %3$d</string>
+    <string name="home_state_stale">上次上报 %1$s · 共 %2$d 次</string>
     <string name="home_state_chip">%1$d 项开启</string>
     <string name="home_count">%1$d 次</string>
     <string name="home_tips">提示</string>
@@ -67,7 +71,7 @@
     <string name="home_tip_off_title">想全部关掉？</string>
     <string name="home_tip_off_body">「功能」页里三个开关都关掉即可，改完记得清一次缓存。</string>
     <string name="home_total_unit">次处理（图标 + 通知）</string>
-    <string name="home_total_none">运行一会儿就会有数字：桌面与系统界面每处理 20 次回报一次。</string>
+    <string name="home_total_none">桌面与系统界面每处理 20 次回报一次，稍等就有数字。</string>
     <string name="home_total_scope">桌面与系统界面加起来的总次数，明细在「统计」页。</string>
     <string name="home_hint">Opticon %1$s · 开关在「功能」，明细在「统计」，配置与排查在「设置」。</string>
     <string name="features_role">三个开关与它们的效果说明</string>
