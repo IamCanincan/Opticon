@@ -34,11 +34,11 @@ import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.runtime.ModulePrefs
 import com.iamcanincan.opticon.ui.FeatureSwitchCard
+import com.iamcanincan.opticon.ui.GroupTitle
 import com.iamcanincan.opticon.ui.NoteList
 import com.iamcanincan.opticon.ui.OpticonCard
 import com.iamcanincan.opticon.ui.SampleTile
 import com.iamcanincan.opticon.ui.ScreenList
-import com.iamcanincan.opticon.ui.Section
 
 /**
  * 「裁圆」页：只讲这一件事 —— 桌面图标裁成正圆，以及会影响它的系统行为说明。
@@ -55,17 +55,17 @@ import com.iamcanincan.opticon.ui.Section
 fun CropScreen(onNotify: (String) -> Unit) {
   ScreenList {
     item { MasterSwitchCard(onNotify) }
-    item { Section(text = stringResource(R.string.section_effect)) { EffectCard() } }
+    item { GroupTitle(stringResource(R.string.section_effect)) }
+    item { EffectCard() }
+    item { GroupTitle(stringResource(R.string.section_notes)) }
     item {
-      Section(text = stringResource(R.string.section_notes)) {
-        NoteList(
-          listOf(
-            R.string.note_adaptive,
-            R.string.note_tiles,
-            R.string.note_launcher3,
-          )
+      NoteList(
+        listOf(
+          R.string.note_adaptive,
+          R.string.note_tiles,
+          R.string.note_launcher3,
         )
-      }
+      )
     }
   }
 }

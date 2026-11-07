@@ -40,12 +40,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.BuildConfig
 import com.iamcanincan.opticon.R
+import com.iamcanincan.opticon.ui.GroupTitle
 import com.iamcanincan.opticon.ui.IconTile
 import com.iamcanincan.opticon.ui.NoteList
 import com.iamcanincan.opticon.ui.OpticonCard
 import com.iamcanincan.opticon.ui.RepoUrl
 import com.iamcanincan.opticon.ui.ScreenList
-import com.iamcanincan.opticon.ui.Section
 import com.iamcanincan.opticon.ui.openExternalUrl
 import com.iamcanincan.opticon.update.UpdateChecker
 
@@ -75,28 +75,32 @@ internal fun AboutScreen(state: UpdateState, onCheck: () -> Unit, onNotify: (Str
     // 2026-10-26 之前是"更新 → 隐私 → 关于"，品牌卡压在最底下，首屏只有一个长说明卡。
     item { AboutCard(onOpen = open) }
 
+    item { GroupTitle(stringResource(R.string.section_feature_range)) }
+
     item {
-      Section(text = stringResource(R.string.section_feature_range)) {
-        NoteList(
-          listOf(
-            R.string.range_crop,
-            R.string.range_mono,
-            R.string.range_notify,
-            R.string.range_scope,
-          )
+      NoteList(
+        listOf(
+          R.string.range_crop,
+          R.string.range_mono,
+          R.string.range_notify,
+          R.string.range_scope,
         )
-      }
+      )
     }
 
-    item { Section(text = stringResource(R.string.section_update)) {
+    item { GroupTitle(stringResource(R.string.section_update)) }
+
+    item {
       UpdateCard(
         state = state,
         onCheck = onCheck,
         onOpenPage = open,
       )
-    } }
+    }
 
-    item { Section(text = stringResource(R.string.section_privacy)) { PrivacyCard() } }
+    item { GroupTitle(stringResource(R.string.section_privacy)) }
+
+    item { PrivacyCard() }
   }
 }
 

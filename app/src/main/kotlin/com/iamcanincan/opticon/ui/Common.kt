@@ -2,7 +2,6 @@ package com.iamcanincan.opticon.ui
 
 import android.content.ClipData
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -205,7 +204,7 @@ internal object NavScrollGate {
 @Composable
 internal fun OpticonCard(
   modifier: Modifier = Modifier,
-  shape: androidx.compose.ui.graphics.Shape = MaterialTheme.shapes.large,
+  shape: androidx.compose.ui.graphics.Shape = MaterialTheme.shapes.extraLarge,
   containerColor: Color = MaterialTheme.colorScheme.surfaceContainerHigh,
   contentColor: Color = MaterialTheme.colorScheme.onSurface,
   padding: Dp = 16.dp,
@@ -270,16 +269,6 @@ internal fun CommandRow(command: String, onNotify: (String) -> Unit) {
   }
 }
 
-/** 小标题 + 它领的那张卡。分成一个 item，才能把组内间距压到比组间距小。 */
-@Composable
-internal fun Section(text: String, content: @Composable () -> Unit) {
-  Column {
-    SectionLabel(text = text)
-    Spacer(modifier = Modifier.height(12.dp))
-    content()
-  }
-}
-
 /**
  * 「说明」要点：带圆点的列表（裁圆 / 单色两页共用）。
  *
@@ -307,34 +296,6 @@ internal fun NoteList(notes: List<Int>) {
         }
       }
     }
-  }
-}
-
-/**
- * 分组小标题：主色小竖条 + 标题字。
- *
- * 原来只是一行 `labelLarge` + `onSurfaceVariant` —— 和卡里的正文（`bodySmall`、同一个次要色）
- * 在字号与颜色上几乎同重，于是"这一段讲什么"在屏幕上读不出来，整页看着就是一堆同样大小的
- * 灰字（2026-09-30 真机复核）。加一条 4dp 主色竖条把层级立起来。
- */
-@Composable
-internal fun SectionLabel(text: String) {
-  Row(
-    verticalAlignment = Alignment.CenterVertically,
-    modifier = Modifier.padding(start = 4.dp),
-  ) {
-    Box(
-      modifier =
-        Modifier.size(width = 4.dp, height = 16.dp)
-          .clip(RoundedCornerShape(2.dp))
-          .background(MaterialTheme.colorScheme.primary)
-    )
-    Spacer(modifier = Modifier.width(10.dp))
-    Text(
-      text = text,
-      style = MaterialTheme.typography.titleSmall,
-      color = MaterialTheme.colorScheme.onSurface,
-    )
   }
 }
 
@@ -475,7 +436,7 @@ internal fun FeatureSwitchCard(
     contentColor = scheme.onPrimaryContainer,
     padding = 0.dp,
   ) {
-    Box(modifier = Modifier.clip(MaterialTheme.shapes.large)) {
+    Box(modifier = Modifier.clip(MaterialTheme.shapes.extraLarge)) {
       Icon(
         imageVector = icon,
         contentDescription = null,

@@ -35,10 +35,10 @@ import com.iamcanincan.opticon.runtime.ModulePrefs
 import com.iamcanincan.opticon.ui.CommandRow
 import com.iamcanincan.opticon.ui.EffectShowcaseCard
 import com.iamcanincan.opticon.ui.FeatureSwitchCard
+import com.iamcanincan.opticon.ui.GroupTitle
 import com.iamcanincan.opticon.ui.OpticonCard
 import com.iamcanincan.opticon.ui.SampleTile
 import com.iamcanincan.opticon.ui.ScreenList
-import com.iamcanincan.opticon.ui.Section
 
 /**
  * 「通知」页。
@@ -71,17 +71,17 @@ fun NotifyScreen(onNotify: (String) -> Unit) {
             )
         }
 
-        item {
-            Section(text = stringResource(R.string.section_effect)) { NotifyEffectCard() }
-        }
+        item { GroupTitle(stringResource(R.string.section_effect)) }
 
-        item {
-            Section(text = stringResource(R.string.section_scope)) { ScopeCard() }
-        }
+        item { NotifyEffectCard() }
 
-        item {
-            Section(text = stringResource(R.string.section_verify)) { VerifyCard(onNotify) }
-        }
+        item { GroupTitle(stringResource(R.string.section_scope)) }
+
+        item { ScopeCard() }
+
+        item { GroupTitle(stringResource(R.string.section_verify)) }
+
+        item { VerifyCard(onNotify) }
     }
 }
 

@@ -28,10 +28,10 @@ import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.runtime.ModulePrefs
 import com.iamcanincan.opticon.ui.EffectShowcaseCard
 import com.iamcanincan.opticon.ui.FeatureSwitchCard
+import com.iamcanincan.opticon.ui.GroupTitle
 import com.iamcanincan.opticon.ui.NoteList
 import com.iamcanincan.opticon.ui.SampleTile
 import com.iamcanincan.opticon.ui.ScreenList
-import com.iamcanincan.opticon.ui.Section
 
 /**
  * 「单色」页：仅涉及 Android 16 强制动态取色下，为未适配应用补一张极性正确的单色剪影。
@@ -63,20 +63,20 @@ fun MonoScreen(onNotify: (String) -> Unit) {
       )
     }
 
-    item {
-      Section(text = stringResource(R.string.section_effect)) { MonoEffectCard() }
-    }
+    item { GroupTitle(stringResource(R.string.section_effect)) }
+
+    item { MonoEffectCard() }
+
+    item { GroupTitle(stringResource(R.string.section_notes)) }
 
     item {
-      Section(text = stringResource(R.string.section_notes)) {
-        NoteList(
-          listOf(
-            R.string.note_mono_scope,
-            R.string.note_mono_cache,
-            R.string.note_themed_icon,
-          )
+      NoteList(
+        listOf(
+          R.string.note_mono_scope,
+          R.string.note_mono_cache,
+          R.string.note_themed_icon,
         )
-      }
+      )
     }
   }
 }

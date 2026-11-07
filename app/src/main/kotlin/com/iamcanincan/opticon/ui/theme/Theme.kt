@@ -30,8 +30,8 @@ import androidx.compose.ui.unit.dp
  * ⚠ 以后新增用到的角色，**先在这里补齐**，别依赖默认值。
  *
  * ## 圆角档位
- * `large = 20dp`，比 Material 3 标准的 12dp 软、比 Expressive 的 32dp 克制。
- * 界面里所有卡片都显式用 `MaterialTheme.shapes.large`，改这一个数就能整体调圆角。
+ * `large = 20dp`，`extraLarge = 28dp`。卡片默认用 `extraLarge`（见 `OpticonCard`），
+ * 分组列表里的行用 `groupRowShape`（首尾 28dp、中间 8dp）；改形状只改这里和那个函数。
  * 形状**不跟随取色**，两套配色下都是同一套圆角。
  */
 

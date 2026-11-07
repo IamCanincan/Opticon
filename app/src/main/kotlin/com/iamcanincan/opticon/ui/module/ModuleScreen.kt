@@ -447,7 +447,7 @@ private fun StepsGroup() {
 private fun VerifyCard(onNotify: (String) -> Unit) {
   val command = stringResource(R.string.verify_logcat)
 
-  OpticonCard(shape = MaterialTheme.shapes.extraLarge) {
+  OpticonCard {
     Column {
       // 「验证是否生效」已经在外层 SectionLabel 里写了。
       Text(
@@ -474,7 +474,7 @@ private fun ToolsCard(onNotify: (String) -> Unit) {
   val cacheSent = stringResource(R.string.cache_sent)
   val restartSent = stringResource(R.string.restart_sent)
 
-  OpticonCard(shape = MaterialTheme.shapes.extraLarge) {
+  OpticonCard {
     Row(verticalAlignment = Alignment.CenterVertically) {
       IconTile(
         icon = Icons.Default.CleaningServices,
