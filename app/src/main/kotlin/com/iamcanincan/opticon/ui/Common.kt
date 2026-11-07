@@ -98,7 +98,7 @@ internal fun PageRole(text: String) {
 }
 
 /** 分组列表的行间距：**相近但不贴在一起**（2026-11-07 主人）。 */
-internal val GroupGap = 3.dp
+internal val GroupGap = 2.dp
 
 /**
  * 分组列表的圆角：首行圆上两角、末行圆下两角，中间行四个小圆角。

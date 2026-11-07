@@ -31,7 +31,9 @@ import com.iamcanincan.opticon.BuildConfig
 import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.runtime.ModulePrefs
 import com.iamcanincan.opticon.ui.OpticonCard
+import com.iamcanincan.opticon.ui.GroupGap
 import com.iamcanincan.opticon.ui.PageRole
+import com.iamcanincan.opticon.ui.groupRowShape
 import com.iamcanincan.opticon.ui.ScreenList
 import com.iamcanincan.opticon.ui.SectionLabel
 import com.iamcanincan.opticon.ui.stats.StatsStore
@@ -61,7 +63,7 @@ fun HomeScreen() {
       OpticonCard(
         containerColor = MaterialTheme.colorScheme.secondaryContainer,
         contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-        shape = RoundedCornerShape(20.dp),
+        shape = MaterialTheme.shapes.extraLarge,
         border = null,
       ) {
         Row(
@@ -109,10 +111,22 @@ fun HomeScreen() {
 
     // 功能列表：灰图标 + 标题 + 副标题 + 右侧开/关小胶囊
     item {
-      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        FeatureRow(Icons.Default.Circle, R.string.tab_crop, R.string.home_sub_crop, options.circleEnabled)
-        FeatureRow(Icons.Default.InvertColors, R.string.tab_mono, R.string.home_sub_mono, options.monoInvert)
-        FeatureRow(Icons.Default.Notifications, R.string.tab_notify, R.string.home_sub_notify, options.notifyEnabled)
+      // 首尾大圆角、中间小圆角，行间只留 2dp（2026-11-07 主人：小圆角的边要贴得更近点）。
+      Column(verticalArrangement = Arrangement.spacedBy(GroupGap)) {
+        val rows = listOf(
+          Triple(Icons.Default.Circle, R.string.tab_crop to R.string.home_sub_crop, options.circleEnabled),
+          Triple(Icons.Default.InvertColors, R.string.tab_mono to R.string.home_sub_mono, options.monoInvert),
+          Triple(Icons.Default.Notifications, R.string.tab_notify to R.string.home_sub_notify, options.notifyEnabled),
+        )
+        rows.forEachIndexed { i, row ->
+          FeatureRow(
+            icon = row.first,
+            title = row.second.first,
+            subtitle = row.second.second,
+            on = row.third,
+            shape = groupRowShape(i, rows.size),
+          )
+        }
       }
     }
 
@@ -132,9 +146,15 @@ fun HomeScreen() {
  * 版式与 KernelSU 的「管理员版本 / 内核版本」那几行一致。
  */
 @Composable
-private fun FeatureRow(icon: ImageVector, title: Int, subtitle: Int, on: Boolean) {
+private fun FeatureRow(
+  icon: ImageVector,
+  title: Int,
+  subtitle: Int,
+  on: Boolean,
+  shape: androidx.compose.ui.graphics.Shape,
+) {
   val scheme = MaterialTheme.colorScheme
-  OpticonCard(shape = RoundedCornerShape(20.dp), border = null) {
+  OpticonCard(shape = shape, border = null) {
     Row(
       modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 16.dp),
       verticalAlignment = Alignment.CenterVertically,
