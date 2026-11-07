@@ -61,6 +61,7 @@ import com.iamcanincan.opticon.ui.CommandRow
 import com.iamcanincan.opticon.ui.HeroCard
 import com.iamcanincan.opticon.ui.IconTile
 import com.iamcanincan.opticon.ui.OpticonCard
+import com.iamcanincan.opticon.ui.PageRole
 import com.iamcanincan.opticon.ui.ScreenList
 import com.iamcanincan.opticon.ui.Section
 import kotlinx.coroutines.launch
@@ -91,6 +92,8 @@ private val OTHER_RESTARTABLE =
 @Composable
 fun ModuleScreen(onNotify: (String) -> Unit) {
   ScreenList {
+    item { PageRole(stringResource(R.string.settings_role)) }
+
     item { StatusCard() }
 
     item { Section(text = stringResource(R.string.section_scope)) { ScopeGroup(onNotify) } }

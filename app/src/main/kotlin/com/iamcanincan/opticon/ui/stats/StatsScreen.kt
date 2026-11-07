@@ -25,7 +25,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.ui.OpticonCard
+import com.iamcanincan.opticon.ui.PageRole
+import com.iamcanincan.opticon.ui.GroupGap
 import com.iamcanincan.opticon.ui.ScreenList
+import com.iamcanincan.opticon.ui.groupRowShape
 import com.iamcanincan.opticon.ui.SectionLabel
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -45,15 +48,11 @@ fun StatsScreen() {
   val groups = remember(loaded) { groupByFeature(loaded.first) }
 
   ScreenList {
+    item { PageRole(stringResource(R.string.stats_role)) }
+
     item {
       OpticonCard {
         Column(modifier = Modifier.padding(16.dp)) {
-          Text(
-            text = stringResource(R.string.stats_role),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-          Spacer(modifier = Modifier.height(4.dp))
           Text(
             text = stringResource(R.string.stats_title),
             style = MaterialTheme.typography.titleMedium,
@@ -85,7 +84,8 @@ fun StatsScreen() {
       item(key = "h:$feature") { SectionLabel(feature) }
       items(rows.size, key = { i -> "$feature:${rows[i].first}" }) { i ->
         val (label, n) = rows[i]
-        BarRow(label = label, value = n, max = rows.maxOf { it.second })
+        BarRow(label = label, value = n, max = rows.maxOf { it.second },
+          shape = groupRowShape(i, rows.size))
       }
     }
   }
@@ -93,9 +93,20 @@ fun StatsScreen() {
 
 /** 一行：`分支名`、次数、以及按组内最大值归一化的条。 */
 @Composable
-private fun BarRow(label: String, value: Int, max: Int) {
+private fun BarRow(
+  label: String,
+  value: Int,
+  max: Int,
+  shape: androidx.compose.ui.graphics.Shape,
+) {
   val frac = if (max <= 0) 0f else (value.toFloat() / max).coerceIn(0f, 1f)
-  Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
+  // 与主页/设置同一套分组圆角：首尾大圆角、中间小圆角、行间 3dp 缝。
+  OpticonCard(
+    shape = shape,
+    containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+    modifier = Modifier.padding(bottom = GroupGap),
+  ) {
+  Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
     Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
       Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
       Text("$value", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
@@ -111,6 +122,7 @@ private fun BarRow(label: String, value: Int, max: Int) {
           .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(5.dp)),
       )
     }
+  }
   }
 }
 

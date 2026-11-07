@@ -34,6 +34,9 @@ import com.iamcanincan.opticon.runtime.ModulePrefs
 import com.iamcanincan.opticon.ui.OpticonCard
 import com.iamcanincan.opticon.ui.ScreenList
 import com.iamcanincan.opticon.ui.SectionLabel
+import com.iamcanincan.opticon.ui.PageRole
+import com.iamcanincan.opticon.ui.GroupGap
+import com.iamcanincan.opticon.ui.groupRowShape
 import com.iamcanincan.opticon.ui.stats.StatsStore
 
 /**
@@ -56,6 +59,8 @@ fun HomeScreen() {
   val (cropCount, notifyCount, total) = splitCounts(snapshot)
 
   ScreenList {
+    item { PageRole(stringResource(R.string.home_role)) }
+
     item {
       OpticonCard(
         shape = MaterialTheme.shapes.extraLarge,
@@ -63,12 +68,6 @@ fun HomeScreen() {
         contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
       ) {
         Column(modifier = Modifier.padding(22.dp)) {
-          Text(
-            text = stringResource(R.string.home_role),
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.85f),
-          )
-          Spacer(modifier = Modifier.height(10.dp))
           Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
             Column(modifier = Modifier.weight(1f)) {
               Text(
@@ -105,7 +104,7 @@ fun HomeScreen() {
     item {
       // 分组列表（2026-11-07 主人："各个块之间应是小圆角相近但并未贴在一起，首尾为大圆角"）：
       // 首行只圆上面两角、末行只圆下面两角、中间行四个小圆角；行间留 3dp 缝，不贴在一起。
-      Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+      Column(verticalArrangement = Arrangement.spacedBy(GroupGap)) {
         val rows = listOf(
           Triple(Icons.Default.Circle, R.string.tab_crop to R.string.home_sub_crop, options.circleEnabled),
           Triple(Icons.Default.InvertColors, R.string.tab_mono to R.string.home_sub_mono, options.monoInvert),
@@ -117,7 +116,7 @@ fun HomeScreen() {
             title = stringResource(row.second.first),
             subtitle = stringResource(row.second.second),
             on = row.third,
-            shape = groupedShape(i, rows.size),
+            shape = groupRowShape(i, rows.size),
           )
         }
       }
@@ -206,17 +205,6 @@ private fun splitCounts(snapshot: String?): Triple<Int, Int, Int> {
   return Triple(crop, notify, crop + notify)
 }
 
-/** 分组列表的圆角：首行圆上两角、末行圆下两角，中间四个小圆角。 */
-private fun groupedShape(index: Int, count: Int): androidx.compose.ui.graphics.Shape {
-  val big = 28.dp
-  val small = 8.dp
-  return when {
-    count == 1 -> RoundedCornerShape(big)
-    index == 0 -> RoundedCornerShape(topStart = big, topEnd = big, bottomStart = small, bottomEnd = small)
-    index == count - 1 -> RoundedCornerShape(topStart = small, topEnd = small, bottomStart = big, bottomEnd = big)
-    else -> RoundedCornerShape(small)
-  }
-}
 
 /** 头图右侧的分项：数字大一号、标签小一号，右对齐，与左边的大总数形成层次。 */
 @Composable

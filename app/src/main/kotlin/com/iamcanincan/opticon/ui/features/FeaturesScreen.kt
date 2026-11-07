@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.R
+import com.iamcanincan.opticon.ui.PageRole
 import com.iamcanincan.opticon.ui.crop.CropScreen
 import com.iamcanincan.opticon.ui.mono.MonoScreen
 import com.iamcanincan.opticon.ui.notify.NotifyScreen
@@ -47,13 +48,7 @@ import com.iamcanincan.opticon.ui.notify.NotifyScreen
 fun FeaturesScreen(onNotify: (String) -> Unit) {
   var sub by remember { mutableIntStateOf(0) }
   Column(modifier = Modifier.fillMaxSize()) {
-    // 每页第一行先说自己是谁干什么。
-    Text(
-      text = stringResource(R.string.features_role),
-      style = MaterialTheme.typography.bodySmall,
-      color = MaterialTheme.colorScheme.onSurfaceVariant,
-      modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-    )
+    PageRole(stringResource(R.string.features_role))
     Row(
       modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
       horizontalArrangement = Arrangement.spacedBy(8.dp),

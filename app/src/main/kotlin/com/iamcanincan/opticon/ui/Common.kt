@@ -86,6 +86,39 @@ import kotlinx.coroutines.launch
  */
 internal val FloatingNavSpace = 96.dp
 
+/** 页面说明行的统一写法：四页都用它，别各自写一份间距和字号。 */
+@Composable
+internal fun PageRole(text: String) {
+  Text(
+    text = text,
+    style = MaterialTheme.typography.bodySmall,
+    color = MaterialTheme.colorScheme.onSurfaceVariant,
+    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+  )
+}
+
+/** 分组列表的行间距：**相近但不贴在一起**（2026-11-07 主人）。 */
+internal val GroupGap = 3.dp
+
+/**
+ * 分组列表的圆角：首行圆上两角、末行圆下两角，中间行四个小圆角。
+ *
+ * 四页共用这一份 —— 主页的三块状态、统计的各功能分组、设置的清单都按它来，
+ * 风格才不会一页一个样。
+ */
+internal fun groupRowShape(index: Int, count: Int): androidx.compose.ui.graphics.Shape {
+  val big = 28.dp
+  val small = 8.dp
+  return when {
+    count <= 1 -> androidx.compose.foundation.shape.RoundedCornerShape(big)
+    index == 0 -> androidx.compose.foundation.shape.RoundedCornerShape(
+      topStart = big, topEnd = big, bottomStart = small, bottomEnd = small)
+    index == count - 1 -> androidx.compose.foundation.shape.RoundedCornerShape(
+      topStart = small, topEnd = small, bottomStart = big, bottomEnd = big)
+    else -> androidx.compose.foundation.shape.RoundedCornerShape(small)
+  }
+}
+
 /**
  * 一页的列表脚手架：左右 16dp、顶部只留 4dp（顶栏已经让过位），底部让出药丸那一段。
  *
