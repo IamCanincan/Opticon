@@ -411,17 +411,18 @@ fun OpticonApp() {
  */
 @Composable
 private fun BrandMark() {
+  // 圆形底 + 图标缩到 72%：方底 + 1dp 描边在 28dp 上会显得脏（2026-11-07 主人："这个 oi logo 不够美观"）。
   Box(
     modifier =
-      Modifier.size(28.dp)
-        .clip(RoundedCornerShape(8.dp))
-        .background(colorResource(R.color.opticon_icon_background))
-        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+      Modifier.size(30.dp)
+        .clip(androidx.compose.foundation.shape.CircleShape)
+        .background(colorResource(R.color.opticon_icon_background)),
+    contentAlignment = androidx.compose.ui.Alignment.Center,
   ) {
     Image(
       painter = painterResource(R.drawable.ic_launcher_foreground),
       contentDescription = null,
-      modifier = Modifier.fillMaxSize(),
+      modifier = Modifier.fillMaxSize(0.72f),
     )
   }
 }
