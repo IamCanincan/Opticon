@@ -124,6 +124,7 @@ import com.iamcanincan.opticon.update.UpdateChecker
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -230,8 +231,39 @@ fun OpticonApp() {
         // 手势走完 = 用户确认返回
         subPage = null
       } finally {
-        // 中途撤销就把位移收回去；已完成时页面已经换了，这一步只是复位。
-        backProgress.animateTo(0f)
+        // ⚠ 必须 NonCancellable：手势被取消时这个协程已是取消态，直接调 suspend 会立刻抛
+        //   CancellationException，清理被跳过 —— 画面就卡在拖到一半的位置（主人报过「卡死」）。
+        withContext(NonCancellable) {
+          // 中途撤销就把位移收回去；已完成时页面已经换了，这一步只是复位。
+          backProgress.animateTo(0f)
+        }
+      }
+    }
+    // 一级页的返回顺序（2026-11-08 主人：「别的三个页面返回应先返回主页」）：
+    // 二级页 → 它所属的一级页（上面那条）→ **主页** → 才退出应用。
+    //
+    // ⚠ 可预测手势（主人：「可预测返回手势呢」）：第一版把 Pager 连续往回滚（从设置拖到主页
+    //   要划过统计、功能三页），主人当场判「会卡死，而且一次返回最多应只出现两个界面」。
+    //   现在改成**两屏**：底下铺一张主页（只在拖动时组合），当前页按手势进度整块右移，
+    //   露出来的就是主页 —— 松手落到主页，取消再滑回来。全程不动 Pager 的滚动，不会卡死。
+    val rootBack = remember { Animatable(0f) }
+    PredictiveBackHandler(enabled = subPage == null && pagerState.currentPage != TAB_HOME) { progress ->
+      var finished = false
+      try {
+        rootBack.snapTo(0f)
+        progress.collect { rootBack.snapTo(it.progress) }
+        finished = true
+      } finally {
+        // 同二级页那条：取消态下 suspend 会直接抛，清理必须放在 NonCancellable 里。
+        withContext(NonCancellable) {
+          if (finished) {
+            // 此时当前页已被拖到屏幕外：先把 Pager 放到主页，再复位位移 —— 画面不跳。
+            pagerState.scrollToPage(TAB_HOME)
+            rootBack.snapTo(0f)
+          } else {
+            rootBack.animateTo(0f)
+          }
+        }
       }
     }
     val density = LocalDensity.current
@@ -415,20 +447,31 @@ fun OpticonApp() {
             // 内容要一直铺到屏幕底部、从药丸后面滚过去，那才是「悬浮」。
             // 让位交给各页列表自己的 contentPadding（见 FloatingNavSpace）。
             Box(modifier = Modifier.padding(inner)) {
-                // 一级页**一直**在组合里：二级页滑出时，底下露出来的就是它，
-                // 可预测返回才有东西可看（不然只会露出背景色）。
-                HorizontalPager(
-                    state = pagerState,
-                    modifier = Modifier.fillMaxSize(),
-                    // 只能由底栏切页：页面横向滑动会和系统边缘返回手势抢事件
-                    userScrollEnabled = false,
-                ) { page ->
-                    when (page) {
-                        // 四个一级页分工：主页「看」、功能「改」、统计「查」、设置「配」。
-                        TAB_HOME -> HomeScreen(onOpen = { subPage = it })
-                        TAB_FEATURES -> FeaturesScreen(onNotify = notify, onOpen = { subPage = it })
-                        TAB_STATS -> StatsScreen()
-                        else -> ModuleScreen(onOpen = { subPage = it })
+                // 返回主页的两屏预览：拖动时底下铺一张主页，当前页整块右移把它露出来。
+                // 只在手势进行中（rootBack > 0）才组合，平时一分钱不花。
+                if (rootBack.value > 0f) {
+                    HomeScreen(onOpen = { subPage = it })
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer { translationX = size.width * rootBack.value }
+                ) {
+                    // 一级页**一直**在组合里：二级页滑出时，底下露出来的就是它，
+                    // 可预测返回才有东西可看（不然只会露出背景色）。
+                    HorizontalPager(
+                        state = pagerState,
+                        modifier = Modifier.fillMaxSize(),
+                        // 只能由底栏切页：页面横向滑动会和系统边缘返回手势抢事件
+                        userScrollEnabled = false,
+                    ) { page ->
+                        when (page) {
+                            // 四个一级页分工：主页「看」、功能「改」、统计「查」、设置「配」。
+                            TAB_HOME -> HomeScreen(onOpen = { subPage = it })
+                            TAB_FEATURES -> FeaturesScreen(onNotify = notify, onOpen = { subPage = it })
+                            TAB_STATS -> StatsScreen()
+                            else -> ModuleScreen(onOpen = { subPage = it })
+                        }
                     }
                 }
 
