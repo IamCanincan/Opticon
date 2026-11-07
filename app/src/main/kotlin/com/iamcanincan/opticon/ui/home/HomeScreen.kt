@@ -251,17 +251,6 @@ private fun TipRow(icon: ImageVector, title: Int, body: Int, shape: androidx.com
     }
   }
 }
-/** 章节标题：KSU 用 titleSmallEmphasized + 主色，左 16dp、下 8dp —— 照抄。 */
-@Composable
-private fun GroupTitle(text: String) {
-  Text(
-    text = text,
-    style = MaterialTheme.typography.titleSmallEmphasized,
-    color = MaterialTheme.colorScheme.primary,
-    modifier = Modifier.padding(start = 16.dp, bottom = 8.dp),
-  )
-}
-
 /** 快照按功能分成两堆（裁圆 / 通知），再各给一个总数。 */
 private fun splitCounts(snapshot: String?): Triple<Int, Int, Int> {
   if (snapshot.isNullOrBlank()) return Triple(0, 0, 0)

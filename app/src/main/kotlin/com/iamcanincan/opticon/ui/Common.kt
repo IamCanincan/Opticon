@@ -401,11 +401,12 @@ internal fun HeroCard(
   Card(
     modifier = modifier.fillMaxWidth(),
     colors = CardDefaults.cardColors(containerColor = containerColor),
-    shape = MaterialTheme.shapes.large,
+    // 与主页那张状态卡（extraLarge=28dp）同一个量级：整页的外框都是大圆角。
+    shape = MaterialTheme.shapes.extraLarge,
   ) {
     // 右上角一枚低透明度的大图标当水印：整张卡原来只有"色块 + 一行字"，
     // 加一层同语义的图形就有了纵深（2026-10-26 美观性）。10% 与正文拉开，不抢内容。
-    Box(modifier = Modifier.clip(MaterialTheme.shapes.large)) {
+    Box(modifier = Modifier.clip(MaterialTheme.shapes.extraLarge)) {
       Icon(
         imageVector = icon,
         contentDescription = null,

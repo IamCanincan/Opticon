@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.Intent
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -30,7 +31,6 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -47,6 +47,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
@@ -58,12 +59,14 @@ import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.circle.ACTION_CLEAR_ICON_CACHE
 import com.iamcanincan.opticon.circle.ACTION_RESTART_SELF
 import com.iamcanincan.opticon.ui.CommandRow
+import com.iamcanincan.opticon.ui.GroupGap
+import com.iamcanincan.opticon.ui.GroupTitle
 import com.iamcanincan.opticon.ui.HeroCard
 import com.iamcanincan.opticon.ui.IconTile
 import com.iamcanincan.opticon.ui.OpticonCard
 import com.iamcanincan.opticon.ui.PageRole
 import com.iamcanincan.opticon.ui.ScreenList
-import com.iamcanincan.opticon.ui.Section
+import com.iamcanincan.opticon.ui.groupRowShape
 import kotlinx.coroutines.launch
 
 private const val LAUNCHER_AOSP = "com.android.launcher3"
@@ -96,14 +99,22 @@ fun ModuleScreen(onNotify: (String) -> Unit) {
 
     item { StatusCard() }
 
-    item { Section(text = stringResource(R.string.section_scope)) { ScopeGroup(onNotify) } }
+    item { GroupTitle(stringResource(R.string.section_scope)) }
 
-    item { Section(text = stringResource(R.string.section_steps)) { StepsCard() } }
+    item { ScopeGroup(onNotify) }
 
-    item { Section(text = stringResource(R.string.section_verify)) { VerifyCard(onNotify) } }
+    item { GroupTitle(stringResource(R.string.section_steps)) }
+
+    item { StepsGroup() }
+
+    item { GroupTitle(stringResource(R.string.section_verify)) }
+
+    item { VerifyCard(onNotify) }
 
     // 2026-10-26 三个功能分页：清缓存 / 重启这些跨功能操作从「裁圆」页搬到模块页。
-    item { Section(text = stringResource(R.string.section_tools)) { ToolsCard(onNotify) } }
+    item { GroupTitle(stringResource(R.string.section_tools)) }
+
+    item { ToolsCard(onNotify) }
   }
 }
 
@@ -211,30 +222,40 @@ private fun ScopeGroup(onNotify: (String) -> Unit) {
   val visible = if (expanded) scopes else scopes.filter { it.tag != ScopeTag.OPTIONAL }
 
   // ⚠ 展开 / 收起要**跟着主题动**：README「界面」一节把「列表展开」也算在 `motionScheme` 里，
-  //   而这里原来是一帧跳过去的（`visible` 直接换列表）。`animateContentSize` 让卡片高度
+  //   而这里原来是一帧跳过去的（`visible` 直接换列表）。`animateContentSize` 让整组高度
   //   按 Expressive 的弹簧参数长出来 —— 参数取自主题，不写死时长。
-  OpticonCard(padding = 0.dp) {
-    Column(
-      modifier =
-        Modifier.animateContentSize(
+  //
+  // 版式与主页/统计同一套：每行一张卡、首尾 28dp 大圆角、中间 8dp、行间只留 2dp
+  // （2026-11-07 主人：「设置这页也应版块小圆角」）。
+  //
+  // ⚠ `clipToBounds` 必须挂在 `animateContentSize` **外面**：以前整组装在一张 Card 里，
+  //   收起时多出来的行被卡片形状裁掉；现在每行自己是一张卡、没有那层裁剪，不补这一下
+  //   就会在收起的那 200~300ms 里画到下一组上面。
+  Column(
+    modifier =
+      Modifier.clipToBounds()
+        .animateContentSize(
           animationSpec = MaterialTheme.motionScheme.defaultSpatialSpec()
-        )
-    ) {
+        ),
+    verticalArrangement = Arrangement.spacedBy(GroupGap),
+  ) {
+    // 说明 + N 行 + 底部分段按钮合成"一组"：圆角按组内的位置算，不是各自一张独立卡。
+    val count = visible.size + 2
+    OpticonCard(shape = groupRowShape(0, count), border = null, padding = 0.dp) {
       Text(
         text = stringResource(R.string.scope_hint),
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
       )
-      HorizontalDivider()
-      visible.forEachIndexed { index, item ->
-        if (index > 0) HorizontalDivider()
-        ScopeRow(item, onNotify)
-      }
-      HorizontalDivider()
-      // 用**左右分段按钮**而不是一个"展开 / 收起"的文字按钮：
-      // 这两个视图是**并列的两档**（常用 / 全部），分段控件一看就知道能左右切；
-      // 文字按钮的文案还会随状态变（"展开其余 5 项" ↔ "收起"），不如两档常驻清楚。
+    }
+    visible.forEachIndexed { index, item ->
+      ScopeRow(item, onNotify, groupRowShape(index + 1, count))
+    }
+    // 用**左右分段按钮**而不是一个"展开 / 收起"的文字按钮：
+    // 这两个视图是**并列的两档**（常用 / 全部），分段控件一看就知道能左右切；
+    // 文字按钮的文案还会随状态变（"展开其余 5 项" ↔ "收起"），不如两档常驻清楚。
+    OpticonCard(shape = groupRowShape(count - 1, count), border = null, padding = 0.dp) {
       SingleChoiceSegmentedButtonRow(
         modifier = Modifier
           .fillMaxWidth()
@@ -277,89 +298,95 @@ private data class ScopeItem(
 )
 
 @Composable
-private fun ScopeRow(item: ScopeItem, onNotify: (String) -> Unit) {
+private fun ScopeRow(
+  item: ScopeItem,
+  onNotify: (String) -> Unit,
+  shape: androidx.compose.ui.graphics.Shape,
+) {
   val clipboard = LocalClipboard.current
   val scope = rememberCoroutineScope()
   val copyLabel = stringResource(R.string.scope_copy)
   val pkg = item.copyText ?: stringResource(item.titleRes)
   val copied = stringResource(R.string.scope_copied, pkg)
-  Row(
-    modifier = Modifier
-      .fillMaxWidth()
-      .clickable(onClickLabel = copyLabel) {
-        scope.launch {
-          clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(null, pkg)))
-          onNotify(copied)
+  OpticonCard(shape = shape, border = null, padding = 0.dp) {
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .clickable(onClickLabel = copyLabel) {
+          scope.launch {
+            clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(null, pkg)))
+            onNotify(copied)
+          }
         }
-      }
-      .padding(horizontal = 16.dp, vertical = 12.dp),
-    verticalAlignment = Alignment.CenterVertically,
-  ) {
-    IconTile(
-      icon = item.icon,
-      // "必选"用主色底强调，其余用中性 surface 底
-      containerColor =
-        if (item.tag.highlighted) MaterialTheme.colorScheme.primary
-        else MaterialTheme.colorScheme.surfaceContainerHighest,
-      contentColor =
-        if (item.tag.highlighted) MaterialTheme.colorScheme.onPrimary
-        else MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    Spacer(modifier = Modifier.width(14.dp))
-    Column(modifier = Modifier.weight(1f)) {
-      Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(
-          text = stringResource(item.titleRes),
-          style = MaterialTheme.typography.bodyLarge,
-          color = MaterialTheme.colorScheme.onSurface,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-          modifier = Modifier.weight(1f),
-        )
-        Spacer(modifier = Modifier.width(4.dp))
-        // 整行可点复制包名；这枚小图标只作提示，语义由 row 的 onClickLabel 承担。
-        Icon(
-          imageVector = Icons.Default.ContentCopy,
-          contentDescription = null,
-          tint = MaterialTheme.colorScheme.onSurfaceVariant,
-          modifier = Modifier.size(14.dp),
-        )
-      }
-      // 包名单独一行小字：标题给友好名，真正的在框架里勾哪个看这一行（整行可点复制）。
-      Text(
-        text = pkg,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
-      Spacer(modifier = Modifier.height(2.dp))
-      Text(
-        text = stringResource(item.descRes),
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
-    }
-    Spacer(modifier = Modifier.width(8.dp))
-    Surface(
-      shape = MaterialTheme.shapes.extraSmall,
-      color =
-        if (item.tag.highlighted) MaterialTheme.colorScheme.primaryContainer
-        else MaterialTheme.colorScheme.surfaceContainerHighest,
+        .padding(horizontal = 16.dp, vertical = 12.dp),
+      verticalAlignment = Alignment.CenterVertically,
     ) {
-      Text(
-        text = stringResource(item.tag.labelRes),
-        style = MaterialTheme.typography.labelSmall,
-        color =
-          if (item.tag.highlighted) MaterialTheme.colorScheme.onPrimaryContainer
+      IconTile(
+        icon = item.icon,
+        // "必选"用主色底强调，其余用中性 surface 底
+        containerColor =
+          if (item.tag.highlighted) MaterialTheme.colorScheme.primary
+          else MaterialTheme.colorScheme.surfaceContainerHighest,
+        contentColor =
+          if (item.tag.highlighted) MaterialTheme.colorScheme.onPrimary
           else MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
       )
+      Spacer(modifier = Modifier.width(14.dp))
+      Column(modifier = Modifier.weight(1f)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          Text(
+            text = stringResource(item.titleRes),
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+          )
+          Spacer(modifier = Modifier.width(4.dp))
+          // 整行可点复制包名；这枚小图标只作提示，语义由 row 的 onClickLabel 承担。
+          Icon(
+            imageVector = Icons.Default.ContentCopy,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(14.dp),
+          )
+        }
+        // 包名单独一行小字：标题给友好名，真正的在框架里勾哪个看这一行（整行可点复制）。
+        Text(
+          text = pkg,
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+          text = stringResource(item.descRes),
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+      Spacer(modifier = Modifier.width(8.dp))
+      Surface(
+        shape = MaterialTheme.shapes.extraSmall,
+        color =
+          if (item.tag.highlighted) MaterialTheme.colorScheme.primaryContainer
+          else MaterialTheme.colorScheme.surfaceContainerHighest,
+      ) {
+        Text(
+          text = stringResource(item.tag.labelRes),
+          style = MaterialTheme.typography.labelSmall,
+          color =
+            if (item.tag.highlighted) MaterialTheme.colorScheme.onPrimaryContainer
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+        )
+      }
     }
   }
 }
 
-/** 启用步骤：标题行 + 4 个步骤（序号 + 主文案 + 小字提示）。 */
+/** 启用步骤：4 个步骤各一张小卡（序号 + 主文案 + 小字提示），首尾大圆角、中间小圆角。 */
 @Composable
-private fun StepsCard() {
+private fun StepsGroup() {
   val steps =
     listOf(
       R.string.step_1 to R.string.step_1_hint,
@@ -368,12 +395,15 @@ private fun StepsCard() {
       R.string.step_4 to R.string.step_4_hint,
     )
 
-  OpticonCard(padding = 0.dp) {
-    Column {
-      // 「启用步骤」已经在外层 SectionLabel 里写了，卡内不再重复。
-      steps.forEachIndexed { index, (titleRes, hintRes) ->
-        if (index > 0) HorizontalDivider()
-        Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+  Column(verticalArrangement = Arrangement.spacedBy(GroupGap)) {
+    // 「启用步骤」已经在外层的 GroupTitle 里写了，卡内不再重复。
+    steps.forEachIndexed { index, (titleRes, hintRes) ->
+      OpticonCard(
+        shape = groupRowShape(index, steps.size),
+        border = null,
+        padding = 0.dp,
+      ) {
+        Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
           Surface(
             shape = MaterialTheme.shapes.extraSmall,
             // 步骤是有顺序的：用主色底把它和"并列关系的列表"区分开。
@@ -417,7 +447,7 @@ private fun StepsCard() {
 private fun VerifyCard(onNotify: (String) -> Unit) {
   val command = stringResource(R.string.verify_logcat)
 
-  OpticonCard {
+  OpticonCard(shape = MaterialTheme.shapes.extraLarge) {
     Column {
       // 「验证是否生效」已经在外层 SectionLabel 里写了。
       Text(
@@ -444,7 +474,7 @@ private fun ToolsCard(onNotify: (String) -> Unit) {
   val cacheSent = stringResource(R.string.cache_sent)
   val restartSent = stringResource(R.string.restart_sent)
 
-  OpticonCard {
+  OpticonCard(shape = MaterialTheme.shapes.extraLarge) {
     Row(verticalAlignment = Alignment.CenterVertically) {
       IconTile(
         icon = Icons.Default.CleaningServices,
