@@ -33,7 +33,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -233,11 +236,15 @@ private fun SummaryCard(
 }
 
 /**
- * 饼图：整块扇形，段与段之间**留 6° 缝**（2026-11-08 主人：「每个部分应分开一点」）。
+ * 饼图：整饼 + **等宽直线缝**（2026-11-08 主人：「每个扇形应平行地分开」→「你这也太不规则了」）。
  *
- * 圆头 → 4dp 倒角 → 无缝整饼都被否过；现在是"干净的楔形 + 彼此分开"：
- * 每段两端各让出 3°（126dp 的饼在边上约 6.6dp），缝里露出的是卡片底色，看起来各自独立。
- * 小于 1.5 个缝的段（1% 那种）不再扣缝 —— 否则会被扣成负长度、整段消失。
+ * 试过三种"分开"：
+ *  · 角度缝 —— 所有缝在圆心汇成一点，看着是裂了；
+ *  · 每块沿角平分线外移（爆开式）—— 圆形轮廓被拆散，主人判"太不规则"；
+ *  · **现在这种**：饼本身是一个完整的圆（轮廓规整），每道边界上盖一条 2dp 的直线缝，
+ *    缝是一根等宽直条，两边平行、从圆心到外缘一样宽，外缘只留一个等宽的缺口。
+ *
+ * 缝的颜色取卡片底色（饼画在卡里，等于"挖掉"），所以深浅两套主题都不用另配色。
  * 进来时按主题 motionScheme 从 0 扫到满。
  */
 @Composable
@@ -252,25 +259,53 @@ private fun Pie(slices: List<Slice>, grand: Int, sweep: Float) {
   }
   Box(modifier = Modifier.size(126.dp).semantics { contentDescription = description }) {
     Canvas(modifier = Modifier.size(126.dp)) {
+      val c = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height / 2f)
+      val radius = size.minDimension / 2f
+
       // 底盘：没有数时是满圆灰饼，读起来像"占比图的空态"，而不是一块空白。
-      drawCircle(color = scheme.surfaceContainerHighest)
+      drawCircle(color = scheme.surfaceContainerHighest, radius = radius, center = c)
       if (grand <= 0 || sweep <= 0.01f) return@Canvas
-      val gapDeg = 6f
+
+      // 画出来的角度用"显示值"：1% 只有 3.6°，被两道 2dp 的缝一夹就成了一条线
+      // （真机截图确认过），所以小于 8° 的段在画面上抬到 8°。图例里的百分比仍按真实值写。
+      val shown = slices.map { s ->
+        val raw = 360f * s.value.toFloat() / grand.toFloat()
+        if (s.value > 0 && raw < 8f) maxOf(raw, 8f) else raw
+      }
+      val shownTotal = shown.sum()
+
       var start = -90f
-      slices.forEach { s ->
-        val full = 360f * s.value.toFloat() / grand.toFloat()
+      slices.forEachIndexed { i, s ->
         if (s.value > 0) {
-          // 小段给一个最小可见角度：1% 只有 3.6°，两面再各让 3° 就几乎读不出"这儿有一段"。
-          // 图例里的百分比仍按真实值写，只有画出来的楔形抬到 6°。
-          val body = if (full > gapDeg * 1.5f) full - gapDeg else maxOf(full, 6f)
+          val deg = shown[i] * 360f / shownTotal
           drawArc(
             color = s.color,
-            startAngle = start + (full - body) / 2f,
-            sweepAngle = body * sweep,
+            startAngle = start,
+            sweepAngle = deg * sweep,
             useCenter = true,
           )
         }
-        start += full
+        start += shown[i] * 360f / shownTotal
+      }
+
+      val live = slices.count { it.value > 0 }
+      if (live <= 1) return@Canvas
+
+      // 每条边界盖一根等宽直条：从圆心到外缘，绕到该角度再画一条横线。
+      val cut = 2.dp.toPx()
+      start = -90f
+      slices.dropLast(1).forEachIndexed { i, _ ->
+        start += shown[i] * 360f / shownTotal
+        // 直线默认指向 3 点钟（0°），而 drawArc 的角度也是从 3 点钟起算的 —— 直接转 start。
+        rotate(degrees = start, pivot = c) {
+          drawLine(
+            color = scheme.surfaceContainerHigh,
+            start = c,
+            end = androidx.compose.ui.geometry.Offset(c.x + radius, c.y),
+            strokeWidth = cut,
+            cap = androidx.compose.ui.graphics.StrokeCap.Butt,
+          )
+        }
       }
     }
   }
