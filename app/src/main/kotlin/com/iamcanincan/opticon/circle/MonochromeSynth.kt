@@ -918,6 +918,14 @@ internal object MonochromeSynth {
     key: Long, measured: IconCropWindow.Window?, colour: IconCropWindow.Window?, subject: Boolean,
   ): Int {
     val n = diagnosed.incrementAndGet()
+    // 横幅刀真开火时**额外**打一行 Info：那条 diag 行虽然也带 `退族=`，但它和裁圆/命中的高频行挤在
+    // 同一个环形缓冲里 —— 2026-11-07 为抓这一行找了两轮，最后发现是被 1200 行裁圆日志冲掉的。
+    // 这一行一年也就出几张，grep 一个动词就到手。取值用 indexOf 不用正则：这是每图标一行的热路径。
+    run {
+      val at = out.report.indexOf("退族=")
+      val killed = if (at < 0) 0 else out.report.substring(at + 3).takeWhile { it.isDigit() }.toIntOrNull() ?: 0
+      if (killed > 0) Log.i(TAG, "Mono: 退族#$n edge=$edge sig=$sig $label ${out.report}")
+    }
     Log.d(TAG, "Mono: diag#$n edge=$edge sig=$sig 键=${MonoKey.hex(key)} $label ${out.report} → " +
       (if (out.mask != null) "已交出掩码" else "判据不成立，放弃合成") + geoTag(win, measured) +
       polarityTag(colour, subject))
