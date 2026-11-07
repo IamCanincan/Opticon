@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import androidx.compose.runtime.mutableIntStateOf
 import com.iamcanincan.opticon.runtime.ACTION_STATS
 
 /**
@@ -19,6 +20,12 @@ import com.iamcanincan.opticon.runtime.ACTION_STATS
  *   读的时候拼起来 —— 任何一个进程上报都不会再把另一个的账冲掉。
  */
 internal object StatsStore {
+  /**
+   * 每收到一份宿主快照就 +1。页面读它一次就等于订阅了统计的更新 ——
+   * 宿主每 20 次计数广播一次，所以"运行中 / 等待上报"和那几个数字不用切页就能自己变
+   * （2026-11-08：原来只在组合时读一次，待在主页上数字永远停在上一次进页的时刻）。
+   */
+  internal val revision = mutableIntStateOf(0)
   private const val PREFS = "opticon_stats"
 
   /** 最近一次（任意进程）上报的时刻，主页"运行中 / 等待上报"判的是它。 */
@@ -51,6 +58,7 @@ internal object StatsStore {
       edit.putString(PREFIX + proc, "$at;" + sb.toString().trimEnd(';'))
     }
     edit.apply()
+    revision.intValue++
   }
 
   /** 读**所有进程**最新一份快照拼起来的视图；没有数据时返回 (null, 0)。 */

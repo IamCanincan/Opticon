@@ -67,7 +67,9 @@ import kotlin.math.roundToInt
 fun StatsScreen() {
   val context = LocalContext.current
   var tick by remember { mutableIntStateOf(0) }
-  val loaded = remember(tick) { StatsStore.load(context) }
+  // 版本号 = 订阅宿主上报；tick 仍留给「刷新」（读盘而不等广播）。
+  val rev = StatsStore.revision.intValue
+  val loaded = remember(rev, tick) { StatsStore.load(context) }
   val groups = remember(loaded) { groupByFeature(loaded.first) }
   val totals = groups.map { (_, rows) -> rows.sumOf { it.second } }
   val grand = totals.sum()

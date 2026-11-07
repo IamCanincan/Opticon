@@ -22,6 +22,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -55,7 +56,9 @@ import com.iamcanincan.opticon.ui.stats.StatsStore
 internal fun HomeScreen(onOpen: (SubPage) -> Unit) {
   val context = LocalContext.current
   val options = ModulePrefs.read(ModulePrefs.of(context))
-  val (snapshot, at) = StatsStore.load(context)
+  // 读一下版本号 = 订阅统计更新（宿主每 20 次计数广播一次），数字自己会变，不用切页。
+  val rev = StatsStore.revision.intValue
+  val (snapshot, at) = remember(rev) { StatsStore.load(context) }
   val (cropCount, monoCount, notifyCount, total) = splitCounts(snapshot)
   val onCount = listOf(options.circleEnabled, options.monoInvert, options.notifyEnabled).count { it }
   val scheme = MaterialTheme.colorScheme
