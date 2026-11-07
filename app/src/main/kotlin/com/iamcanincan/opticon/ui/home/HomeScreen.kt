@@ -79,8 +79,8 @@ fun HomeScreen() {
               )
               Text(
                 text = stringResource(R.string.home_total_unit),
-                style = MaterialTheme.typography.bodySmall,
-                color = LocalContentColor.current.copy(alpha = 0.72f),
+                style = MaterialTheme.typography.bodyMedium,
+                color = LocalContentColor.current.copy(alpha = 0.9f),
               )
             }
             Column(horizontalAlignment = Alignment.End) {
@@ -144,15 +144,17 @@ private fun StatusTile(
 ) {
   val scheme = MaterialTheme.colorScheme
   // MD3E 的弹簧过渡：开关状态变化时整块颜色平滑过渡，不是硬切。
+  // 中性底 + 细边框（KernelSU 的分组行就是这个做法）：一屏三块高饱和色会显得脏，
+  // 颜色只留给"这一项现在开没开"。
   val bg = androidx.compose.animation.animateColorAsState(
-    targetValue = if (on) scheme.primaryContainer else scheme.surfaceContainerHigh,
+    targetValue = scheme.surfaceContainerLow,
     animationSpec = androidx.compose.animation.core.spring(dampingRatio = 0.8f, stiffness = 380f),
     label = "tileBg",
   ).value
   OpticonCard(
     shape = shape,
     containerColor = bg,
-    contentColor = if (on) scheme.onPrimaryContainer else scheme.onSurfaceVariant,
+    contentColor = scheme.onSurface,
   ) {
     Row(
       modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
@@ -161,13 +163,17 @@ private fun StatusTile(
       Box(
         modifier = Modifier.size(46.dp)
           .background(
-            if (on) scheme.onPrimaryContainer.copy(alpha = 0.12f)
-            else scheme.onSurface.copy(alpha = 0.08f),
+            scheme.surfaceContainerHighest,
             RoundedCornerShape(12.dp),
           ),
         contentAlignment = Alignment.Center,
       ) {
-        Icon(icon, contentDescription = null, modifier = Modifier.size(26.dp))
+        Icon(
+          icon,
+          contentDescription = null,
+          tint = if (on) scheme.primary else scheme.onSurfaceVariant,
+          modifier = Modifier.size(26.dp),
+        )
       }
       Spacer(modifier = Modifier.size(14.dp))
       Column(modifier = Modifier.weight(1f)) {
@@ -178,11 +184,20 @@ private fun StatusTile(
           color = LocalContentColor.current.copy(alpha = 0.72f),
         )
       }
-      Text(
-        text = stringResource(if (on) R.string.home_on else R.string.home_off),
-        style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.Bold,
-      )
+      androidx.compose.foundation.layout.Box(
+        modifier = Modifier
+          .background(
+            if (on) scheme.primaryContainer else scheme.surfaceContainerHighest,
+            RoundedCornerShape(50),
+          )
+          .padding(horizontal = 12.dp, vertical = 4.dp),
+      ) {
+        Text(
+          text = stringResource(if (on) R.string.home_on else R.string.home_off),
+          style = MaterialTheme.typography.labelLarge,
+          color = if (on) scheme.onPrimaryContainer else scheme.onSurfaceVariant,
+        )
+      }
     }
   }
 }
