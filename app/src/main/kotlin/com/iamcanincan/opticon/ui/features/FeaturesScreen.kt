@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -37,6 +38,13 @@ import com.iamcanincan.opticon.ui.notify.NotifyScreen
 fun FeaturesScreen(onNotify: (String) -> Unit) {
   var sub by remember { mutableIntStateOf(0) }
   Column(modifier = Modifier.fillMaxSize()) {
+    // 每页第一行先说自己是谁干什么。
+    Text(
+      text = stringResource(R.string.features_role),
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+    )
     Row(
       modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
       horizontalArrangement = Arrangement.spacedBy(8.dp),

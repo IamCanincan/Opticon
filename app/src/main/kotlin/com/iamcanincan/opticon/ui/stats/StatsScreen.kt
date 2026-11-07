@@ -49,6 +49,12 @@ fun StatsScreen() {
       OpticonCard {
         Column(modifier = Modifier.padding(16.dp)) {
           Text(
+            text = stringResource(R.string.stats_role),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          Spacer(modifier = Modifier.height(4.dp))
+          Text(
             text = stringResource(R.string.stats_title),
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,

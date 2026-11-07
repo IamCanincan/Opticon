@@ -11,187 +11,152 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Circle
+import androidx.compose.material.icons.filled.InvertColors
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Circle
-import androidx.compose.material.icons.filled.InvertColors
-import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.iamcanincan.opticon.BuildConfig
 import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.runtime.ModulePrefs
-import com.iamcanincan.opticon.ui.IconTile
 import com.iamcanincan.opticon.ui.OpticonCard
 import com.iamcanincan.opticon.ui.ScreenList
-import com.iamcanincan.opticon.ui.Section
 import com.iamcanincan.opticon.ui.SectionLabel
 import com.iamcanincan.opticon.ui.stats.StatsStore
 
 /**
- * **主页**：一屏看全"装了什么版本、三个开关是什么状态、后台处理了多少"。
+ * **主页 = 状态页**。这一页只回答一个问题：现在是什么状态。
  *
- * 与「设置」页的分工：设置是"怎么配、怎么查问题"（作用域、日志、运维按钮）；
- * 主页只回答"现在是什么状态"，并且每个块都能一键跳到对应的详细页。
+ * 分工（改这一页之前先读）：
+ * - 主页：三个功能开没开 + 后台总共处理了多少 —— 只读，不放任何设置项；
+ * - 功能：开关本身与效果说明；
+ * - 统计：每个分支各多少；
+ * - 设置：作用域、排查、运维按钮。
  *
- * ⚠ 开关状态直接读本应用自己的 SharedPreferences（`ModulePrefs.of`）：界面侧写的就是这份，
- *   宿主侧读的也是这份（经 provider 转发）。这里不做"实时监听"——切页回来时重组一次就够。
+ * 所以这里刻意不放"去调开关 / 看完整统计"两个按钮，也不列分支明细 —— 那两样分别在
+ * 功能页与统计页，搬过来只会让三页重复（2026-11-07 主人："每个页面都应有分工"）。
  */
 @Composable
-fun HomeScreen(onOpenFeatures: () -> Unit, onOpenStats: () -> Unit) {
+fun HomeScreen() {
   val context = LocalContext.current
   val options = ModulePrefs.read(ModulePrefs.of(context))
-  val snapshot = StatsStore.load(context)
+  val (snapshot, at) = StatsStore.load(context)
+  val total = totalCount(snapshot)
 
   ScreenList {
     item {
       OpticonCard {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(18.dp)) {
           Text(
-            text = stringResource(R.string.home_hello, BuildConfig.VERSION_NAME),
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.SemiBold,
+            text = stringResource(R.string.home_role),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
-          Spacer(modifier = Modifier.height(6.dp))
+          Spacer(modifier = Modifier.height(10.dp))
+          Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+              text = if (total > 0) "$total" else "—",
+              fontSize = 44.sp,
+              fontWeight = FontWeight.SemiBold,
+              color = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(modifier = Modifier.size(8.dp))
+            Text(
+              text = stringResource(R.string.home_total_unit),
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.padding(bottom = 8.dp),
+            )
+          }
           Text(
-            text = stringResource(R.string.home_sub),
-            style = MaterialTheme.typography.bodyMedium,
+            text = if (at == 0L) stringResource(R.string.home_total_none)
+            else stringResource(R.string.home_total_scope),
+            style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
         }
       }
     }
 
+    item { SectionLabel(stringResource(R.string.home_features)) }
+
     item {
-      SectionLabel(stringResource(R.string.home_features))
-      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        FeatureRow(
-          icon = Icons.Default.Circle,
-          title = stringResource(R.string.tab_crop),
-          on = options.circleEnabled,
-        )
-        FeatureRow(
-          icon = Icons.Default.InvertColors,
-          title = stringResource(R.string.tab_mono),
-          on = options.monoInvert,
-        )
-        FeatureRow(
-          icon = Icons.Default.Notifications,
-          title = stringResource(R.string.tab_notify),
-          on = options.notifyEnabled,
-        )
+      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        StatusTile(Icons.Default.Circle, stringResource(R.string.tab_crop), options.circleEnabled)
+        StatusTile(Icons.Default.InvertColors, stringResource(R.string.tab_mono), options.monoInvert)
+        StatusTile(Icons.Default.Notifications, stringResource(R.string.tab_notify), options.notifyEnabled)
       }
     }
 
     item {
-      Section(text = stringResource(R.string.home_stats)) {
-        Column(modifier = Modifier.padding(16.dp)) {
-          val (snap, at) = snapshot
-          if (snap.isNullOrBlank()) {
-            Text(
-              text = stringResource(R.string.stats_empty),
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-          } else {
-            for ((label, n) in summarize(snap)) {
-              Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-              ) {
-                Text(label, style = MaterialTheme.typography.bodyMedium)
-                Text("$n", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-              }
-            }
-            if (at > 0L) {
-              Spacer(modifier = Modifier.height(6.dp))
-              Text(
-                text = stringResource(R.string.home_stats_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
-          }
-        }
-      }
-    }
-
-    item {
-      FilledTonalButton(
-        onClick = onOpenStats,
-        modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.large,
-      ) { Text(stringResource(R.string.home_open_stats)) }
-    }
-    item {
-      FilledTonalButton(
-        onClick = onOpenFeatures,
-        modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.large,
-      ) { Text(stringResource(R.string.home_open_features)) }
+      Text(
+        text = stringResource(R.string.home_hint, BuildConfig.VERSION_NAME),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
+      )
     }
   }
 }
 
+/** 一行状态：图标 + 功能名 + 开/关。开关状态用整块颜色表达，不靠读文字。 */
 @Composable
-private fun FeatureRow(icon: ImageVector, title: String, on: Boolean) {
-  OpticonCard {
+private fun StatusTile(icon: ImageVector, title: String, on: Boolean) {
+  val scheme = MaterialTheme.colorScheme
+  OpticonCard(
+    containerColor = if (on) scheme.primaryContainer else scheme.surfaceContainerHigh,
+    contentColor = if (on) scheme.onPrimaryContainer else scheme.onSurfaceVariant,
+  ) {
     Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 16.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      IconTile(
-        icon = icon,
-        containerColor = if (on) MaterialTheme.colorScheme.primary
-        else MaterialTheme.colorScheme.surfaceVariant,
-        contentColor = if (on) MaterialTheme.colorScheme.onPrimary
-        else MaterialTheme.colorScheme.onSurfaceVariant,
-      )
-      Spacer(modifier = Modifier.size(12.dp))
-      Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
       Box(
-        modifier = Modifier
+        modifier = Modifier.size(40.dp)
           .background(
-            if (on) MaterialTheme.colorScheme.primaryContainer
-            else MaterialTheme.colorScheme.surfaceVariant,
-            RoundedCornerShape(50),
-          )
-          .padding(horizontal = 10.dp, vertical = 3.dp),
+            if (on) scheme.onPrimaryContainer.copy(alpha = 0.12f)
+            else scheme.onSurface.copy(alpha = 0.08f),
+            RoundedCornerShape(12.dp),
+          ),
+        contentAlignment = Alignment.Center,
       ) {
-        Text(
-          text = stringResource(if (on) R.string.home_on else R.string.home_off),
-          style = MaterialTheme.typography.labelMedium,
-          color = if (on) MaterialTheme.colorScheme.onPrimaryContainer
-          else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Icon(icon, contentDescription = null, modifier = Modifier.size(22.dp))
       }
+      Spacer(modifier = Modifier.size(14.dp))
+      Text(
+        text = title,
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.weight(1f),
+      )
+      Text(
+        text = stringResource(if (on) R.string.home_on else R.string.home_off),
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+      )
     }
   }
 }
 
-/**
- * 快照按功能汇总（跨进程相加）：`桌面/裁圆=1200;系统界面/通知/被补=12` →
- * `裁圆 = 1200`、`通知 · 被补 = 12`。主页只给前三行，详情去统计页。
- */
-private fun summarize(snapshot: String): List<Pair<String, Int>> {
-  val sums = LinkedHashMap<String, Int>()
+/** 快照里所有分支的次数之和（跨进程相加），只用于主页那个大数字。 */
+private fun totalCount(snapshot: String?): Int {
+  if (snapshot.isNullOrBlank()) return 0
+  var sum = 0
   for (part in snapshot.split(';')) {
     val eq = part.lastIndexOf('=')
     if (eq <= 0) continue
-    val n = part.substring(eq + 1).toIntOrNull() ?: continue
-    val key = part.substring(0, eq)
-    val branch = key.substringAfter('/', key)
-    val label = branch.replace("/", " · ")
-    sums[label] = (sums[label] ?: 0) + n
+    sum += part.substring(eq + 1).toIntOrNull() ?: 0
   }
-  return sums.entries.sortedByDescending { it.value }.take(3).map { it.key to it.value }
+  return sum
 }

@@ -51,6 +51,14 @@
     <string name="home_stats_hint">数字由桌面 / 系统界面每 20 次回报一次，点下面看完整分布。</string>
     <string name="home_open_stats">查看完整统计</string>
     <string name="home_open_features">去调开关</string>
+    <string name="home_role">当前状态</string>
+    <string name="home_total_unit">次图标 / 通知处理</string>
+    <string name="home_total_none">运行一会儿就会有数字：桌面与系统界面每处理 20 次回报一次。</string>
+    <string name="home_total_scope">桌面与系统界面加起来的总次数，明细在「统计」页。</string>
+    <string name="home_hint">Opticon %1$s · 开关在「功能」，明细在「统计」，配置与排查在「设置」。</string>
+    <string name="features_role">三个开关与它们的效果说明</string>
+    <string name="stats_role">每个分支各处理了多少（按进程分开数）</string>
+    <string name="settings_role">作用域、排查与运维操作</string>
 
     <!-- ============ 「图标」页 ============ -->
 

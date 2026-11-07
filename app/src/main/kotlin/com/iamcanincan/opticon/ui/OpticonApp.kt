@@ -364,10 +364,7 @@ fun OpticonApp() {
                 ) { page ->
                     when (page) {
                         // 主页 = 一屏看全状态；功能 = 三个开关页合成一页；设置 = 原「模块」页。
-                        TAB_HOME -> HomeScreen(
-                            onOpenFeatures = { scope.launch { pagerState.animateScrollToPage(TAB_FEATURES) } },
-                            onOpenStats = { scope.launch { pagerState.animateScrollToPage(TAB_STATS) } },
-                        )
+                        TAB_HOME -> HomeScreen()
                         TAB_FEATURES -> FeaturesScreen(onNotify = notify)
                         TAB_STATS -> StatsScreen()
                         TAB_SETTINGS -> ModuleScreen(onNotify = notify)
