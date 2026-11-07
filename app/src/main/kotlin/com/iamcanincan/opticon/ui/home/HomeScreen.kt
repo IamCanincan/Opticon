@@ -13,10 +13,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Circle
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.InvertColors
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -27,29 +27,23 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.iamcanincan.opticon.BuildConfig
 import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.runtime.ModulePrefs
 import com.iamcanincan.opticon.ui.OpticonCard
+import com.iamcanincan.opticon.ui.PageRole
 import com.iamcanincan.opticon.ui.ScreenList
 import com.iamcanincan.opticon.ui.SectionLabel
-import com.iamcanincan.opticon.ui.PageRole
-import com.iamcanincan.opticon.ui.GroupGap
-import com.iamcanincan.opticon.ui.groupRowShape
 import com.iamcanincan.opticon.ui.stats.StatsStore
 
 /**
- * **主页 = 状态页**。这一页只回答一个问题：现在是什么状态。
+ * **主页 = 状态页**，版式对齐 KernelSU 管理器的首页（2026-11-07 主人："还是太丑了"）：
  *
- * 分工（改这一页之前先读）：
- * - 主页：三个功能开没开 + 后台总共处理了多少 —— 只读，不放任何设置项；
- * - 功能：开关本身与效果说明；
- * - 统计：每个分支各多少；
- * - 设置：作用域、排查、运维按钮。
+ * - 顶部一张**紧凑状态卡**（图标 + 一行结论 + 一行数据 + 右侧小胶囊），不是一大块空数字；
+ * - 下面是**灰图标 + 标题/副标题**的列表，图标不再带彩色底块；
+ * - 卡片统一 20dp 圆角、行间 8dp 缝 —— 与他机上那页的规格一致。
  *
- * 所以这里刻意不放"去调开关 / 看完整统计"两个按钮，也不列分支明细 —— 那两样分别在
- * 功能页与统计页，搬过来只会让三页重复（2026-11-07 主人："每个页面都应有分工"）。
+ * 分工不变：主页只读状态；开关在「功能」，明细在「统计」，配置与排障在「设置」。
  */
 @Composable
 fun HomeScreen() {
@@ -57,68 +51,68 @@ fun HomeScreen() {
   val options = ModulePrefs.read(ModulePrefs.of(context))
   val (snapshot, at) = StatsStore.load(context)
   val (cropCount, notifyCount, total) = splitCounts(snapshot)
+  val onCount = listOf(options.circleEnabled, options.monoInvert, options.notifyEnabled).count { it }
 
   ScreenList {
     item { PageRole(stringResource(R.string.home_role)) }
 
+    // 状态卡：图标 + 一行结论 + 一行数据 + 右侧胶囊（同 KernelSU 的"工作中 / 版本 / LKM"）
     item {
       OpticonCard(
-        shape = MaterialTheme.shapes.extraLarge,
-        containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        shape = RoundedCornerShape(20.dp),
+        border = null,
       ) {
-        Column(modifier = Modifier.padding(22.dp)) {
-          Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
-            Column(modifier = Modifier.weight(1f)) {
-              Text(
-                text = "$total",
-                fontSize = 60.sp,
-                lineHeight = 64.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = LocalContentColor.current,
-              )
-              Text(
-                text = stringResource(R.string.home_total_unit),
-                style = MaterialTheme.typography.bodyMedium,
-                color = LocalContentColor.current.copy(alpha = 0.9f),
-              )
-            }
-            Column(horizontalAlignment = Alignment.End) {
-              SplitStat("裁圆", cropCount)
-              Spacer(modifier = Modifier.height(6.dp))
-              SplitStat("通知", notifyCount)
-            }
-          }
-          Text(
-            text = if (at == 0L) stringResource(R.string.home_total_none)
-            else (if (total > 0) "共 $total 次 · " else "") + stringResource(R.string.home_total_scope),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.75f),
+        Row(
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 16.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Icon(
+            imageVector = Icons.Default.CheckCircle,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSecondaryContainer,
+            modifier = Modifier.size(28.dp),
           )
+          Spacer(modifier = Modifier.size(14.dp))
+          Column(modifier = Modifier.weight(1f)) {
+            Text(
+              text = stringResource(R.string.home_state_ok),
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+              text = if (at == 0L) stringResource(R.string.home_total_none)
+              else stringResource(R.string.home_state_data, total, cropCount, notifyCount),
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f),
+            )
+          }
+          Box(
+            modifier = Modifier
+              .background(
+                MaterialTheme.colorScheme.surface.copy(alpha = 0.25f),
+                RoundedCornerShape(50),
+              )
+              .padding(horizontal = 10.dp, vertical = 4.dp),
+          ) {
+            Text(
+              text = stringResource(R.string.home_state_chip, onCount),
+              style = MaterialTheme.typography.labelMedium,
+            )
+          }
         }
       }
     }
 
     item { SectionLabel(stringResource(R.string.home_features)) }
 
+    // 功能列表：灰图标 + 标题 + 副标题 + 右侧开/关小胶囊
     item {
-      // 分组列表（2026-11-07 主人："各个块之间应是小圆角相近但并未贴在一起，首尾为大圆角"）：
-      // 首行只圆上面两角、末行只圆下面两角、中间行四个小圆角；行间留 3dp 缝，不贴在一起。
-      Column(verticalArrangement = Arrangement.spacedBy(GroupGap)) {
-        val rows = listOf(
-          Triple(Icons.Default.Circle, R.string.tab_crop to R.string.home_sub_crop, options.circleEnabled),
-          Triple(Icons.Default.InvertColors, R.string.tab_mono to R.string.home_sub_mono, options.monoInvert),
-          Triple(Icons.Default.Notifications, R.string.tab_notify to R.string.home_sub_notify, options.notifyEnabled),
-        )
-        rows.forEachIndexed { i, row ->
-          StatusTile(
-            icon = row.first,
-            title = stringResource(row.second.first),
-            subtitle = stringResource(row.second.second),
-            on = row.third,
-            shape = groupRowShape(i, rows.size),
-          )
-        }
+      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        FeatureRow(Icons.Default.Circle, R.string.tab_crop, R.string.home_sub_crop, options.circleEnabled)
+        FeatureRow(Icons.Default.InvertColors, R.string.tab_mono, R.string.home_sub_mono, options.monoInvert)
+        FeatureRow(Icons.Default.Notifications, R.string.tab_notify, R.string.home_sub_notify, options.notifyEnabled)
       }
     }
 
@@ -127,74 +121,54 @@ fun HomeScreen() {
         text = stringResource(R.string.home_hint, BuildConfig.VERSION_NAME),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
+        modifier = Modifier.padding(horizontal = 4.dp, vertical = 10.dp),
       )
     }
   }
 }
 
-/** 一行状态：图标 + 功能名 + 开/关。开关状态用整块颜色表达，不靠读文字。 */
+/**
+ * 一行功能：**灰色图标**（不带彩色底块）+ 标题/副标题 + 右侧状态胶囊。
+ * 版式与 KernelSU 的「管理员版本 / 内核版本」那几行一致。
+ */
 @Composable
-private fun StatusTile(
-  icon: ImageVector,
-  title: String,
-  subtitle: String,
-  on: Boolean,
-  shape: androidx.compose.ui.graphics.Shape = MaterialTheme.shapes.extraLarge,
-) {
+private fun FeatureRow(icon: ImageVector, title: Int, subtitle: Int, on: Boolean) {
   val scheme = MaterialTheme.colorScheme
-  // MD3E 的弹簧过渡：开关状态变化时整块颜色平滑过渡，不是硬切。
-  // 中性底 + 细边框（KernelSU 的分组行就是这个做法）：一屏三块高饱和色会显得脏，
-  // 颜色只留给"这一项现在开没开"。
-  val bg = androidx.compose.animation.animateColorAsState(
-    targetValue = scheme.surfaceContainerLow,
-    animationSpec = androidx.compose.animation.core.spring(dampingRatio = 0.8f, stiffness = 380f),
-    label = "tileBg",
-  ).value
-  OpticonCard(
-    shape = shape,
-    containerColor = bg,
-    contentColor = scheme.onSurface,
-  ) {
+  OpticonCard(shape = RoundedCornerShape(20.dp), border = null) {
     Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 16.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      Box(
-        modifier = Modifier.size(46.dp)
-          .background(
-            scheme.surfaceContainerHighest,
-            RoundedCornerShape(12.dp),
-          ),
-        contentAlignment = Alignment.Center,
-      ) {
-        Icon(
-          icon,
-          contentDescription = null,
-          tint = if (on) scheme.primary else scheme.onSurfaceVariant,
-          modifier = Modifier.size(26.dp),
-        )
-      }
+      Icon(
+        imageVector = icon,
+        contentDescription = null,
+        tint = if (on) scheme.onSurfaceVariant else scheme.outline,
+        modifier = Modifier.size(24.dp),
+      )
       Spacer(modifier = Modifier.size(14.dp))
       Column(modifier = Modifier.weight(1f)) {
-        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         Text(
-          text = subtitle,
-          style = MaterialTheme.typography.bodySmall,
-          color = LocalContentColor.current.copy(alpha = 0.72f),
+          text = stringResource(title),
+          style = MaterialTheme.typography.titleMedium,
+          color = scheme.onSurface,
+        )
+        Text(
+          text = stringResource(subtitle),
+          style = MaterialTheme.typography.bodyMedium,
+          color = scheme.onSurfaceVariant,
         )
       }
-      androidx.compose.foundation.layout.Box(
+      Box(
         modifier = Modifier
           .background(
             if (on) scheme.primaryContainer else scheme.surfaceContainerHighest,
             RoundedCornerShape(50),
           )
-          .padding(horizontal = 12.dp, vertical = 4.dp),
+          .padding(horizontal = 10.dp, vertical = 3.dp),
       ) {
         Text(
           text = stringResource(if (on) R.string.home_on else R.string.home_off),
-          style = MaterialTheme.typography.labelLarge,
+          style = MaterialTheme.typography.labelMedium,
           color = if (on) scheme.onPrimaryContainer else scheme.onSurfaceVariant,
         )
       }
@@ -218,24 +192,4 @@ private fun splitCounts(snapshot: String?): Triple<Int, Int, Int> {
     }
   }
   return Triple(crop, notify, crop + notify)
-}
-
-
-/** 头图右侧的分项：数字大一号、标签小一号，右对齐，与左边的大总数形成层次。 */
-@Composable
-private fun SplitStat(label: String, value: Int) {
-  Row(verticalAlignment = Alignment.CenterVertically) {
-    Text(
-      text = label,
-      style = MaterialTheme.typography.bodySmall,
-      color = LocalContentColor.current.copy(alpha = 0.75f),
-    )
-    Spacer(modifier = Modifier.size(8.dp))
-    Text(
-      text = "$value",
-      style = MaterialTheme.typography.titleLarge,
-      fontWeight = FontWeight.SemiBold,
-      color = LocalContentColor.current,
-    )
-  }
 }

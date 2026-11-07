@@ -195,6 +195,7 @@ internal fun OpticonCard(
   containerColor: Color = MaterialTheme.colorScheme.surfaceContainerLow,
   contentColor: Color = MaterialTheme.colorScheme.onSurface,
   padding: Dp = 16.dp,
+  border: androidx.compose.foundation.BorderStroke? = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
   content: @Composable ColumnScope.() -> Unit,
 ) {
   Card(
@@ -202,7 +203,7 @@ internal fun OpticonCard(
     shape = shape,
     colors =
       CardDefaults.cardColors(containerColor = containerColor, contentColor = contentColor),
-    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    border = border,
   ) {
     Column(modifier = Modifier.padding(padding), content = content)
   }
