@@ -69,9 +69,26 @@ fun HomeScreen() {
             color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.85f),
           )
           Spacer(modifier = Modifier.height(10.dp))
-          Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-            BigStat("裁圆", cropCount, Modifier.weight(1f))
-            BigStat("通知", notifyCount, Modifier.weight(1f))
+          Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = "$total",
+                fontSize = 60.sp,
+                lineHeight = 64.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = LocalContentColor.current,
+              )
+              Text(
+                text = stringResource(R.string.home_total_unit),
+                style = MaterialTheme.typography.bodySmall,
+                color = LocalContentColor.current.copy(alpha = 0.72f),
+              )
+            }
+            Column(horizontalAlignment = Alignment.End) {
+              SplitStat("裁圆", cropCount)
+              Spacer(modifier = Modifier.height(6.dp))
+              SplitStat("通知", notifyCount)
+            }
           }
           Text(
             text = if (at == 0L) stringResource(R.string.home_total_none)
@@ -86,13 +103,23 @@ fun HomeScreen() {
     item { SectionLabel(stringResource(R.string.home_features)) }
 
     item {
-      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        StatusTile(Icons.Default.Circle, stringResource(R.string.tab_crop),
-          stringResource(R.string.home_sub_crop), options.circleEnabled)
-        StatusTile(Icons.Default.InvertColors, stringResource(R.string.tab_mono),
-          stringResource(R.string.home_sub_mono), options.monoInvert)
-        StatusTile(Icons.Default.Notifications, stringResource(R.string.tab_notify),
-          stringResource(R.string.home_sub_notify), options.notifyEnabled)
+      // 分组列表（2026-11-07 主人："各个块之间应是小圆角相近但并未贴在一起，首尾为大圆角"）：
+      // 首行只圆上面两角、末行只圆下面两角、中间行四个小圆角；行间留 3dp 缝，不贴在一起。
+      Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        val rows = listOf(
+          Triple(Icons.Default.Circle, R.string.tab_crop to R.string.home_sub_crop, options.circleEnabled),
+          Triple(Icons.Default.InvertColors, R.string.tab_mono to R.string.home_sub_mono, options.monoInvert),
+          Triple(Icons.Default.Notifications, R.string.tab_notify to R.string.home_sub_notify, options.notifyEnabled),
+        )
+        rows.forEachIndexed { i, row ->
+          StatusTile(
+            icon = row.first,
+            title = stringResource(row.second.first),
+            subtitle = stringResource(row.second.second),
+            on = row.third,
+            shape = groupedShape(i, rows.size),
+          )
+        }
       }
     }
 
@@ -109,7 +136,13 @@ fun HomeScreen() {
 
 /** 一行状态：图标 + 功能名 + 开/关。开关状态用整块颜色表达，不靠读文字。 */
 @Composable
-private fun StatusTile(icon: ImageVector, title: String, subtitle: String, on: Boolean) {
+private fun StatusTile(
+  icon: ImageVector,
+  title: String,
+  subtitle: String,
+  on: Boolean,
+  shape: androidx.compose.ui.graphics.Shape = MaterialTheme.shapes.extraLarge,
+) {
   val scheme = MaterialTheme.colorScheme
   // MD3E 的弹簧过渡：开关状态变化时整块颜色平滑过渡，不是硬切。
   val bg = androidx.compose.animation.animateColorAsState(
@@ -118,7 +151,7 @@ private fun StatusTile(icon: ImageVector, title: String, subtitle: String, on: B
     label = "tileBg",
   ).value
   OpticonCard(
-    shape = MaterialTheme.shapes.extraLarge,
+    shape = shape,
     containerColor = bg,
     contentColor = if (on) scheme.onPrimaryContainer else scheme.onSurfaceVariant,
   ) {
@@ -173,20 +206,33 @@ private fun splitCounts(snapshot: String?): Triple<Int, Int, Int> {
   return Triple(crop, notify, crop + notify)
 }
 
-/** 头图里的一个大数字 + 下面一行小字。 */
+/** 分组列表的圆角：首行圆上两角、末行圆下两角，中间四个小圆角。 */
+private fun groupedShape(index: Int, count: Int): androidx.compose.ui.graphics.Shape {
+  val big = 28.dp
+  val small = 8.dp
+  return when {
+    count == 1 -> RoundedCornerShape(big)
+    index == 0 -> RoundedCornerShape(topStart = big, topEnd = big, bottomStart = small, bottomEnd = small)
+    index == count - 1 -> RoundedCornerShape(topStart = small, topEnd = small, bottomStart = big, bottomEnd = big)
+    else -> RoundedCornerShape(small)
+  }
+}
+
+/** 头图右侧的分项：数字大一号、标签小一号，右对齐，与左边的大总数形成层次。 */
 @Composable
-private fun BigStat(label: String, value: Int, modifier: Modifier = Modifier) {
-  Column(modifier = modifier) {
-    Text(
-      text = "$value",
-      fontSize = 40.sp,
-      fontWeight = FontWeight.SemiBold,
-      color = LocalContentColor.current.copy(alpha = if (value > 0) 1f else 0.45f),
-    )
+private fun SplitStat(label: String, value: Int) {
+  Row(verticalAlignment = Alignment.CenterVertically) {
     Text(
       text = label,
       style = MaterialTheme.typography.bodySmall,
-      color = LocalContentColor.current.copy(alpha = 0.72f),
+      color = LocalContentColor.current.copy(alpha = 0.75f),
+    )
+    Spacer(modifier = Modifier.size(8.dp))
+    Text(
+      text = "$value",
+      style = MaterialTheme.typography.titleLarge,
+      fontWeight = FontWeight.SemiBold,
+      color = LocalContentColor.current,
     )
   }
 }
