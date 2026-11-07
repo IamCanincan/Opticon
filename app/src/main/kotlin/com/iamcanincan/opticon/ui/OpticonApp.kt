@@ -46,10 +46,6 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.Extension
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.InvertColors
-import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
@@ -95,7 +91,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.invisibleToUser
@@ -401,7 +396,7 @@ fun OpticonApp() {
                     when (page) {
                         // 四个一级页分工：主页「看」、功能「改」、统计「查」、设置「配」。
                         TAB_HOME -> HomeScreen(onOpen = { subPage = it })
-                        TAB_FEATURES -> FeaturesScreen(onOpen = { subPage = it })
+                        TAB_FEATURES -> FeaturesScreen(onNotify = notify, onOpen = { subPage = it })
                         TAB_STATS -> StatsScreen()
                         else -> ModuleScreen(onOpen = { subPage = it })
                     }

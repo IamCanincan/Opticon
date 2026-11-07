@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -45,9 +44,7 @@ import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -413,8 +410,8 @@ internal fun IconTile(
  *   不传 [trailing] 时连那 8dp 的右侧间隔也不生成 —— 模块页的状态卡右边直接收口。
  *   至于「开关该不该待在这一行」，两页没留过说明，别当成定死的约束。
  *
- * ⚠ [modifier] 是给**整张卡**的。带开关的那张卡要传 `Modifier.toggleable(role = Role.Switch)`：
- *   整行可点既是更好的触控目标，也是读屏唯一能拿到名字的形态 —— 详见 `SwitchRow` 那段说明。
+ * ⚠ [modifier] 是给**整张卡**的。⚠ 2026-11-08 起不再建议用 `toggleable` 把整张卡做成开关
+ *   （主人：「只有开关按钮部分点击才能开关」）—— 现在各处的开关都由右侧 `Switch` 自己吃点击。
  *
  * @param containerColor 卡片底色，同时当图标的颜色（见上面的反色说明）
  * @param contentColor 卡上的文字色，同时当图标方块的底色
@@ -485,7 +482,8 @@ internal fun HeroCard(
  * 功能说明比模块状态长（单色那条尤其），必须让正文占满整宽。这里保留 HeroCard 的色彩与水印语言，
  * 只把正文放到下一行 —— 三个功能页因此长得一模一样。
  *
- * 语义：整张卡 `toggleable`（读屏只报一站），内部 Switch 只做展示。
+ * ⚠ 2026-11-08 主人：「应只有开关按钮部分点击才能开关，不然太灵敏了」——
+ *   整张卡不再 `toggleable`（原来点正文也会把开关翻过去），只有右边的 Switch 自己吃点击。
  */
 @Composable
 internal fun FeatureSwitchCard(
@@ -496,13 +494,7 @@ internal fun FeatureSwitchCard(
   onCheckedChange: (Boolean) -> Unit,
 ) {
   val scheme = MaterialTheme.colorScheme
-  val toggle = Modifier.toggleable(
-    value = checked,
-    role = Role.Switch,
-    onValueChange = onCheckedChange,
-  )
   OpticonCard(
-    modifier = toggle,
     containerColor = scheme.primaryContainer,
     contentColor = scheme.onPrimaryContainer,
     padding = 0.dp,
@@ -532,7 +524,7 @@ internal fun FeatureSwitchCard(
             modifier = Modifier.weight(1f),
           )
           Spacer(modifier = Modifier.width(8.dp))
-          Switch(checked = checked, onCheckedChange = null)
+          Switch(checked = checked, onCheckedChange = onCheckedChange)
         }
         Spacer(modifier = Modifier.height(12.dp))
         Text(

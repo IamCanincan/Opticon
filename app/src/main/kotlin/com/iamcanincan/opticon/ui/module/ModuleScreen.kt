@@ -1,7 +1,6 @@
 package com.iamcanincan.opticon.ui.module
 
 import android.content.ClipData
-import android.content.Intent
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -59,8 +58,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.R
-import com.iamcanincan.opticon.circle.ACTION_CLEAR_ICON_CACHE
-import com.iamcanincan.opticon.circle.ACTION_RESTART_SELF
+import com.iamcanincan.opticon.ui.clearIconCache
+import com.iamcanincan.opticon.ui.restartOtherProcesses
+import com.iamcanincan.opticon.ui.restartSystemUi
 import com.iamcanincan.opticon.ui.CommandRow
 import com.iamcanincan.opticon.ui.GroupGap
 import com.iamcanincan.opticon.ui.GroupTitle
@@ -73,19 +73,6 @@ import com.iamcanincan.opticon.ui.ScreenList
 import com.iamcanincan.opticon.ui.SubPage
 import com.iamcanincan.opticon.ui.groupRowShape
 import kotlinx.coroutines.launch
-
-private const val LAUNCHER_AOSP = "com.android.launcher3"
-private const val LAUNCHER_PIXEL = "com.google.android.apps.nexuslauncher"
-private const val SYSTEMUI = "com.android.systemui"
-
-/** 「重启其他」覆盖的进程：都是会显示别的应用图标、杀掉后系统会自动拉起的 UI 进程。 */
-private val OTHER_RESTARTABLE =
-  listOf(
-    "com.android.settings",
-    "com.google.android.settings.intelligence",
-    "com.android.intentresolver",
-    "com.android.permissioncontroller",
-  )
 
 /**
  * 「设置」一级页：四项的入口 —— 作用域 / 启用与验证 / 运维操作 / 关于。
@@ -552,17 +539,7 @@ private fun ToolsCard(onNotify: (String) -> Unit) {
       Spacer(modifier = Modifier.height(16.dp))
       FilledTonalButton(
         onClick = {
-          // 桌面进程里注册的是动态接收器；再显式点两个已知桌面的包名，双保险（重复送达无害）。
-          // ⚠ **必须带 FLAG_RECEIVER_FOREGROUND**：这个按钮永远是在我们自己的设置界面里按的，
-          //   那一刻桌面是后台缓存进程（Android 14+ 还会被冻结），普通广播会被直接丢掉 ——
-          //   2026-11-07 真机现场：三个别的进程都打出 `clear request ignored`，**桌面一声不响**、
-          //   进程号没变、`app_icons.db` 一行没少。也就是说这个按钮一直是「点了没反应」，
-          //   而他看到的图标变化来自装新包之后桌面自己重启那次。前台标志让广播把接收方解冻。
-          runCatching {
-            context.sendBroadcast(Intent(ACTION_CLEAR_ICON_CACHE).addFlags(Intent.FLAG_RECEIVER_FOREGROUND))
-            context.sendBroadcast(Intent(ACTION_CLEAR_ICON_CACHE).setPackage(LAUNCHER_AOSP).addFlags(Intent.FLAG_RECEIVER_FOREGROUND))
-            context.sendBroadcast(Intent(ACTION_CLEAR_ICON_CACHE).setPackage(LAUNCHER_PIXEL).addFlags(Intent.FLAG_RECEIVER_FOREGROUND))
-          }
+          clearIconCache(context)
           onNotify(cacheSent)
         },
         modifier = Modifier.fillMaxWidth(),
@@ -604,10 +581,7 @@ private fun ToolsCard(onNotify: (String) -> Unit) {
       Row(modifier = Modifier.fillMaxWidth()) {
         OutlinedButton(
           onClick = {
-            runCatching {
-              context.sendBroadcast(Intent(ACTION_RESTART_SELF).setPackage(SYSTEMUI)
-                .addFlags(Intent.FLAG_RECEIVER_FOREGROUND))
-            }
+            restartSystemUi(context)
             onNotify(restartSent)
           },
           modifier = Modifier.weight(1f),
@@ -618,13 +592,7 @@ private fun ToolsCard(onNotify: (String) -> Unit) {
         Spacer(modifier = Modifier.width(10.dp))
         OutlinedButton(
           onClick = {
-            // 其余会画别的应用图标的进程。杀掉后系统会把它们拉起来，下次用到时重新注入。
-            runCatching {
-              for (pkg in OTHER_RESTARTABLE) {
-                context.sendBroadcast(Intent(ACTION_RESTART_SELF).setPackage(pkg)
-                  .addFlags(Intent.FLAG_RECEIVER_FOREGROUND))
-              }
-            }
+            restartOtherProcesses(context)
             onNotify(restartSent)
           },
           modifier = Modifier.weight(1f),

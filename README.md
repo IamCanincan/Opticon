@@ -59,54 +59,48 @@
 
 ## 界面
 
-应用有桌面图标，打开是**五页**，底部一个**悬浮药丸**导航 —— 页面按**内容归属**分，
-三个功能各占一页：
+打开是**四个一级页**（主页 / 功能 / 统计 / 设置），底部一个**悬浮药丸**导航。
+每个功能的开关与说明、作用域清单、启用步骤、运维操作、关于，各自是一张**二级页**，
+从一级页的一行入口点进去。
 
-| 页面 | 内容 |
+| 一级页 | 职责 |
 |---|---|
-| **裁圆** | 裁圆开关、效果示意、注意事项 |
-| **单色** | 未适配图标的单色层开关、注意事项 |
-| **通知** | 通知总开关、作用域、怎么确认生效 |
-| **模块** | 三个功能**共用**的东西：作用域清单、启用步骤、验证命令、运维按钮（清图标缓存 / 重启进程） |
-| **关于** | 检查更新与版本信息 |
+| **主页** | **看**：状态结论（运行中 / 等待上报）+ 三个功能的处理次数；点一行进该功能的二级页 |
+| **功能** | **改**：三个开关（只有开关本身可点）+ 全部开启 / 全部关闭 + 开关何时生效 |
+| **统计** | **查**：按功能分组的处理次数条形图 |
+| **设置** | **配**：作用域 / 启用与验证 / 运维操作 / 关于 四个入口 |
 
-- **切页只走底栏**：页面本身不响应左右滑动（避免和系统边缘返回手势、页面内控件抢手势），
+二级页共七张：裁圆、单色、通知、作用域、启用与验证、运维操作、关于。顶栏左上角是返回箭头、
+底栏自动隐藏；**支持系统的预测式返回手势**（`enableOnBackInvokedCallback` +
+`PredictiveBackHandler`：拖动时二级页跟着手指右移，能看见底下的一级页），系统返回键同样先退二级页。
+
+- **切一级页只走底栏**：页面本身不响应左右滑动（避免和系统边缘返回手势、页面内控件抢手势），
   底栏点击或拖拽都能切页（当前页由 Pager 统一持有）。
 - 底栏是**悬浮药丸**（几何与交互对齐 KeyLens）：每格 52dp，选中项是 **44dp 圆形光晕 + 侧边文字**，
   未选中只留光晕里的图标；**长页向下滑时药丸下沉缩小消失，向上滑或回到顶部再出现**；
   按住活动圆横向拖到另一格松手也能切页。
-  五格是刻意定的 —— 三个功能各一页，再加「模块」与「关于」。
   底色是 `surfaceContainer`（KeyLens 的 navigation-container 同一档）+ 38% `outlineVariant` 描边，
-  **不是** `surface`（理由见 `OpticonApp` 的说明：写死的浅色配色里 `surface` 与 `background`
-  是同一个值，深色下 `surface` 还比背景暗 —— 靠阴影在两套主题下都不成立）。
-- **各页不再自带品牌头**：顶栏左侧是品牌标记，右侧是**当前页标题**
-  （裁圆 / 单色 / 通知 / 模块 / 关于），切换页面时标题淡入淡出；页面本身不重复 App 名。
-  （唯一的例外是「关于」页页首那块**品牌卡**：它是身份说明，不重复 App 名，并带版本与仓库入口。）
-- **三个功能页共用一张 `FeatureSwitchCard`**：主色容器 + 反色图标 + 标题/开关一行 +
-  整宽说明 + 同语义水印；其下用共享 `SampleTile` 拼示意卡——裁圆四格（原样 / 正圆 /
-  保留完整 / 快捷方式）、单色两格（原图标 / 剪影）、通知两格（灰白色块 / 可辨识图标）。
-- **模块页**作用域行整行可点，复制包名到剪贴板；**关于页**依次是品牌卡、功能范围、
-  更新、隐私。整页背景是极淡的 `surfaceContainerLow → background` 渐变，只在卡片之间
-  形成一点纵深。
-- 作用域清单用**分段按钮**（必选 + 推荐 / 全部）左右切换，而不是一个文案会变的
-  "展开 / 收起"按钮 —— 这两档是并列的，分段控件更直白。
-- 动效一律取自 `MaterialTheme.motionScheme`（MD3 Expressive 的弹簧参数），
-  没有硬编码时长的 `tween`：Tab 选中胶囊的展开、颜色过渡、作用域清单的展开
-  （`animateContentSize`）都跟着主题走。
+  **不是** `surface`（写死的浅色配色里 `surface` 与 `background` 是同一个值，深色下 `surface` 还比背景暗）。
+- **顶栏左侧是品牌标记，右侧是当前页标题**；二级页把品牌标记换成返回箭头。
+- **开关只有开关本身可点**（2026-11-08）：整行 / 整张卡不再 `toggleable`，点正文不会误翻开关。
+  切完开关会**自动做后续动作**（`ui/Actions.kt`）：裁圆 / 单色 → 清桌面图标缓存并重启桌面；
+  通知 → 重启系统界面。做完弹一条 Snackbar 说明刚刚做了什么。
+- **圆角语言**：一级页每张卡 28dp（`OpticonCard` 的默认 `extraLarge`）；分组列表用
+  `groupRowShape`（首尾 28dp、中间 8dp、行间 2dp）；章节标题统一 `GroupTitle`
+  （`titleSmallEmphasized` + 主色，左 16dp / 下 8dp）。
+- 作用域清单用**分段按钮**（必选 + 推荐 / 全部）左右切换；展开走 `animateContentSize`。
+- 动效一律取自 `MaterialTheme.motionScheme`，没有硬编码时长的 `tween`。
+- 三个功能的开关卡共用 `FeatureSwitchCard`；效果示意用共享的 `SampleTile` 拼。
 
-作用域清单放在「模块」页而不是某个功能页，是因为它本来就有两半：
+作用域清单放在「设置 → 作用域」而不是某个功能页，是因为它本来就有两半：
 launcher / settings / system_server 那几条是给图标功能用的（裁圆与单色合成），
 而 `com.android.systemui` 一个进程横跨两条（它既画通知，也画状态栏和最近任务的图标）。
 
-> 界面全部走 Material 3 Expressive：圆角一律用 `MaterialTheme.shapes.*` 的语义档位、
-> 内容卡一律走共享的 `OpticonCard`（一档底色 + 1dp `outlineVariant` 描边）、
-> 配色只用 `colorScheme` 的语义角色，所以浅色 / 深色两套主题都成立。
+> 界面全部走 Material 3 Expressive：圆角用 `MaterialTheme.shapes.*` 的语义档位、
+> 内容卡一律走共享的 `OpticonCard`、配色只用 `colorScheme` 的语义角色，浅色 / 深色两套都成立。
 >
 > ⚠ **唯一的写死颜色**是「关于」页那块图标底板的 `@color/opticon_icon_background`
-> （品牌淡粉）：那是在复刻桌面图标本体，本来就不该跟随取色 —— 见 `colors.xml` 里的说明。
->
-> ⚠ 卡片为什么不用 `ElevatedCard`、字号为什么用 `bodyMedium`：见 `Common.kt` 里
-> `OpticonCard` 的 KDoc 与 `SectionLabel` 的说明（2026-09-30 按真机截图重做过一轮）。
+> （品牌淡粉）：那是在复刻桌面图标本体，本来就不该跟随取色。
 
 设置写进自己的 SharedPreferences，模块侧通过本应用暴露的**只读 ContentProvider**
 （`com.iamcanincan.opticon.config`，只读，按调用方包名认自家人）
@@ -667,13 +661,19 @@ com.iamcanincan.opticon
 │   └── OpticonLog             统一的日志 tag
 ├── ui/
 │   ├── MainActivity           入口 Activity（同时是桌面图标）
-│   ├── OpticonApp             外壳：顶栏 + 悬浮药丸导航 + Pager（底栏切页）
-│   ├── Common                 各页共用：ScreenList / Section / OpticonCard / HeroCard / IconTile / NoteList / CommandRow
-│   ├── crop/CropScreen        「裁圆」页（开关 / 效果示意 / 说明）
-│   ├── mono/MonoScreen        「单色」页（单色层开关 / 说明）
-│   ├── notify/NotifyScreen    「通知」页（通知小图标）
-│   ├── module/ModuleScreen    「模块」页（作用域 / 步骤 / 验证 / 运维）
-│   ├── about/AboutScreen      「关于」页（检查更新 / 版本信息）
+│   ├── OpticonApp             外壳：顶栏 + 悬浮药丸导航 + Pager + 二级页分派与预测式返回
+│   ├── SubPage                二级页枚举（裁圆 / 单色 / 通知 / 作用域 / 启用与验证 / 运维 / 关于）
+│   ├── Actions                界面里的"让改动立刻生效"广播（清缓存 / 重启系统界面 / 重启其他进程）
+│   ├── Common                 各页共用：ScreenList / MenuRow / OpticonCard / HeroCard / IconTile / NoteList / CommandRow
+│   ├── home/HomeScreen        「主页」一级页（状态 + 三个功能的次数）
+│   ├── features/FeaturesScreen「功能」一级页（三个开关 + 全部开关 + 生效说明）
+│   ├── stats/StatsScreen      「统计」一级页（分支计数条形图）
+│   ├── stats/StatsStore       统计快照落盘 + 接宿主广播
+│   ├── crop/CropScreen        二级页「裁圆」（开关 / 效果示意 / 说明）
+│   ├── mono/MonoScreen        二级页「单色」（单色层开关 / 说明）
+│   ├── notify/NotifyScreen    二级页「通知」（通知小图标）
+│   ├── module/ModuleScreen    「设置」一级页 + 三个二级页（作用域 / 启用与验证 / 运维操作）
+│   ├── about/AboutScreen      二级页「关于」（版本 / 检查更新 / 隐私）
 │   └── theme/Theme            M3E 主题（动态取色）
 └── update/UpdateChecker       检查更新（唯一的联网点）
 ```

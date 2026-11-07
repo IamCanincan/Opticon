@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.runtime.ModulePrefs
 import com.iamcanincan.opticon.ui.FeatureSwitchCard
+import com.iamcanincan.opticon.ui.clearIconCache
 import com.iamcanincan.opticon.ui.GroupTitle
 import com.iamcanincan.opticon.ui.NoteList
 import com.iamcanincan.opticon.ui.OpticonCard
@@ -88,7 +89,7 @@ private fun MasterSwitchCard(onNotify: (String) -> Unit) {
   var enabled by remember {
     mutableStateOf(prefs.getBoolean(ModulePrefs.KEY_CIRCLE_ENABLED, ModulePrefs.DEFAULT_CIRCLE_ENABLED))
   }
-  val savedHint = stringResource(R.string.switch_saved_hint)
+  val applied = stringResource(R.string.switch_applied_cache)
 
   FeatureSwitchCard(
     icon = Icons.Default.Circle,
@@ -98,8 +99,10 @@ private fun MasterSwitchCard(onNotify: (String) -> Unit) {
     onCheckedChange = { value ->
       enabled = value
       prefs.edit().putBoolean(ModulePrefs.KEY_CIRCLE_ENABLED, value).apply()
-      // 桌面持有预渲染缓存；提示用户清除后才会反映新设置。
-      onNotify(savedHint)
+      // 2026-11-08 主人：开关后自动做后续动作 —— 桌面把图标位图缓存在自己的库里，
+      // 不主动清一次，"开关改了屏幕没变化"就永远要用户自己跑去运维页按一次。
+      clearIconCache(context)
+      onNotify(applied)
     },
   )
 }

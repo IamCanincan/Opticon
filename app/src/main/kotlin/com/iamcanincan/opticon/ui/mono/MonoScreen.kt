@@ -28,6 +28,7 @@ import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.runtime.ModulePrefs
 import com.iamcanincan.opticon.ui.EffectShowcaseCard
 import com.iamcanincan.opticon.ui.FeatureSwitchCard
+import com.iamcanincan.opticon.ui.clearIconCache
 import com.iamcanincan.opticon.ui.GroupTitle
 import com.iamcanincan.opticon.ui.NoteList
 import com.iamcanincan.opticon.ui.SampleTile
@@ -46,7 +47,7 @@ fun MonoScreen(onNotify: (String) -> Unit) {
   var enabled by remember {
     mutableStateOf(prefs.getBoolean(ModulePrefs.KEY_MONO_INVERT, ModulePrefs.DEFAULT_MONO_INVERT))
   }
-  val savedHint = stringResource(R.string.switch_saved_hint)
+  val applied = stringResource(R.string.switch_applied_cache)
 
   ScreenList {
     item {
@@ -58,7 +59,9 @@ fun MonoScreen(onNotify: (String) -> Unit) {
         onCheckedChange = { value ->
           enabled = value
           prefs.edit().putBoolean(ModulePrefs.KEY_MONO_INVERT, value).apply()
-          onNotify(savedHint)
+          // 单色层也是桌面在画图标时取的：同样要清一次桌面缓存才会重画。
+          clearIconCache(context)
+          onNotify(applied)
         },
       )
     }

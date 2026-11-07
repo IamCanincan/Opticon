@@ -215,6 +215,10 @@ internal object MonochromeSynth {
    * `Mono: N layers synthesized` 就说明合成真的在跑，而不是悄悄返回 null 让桌面走了老路。
    */
   private fun noteSynthesized() {
+    // 统计页的「单色」：**交出一张单色层就记一次**，两条入口（新合成 / 命中缓存）都算 ——
+    // 口径与「裁圆」一致（那张图被我们处理过），而只记新合成的话，本机磁盘缓存在手，
+    // 界面会长期显示 0，看着像没工作。
+    com.iamcanincan.opticon.runtime.Stats.bump("单色")
     val total = synthesized.incrementAndGet()
     if (total <= LOG_FIRST || total % LOG_EVERY == 0) {
       // H0 的射程跟着报：这一支成立的前提是"桌面交给我们的位图"的几何口径（见 [regionGround]

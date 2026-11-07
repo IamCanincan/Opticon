@@ -15,7 +15,6 @@ import androidx.compose.material.icons.filled.InvertColors
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Schedule
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -31,7 +30,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.runtime.ModulePrefs
@@ -40,6 +38,8 @@ import com.iamcanincan.opticon.ui.GroupTitle
 import com.iamcanincan.opticon.ui.IconTile
 import com.iamcanincan.opticon.ui.MenuRow
 import com.iamcanincan.opticon.ui.OpticonCard
+import com.iamcanincan.opticon.ui.clearIconCache
+import com.iamcanincan.opticon.ui.restartSystemUi
 import com.iamcanincan.opticon.ui.PageRole
 import com.iamcanincan.opticon.ui.ScreenList
 import com.iamcanincan.opticon.ui.SubPage
@@ -56,7 +56,7 @@ import com.iamcanincan.opticon.ui.groupRowShape
  * 行上其余地方吃的是"切开关"，两者不抢手势。
  */
 @Composable
-internal fun FeaturesScreen(onOpen: (SubPage) -> Unit) {
+internal fun FeaturesScreen(onNotify: (String) -> Unit, onOpen: (SubPage) -> Unit) {
   val context = LocalContext.current
   val prefs = remember { ModulePrefs.of(context) }
   var crop by remember {
@@ -69,8 +69,22 @@ internal fun FeaturesScreen(onOpen: (SubPage) -> Unit) {
     mutableStateOf(prefs.getBoolean(ModulePrefs.KEY_NOTIFY_ENABLED, ModulePrefs.DEFAULT_NOTIFY_ENABLED))
   }
   val allOn = crop && mono && notify
+  val appliedCache = stringResource(R.string.switch_applied_cache)
+  val appliedSystemUi = stringResource(R.string.switch_applied_systemui)
+  val appliedAll = stringResource(R.string.switch_applied_all)
 
   fun write(key: String, value: Boolean) = prefs.edit().putBoolean(key, value).apply()
+
+  /** 开关之后立刻把后续动作做完（2026-11-08 主人：「开关后自动清缓存等一系列操作」）。 */
+  fun apply(page: SubPage) {
+    if (page == SubPage.NOTIFY) {
+      restartSystemUi(context)
+      onNotify(appliedSystemUi)
+    } else {
+      clearIconCache(context)
+      onNotify(appliedCache)
+    }
+  }
 
   ScreenList {
     item { PageRole(stringResource(R.string.features_role)) }
@@ -105,6 +119,7 @@ internal fun FeaturesScreen(onOpen: (SubPage) -> Unit) {
                   write(ModulePrefs.KEY_NOTIFY_ENABLED, value)
                 }
               }
+              apply(row.page)
             },
           )
         }
@@ -126,6 +141,9 @@ internal fun FeaturesScreen(onOpen: (SubPage) -> Unit) {
           write(ModulePrefs.KEY_CIRCLE_ENABLED, target)
           write(ModulePrefs.KEY_MONO_INVERT, target)
           write(ModulePrefs.KEY_NOTIFY_ENABLED, target)
+          clearIconCache(context)
+          restartSystemUi(context)
+          onNotify(appliedAll)
         },
         iconTint = MaterialTheme.colorScheme.primary,
         showChevron = false,
@@ -174,7 +192,6 @@ private fun SwitchRow(
     Row(
       modifier =
         Modifier.fillMaxWidth()
-          .toggleable(value = entry.on, role = Role.Switch, onValueChange = onToggle)
           .padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -197,6 +214,8 @@ private fun SwitchRow(
           color = scheme.onSurfaceVariant,
         )
       }
+      // ⚠ 只有箭头和开关本身可点：2026-11-08 主人「应只有开关按钮部分点击才能开关，
+      //   不然太灵敏了」—— 原来整行是 toggleable，点在文字上也会把开关翻过去。
       IconButton(onClick = onDetail) {
         Icon(
           imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
@@ -205,7 +224,7 @@ private fun SwitchRow(
           modifier = Modifier.size(20.dp),
         )
       }
-      Switch(checked = entry.on, onCheckedChange = null)
+      Switch(checked = entry.on, onCheckedChange = onToggle)
     }
   }
 }

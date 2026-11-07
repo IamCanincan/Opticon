@@ -32,7 +32,6 @@
     <string name="tab_crop">裁圆</string>
     <string name="tab_mono">单色</string>
     <string name="tab_notify">通知</string>
-    <string name="tab_module">模块</string>
     <string name="tab_about">关于</string>
     <string name="tab_home">主页</string>
     <string name="tab_features">功能</string>
@@ -44,36 +43,24 @@
     <string name="stats_empty_body">到桌面划一划、随手开几个应用；桌面与系统界面每处理 20 次回报一次，之后这里就按功能列出次数。</string>
     <string name="stats_at">上次更新 %1$s（由桌面 / 系统界面上报）</string>
     <string name="stats_refresh">刷新</string>
-    <string name="home_hello">Opticon %1$s</string>
     <string name="home_sub">图标裁圆 · 单色极性 · 通知小图标，三项都可以单独开关。下面一眼看全当前状态。</string>
     <string name="home_features">功能状态</string>
-    <string name="home_on">开</string>
-    <string name="home_off">关</string>
     <string name="home_sub_crop">桌面图标统一裁成圆形</string>
     <string name="home_sub_mono">未适配图标的黑白极性修正</string>
     <string name="home_sub_notify">通知小图标改成黑白剪影</string>
-    <string name="home_stats">后台处理</string>
-    <string name="home_stats_hint">数字由桌面 / 系统界面每 20 次回报一次，点下面看完整分布。</string>
-    <string name="home_open_stats">查看完整统计</string>
-    <string name="home_open_features">去调开关</string>
     <string name="home_role">当前状态</string>
     <string name="home_state_ok">运行中</string>
     <string name="home_state_idle">等待上报</string>
-    <string name="home_state_data">共 %1$d 次 · 裁圆 %2$d · 通知 %3$d</string>
+    <string name="home_state_data2">共 %1$d 次 · 裁圆 %2$d · 单色 %3$d · 通知 %4$d</string>
     <string name="home_state_stale">上次上报 %1$s · 共 %2$d 次</string>
     <string name="home_state_chip">%1$d 项开启</string>
     <string name="home_count">%1$d 次</string>
     <string name="home_tips">提示</string>
     <string name="home_tip_stale_title">改完开关没变化？</string>
-    <string name="home_tip_stale_body">已经画好的图标不会自己变：到「设置」页按一次「清除缓存并重启桌面」。</string>
+    <string name="home_tip_stale_body">现在改完开关会自动清缓存并重启桌面；万一还是没变化，到「设置 → 运维操作」手动按一次。</string>
     <string name="home_tip_count_title">这些数字是什么？</string>
     <string name="home_tip_count_body">桌面与系统界面各处理了多少次，每 20 次回报一次；明细在「统计」页。</string>
-    <string name="home_tip_off_title">想全部关掉？</string>
-    <string name="home_tip_off_body">「功能」页里三个开关都关掉即可，改完记得清一次缓存。</string>
-    <string name="home_total_unit">次处理（图标 + 通知）</string>
     <string name="home_total_none">桌面与系统界面每处理 20 次回报一次，稍等就有数字。</string>
-    <string name="home_total_scope">桌面与系统界面加起来的总次数，明细在「统计」页。</string>
-    <string name="home_hint">Opticon %1$s · 开关在「功能」，明细在「统计」，配置与排查在「设置」。</string>
     <string name="features_role">三个开关与它们的效果说明</string>
     <string name="features_group">三个功能</string>
     <string name="settings_group">配置与关于</string>
@@ -101,7 +88,6 @@
     <string name="circle_switch_title">图标裁切为正圆</string>
     <string name="circle_switch_body">应用图标（含自适应图标）统一裁切为正圆；适用于桌面、应用列表与最近任务。</string>
     <!-- 开关切换后的 Snackbar：桌面有预渲染缓存，需说明清除缓存后才会生效 -->
-    <string name="switch_saved_hint">设置已保存。已缓存的桌面图标需在「模块」→「运维操作」中清除桌面缓存后重新生成。</string>
 
     <!-- 状态卡 -->
     <string name="status_title">模块启用状态</string>
@@ -154,7 +140,6 @@
     <string name="scope_segment_all">全部</string>
 
     <!-- 启用步骤 -->
-    <string name="section_steps">启用步骤</string>
     <string name="step_1">在框架中启用本模块</string>
     <string name="step_1_hint">在框架管理器中启用本模块。</string>
     <string name="step_2">按上方清单选择生效进程</string>
@@ -177,12 +162,15 @@
     <string name="cache_title">清除桌面图标缓存</string>
     <string name="cache_body">桌面将图标位图缓存于其数据库；开关或模块变更后，缓存可能不会自动更新。点击下方按钮可删除该缓存并重启桌面进程（屏幕会短暂闪烁）。模块的掩码缓存按内容与安装标识自动失效，无需手动清理。</string>
     <string name="action_clear_launcher">清除缓存并重启桌面</string>
-    <string name="feature_cache_hint">改完开关后，已经显示的图标不会自己变 —— 到「设置」页按一次「清除缓存并重启桌面」。</string>
+    <string name="feature_cache_hint">改完开关会自动清一次桌面缓存并重画图标；万一还是没变化，到「设置 → 运维操作」手动按一次。</string>
     <string name="restart_title">重启界面进程</string>
     <string name="restart_body">系统界面、设置、分享面板这些进程会自己缓存已经画好的图标；重启它们之后，下次打开会用当前设置重新绘制。</string>
     <string name="action_restart_systemui">重启系统界面</string>
     <string name="action_restart_others">重启设置等进程</string>
     <string name="cache_sent">请求已发送：桌面进程将重启，并按当前设置重建图标。</string>
+    <string name="switch_applied_cache">已应用：桌面图标缓存已清除，桌面正在重启</string>
+    <string name="switch_applied_systemui">已应用：系统界面已重启，通知会按新设置重画</string>
+    <string name="switch_applied_all">已应用：已清桌面缓存并重启系统界面</string>
     <string name="restart_sent">请求已发送：目标进程将重启。</string>
     <string name="tools_hint">通常仅在图标未随设置更新时使用。若无响应，表示该进程未注入模块；请核对上方作用域并重启设备。</string>
 
@@ -225,14 +213,12 @@
     <string name="note_themed_icon">本应用图标包含 monochrome 层；在 Android 13 及以上启动器启用“主题图标”时，将按壁纸取色渲染。</string>
 
     <!-- 关于页：功能范围（覆盖什么、有意排除什么） -->
-    <string name="section_feature_range">功能范围</string>
     <string name="range_crop">裁圆：所有已注入进程中的应用图标；快速设置磁贴除外。</string>
     <string name="range_mono">单色：未提供单色层的自适应图标；已提供者原样透传。</string>
     <string name="range_notify">通知：新通知、通知行与状态栏重建；已适配应用跳过，大图与头像不处理。</string>
     <string name="range_scope">作用域由框架管理器决定；未注入的进程不受影响。</string>
 
     <!-- 更新卡片 -->
-    <string name="section_update">更新</string>
     <!-- 卡片标题和按钮共用这一句 -->
     <string name="update_title">检查更新</string>
     <string name="action_open_repo">在 GitHub 上查看</string>
@@ -255,7 +241,6 @@
 
 
     <!-- 隐私：这块信息之前只写在 README 里，界面上也该有一份 -->
-    <string name="section_privacy">隐私</string>
     <string name="privacy_title">网络访问与数据上报</string>
     <string name="privacy_body">仅在用户主动点击「检查更新」时建立网络连接；不包含后台轮询、统计上报或广告。注入进程内的挂钩代码不进行网络访问。</string>
 

@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -30,7 +29,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.iamcanincan.opticon.BuildConfig
 import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.runtime.ModulePrefs
 import com.iamcanincan.opticon.ui.OpticonCard
@@ -58,7 +56,7 @@ internal fun HomeScreen(onOpen: (SubPage) -> Unit) {
   val context = LocalContext.current
   val options = ModulePrefs.read(ModulePrefs.of(context))
   val (snapshot, at) = StatsStore.load(context)
-  val (cropCount, notifyCount, total) = splitCounts(snapshot)
+  val (cropCount, monoCount, notifyCount, total) = splitCounts(snapshot)
   val onCount = listOf(options.circleEnabled, options.monoInvert, options.notifyEnabled).count { it }
   val scheme = MaterialTheme.colorScheme
   // 「运行中」必须是读数、不能是写死的一句话：模块被关掉 / 钩子没注入时，宿主就不会再回报计数。
@@ -98,7 +96,7 @@ internal fun HomeScreen(onOpen: (SubPage) -> Unit) {
             Text(
               text = when {
                 at == 0L -> stringResource(R.string.home_total_none)
-                fresh -> stringResource(R.string.home_state_data, total, cropCount, notifyCount)
+                fresh -> stringResource(R.string.home_state_data2, total, cropCount, monoCount, notifyCount)
                 else -> stringResource(R.string.home_state_stale, timeHm(at), total)
               },
               style = MaterialTheme.typography.bodyMedium,
@@ -236,10 +234,16 @@ private fun TipRow(icon: ImageVector, title: Int, body: Int, shape: androidx.com
 /** 「近期有回报」的窗口：宿主每 20 次计数才回报一次，10 分钟内有回报就算在跑。 */
 private const val FRESH_MS = 10 * 60 * 1000L
 
-/** 快照按功能分成两堆（裁圆 / 通知），再各给一个总数。 */
-private fun splitCounts(snapshot: String?): Triple<Int, Int, Int> {
-  if (snapshot.isNullOrBlank()) return Triple(0, 0, 0)
+/**
+ * 快照按功能分成三堆（裁圆 / 单色 / 通知），再给一个总数。
+ *
+ * ⚠ 单色 2026-11-08 才有账：进账点在 `MonochromeSynth.store`（新合成一张单色层记一次），
+ *   所以它是「我们替多少张未适配图标做了单色层」；应用自带单色层的那一批我们不碰、也不计。
+ */
+private fun splitCounts(snapshot: String?): Stats4 {
+  if (snapshot.isNullOrBlank()) return Stats4(0, 0, 0, 0)
   var crop = 0
+  var mono = 0
   var notify = 0
   for (part in snapshot.split(';')) {
     val eq = part.lastIndexOf('=')
@@ -248,8 +252,17 @@ private fun splitCounts(snapshot: String?): Triple<Int, Int, Int> {
     val branch = part.substring(0, eq).substringAfter('/')
     when {
       branch.startsWith("裁圆") -> crop += n
+      branch.startsWith("单色") -> mono += n
       branch.startsWith("通知") -> notify += n
     }
   }
-  return Triple(crop, notify, crop + notify)
+  return Stats4(crop, mono, notify, crop + mono + notify)
 }
+
+/** 三堆 + 总数。解构按声明顺序，调用点写 `val (crop, mono, notify, total) = …`。 */
+private data class Stats4(
+  val crop: Int,
+  val mono: Int,
+  val notify: Int,
+  val total: Int,
+)

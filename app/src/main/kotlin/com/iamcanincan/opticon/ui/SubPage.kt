@@ -17,7 +17,7 @@ internal enum class SubPage(val titleRes: Int) {
   MONO(R.string.tab_mono),
   NOTIFY(R.string.tab_notify),
   SCOPE(R.string.section_scope),
-  SETUP(R.string.section_steps),
+  SETUP(R.string.settings_setup_title),
   TOOLS(R.string.section_tools),
   ABOUT(R.string.tab_about),
 }

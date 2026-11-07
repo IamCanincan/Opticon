@@ -35,6 +35,7 @@ import com.iamcanincan.opticon.runtime.ModulePrefs
 import com.iamcanincan.opticon.ui.CommandRow
 import com.iamcanincan.opticon.ui.EffectShowcaseCard
 import com.iamcanincan.opticon.ui.FeatureSwitchCard
+import com.iamcanincan.opticon.ui.restartSystemUi
 import com.iamcanincan.opticon.ui.GroupTitle
 import com.iamcanincan.opticon.ui.OpticonCard
 import com.iamcanincan.opticon.ui.SampleTile
@@ -52,6 +53,7 @@ fun NotifyScreen(onNotify: (String) -> Unit) {
     val context = LocalContext.current
     // 默认配置由外壳（OpticonApp）在首次打开时写入，这里只读。
     val prefs = remember { ModulePrefs.of(context) }
+    val applied = stringResource(R.string.switch_applied_systemui)
 
     var enabled by remember {
         mutableStateOf(prefs.getBoolean(ModulePrefs.KEY_NOTIFY_ENABLED, ModulePrefs.DEFAULT_NOTIFY_ENABLED))
@@ -67,6 +69,9 @@ fun NotifyScreen(onNotify: (String) -> Unit) {
                 onCheckedChange = { value ->
                     enabled = value
                     prefs.edit().putBoolean(ModulePrefs.KEY_NOTIFY_ENABLED, value).apply()
+                    // 通知行由系统界面绘制、已显示的那几条不会自己重绘：重启一次系统界面让它们重建。
+                    restartSystemUi(context)
+                    onNotify(applied)
                 },
             )
         }
