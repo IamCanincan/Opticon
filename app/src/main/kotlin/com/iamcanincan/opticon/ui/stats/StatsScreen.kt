@@ -32,8 +32,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
@@ -43,7 +45,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.R
-import com.iamcanincan.opticon.ui.GroupGap
 import com.iamcanincan.opticon.ui.GroupTitle
 import com.iamcanincan.opticon.ui.OpticonCard
 import com.iamcanincan.opticon.ui.PageRole
@@ -213,7 +214,16 @@ private fun SummaryCard(
   }
 }
 
-/** 环：粗描边 + 圆头 + 段间 4° 缝；中间是总数。 */
+/**
+ * 环：粗描边 + **4dp 小圆角**的段端 + 段间 3° 缝；中间是总数。
+ *
+ * 为什么不用 `StrokeCap.Round`：那是按描边半径倒圆（18dp 描边 = 每端一个 9dp 的半圆），
+ * 段看起来像胶囊，主人 2026-11-08 判「这样也太丑了吧」；但纯平头又太方。
+ * 所以这里自己拼路径：外弧 → 外端角 → 径向面 → 内端角 → 内弧（反向）→ 内起角 → 径向面 → 闭合，
+ * 四个角各用一段二次贝塞尔倒 [CORNER_RADIUS]。
+ *
+ * 短的段（1% 那种）会被缝和两个圆角吃成负数：改画一个圆点，半径随占比缩。
+ */
 @Composable
 private fun Ring(slices: List<Slice>, grand: Int, sweep: Float) {
   val scheme = MaterialTheme.colorScheme
@@ -232,39 +242,70 @@ private fun Ring(slices: List<Slice>, grand: Int, sweep: Float) {
     contentAlignment = Alignment.Center,
   ) {
     Canvas(modifier = Modifier.size(126.dp)) {
-      // ⚠ 这里**不能**用圆头：18dp 的描边在 r≈54dp 上，一个圆头就沿弧长吃掉约 9.5°，
-      //   三段的缝（4°）会被相邻两头的圆角整个盖住 —— 5% 那一小段还会被两头吃成一块墨。
-      //   改平头 + 3° 缝：分段读得出来，5% 也还看得见。
-      val stroke = Stroke(width = thickness.toPx(), cap = StrokeCap.Butt)
-      val inset = stroke.width / 2f
-      val arcSize = Size(size.width - stroke.width, size.height - stroke.width)
+      val strokeWidth = thickness.toPx()
+      val radius = (size.minDimension - strokeWidth) / 2f
+      val c = Offset(size.width / 2f, size.height / 2f)
+
       // 轨道：没有数的时候也得看得见这是个"环"，而不是一片空白。
-      drawArc(
+      drawCircle(
         color = scheme.surfaceContainerHighest,
-        startAngle = 0f,
-        sweepAngle = 360f,
-        useCenter = false,
-        topLeft = androidx.compose.ui.geometry.Offset(inset, inset),
-        size = arcSize,
-        style = Stroke(width = stroke.width),
+        radius = radius,
+        center = c,
+        style = Stroke(width = strokeWidth),
       )
-      if (grand <= 0 || slices.isEmpty()) return@Canvas
+      if (grand <= 0 || sweep <= 0.01f) return@Canvas
+      val live = slices.filter { it.value > 0 }
+      if (live.isEmpty()) return@Canvas
+
+      val inner = radius - strokeWidth / 2f
+      val outer = radius + strokeWidth / 2f
+      val corner = 4.dp.toPx()
+
+      // 只有一段 = 整个环：不画缝，直接一个填满的圆环。
+      if (live.size == 1 && 360f * sweep >= 359f) {
+        drawCircle(
+          color = live[0].color,
+          radius = radius,
+          center = c,
+          style = Stroke(strokeWidth),
+        )
+        return@Canvas
+      }
+
+      val gapDeg = 3f
       var start = -90f
       slices.forEach { s ->
         val full = 360f * s.value.toFloat() / grand.toFloat()
-        // 缝只给"够长的段"留：小于 8° 的段（1% 那种）本来就只有一条线宽，再扣 3° 就看不见了。
-        val gap = if (slices.size > 1 && full >= 8f) 3f else 0f
-        val drawn = ((full - gap) * sweep).coerceAtLeast(0f)
-        if (drawn > 0f) {
-          drawArc(
-            color = s.color,
-            startAngle = start + gap / 2f,
-            sweepAngle = drawn,
-            useCenter = false,
-            topLeft = androidx.compose.ui.geometry.Offset(inset, inset),
-            size = arcSize,
-            style = stroke,
-          )
+        if (s.value > 0) {
+          val visual = full * sweep
+          val bodySweep = visual - gapDeg
+          // 角半径最多占这段弧长的 1/4：否则圆角会互相吃掉，画出来是个梭形。
+          val arcLen = outer * Math.toRadians(bodySweep.coerceAtLeast(0f).toDouble()).toFloat()
+          val k = minOf(corner, arcLen / 4f, strokeWidth / 2f)
+          if (bodySweep > 0.5f && k > 0.2f) {
+            val path = ringSegment(
+              cx = c.x,
+              cy = c.y,
+              inner = inner,
+              outer = outer,
+              startDeg = start + gapDeg / 2f,
+              sweepDeg = bodySweep,
+              corner = k,
+            )
+            drawPath(path = path, color = s.color)
+          } else {
+            // 太短：画一个点，半径按"这段占多少"缩，别把 1% 画成一个正式段。
+            val mid = Math.toRadians((start + visual / 2f).toDouble())
+            val dotR = (strokeWidth / 2f) * (visual / 6f).coerceIn(0.3f, 0.8f)
+            drawCircle(
+              color = s.color,
+              radius = dotR,
+              center = Offset(
+                c.x + radius * kotlin.math.cos(mid).toFloat(),
+                c.y + radius * kotlin.math.sin(mid).toFloat(),
+              ),
+            )
+          }
         }
         start += full
       }
@@ -283,6 +324,66 @@ private fun Ring(slices: List<Slice>, grand: Int, sweep: Float) {
       )
     }
   }
+}
+
+
+/**
+ * 一段"环形带"的路径，四个角各倒 [corner] 的圆角（不是圆头）。
+ *
+ * 顺序：外弧 → 外端角 → 径向面 → 内端角 → 内弧（反向）→ 内起角 → 径向面 → 外起角 → 闭合。
+ * 角度偏移按 `corner / 半径` 换算：外弧退得少、内弧退得多，两头的倒角半径看起来才一样。
+ */
+private fun ringSegment(
+  cx: Float,
+  cy: Float,
+  inner: Float,
+  outer: Float,
+  startDeg: Float,
+  sweepDeg: Float,
+  corner: Float,
+): Path {
+  fun pt(r: Float, deg: Float) = Offset(
+    cx + r * kotlin.math.cos(Math.toRadians(deg.toDouble())).toFloat(),
+    cy + r * kotlin.math.sin(Math.toRadians(deg.toDouble())).toFloat(),
+  )
+
+  val path = Path()
+  val kOutDeg = Math.toDegrees((corner / outer).toDouble()).toFloat()
+  val kInDeg = Math.toDegrees((corner / inner).toDouble()).toFloat()
+  val a0 = startDeg
+  val a1 = startDeg + sweepDeg
+  val outerRect = Rect(cx - outer, cy - outer, cx + outer, cy + outer)
+  val innerRect = Rect(cx - inner, cy - inner, cx + inner, cy + inner)
+
+  val start = pt(outer, a0 + kOutDeg)
+  path.moveTo(start.x, start.y)
+  path.arcTo(outerRect, a0 + kOutDeg, sweepDeg - 2f * kOutDeg, forceMoveTo = false)
+
+  val outerEndCorner = pt(outer, a1)
+  val outerEnd = pt(outer - corner, a1)
+  path.quadraticTo(outerEndCorner.x, outerEndCorner.y, outerEnd.x, outerEnd.y)
+
+  val innerEnd = pt(inner + corner, a1)
+  path.lineTo(innerEnd.x, innerEnd.y)
+
+  val innerEndCorner = pt(inner, a1)
+  val innerEndAfter = pt(inner, a1 - kInDeg)
+  path.quadraticTo(innerEndCorner.x, innerEndCorner.y, innerEndAfter.x, innerEndAfter.y)
+
+  path.arcTo(innerRect, a1 - kInDeg, -(sweepDeg - 2f * kInDeg), forceMoveTo = false)
+
+  val innerStartCorner = pt(inner, a0)
+  val innerStart = pt(inner + corner, a0)
+  path.quadraticTo(innerStartCorner.x, innerStartCorner.y, innerStart.x, innerStart.y)
+
+  val outerStart = pt(outer - corner, a0)
+  path.lineTo(outerStart.x, outerStart.y)
+
+  val outerStartCorner = pt(outer, a0)
+  path.quadraticTo(outerStartCorner.x, outerStartCorner.y, start.x, start.y)
+
+  path.close()
+  return path
 }
 
 @Composable
