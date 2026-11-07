@@ -684,6 +684,14 @@ fun main() {
     val again = com.iamcanincan.opticon.notify.IconBitmap.fitInk(f, 0.95f)
     check("通知归一：已经在 0.95 上的输入**原样交回**（不重画、逐字节相同 —— 重复处理不抖动）",
       again === f, "同一对象=${again === f}")
+    // **只放大、不缩小**（2026-11-07 主人判「已适配的通知图标不要动它了」）：满墨的源以前被缩到 95%，
+    // 屏幕上就是"这个图标怎么变小了"（他先在支付宝上感觉到）。这条钉住"够大的一律原样交回"。
+    run {
+      val full = block(64, 64, 64, 64, 0, 0)
+      val ff = com.iamcanincan.opticon.notify.IconBitmap.fitInk(full, 0.95f)
+      check("通知归一：满墨（100%）源**原样交回**、不再缩到 95%", ff === full,
+        "同一对象=${ff === full}")
+    }
     check("通知归一：整张透明 → null（调用方按『放弃』走，不交空图）",
       com.iamcanincan.opticon.notify.IconBitmap.fitInk(android.graphics.Bitmap.createBitmap(24, 24, cfg), 0.95f) == null,
       "空图必须 null")

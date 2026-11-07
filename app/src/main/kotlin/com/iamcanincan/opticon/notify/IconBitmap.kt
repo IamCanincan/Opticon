@@ -804,8 +804,10 @@ object IconBitmap {
         val bh = y1 - y0 + 1
         val side = maxOf(w, h)
         val scale = (target * side) / maxOf(bw, bh)
-        // 已经落在目标上（±1 格）就别重画：省一次分配，也让"重复处理同一张"逐字节相同。
-        if (kotlin.math.abs(scale - 1f) <= 1f / maxOf(bw, bh)) return input
+        // **只放大、不缩小**（2026-11-07 主人判：「已适配的通知图标不要动它了」）。
+        // 原先满墨的源（100%）会被缩到 95% —— 屏幕上就是"这个图标怎么变小了"（他先在支付宝上感觉到的）。
+        // 现在：够大的一律原样交回（等于 ±1 格那条早退的推广），只把**偏小的**放到目标。
+        if (scale <= 1f) return input
         val dw = maxOf(1, (bw * scale).roundToInt())
         val dh = maxOf(1, (bh * scale).roundToInt())
         val out = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888)
