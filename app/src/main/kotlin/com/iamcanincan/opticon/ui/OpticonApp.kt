@@ -414,7 +414,7 @@ private fun BrandMark() {
   // 而不是彩色版的两层叠放（2026-11-07："还是和桌面图标不一样"）。
   Box(
     modifier =
-      Modifier.size(30.dp)
+      Modifier.size(34.dp)
         .clip(androidx.compose.foundation.shape.CircleShape)
         .background(MaterialTheme.colorScheme.primaryContainer),
     contentAlignment = androidx.compose.ui.Alignment.Center,
@@ -423,7 +423,7 @@ private fun BrandMark() {
       painter = painterResource(R.drawable.ic_launcher_monochrome),
       contentDescription = null,
       tint = MaterialTheme.colorScheme.onPrimaryContainer,
-      modifier = Modifier.fillMaxSize(0.62f),
+      modifier = Modifier.fillMaxSize(0.92f),
     )
   }
 }
