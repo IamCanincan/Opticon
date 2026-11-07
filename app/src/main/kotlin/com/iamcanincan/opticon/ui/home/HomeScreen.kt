@@ -174,7 +174,7 @@ private fun FeatureRow(spec: FeatureSpec, shape: androidx.compose.ui.graphics.Sh
   val title = spec.title
   val subtitle = spec.subtitle
   val on = spec.on
-  OpticonCard(shape = shape, border = null, padding = 0.dp) {
+  OpticonCard(shape = shape, border = null, padding = 0.dp, containerColor = MaterialTheme.colorScheme.surfaceBright) {
     Row(
       modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
       verticalAlignment = Alignment.CenterVertically,
@@ -228,7 +228,7 @@ private fun FeatureRow(spec: FeatureSpec, shape: androidx.compose.ui.graphics.Sh
 /** 提示行：灰图标 + 标题 + 一行解释，与功能行同一套版式（没有右侧胶囊）。 */
 @Composable
 private fun TipRow(icon: ImageVector, title: Int, body: Int, shape: androidx.compose.ui.graphics.Shape) {
-  OpticonCard(shape = shape, border = null, padding = 0.dp) {
+  OpticonCard(shape = shape, border = null, padding = 0.dp, containerColor = MaterialTheme.colorScheme.surfaceBright) {
     Row(
       modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
       verticalAlignment = Alignment.CenterVertically,
