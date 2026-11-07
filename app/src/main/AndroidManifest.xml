@@ -116,5 +116,17 @@
             android:name=".runtime.ConfigProvider"
             android:authorities="com.iamcanincan.opticon.config"
             android:exported="true" />
+
+        <!--
+            桌面删完图标缓存、准备重启自己时回报一声（免鉴权：桌面不持有我们的签名权限）。
+            代价是任何应用都能伪造这一响——它只弹一句提示，不动任何配置。见 CacheAckReceiver。
+        -->
+        <receiver
+            android:name=".runtime.CacheAckReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.iamcanincan.opticon.CACHE_DONE" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

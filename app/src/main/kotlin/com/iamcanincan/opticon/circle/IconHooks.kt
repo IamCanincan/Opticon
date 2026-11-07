@@ -242,6 +242,9 @@ const val ACTION_CLEAR_ICON_CACHE = "com.iamcanincan.opticon.CLEAR_ICON_CACHE"
 /** 手动"重启自己"的广播 action：App 按包名点名，对应进程里的本模块收到后自杀重启。 */
 const val ACTION_RESTART_SELF = "com.iamcanincan.opticon.RESTART_SELF"
 
+/** 桌面侧**干完之后**回报给模块应用的广播（`CacheAckReceiver` 收）。 */
+const val ACTION_CACHE_DONE = "com.iamcanincan.opticon.CACHE_DONE"
+
 /**
  * 上面两条 action 的**入口闸**：只有持有本权限的应用能让被注入的进程去清缓存 / 自杀重启。
  *
@@ -501,6 +504,13 @@ private fun registerProcessControlReceiver(context: Context, packageName: String
             }
             val deleted = deleteIconCache(packageName)
             Log.d(TAG, "CacheClear: manual request, db deleted=$deleted, restarting launcher")
+            // **回报给模块应用**：这个按钮以前只发出去、没人证它到了（2026-11-07 真机抓到
+            // 广播被冻结的桌面吞掉，用户点了等于没点，屏幕上却什么都不说）。
+            // ⚠ 接收方免鉴权（导出、无权限）：桌面进程不持有我们的签名权限，只收得进这种。
+            //   代价是别的应用也能伪造这一响 —— 它只会让界面弹一句"已重建"，不做任何动作。
+            runCatching {
+                ctx.sendBroadcast(Intent(ACTION_CACHE_DONE).setPackage(BuildConfig.APPLICATION_ID))
+            }
             Process.killProcess(Process.myPid())
           }
           ACTION_RESTART_SELF -> {
