@@ -482,9 +482,8 @@ fun OpticonApp() {
                     modifier = Modifier
                         .fillMaxSize()
                         .graphicsLayer {
-                            // 与二级页那条完全同一套：位移 + 25% 淡出。
+                            // 与二级页那条完全同一套：只位移、不淡出。
                             translationX = size.width * rootBack.value
-                            alpha = 1f - 0.25f * rootBack.value
                         }
                         .background(pageBackground)
                 ) {
@@ -511,13 +510,15 @@ fun OpticonApp() {
                     // 二级页没有底栏 → 列表不该再为药丸留 96dp（见 Common.kt 的 LocalNavSpace）。
                     // ⚠ 只包这一层：一级页虽然还组合在下面，返回时它的留白与滚动位置都不跳。
                     CompositionLocalProvider(LocalNavSpace provides 0.dp) {
-                        // 二级页盖在一级页上：拖动时按手势进度右移并淡出，底下一级页露出来。
+                        // 二级页盖在一级页上：拖动时按手势进度右移，底下一级页露出来。
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .graphicsLayer {
+                                    // 只做位移、**不淡出**：半透明会透出底下那页、叠影发花
+                                    //（主人一级页那条报过「返回时是透明的」，二级页这条原来
+                                    //  也一直是半透明）。两条返回现在都是不透明的整块滑动。
                                     translationX = size.width * backProgress.value
-                                    alpha = 1f - 0.25f * backProgress.value
                                 }
                                 // 与一级页那条用同一道渐变：两条返回动画除了"底下是谁"以外完全同构。
                                 .background(pageBackground)
