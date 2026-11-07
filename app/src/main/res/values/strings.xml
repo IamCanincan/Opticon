@@ -34,6 +34,14 @@
     <string name="tab_notify">通知</string>
     <string name="tab_module">模块</string>
     <string name="tab_about">关于</string>
+    <string name="tab_home">主页</string>
+    <string name="tab_features">功能</string>
+    <string name="tab_stats">统计</string>
+    <string name="tab_settings">设置</string>
+    <string name="stats_title">各功能处理次数</string>
+    <string name="stats_empty">还没有数据：桌面与系统界面每处理 20 次才回报一次，正常使用一会儿再回来。</string>
+    <string name="stats_at">上次更新 %1$s（由桌面 / 系统界面上报）</string>
+    <string name="stats_refresh">刷新</string>
 
     <!-- ============ 「图标」页 ============ -->
 

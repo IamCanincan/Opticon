@@ -38,6 +38,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Circle
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Info
@@ -99,6 +103,8 @@ import com.iamcanincan.opticon.BuildConfig
 import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.runtime.ModulePrefs
 import com.iamcanincan.opticon.ui.about.AboutScreen
+import com.iamcanincan.opticon.ui.features.FeaturesScreen
+import com.iamcanincan.opticon.ui.stats.StatsScreen
 import com.iamcanincan.opticon.ui.about.UpdateState
 import com.iamcanincan.opticon.ui.about.toState
 import com.iamcanincan.opticon.ui.crop.CropScreen
@@ -114,14 +120,13 @@ import kotlinx.coroutines.withContext
 
 private const val REPO_URL = "https://github.com/IamCanincan/Opticon"
 
-private const val TAB_CROP = 0
-private const val TAB_MONO = 1
-private const val TAB_NOTIFY = 2
-private const val TAB_MODULE = 3
-private const val TAB_ABOUT = 4
+private const val TAB_HOME = 0
+private const val TAB_FEATURES = 1
+private const val TAB_STATS = 2
+private const val TAB_SETTINGS = 3
 
 /** 底栏格数 = Pager 的页数 */
-private const val PAGE_COUNT = 5
+private const val PAGE_COUNT = 4
 
 // 底栏几何照搬 KeyLens 的 webui：药丸 6dp 内边距 + 每格 52dp + 44dp 圆形光晕 + 24dp 图标。
 // 五格在 360dp 屏上仍留边（展开文字那格约 98dp，其余 52dp，合计约 334dp）。
@@ -151,11 +156,10 @@ private val NavNearTop = 24.dp
 private class NavEntry(val index: Int, val icon: ImageVector, val labelRes: Int)
 
 private val NavEntries = listOf(
-    NavEntry(TAB_CROP, Icons.Default.Circle, R.string.tab_crop),
-    NavEntry(TAB_MONO, Icons.Default.InvertColors, R.string.tab_mono),
-    NavEntry(TAB_NOTIFY, Icons.Default.Notifications, R.string.tab_notify),
-    NavEntry(TAB_MODULE, Icons.Default.Extension, R.string.tab_module),
-    NavEntry(TAB_ABOUT, Icons.Default.Info, R.string.tab_about),
+    NavEntry(TAB_HOME, Icons.Default.Home, R.string.tab_home),
+    NavEntry(TAB_FEATURES, Icons.Default.Build, R.string.tab_features),
+    NavEntry(TAB_STATS, Icons.AutoMirrored.Filled.List, R.string.tab_stats),
+    NavEntry(TAB_SETTINGS, Icons.Default.Settings, R.string.tab_settings),
 )
 
 /**
@@ -239,11 +243,10 @@ fun OpticonApp() {
     // 原来顶栏永远只写"Opticon"，页面身份只能从底栏选中态读；五页之后这种读法更费劲。
     val pageTitle = stringResource(
         when (pagerState.currentPage) {
-            TAB_CROP -> R.string.tab_crop
-            TAB_MONO -> R.string.tab_mono
-            TAB_NOTIFY -> R.string.tab_notify
-            TAB_MODULE -> R.string.tab_module
-            else -> R.string.tab_about
+            TAB_HOME -> R.string.tab_home
+            TAB_FEATURES -> R.string.tab_features
+            TAB_STATS -> R.string.tab_stats
+            else -> R.string.tab_settings
         }
     )
 
@@ -359,10 +362,10 @@ fun OpticonApp() {
                     userScrollEnabled = false,
                 ) { page ->
                     when (page) {
-                        TAB_CROP -> CropScreen(onNotify = notify)
-                        TAB_MONO -> MonoScreen(onNotify = notify)
-                        TAB_NOTIFY -> NotifyScreen(onNotify = notify)
-                        TAB_MODULE -> ModuleScreen(onNotify = notify)
+                        // 主页 = 模块状态与作用域（原来那页「模块」）；功能 = 三个开关页合成一页。
+                        TAB_HOME -> ModuleScreen(onNotify = notify)
+                        TAB_FEATURES -> FeaturesScreen(onNotify = notify)
+                        TAB_STATS -> StatsScreen()
                         else -> AboutScreen(state = updateState, onCheck = checkUpdate, onNotify = notify)
                     }
                 }
@@ -444,6 +447,8 @@ private fun BrandMark() {
  * ⚠ 改底色时记住这条：**药丸必须在浅色和深色下都和背景有明显差值**，
  * 而"靠阴影"在深色下不算数。
  */
+// invisibleToUser() 在本仓库的 Compose 版本上仍是唯一可用的等价物（新版叫 hideFromAccessibility）。
+@Suppress("DEPRECATION")
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun FloatingNavBar(
