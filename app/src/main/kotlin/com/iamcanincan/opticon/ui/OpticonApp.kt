@@ -1,5 +1,6 @@
 package com.iamcanincan.opticon.ui
 
+import android.content.res.Configuration
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
@@ -24,6 +25,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -87,6 +89,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -207,6 +210,11 @@ fun OpticonApp() {
     // ⚠ 这里单独挂一条 connection，只读 `consumed.y`（符号：向下滑为负），不动顶栏那条。
     //   `contentOffset` 只用来判断"离顶多远"（EnterAlways 在 onPostScroll 里直接累加
     //   consumed.y，等价于负的滚动距离）。
+    // 横屏：大标题栏（LargeFlexibleTopAppBar）在 360dp 高的横屏上占掉近一半高度，
+    // 所以横屏换 64dp 的紧凑栏 + 小一号标题。
+    val landscape =
+        LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+
     var navVisible by remember { mutableStateOf(true) }
     // 二级页。null = 停在一级页（底栏的某一页）。一级页只把「点进去是哪一页」递上来，
     // 渲染在这里按 [SubPage] 分派 —— 页面之间不互相引用，加一页只动这个枚举 + 下面那条 when。
@@ -325,63 +333,81 @@ fun OpticonApp() {
                 .nestedScroll(navScrollConnection),
             containerColor = Color.Transparent,
             topBar = {
-                LargeFlexibleTopAppBar(
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        // 与渐变顶端同色：顶栏不透明，滚动内容不会从标题后面透出来；
-                        // 颜色与 Box 渐变的第一个色标一致，视觉上仍是一整块。
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                        scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                    ),
-                    title = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            // 二级页不画品牌标记：那个位置让给返回箭头，标题更贴近内容一点。
-                            if (subPage == null) {
-                                BrandMark()
-                                Spacer(Modifier.width(12.dp))
-                            }
-                            Column {
-                                AnimatedContent(
-                                    targetState = pageTitle,
-                                    transitionSpec = { fadeIn() togetherWith fadeOut() },
-                                    label = "pageTitle",
-                                ) { title ->
-                                    Text(
-                                        text = title,
-                                        style = MaterialTheme.typography.headlineMedium,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                    )
-                                }
-                            }
+                val barColors = TopAppBarDefaults.topAppBarColors(
+                    // 与渐变顶端同色：顶栏不透明，滚动内容不会从标题后面透出来；
+                    // 颜色与 Box 渐变的第一个色标一致，视觉上仍是一整块。
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                    scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                )
+                val titleSlot: @Composable () -> Unit = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // 二级页不画品牌标记：那个位置让给返回箭头，标题更贴近内容一点。
+                        if (subPage == null) {
+                            BrandMark()
+                            Spacer(Modifier.width(12.dp))
                         }
-                    },
-                    navigationIcon = {
-                        // 只有二级页才有返回：一级页的"上一级"就是它自己。
-                        if (subPage != null) {
-                            IconButton(onClick = { subPage = null }) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                    contentDescription = stringResource(R.string.action_back),
+                        Column {
+                            AnimatedContent(
+                                targetState = pageTitle,
+                                transitionSpec = { fadeIn() togetherWith fadeOut() },
+                                label = "pageTitle",
+                            ) { title ->
+                                Text(
+                                    text = title,
+                                    style =
+                                        if (landscape) MaterialTheme.typography.titleLarge
+                                        else MaterialTheme.typography.headlineMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                 )
                             }
                         }
-                    },
-                    actions = {
-                        // ⚠ 走 openExternalUrl 而不是直接 `uriHandler.openUri`：没有浏览器的
-                        //   设备上后者会抛 IllegalArgumentException 把应用带崩（见该函数说明）。
-                        //   失败必须说出来 —— 按下去什么都不发生比崩溃更难查。
-                        IconButton(
-                            onClick = {
-                                if (!openExternalUrl(uriHandler, REPO_URL)) notify(openLinkFailed)
-                            }
-                        ) {
+                    }
+                }
+                val navIcon: @Composable () -> Unit = {
+                    // 只有二级页才有返回：一级页的"上一级"就是它自己。
+                    if (subPage != null) {
+                        IconButton(onClick = { subPage = null }) {
                             Icon(
-                                imageVector = Icons.Default.Code,
-                                contentDescription = stringResource(R.string.action_open_repo),
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = stringResource(R.string.action_back),
                             )
                         }
-                    },
-                    scrollBehavior = scrollBehavior,
-                )
+                    }
+                }
+                val barActions: @Composable RowScope.() -> Unit = {
+                    // ⚠ 走 openExternalUrl 而不是直接 `uriHandler.openUri`：没有浏览器的
+                    //   设备上后者会抛 IllegalArgumentException 把应用带崩（见该函数说明）。
+                    //   失败必须说出来 —— 按下去什么都不发生比崩溃更难查。
+                    IconButton(
+                        onClick = {
+                            if (!openExternalUrl(uriHandler, REPO_URL)) notify(openLinkFailed)
+                        }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Code,
+                            contentDescription = stringResource(R.string.action_open_repo),
+                        )
+                    }
+                }
+
+                // ⚠ 横屏必须换成 64dp 的紧凑栏：`LargeFlexibleTopAppBar` 在 360dp 高的横屏上
+                //   要吃掉近一半高度（2026-11-08 截到的现场），标题也换成 titleLarge。
+                if (landscape) {
+                    TopAppBar(
+                        colors = barColors,
+                        title = titleSlot,
+                        navigationIcon = navIcon,
+                        actions = barActions,
+                    )
+                } else {
+                    LargeFlexibleTopAppBar(
+                        colors = barColors,
+                        title = titleSlot,
+                        navigationIcon = navIcon,
+                        actions = barActions,
+                        scrollBehavior = scrollBehavior,
+                    )
+                }
             },
         ) { inner ->
             // ⚠ 这里只扣顶栏让出的空间，**不要**再减掉药丸的高度：
