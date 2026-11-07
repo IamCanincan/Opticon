@@ -57,7 +57,11 @@ fun HomeScreen() {
 
   ScreenList {
     item {
-      OpticonCard(containerColor = MaterialTheme.colorScheme.tertiaryContainer, contentColor = MaterialTheme.colorScheme.onTertiaryContainer) {
+      OpticonCard(
+        shape = MaterialTheme.shapes.extraLarge,
+        containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+      ) {
         Column(modifier = Modifier.padding(22.dp)) {
           Text(
             text = stringResource(R.string.home_role),
@@ -107,8 +111,15 @@ fun HomeScreen() {
 @Composable
 private fun StatusTile(icon: ImageVector, title: String, subtitle: String, on: Boolean) {
   val scheme = MaterialTheme.colorScheme
+  // MD3E 的弹簧过渡：开关状态变化时整块颜色平滑过渡，不是硬切。
+  val bg = androidx.compose.animation.animateColorAsState(
+    targetValue = if (on) scheme.primaryContainer else scheme.surfaceContainerHigh,
+    animationSpec = androidx.compose.animation.core.spring(dampingRatio = 0.8f, stiffness = 380f),
+    label = "tileBg",
+  ).value
   OpticonCard(
-    containerColor = if (on) scheme.primaryContainer else scheme.surfaceContainerHigh,
+    shape = MaterialTheme.shapes.extraLarge,
+    containerColor = bg,
     contentColor = if (on) scheme.onPrimaryContainer else scheme.onSurfaceVariant,
   ) {
     Row(

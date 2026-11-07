@@ -158,6 +158,7 @@ internal object NavScrollGate {
 @Composable
 internal fun OpticonCard(
   modifier: Modifier = Modifier,
+  shape: androidx.compose.ui.graphics.Shape = MaterialTheme.shapes.large,
   containerColor: Color = MaterialTheme.colorScheme.surfaceContainerLow,
   contentColor: Color = MaterialTheme.colorScheme.onSurface,
   padding: Dp = 16.dp,
@@ -165,7 +166,7 @@ internal fun OpticonCard(
 ) {
   Card(
     modifier = modifier.fillMaxWidth(),
-    shape = MaterialTheme.shapes.large,
+    shape = shape,
     colors =
       CardDefaults.cardColors(containerColor = containerColor, contentColor = contentColor),
     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
