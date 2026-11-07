@@ -96,7 +96,7 @@ internal fun HomeScreen(onOpen: (SubPage) -> Unit) {
             Text(
               text = when {
                 at == 0L -> stringResource(R.string.home_total_none)
-                fresh -> stringResource(R.string.home_state_data2, total, cropCount, monoCount, notifyCount)
+                fresh -> stringResource(R.string.home_state_total, total, timeHm(at))
                 else -> stringResource(R.string.home_state_stale, timeHm(at), total)
               },
               style = MaterialTheme.typography.bodyMedium,
@@ -127,7 +127,7 @@ internal fun HomeScreen(onOpen: (SubPage) -> Unit) {
       Column(verticalArrangement = Arrangement.spacedBy(GroupGap)) {
         val rows = listOf(
           FeatureSpec(SubPage.CROP, Icons.Default.Circle, R.string.tab_crop, R.string.home_sub_crop, options.circleEnabled, cropCount),
-          FeatureSpec(SubPage.MONO, Icons.Default.InvertColors, R.string.tab_mono, R.string.home_sub_mono, options.monoInvert, -1),
+          FeatureSpec(SubPage.MONO, Icons.Default.InvertColors, R.string.tab_mono, R.string.home_sub_mono, options.monoInvert, monoCount),
           FeatureSpec(SubPage.NOTIFY, Icons.Default.Notifications, R.string.tab_notify, R.string.home_sub_notify, options.notifyEnabled, notifyCount),
         )
         rows.forEachIndexed { i, row ->

@@ -51,7 +51,7 @@
     <string name="home_role">当前状态</string>
     <string name="home_state_ok">运行中</string>
     <string name="home_state_idle">等待上报</string>
-    <string name="home_state_data2">共 %1$d 次 · 裁圆 %2$d · 单色 %3$d · 通知 %4$d</string>
+    <string name="home_state_total">共 %1$d 次处理 · %2$s 上报</string>
     <string name="home_state_stale">上次上报 %1$s · 共 %2$d 次</string>
     <string name="home_state_chip">%1$d 项开启</string>
     <string name="home_count">%1$d 次</string>
