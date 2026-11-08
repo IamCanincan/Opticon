@@ -59,7 +59,7 @@ internal object Stats {
     val batch = synchronized(pending) {
       if (seen.size >= EVENT_SEEN_MAX) seen.clear()
       if (!seen.add(dedupeKey)) return
-      pending.add(line)
+      pending.add(procName() + "	" + line)
       if (pending.size >= EVENT_BATCH) flushLocked() else ""
     }
     if (batch.isNotEmpty()) runCatching { ModuleRuntime.publishStats(snapshot(), batch) }

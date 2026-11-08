@@ -939,11 +939,11 @@ internal object MonochromeSynth {
       "$sig|$edge",
       buildString {
         append(System.currentTimeMillis()).append('	')
-        append(label).append('	')
+        append(label.substringBefore(' ')).append('	')
         append(sig).append('	')
         append(edge).append('	')
         append(if (out.mask != null) "mask" else "null").append('	')
-        append(out.report.take(160))
+        append(out.report.take(240))
       },
     )
     return n
