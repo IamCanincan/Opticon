@@ -1,4 +1,11 @@
 name	status	w	h	md5
+app_alipay_payment.png	mask	96	96	6c8732fb2b41
+app_alipay_transfer.png	mask	96	96	656605f91465
+app_ele_stat_third.png	mask	96	96	85a86ae25847
+app_weibo_small.png	mask	96	96	a2ef40c18170
+app_xhs_authorize.png	mask	96	96	db69a4b0fb8b
+app_xhs_hot_big.png	mask	96	96	7ffe2b8a0460
+app_xhs_im_sys.png	mask	96	96	933c6f590a60
 fw_stat_ecb_mode.png	mask	96	96	8d114a51cf22
 fw_stat_notify_car_mode.png	mask	96	96	bd6dde613333
 fw_stat_notify_chat.png	mask	96	96	75ac57ba7b99
