@@ -1,7 +1,11 @@
 import com.android.build.api.dsl.ApplicationExtension
+import org.gradle.api.file.ConfigurableFileCollection
+import org.gradle.api.provider.ValueSource
+import org.gradle.api.provider.ValueSourceParameters
 import org.gradle.kotlin.dsl.configure
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.io.File
+import java.security.MessageDigest
 import java.util.Properties
 
 plugins {
@@ -28,6 +32,44 @@ val keystoreProperties = Properties().apply {
 val releaseStoreFile: File? =
   keystoreProperties.getProperty("storeFile")?.let { rootProject.file(it) }
 
+/**
+ * **图标管线源码指纹** —— 掩码缓存的失效键（见 `MonoCache.dir`）。
+ *
+ * 为什么不是装机时间（2026-11-08 真机账）：装机身份每装一次都动，而绝大多数装包只改
+ * 界面/文案，图标管线一个字节没变 —— 于是只改界面的更新也要把 243 张掩码全部重算
+ * （冷 46.9 s vs 热 22.8 s，差 24.1 s 全是冷合成）。指纹只在整个 `circle/` 包的源码
+ * 变了才换：交付掩码是这一层所有代码的函数（模型 / 几何 / 极性 / 盘雾 / 键），所以
+ * 覆盖**整个包**，漏一份就会在改过之后继续发旧掩码；多算一条注释的代价只是"多冷一次"，
+ * 安全方向。
+ *
+ * 用 [ValueSource] 而不是在配置期直接读文件：配置缓存（configuration cache）打开后，
+ * 后者不会因源码变化而失效，可能拿旧指纹复用旧掩码 —— 那正是这个键要防的事。
+ */
+abstract class IconPipelineHash : ValueSource<String, IconPipelineHash.Params> {
+  interface Params : ValueSourceParameters {
+    val sources: ConfigurableFileCollection
+  }
+
+  override fun obtain(): String {
+    val md = MessageDigest.getInstance("SHA-256")
+    // 目录是平铺的（`circle/*.kt`），按文件名排序即可；**不许把绝对路径折进来**，
+    // 否则换一台机器/换一个检出目录，同一份源码会得到不同指纹。
+    for (f in parameters.sources.files.sortedBy { it.name }) {
+      md.update(f.name.toByteArray(Charsets.UTF_8))
+      md.update(0.toByte())
+      md.update(f.readBytes())
+      md.update(0.toByte())
+    }
+    return md.digest().joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }.take(16)
+  }
+}
+
+val iconPipelineHash = providers.of(IconPipelineHash::class.java) {
+  parameters.sources.from(
+    fileTree("src/main/kotlin/com/iamcanincan/opticon/circle") { include("*.kt") }
+  )
+}
+
 extensions.configure<ApplicationExtension> {
   namespace = "com.iamcanincan.opticon"
   compileSdk = 37
@@ -46,6 +88,10 @@ extensions.configure<ApplicationExtension> {
     targetSdk = 37
     versionCode = 7
     versionName = "1.1.3"
+    // 图标管线指纹（见 IconPipelineHash）：写进 BuildConfig，宿主进程里读它决定
+    // 掩码缓存目录与「这批图标是谁画的」戳记。值取的是**源码**的哈希，所以 Gradle
+    // 会把它当 BuildConfig 的输入 —— 管线一变，生成任务就重跑。
+    buildConfigField("String", "MASK_ALGO", "\"${iconPipelineHash.get()}\"")
   }
 
   signingConfigs {

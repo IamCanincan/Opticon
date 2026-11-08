@@ -23,16 +23,21 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * ## 两层
  * · **内存**：LRU，按字节封顶（见 [MAX_MEM_BYTES]）。命中就免掉整条模型。
- * · **磁盘**：宿主的 `cacheDir/opticon-mono/<装机身份>/`。命中免掉模型、只付一次文件读；
+ * · **磁盘**：宿主的 `cacheDir/opticon-mono/<管线指纹>/<api>/`。命中免掉模型、只付一次文件读；
  *   它才是「每次**重启**都要加载好久」的解药 —— 内存这一层活不过进程。
  *   跨重启的账量过：相邻两次重启的内容集合 **210/211 相同**，所以磁盘几乎全是命中。
  *
  * ## 键与文件格式在 [MonoKey]
  * 那两件是"给错就画错图标"的部分，剥成纯函数在判据台上逐条钉过（`SelfTest`），不在这里重复。
- * ⚠ 目录名带**装机身份**（[renderId]，认 `lastUpdateTime` 不认 versionName）：算法每装一次就变，
- * 版本号只在正式发版时动 —— 与桌面图标缓存戳记同一条理由（见 IconHooks 里 `renderId` 的注释）。
- * 这条要是写错，接下来几轮迭代会看到**上一版画的那张**。拿不到装机身份时整层磁盘关掉：
- * 宁可不快，不可给旧答案。
+ * ⚠ 目录名带的是**图标管线源码指纹**（[algoId] → `BuildConfig.MASK_ALGO`，构建期由
+ * `app/build.gradle.kts` 的 `IconPipelineHash` 折出），**不再是装机时间**：
+ *   · 装机时间每装一次都动，于是只改界面的装包也会把 243 张掩码全部重算
+ *     （2026-11-08 真机：冷 46.9 s vs 热 22.8 s，差 24.1 s 全是冷合成）；
+ *   · 指纹只看 `circle/` 这一包的源码 —— 交付掩码是这一层代码的函数，它没变，
+ *     上一版画的就还是对的。
+ * 这条要是写错，接下来几轮迭代会看到**上一版画的那张**，所以覆盖面取整个包
+ * （见 `IconPipelineHash` 的注释）。目录名另外带 `_api<SDK>`：系统 OTA 不动我们，
+ * 像素没变但交付口径可能变，那一条键盖不住。
  *
  * ## 负缓存
  * 「判据不成立、放弃合成」那张也记（只记内存）：它同样被重压 148 次，一次模型都省不掉的话
@@ -107,7 +112,7 @@ internal object MonoCache {
    * 桌面每次重启，150 多个位图源都要重付一遍。掩码本身早就在磁盘上，缺的只是这座桥。
    * 两个键都是**内容**哈希（srcKey 含源图内容+绘制状态，内容键含模型输入），所以这份表
    * 不引入"按包名/资源身份"的旧答案风险；文件坏了整份丢（CRC），绝不半份上屏。
-   * 与掩码同目录 ⇒ 自带装机身份；格式再带版本号。
+   * 与掩码同目录 ⇒ 自带管线指纹；格式再带版本号。
    */
   private const val SRC_MAP_NAME = "srcmap.bin"
   private var srcWarned = 0
@@ -221,7 +226,7 @@ internal object MonoCache {
   }
 
   /**
-   * 目录：`<宿主的 cacheDir>/opticon-mono/<装机身份>/`。
+   * 目录：`<宿主的 cacheDir>/opticon-mono/<管线指纹>_api<SDK>/`。
    *
    * 用**宿主**的 cacheDir 是因为我们就跑在那个进程里，拿自己的 Context 写自己的目录；
    * 换到模块的 dataDir 就是跨 UID 写，那是权限拒绝。
@@ -230,7 +235,7 @@ internal object MonoCache {
    *
    * ⚠ **"还没就绪"不算失败**（主人 2026-10-11 量过同一条坑：attach 阶段 `currentApplication()` 常常是 null）：
    * 头几次 bind 可能全落在那个窗口里，按次数计上限会把这一层**永久**关掉而只在日志里留三行。
-   * 所以只有"拿到了 Context 却建不出目录 / 拿不到装机身份"这种**确定失败**才计数；
+   * 所以只有"拿到了 Context 却建不出目录"这种**确定失败**才计数；
    * `app == null` 只是没就绪，下次再来。
    * ⚠ 反过来，写失败要**把目录忘掉**：系统的 `cacheDir` 会被清（存储紧张、用户清缓存、别的工具），
    * 抓住一个已消失的 `dir` 不放 = 这个进程余下每一次写都抛，而每次写都抛就是每次图标一行警告。
@@ -238,9 +243,8 @@ internal object MonoCache {
   private fun dir(): File? {
     dir?.let { return it }
     if (dirTries >= 3) return null
-    // ⚠ 顺序是**先 Context 后要身份**，反过来会把这一层永久关掉：`renderId()` 内部第一件事就是
-    //   `currentApplication()`，而 attach 阶段那会儿它就是 null —— 于是"没就绪"会被当成"拿不到装机身份"
-    //   计数，头三次 bind 一眨眼就把 3 次额度烧光，之后整个进程再试过不了。
+    // 身份来自 BuildConfig（[algoId]），不需要 Context —— 原来"attach 阶段拿不到身份就计数"
+    // 那条坑随之消失；现在挡路的只剩宿主 cacheDir 本身。
     val app = runCatching { currentApplication() }.getOrNull() ?: return null   // 没就绪：不计数，下次再来
     val root = runCatching { app.cacheDir }.getOrNull()
     if (root == null) {
@@ -248,23 +252,20 @@ internal object MonoCache {
       Log.w(TAG, "Mono: 掩码缓存拿不到宿主 cacheDir，磁盘那一层不开")
       return null
     }
-    val id = runCatching { renderId() }.getOrNull()
-    if (id == null) {
-      dirTries++
-      Log.w(TAG, "Mono: 掩码缓存拿不到装机身份，磁盘那一层暂不开（只会慢，不会给旧答案）")
-      return null
-    }
-    // ⚠ 目录名里带上 **SDK_INT**：装机身份只认我们自己的安装包，而**系统 OTA 不动我们**
-    //   （`lastUpdateTime` 是"我们这个包"的）。像素变了键自然变，但 ALPHA_8 的 `rowBytes`、
-    //   ColorSpace 语义这类"像素没变、交付口径变了"的东西只有系统侧会动 —— 那一条键盖不住。
-    //   多一个目录名后缀的钱，比"OTA 之后继续发上一套框架下压出来的掩码"便宜。
-    val d = File(File(root, DIR_NAME), "${id}_api${android.os.Build.VERSION.SDK_INT}".replace(Regex("[^A-Za-z0-9._-]"), "_"))
+    // ⚠ 目录名里带上 **SDK_INT**：管线指纹只认 `circle/` 的源码，而**系统 OTA 不动我们**。
+    //   像素变了键自然变，但 ALPHA_8 的 `rowBytes`、ColorSpace 语义这类"像素没变、交付口径变了"
+    //   的东西只有系统侧会动 —— 那一条键盖不住。多一个目录名后缀的钱，
+    //   比"OTA 之后继续发上一套框架下压出来的掩码"便宜。
+    val d = File(File(root, DIR_NAME), "${algoId()}_api${android.os.Build.VERSION.SDK_INT}")
     if (!runCatching { d.mkdirs(); d.isDirectory }.getOrDefault(false)) {
       dirTries++
       Log.w(TAG, "Mono: 掩码缓存目录建不出来（$d），磁盘那一层不开")
       return null
     }
     pruneOldBuilds(d.parentFile, d)
+    // 这一行是**验证"只改界面的装包没有换目录"**的唯一出口：装机后 grep 它，
+    // 同一个指纹 + 上一轮的掩码文件还在，就说明这次重启不该有冷合成。
+    Log.d(TAG, "Mono: 掩码缓存 ${d.name}（管线 ${algoId()}）")
     return d.also { dir = it }
   }
 

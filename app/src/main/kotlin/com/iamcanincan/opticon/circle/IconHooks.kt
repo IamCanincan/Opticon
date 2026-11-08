@@ -319,38 +319,29 @@ private fun cacheStamp(packageName: String) =
   File("${launcherDataDir(packageName)}/cache", "opticon-render-stamp")
 
 /**
- * 「这批图标是哪一次装机画的」—— 认的是**装机时间**，不是 versionName。
+ * 「这批图标是哪一版**图标管线**画的」—— 认的是 `circle/` 全部源码的指纹
+ * （构建期折成 [BuildConfig.MASK_ALGO]），不再认装机时间，也不再认 versionName。
  *
- * 这一轮就栽在只认版本号上：两天里算法改了好几版（第二遍的前提、β 的均值/中位数之争、
- * 抖音那批的重排），`versionName` 一直是 1.0.3 —— 于是戳记一直说"缓存就是当前模块画的"，
- * 警告一条没出，而他盯着桌面看就是"没更新"。**装机时间每次 `adb install -r` 都动**，
- * 那才是"代码换过了、缓存该重画"的证据；版本号只在正式发版时动。
+ * 两个历史教训各留下来一半：
+ *  · 只认 versionName 不行 —— 算法改了几版而版本号没动，戳记会一直说"一致"；
+ *  · 只认装机时间也不行（2026-11-08 真机账）—— 装机时间每装一次都动，而绝大多数装包
+ *    只改界面/文案，图标管线一个字节没变，于是 243 张掩码白白重算 **24.1 s**
+ *    （冷 46.9 s vs 热 22.8 s）。
  *
- * 拿不到 Context 时返回 null（调用方要么等，要么明说没法核对 —— 不许静默当成"一致"）。
+ * 所以换成"管线源码指纹"：管线真变了才换。它不需要 Context，**不会拿不到** ——
+ * 这条出口不再有"没法核对"这一档。
  *
  * `internal` 是因为 [MonoCache] 也认这一个身份：掩码缓存的目录名换不换，决定的是
  * 「新装一版之后还会不会看见上一版画的那张」，两处必须同进同退。
  */
-internal fun renderId(): String? = runCatching {
-  val app = currentApplication() ?: return null
-  val pi = app.packageManager.getPackageInfo(BuildConfig.APPLICATION_ID, 0)
-  "${BuildConfig.VERSION_NAME}@${pi.lastUpdateTime / 1000L}"
-}.getOrNull()
+internal fun algoId(): String = "a" + BuildConfig.MASK_ALGO
 
 private fun warnStaleIconCache(packageName: String) {
-  // 这里还在 `packageLoaded` 的 attach 阶段，`currentApplication()` 常常是 null ——
-  // 与 [hookProcessControlReceiver] 同一个坑、同一个解法：起个守护线程等它就绪，别去 hook onCreate。
+  // 仍然放到守护线程上：这里在 `packageLoaded` 的 attach 阶段，宿主目录/数据库可能还没就绪。
+  // ⚠ 原来还要等 `currentApplication()` 才能问装机身份；现在身份来自 BuildConfig，
+  //   这一档不存在了（[algoId] 不会返回 null）。
   Thread {
-    var id: String? = null
-    for (i in 0 until 60) {
-      id = renderId()
-      if (id != null) break
-      runCatching { Thread.sleep(100) }
-    }
-    if (id == null) {
-      Log.w(TAG, "IconCache: 拿不到自己的安装包信息，没法核对这批图标是谁画的")
-      return@Thread
-    }
+    val id = algoId()
     runCatching {
       val db = File("${launcherDataDir(packageName)}/databases/app_icons.db")
       if (!db.exists()) return@runCatching                 // 没有缓存可谈
@@ -389,15 +380,12 @@ private fun deleteIconCache(packageName: String): Boolean {
   for (suffix in listOf("-journal", "-wal", "-shm")) {
     runCatching { File(db.path + suffix).delete() }
   }
-  // 缓存没了，下一批图标就是**当前这个构建**画的 —— 戳记跟着改成它的装机身份，
-  // 否则 [warnStaleIconCache] 会一直误报。拿不到就写个明显的假值并说一声，
-  // 宁可就报一次"这批图标是旧模块画的"，也不许静默地把不一致说成一致。
+  // 缓存没了，下一批图标就是**当前这一版管线**画的 —— 戳记跟着改成管线指纹，
+  // 否则 [warnStaleIconCache] 会一直误报。
   runCatching {
     val stamp = cacheStamp(packageName)
     stamp.parentFile?.mkdirs()
-    val id = renderId()
-    if (id == null) Log.w(TAG, "IconCache: 拿不到装机身份，戳记只能写版本号（下次启动会误报一次）")
-    stamp.writeText(id ?: BuildConfig.VERSION_NAME)
+    stamp.writeText(algoId())
   }
   return true
 }

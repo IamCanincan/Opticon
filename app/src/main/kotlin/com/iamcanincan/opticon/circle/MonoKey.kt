@@ -66,7 +66,7 @@ internal object MonoKey {
    * 键仍覆盖全部输入：`edge`、四个标志、`px`、`underColor`（`under` 的长度由 `edge` 决定）。
    *
    * ⚠ 与数组那一路用**不同的种子/标记**（`1L shl 33`、tag 6），两条路的键空间不重叠；
-   *   缓存目录按装机身份分，换装即换目录，所以它不会和旧格式的文件撞在一起。
+   *   缓存目录按管线指纹分，MonoKey 一改指纹就换目录，所以它不会和旧格式的文件撞在一起。
    */
   fun keyOfFlat(
     px: IntArray, underColor: Int, edge: Int, adaptive: Boolean, flatten: Boolean, circle: Boolean,
@@ -97,7 +97,7 @@ internal object MonoKey {
    * 147k 次 Long 乘法，真机账里 `键` 一项 ~1.9ms、占一次命中 ~3 成的计算。两像素一并
    * 把乘法次数减半，键空间与单像素敏感都不变（`MonoKeyKt` 逐条钉：语料两两不撞、
    * 每一个像素位变化都换键）。顺序仍由下标决定：奇数长度最后补一格。
-   * ⚠ 旧键与新键**不兼容**（算法变了）；缓存目录按装机身份分，换装即新目录，不会读到旧键。
+   * ⚠ 旧键与新键**不兼容**（算法变了）；缓存目录按管线指纹分，MonoKey 一改就换目录，不会读到旧键。
    */
   private fun fold(h0: Long, px: IntArray?, tag: Long): Long {
     if (px == null) return mix(h0, tag shl 40)

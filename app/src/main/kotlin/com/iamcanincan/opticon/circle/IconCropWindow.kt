@@ -286,7 +286,7 @@ internal object IconCropWindow {
   /** 当前条数 —— 反证台用它验"LRU 真有上限"（没这个读数，"有界"就只是注释里的一句承诺）。 */
   val winCacheSize: Int get() = synchronized(winCache) { winCache.size }
 
-  /** 清掉整张缓存（装机身份换了、或配置里"强制重算"时用）。 */
+  /** 清掉整张缓存（配置变了、要强制重量时用）。 */
   fun clearWindowCache() = synchronized(winCache) { winCache.clear() }
 
   /** 内容哈希：FNV-1a 64 走完整张格子 —— 一格一改就必须换键（这是"不会把旧窗口给新图"的全部依据）。 */
