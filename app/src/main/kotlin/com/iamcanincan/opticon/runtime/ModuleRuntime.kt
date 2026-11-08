@@ -258,12 +258,13 @@ object ModuleRuntime {
      * 宿主进程读不到应用的数据目录、应用也读不到宿主的内存，实测能通的只有广播这一条
      * （与  同一条路）。频次由 [Stats] 控制（每 20 次计数一次），这里不额外节流。
      */
-    internal fun publishStats(snapshot: String) {
+    internal fun publishStats(snapshot: String, events: String = "") {
         val ctx = hostContext() ?: return
         runCatching {
             val i = android.content.Intent(ACTION_STATS)
                 .setPackage(BuildConfig.APPLICATION_ID)
                 .putExtra("stats", snapshot)
+                .putExtra("events", events)
                 .putExtra("at", System.currentTimeMillis())
             i.addFlags(android.content.Intent.FLAG_RECEIVER_FOREGROUND)
             ctx.sendBroadcast(i)

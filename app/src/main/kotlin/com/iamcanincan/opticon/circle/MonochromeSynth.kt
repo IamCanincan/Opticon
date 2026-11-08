@@ -933,6 +933,19 @@ internal object MonochromeSynth {
     Log.d(TAG, "Mono: diag#$n edge=$edge sig=$sig 键=${MonoKey.hex(key)} $label ${out.report} → " +
       (if (out.mask != null) "已交出掩码" else "判据不成立，放弃合成") + geoTag(win, measured) +
       polarityTag(colour, subject))
+    // 每张图标一条「走了哪条路」的记录（同一张图只记一次），随统计广播回应用侧攒成文件。
+    // 用的是这条 diag 行里已经算好的那串读数，热路径上只多一次查表 + 拼接。
+    com.iamcanincan.opticon.runtime.Stats.event(
+      "$sig|$edge",
+      buildString {
+        append(System.currentTimeMillis()).append('	')
+        append(label).append('	')
+        append(sig).append('	')
+        append(edge).append('	')
+        append(if (out.mask != null) "mask" else "null").append('	')
+        append(out.report.take(160))
+      },
+    )
     return n
   }
 

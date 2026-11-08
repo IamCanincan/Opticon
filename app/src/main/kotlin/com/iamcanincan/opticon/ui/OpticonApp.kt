@@ -499,7 +499,7 @@ fun OpticonApp() {
                             // 四个一级页分工：主页「看」、功能「改」、统计「查」、设置「配」。
                             TAB_HOME -> HomeScreen(onOpen = { subPage = it })
                             TAB_FEATURES -> FeaturesScreen(onNotify = notify, onOpen = { subPage = it })
-                            TAB_STATS -> StatsScreen()
+                            TAB_STATS -> StatsScreen(onNotify = notify)
                             else -> ModuleScreen(onOpen = { subPage = it })
                         }
                     }

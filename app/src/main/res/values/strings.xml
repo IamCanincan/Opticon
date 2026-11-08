@@ -44,6 +44,9 @@
     <string name="stats_at">上次更新 %1$s（由桌面 / 系统界面上报）</string>
     <string name="stats_refresh">刷新</string>
     <string name="stats_by_feature">按功能</string>
+    <string name="stats_export">导出</string>
+    <string name="stats_export_done">已导出：%1$s</string>
+    <string name="stats_export_empty">还没有明细可导出（桌面重画过图标之后才会有）</string>
     <string name="stats_total_unit">次处理</string>
     <string name="stats_percent">%1$d%%</string>
     <string name="stats_times">次</string>

@@ -28,6 +28,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,6 +45,9 @@ import com.iamcanincan.opticon.ui.GroupTitle
 import com.iamcanincan.opticon.ui.OpticonCard
 import com.iamcanincan.opticon.ui.PageRole
 import com.iamcanincan.opticon.ui.ScreenList
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -64,7 +68,7 @@ import kotlin.math.roundToInt
  * 数据仍是宿主每 20 次计数回报一次，所以这里不做实时刷新，只给一个「刷新」按钮。
  */
 @Composable
-fun StatsScreen() {
+fun StatsScreen(onNotify: (String) -> Unit) {
   val context = LocalContext.current
   var tick by remember { mutableIntStateOf(0) }
   // 版本号 = 订阅宿主上报；tick 仍留给「刷新」（读盘而不等广播）。
@@ -73,11 +77,30 @@ fun StatsScreen() {
   val groups = remember(loaded) { groupByFeature(loaded.first) }
   val totals = groups.map { (_, rows) -> rows.sumOf { it.second } }
   val grand = totals.sum()
+  val scope = rememberCoroutineScope()
+  val exported = stringResource(R.string.stats_export_done)
+  val nothing = stringResource(R.string.stats_export_empty)
 
   ScreenList {
     item { PageRole(stringResource(R.string.stats_role)) }
 
-    item { SummaryCard(groups, totals, grand, loaded.second, onRefresh = { tick++ }) }
+    item {
+      SummaryCard(
+        groups = groups,
+        totals = totals,
+        grand = grand,
+        at = loaded.second,
+        onRefresh = { tick++ },
+        onExport = {
+          // 导出就是把明细文件复制到外部目录（adb pull 直接可拉）。
+          // 文件几百 KB 以内，放 IO 线程；结果用 Snackbar 说清楚路径。
+          scope.launch {
+            val path = withContext(Dispatchers.IO) { StatsStore.exportEvents(context) }
+            onNotify(if (path != null) exported.format(path) else nothing)
+          }
+        },
+      )
+    }
 
     item {
       Text(
@@ -160,6 +183,7 @@ private fun SummaryCard(
   grand: Int,
   at: Long,
   onRefresh: () -> Unit,
+  onExport: () -> Unit,
 ) {
   val scheme = MaterialTheme.colorScheme
   val slices = groups.mapIndexed { i, (feature, _) -> Slice(feature, totals[i], chartColor(i)) }
@@ -180,6 +204,7 @@ private fun SummaryCard(
         fontWeight = FontWeight.SemiBold,
       )
       Spacer(modifier = Modifier.weight(1f))
+      TextButton(onClick = onExport) { Text(stringResource(R.string.stats_export)) }
       TextButton(onClick = onRefresh) { Text(stringResource(R.string.stats_refresh)) }
     }
     Text(
