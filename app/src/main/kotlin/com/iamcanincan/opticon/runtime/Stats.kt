@@ -113,7 +113,20 @@ internal object Stats {
     return out
   }
 
-  /** 宿主进程名（`Application.getProcessName()`，API 28+ 静态可用，不需要 Context）。 */
+  /**
+   * 宿主进程名，不需要 Context。
+   *
+   * `Application.getProcessName()` 是 **API 28** 才有的静态方法，而 minSdk 是 26 —— 原来的
+   * 单行写法在 26/27 上会抛 `NoSuchMethodError`，被 `runCatching` 吞成 `?`，统计页的
+   * 「按进程分」就全落到一个 `?/…` 桶里，而且**日志里看不出来**（这正是全量 lint 抓到的那条）。
+   * 26/27 退回读 `/proc/self/cmdline`（进程读自己的 proc 恒可读，取第一个 NUL 之前那一段）。
+   */
   private fun procName(): String =
-    runCatching { android.app.Application.getProcessName() }.getOrNull() ?: "?"
+    runCatching {
+      if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+        android.app.Application.getProcessName()
+      } else {
+        java.io.File("/proc/self/cmdline").readText().substringBefore('\u0000')
+      }
+    }.getOrNull()?.takeIf { it.isNotEmpty() } ?: "?"
 }
