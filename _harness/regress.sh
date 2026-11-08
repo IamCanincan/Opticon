@@ -613,4 +613,24 @@ echo "== 24/24 两档退族一致账 =="
 . ./memberlinegate.sh
 memberline_gate || exit 1
 
+# —— 第廿五闸：**通知小图标语料**（2026-11-08）。
+#   裁圆有几何两格表、单色有 rec_model + 15 闸，通知以前只有真机日志里的「走了哪条支」——
+#   判不了剪影对不对，也挡不住行为回归。这一闸补的是**真实语料 + 逐张基线**：
+#   · `notif_model/`：框架 `stat_*` 91 张（透明底 → alpha 支）+ 20 张合成实心底
+#     （二值化支：白字形铺蓝/红/绿/深底、黑字形铺浅底）；
+#   · 跑的是**生产同一份** `IconBitmap.monochrome`（它本来就在判据台的编译清单里）。
+#   能判：输出纯白+alpha、长边 ≤96、占比 2%..85%、墨框非空、逐张 md5 不漂、更新不许静默扩分母。
+#   判不了：「好不好看」——那要人眼/参照；本闸保证"一直是主人验收过的那一张"。
+#   ⚠ 输入口径：语料是资源 PNG，按生产取框（`iconBounds` 等比居中）铺到 96² 再跑；缩放用
+#     最近邻（桩类就是它），与真机双线性的差在亚像素抗锯齿上。它只与自己上一轮比。
+echo "== 25/25 通知小图标语料 =="
+[ -d notif_model ] || { echo "!! 语料 notif_model/ 不在 —— 这一闸没跑，不算过"; exit 1; }
+NOTIF_RC=0
+NOTIF_ARGS="notif_model"
+[ -n "$UPDATE" ] && NOTIF_ARGS="notif_model --update"
+run harness.NotifyBenchKt $NOTIF_ARGS > bench/reg/notif.txt 2>&1 || NOTIF_RC=$?
+[ "$NOTIF_RC" = "0" ] || { tail -8 bench/reg/notif.txt; echo "!! 通知剪影语料红了（退码 $NOTIF_RC）—— 见 bench/reg/notif.txt"; exit 1; }
+grep -q '^== 合计' bench/reg/notif.txt || { echo "!! 通知语料没出合计行 —— 驱动坏了，不算过"; exit 1; }
+tail -1 bench/reg/notif.txt
+
 node _regress.cjs "$@" --corpus="$CORPUS"
