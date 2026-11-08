@@ -311,6 +311,9 @@ private class MaskedDrawable(
    */
   private var plateWhite = false
 
+  /** 这张图标是否已经往统计明细里记过一条（draw 每帧都会进来，只记第一次）。 */
+  private var notedCrop = false
+
   override fun draw(canvas: Canvas) {
     val width = bounds.width()
     val height = bounds.height()
@@ -364,6 +367,24 @@ private class MaskedDrawable(
     val scale = maxOf(width / boxWidth, height / boxHeight)
     // 一次性几何诊断：彩色这支**实际画多大、内容框/倍数是多少**。之前只有 mono 那侧的
     // `layer bounds`，两边对不上时没法算比例（2026-10-25 核几何用；每个进程前 60 张）。
+    if (!notedCrop) {
+      notedCrop = true
+      // 每张图标一条「裁圆走了哪条路」：同一个包只记一次（Stats 那边按 key 去重）。
+      // 只记第一次 draw —— 这个方法每帧都会进来。
+      com.iamcanincan.opticon.runtime.Stats.event(
+        "crop|${IconNames.of(icon)}",
+        buildString {
+          append(System.currentTimeMillis()).append('	')
+          append(IconNames.of(icon)).append('	')
+          append("裁圆").append('	')
+          append("框=").append(box?.toShortString() ?: "-").append('	')
+          append("缩=").append("%.2f".format(scale)).append('	')
+          append("白底=").append(if (plateWhite) 1 else 0).append('	')
+          append("细环=").append(if (edgeRing) 1 else 0).append('	')
+          append("尺寸=").append(width).append('x').append(height)
+        },
+      )
+    }
     if (drawLogLeft.decrementAndGet() >= 0) {
       Log.d(TAG, "裁圆绘制: ${IconNames.of(icon)} bounds=${width}x$height " +
         "intrinsic=${intrinsicWidth}x$intrinsicHeight box=${box?.toShortString() ?: "-"} " +
