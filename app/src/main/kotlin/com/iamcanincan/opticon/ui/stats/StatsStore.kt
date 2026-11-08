@@ -98,6 +98,16 @@ internal object StatsStore {
     dst.absolutePath
   }.getOrNull()
 
+  private const val KEY_PERF = "perf"
+
+  /** 宿主报来的耗时账（`crop:累计ns/张数;mono:…`），只用来在统计页显示"每张多少 ms"。 */
+  fun savePerf(context: Context, perf: String) {
+    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_PERF, perf).apply()
+  }
+
+  fun loadPerf(context: Context): String? =
+    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_PERF, null)
+
   private const val EVENT_LOG = "opticon-events.log"
   private const val EVENT_LOG_MAX = 5L * 1024 * 1024
 
@@ -136,6 +146,7 @@ class StatsReceiver : BroadcastReceiver() {
     val at = intent.getLongExtra("at", System.currentTimeMillis())
     StatsStore.save(context, snap, at)
     // 每张图标一条的明细（宿主攒批发来）。没有就跳过 —— 老版本宿主不发这个字段。
+    intent.getStringExtra("perf")?.let { if (it.isNotBlank()) StatsStore.savePerf(context, it) }
     val events = intent.getStringExtra("events")
     if (!events.isNullOrEmpty()) StatsStore.appendEvents(context, events)
     Log.i("Opticon", "StatsAck: 收到统计快照 ${snap.length} 字符、明细 ${events?.length ?: 0} 字符")

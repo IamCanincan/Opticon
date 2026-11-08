@@ -29,6 +29,10 @@ internal object Stats {
   /** 已记过的图标键上限（每进程一份）：`sig|edge`，避免同一张图被反复记。 */
   private const val EVENT_SEEN_MAX = 4096
 
+  /** 耗时账：`crop` / `mono` 各自的累计纳秒与张数（真机上的"每张多少 ms"靠它）。 */
+  private val perfNs = ConcurrentHashMap<String, AtomicLong>()
+  private val perfN = ConcurrentHashMap<String, AtomicLong>()
+
   /** 键 = `<进程>/<分支>`，值 = 次数。 */
   private val counts = ConcurrentHashMap<String, Int>()
   private val total = AtomicLong(0)
@@ -42,6 +46,21 @@ internal object Stats {
     counts.merge(k, 1) { a, b -> a + b }
     if (total.incrementAndGet() % FLUSH_EVERY == 0L) flush()
   }
+
+  /**
+   * 记一次耗时（纳秒）。**只累加两个原子数**，热路径上可以忽略；
+   * 具体"每张多少 ms"由应用侧拿 累计/张数 算。
+   */
+  fun timing(kind: String, ns: Long) {
+    runCatching {
+      perfNs.getOrPut(kind) { AtomicLong() }.addAndGet(ns)
+      perfN.getOrPut(kind) { AtomicLong() }.incrementAndGet()
+    }
+  }
+
+  /** `裁圆:累计ns/张数;单色:…` —— 随统计广播一起回去。 */
+  private fun perfSnapshot(): String =
+    perfNs.entries.joinToString(";") { (k, v) -> k + ":" + v.get() + "/" + (perfN[k]?.get() ?: 0L) }
 
   /**
    * 记一条「这张图标走了哪条路」——**同一张图（sig + 边）只记一次**。
@@ -69,7 +88,7 @@ internal object Stats {
         pending.add(procName() + "	" + line)
         if (flushNow || pending.size >= EVENT_BATCH) flushLocked() else ""
       }
-      if (batch.isNotEmpty()) ModuleRuntime.publishStats(snapshot(), batch)
+      if (batch.isNotEmpty()) ModuleRuntime.publishStats(snapshot(), batch, perfSnapshot())
     }
   }
 
@@ -80,7 +99,7 @@ internal object Stats {
 
   private fun flush() {
     val events = synchronized(pending) { flushLocked() }
-    runCatching { ModuleRuntime.publishStats(snapshot(), events) }
+    runCatching { ModuleRuntime.publishStats(snapshot(), events, perfSnapshot()) }
   }
 
   /**

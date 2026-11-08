@@ -334,6 +334,7 @@ private class MaskedDrawable(
       cacheMask = mask
     }
 
+    val t0 = System.nanoTime()
     bitmap.eraseColor(Color.TRANSPARENT)
 
     // 图案在哪 / 走哪条路（下面 cover 用）。必须**先问**：多孔那类要先支起白底
@@ -403,6 +404,8 @@ private class MaskedDrawable(
     paint.xfermode = null
 
     canvas.drawBitmap(bitmap, null, bounds, paint)
+    // 耗时账：这一段是"每帧每图标"真正花掉的时间（光栅化 + 遮罩）。
+    com.iamcanincan.opticon.runtime.Stats.timing("crop", System.nanoTime() - t0)
   }
 
   /**

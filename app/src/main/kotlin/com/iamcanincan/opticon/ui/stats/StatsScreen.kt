@@ -77,6 +77,7 @@ fun StatsScreen(onNotify: (String) -> Unit) {
   val groups = remember(loaded) { groupByFeature(loaded.first) }
   val totals = groups.map { (_, rows) -> rows.sumOf { it.second } }
   val grand = totals.sum()
+  val perf = remember(rev, tick) { StatsStore.loadPerf(context) }
   val scope = rememberCoroutineScope()
   val exported = stringResource(R.string.stats_export_done)
   val nothing = stringResource(R.string.stats_export_empty)
@@ -90,6 +91,7 @@ fun StatsScreen(onNotify: (String) -> Unit) {
         totals = totals,
         grand = grand,
         at = loaded.second,
+        perf = perf,
         onRefresh = { tick++ },
         onExport = {
           // 导出就是把明细文件复制到外部目录（adb pull 直接可拉）。
@@ -182,6 +184,7 @@ private fun SummaryCard(
   totals: List<Int>,
   grand: Int,
   at: Long,
+  perf: String?,
   onRefresh: () -> Unit,
   onExport: () -> Unit,
 ) {
@@ -213,6 +216,15 @@ private fun SummaryCard(
       style = MaterialTheme.typography.bodySmall,
       color = scheme.onSurfaceVariant,
     )
+
+    perfLines(perf).forEachIndexed { i, line ->
+      Text(
+        text = line,
+        style = MaterialTheme.typography.labelSmall,
+        color = scheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = if (i == 0) 2.dp else 1.dp),
+      )
+    }
 
     Spacer(modifier = Modifier.height(18.dp))
 
@@ -462,6 +474,47 @@ private fun friendlyProcess(proc: String): String = when (proc) {
   "com.android.systemui" -> "系统界面"
   "com.android.settings" -> "设置"
   else -> proc
+}
+
+/**
+ * `crop:1200000/4;mono:34000000/2;monoCold:…/…` →
+ * 第一行 `耗时 单色 23.2ms/张（780 次）· 裁圆 2.7ms/张（861 次）`
+ * 第二行 `单色构成 快键 0.1ms×624 · 缓存 4.9ms×156 · 冷合成 108ms×… · 等锁 1.0ms`
+ *
+ * 为什么要第二行：一个「单色 23.2ms/张」的均值把**等锁、快键命中（亚毫秒）、
+ * 内容缓存命中（几毫秒）、真冷合成（上百毫秒）** 四档混在一起，看到 23ms 没法判断
+ * 下一刀该砍哪里。分档也只有配上**张数**才读得懂（平均值会被少数慢图拉走）。
+ */
+private fun perfLines(perf: String?): List<String> {
+  if (perf.isNullOrBlank()) return emptyList()
+  val names = mapOf(
+    "crop" to "裁圆", "mono" to "单色",
+    "monoFast" to "快键", "monoCache" to "缓存", "monoCold" to "冷合成",
+    "monoWait" to "等锁", "monoInst" to "实例命中",
+  )
+  val avg = HashMap<String, Pair<Double, Long>>()
+  for (seg in perf.split(';')) {
+    val k = seg.substringBefore(':', "")
+    val v = seg.substringAfter(':', "")
+    val ns = v.substringBefore('/').toLongOrNull() ?: continue
+    val n = v.substringAfter('/', "0").toLongOrNull() ?: continue
+    if (n <= 0) continue
+    avg[k] = (ns.toDouble() / n / 1_000_000.0) to n
+  }
+  fun ms(k: String, withCount: Boolean): String? {
+    val (m, n) = avg[k] ?: return null
+    val text = (if (m >= 100) "%.0f" else "%.1f").format(m) + "ms"
+    return (names[k] ?: k) + " " + if (withCount) "$text（$n 次）" else "$text×$n"
+  }
+  val head = listOfNotNull(ms("mono", true), ms("crop", true))
+  val split = listOfNotNull(
+    ms("monoFast", false), ms("monoCache", false), ms("monoCold", false),
+    ms("monoWait", false), ms("monoInst", false),
+  )
+  return listOfNotNull(
+    head.takeIf { it.isNotEmpty() }?.joinToString(" · ", prefix = "耗时 "),
+    split.takeIf { it.isNotEmpty() }?.joinToString(" · ", prefix = "单色构成 "),
+  )
 }
 
 private fun timeText(at: Long): String =

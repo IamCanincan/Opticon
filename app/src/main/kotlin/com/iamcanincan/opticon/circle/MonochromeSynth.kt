@@ -18,6 +18,7 @@ import android.graphics.drawable.GradientDrawable
 import android.util.Log
 
 import com.iamcanincan.opticon.runtime.ModuleRuntime
+import com.iamcanincan.opticon.runtime.Stats
 import com.iamcanincan.opticon.runtime.TAG
 import java.nio.ByteBuffer
 import java.util.HashMap
@@ -157,16 +158,49 @@ internal object MonochromeSynth {
    * 那会让桌面以为有单色图标、结果画出一片空白）。一次会话里桌面给的图层 bounds
    * 是常量，所以只有第一个图标付两次。
    */
-  @Synchronized
   fun forIcon(source: Drawable, shortcut: Boolean = false): Drawable? {
-    cache[source]?.takeIf { it.shortcut == shortcut }?.let {
-      return MonochromeLayer(source, it.mask).also { noteSynthesized() }
+    val t0 = System.nanoTime()
+    // ⚠ 这把锁必须仍然是**同一个监视器**：`render` / `demote` 也是 `@Synchronized`，
+    //   改成 synchronized(this) 才与它们互斥（reentrant，进来之后 render 不再等）。
+    return synchronized(this) {
+      val t1 = System.nanoTime()
+      // 等锁 ≠ 干活：不拆开的话，「23ms/张」到底是模型慢、还是几百张在同一个线程上排队，
+      // 日志回答不了。`mono` 仍是总账（含等锁），这一格只作减法用。
+      Stats.timing("monoWait", t1 - t0)
+      probeThread()
+      try {
+        cache[source]?.takeIf { it.shortcut == shortcut }?.let {
+          Stats.timing("monoInst", System.nanoTime() - t1)
+          return MonochromeLayer(source, it.mask).also { noteSynthesized() }
+        }
+        val mask = render(source, minOf(if (knownEdge > 0) knownEdge else MIN_EDGE, MAX_EDGE), shortcut)
+          ?: return null
+        store(source, mask, shortcut)
+        MonochromeLayer(source, mask).also { noteSynthesized() }
+      } finally {
+        Stats.timing("mono", System.nanoTime() - t0)
+      }
     }
-    val mask = render(source, minOf(if (knownEdge > 0) knownEdge else MIN_EDGE, MAX_EDGE), shortcut)
-      ?: return null
-    store(source, mask, shortcut)
-    return MonochromeLayer(source, mask).also { noteSynthesized() }
   }
+
+  /**
+   * 合成线程普查（前 [THREAD_PROBE_LIMIT] 次）。
+   *
+   * 为什么要有：`render` 在真机上把整段模型串行在一把锁上，而「并行化能省多少」完全取决于
+   * **宿主是不是从多个线程问** —— 若它本来就只有一个加载线程，加锁并行化就是零收益。
+   * 这一位只决定方向，不参与任何判断；[THREAD_PROBE_LIMIT] 条之后不再产生日志。
+   */
+  private val threadProbes = AtomicInteger(0)
+
+  private fun probeThread() {
+    val n = threadProbes.incrementAndGet()
+    if (n <= THREAD_PROBE_LIMIT) {
+      Log.d(TAG, "Mono: 合成线程#$n ${Thread.currentThread().name} knownEdge=$knownEdge")
+    }
+  }
+
+  /** 线程普查放行条数：够看出"是不是只有一个线程"，又不至于刷屏。 */
+  private const val THREAD_PROBE_LIMIT = 12
 
   private fun store(source: Drawable, mask: Bitmap, shortcut: Boolean) {
     val size = mask.byteCount.toLong()
@@ -439,9 +473,11 @@ internal object MonochromeSynth {
     if (edge <= 0) return null
     ensureSrcMap()
     val t0 = System.nanoTime()
+    // 出口分账：快键命中 / 内容缓存命中 / 真冷合成。三档的代价差两个数量级，
+    // 合在一个均值里就无法判断下一刀该砍哪一段。`kind` 只服务这一条计时，不参与判断。
+    var kind = "monoCold"
     return runCatching {
       val adaptive = source is AdaptiveIconDrawable
-      val label = describe(source, adaptive)
       // **只取前景层，前提是背景层真的是一张盘。** 主人 2026-10-09 连着两次点
       // `com.google.android.apps.translate`：「"文"这个字也没有」。查的结论不是模型判错 ——
       // 那张的 `fg=BitmapDrawable` 里**只有左半的 G 与那道斜切**，"文"在**背景层**；
@@ -481,7 +517,7 @@ internal object MonochromeSynth {
       val circle = ModuleRuntime.options().circleEnabled
       val target = if (adaptive && !flatten) source.foreground else source
       if (target == null) {
-        noteGiveUp(edge, label, "取不到前景层")
+        noteGiveUp(edge, describe(source, adaptive), "取不到前景层")
         return@runCatching null
       }
       // 源内容快键：BitmapDrawable 的源位图哈希 + 绘制状态。命中就直接取已算好的掩码，
@@ -498,10 +534,14 @@ internal object MonochromeSynth {
           val hit = MonoCache.lookup(ck, edge)
           if (hit != null) {
             noteSourceFastHit()
+            kind = "monoFast"
             return@runCatching hit.mask
           }
         }
       }
+      // 快键已经出完结果再组标签：命中路径上没人读它，而 `describe` 要查名字表 + 取
+      // ConstantState，是这几百次 bind 里唯一还能白省的一小段。
+      val label = describe(source, adaptive)
       // ⚠ 整张那一路**不能**用 `rasterize(source)`：`AdaptiveIconDrawable.draw()` 按视口画，
       //   会把图标放大 1.5 倍再裁掉四边（主人 2026-10-09「不少图标被裁切放大了」）。
       val raster = if (flatten) rasterizeLayers(source, edge) else rasterize(target, edge)
@@ -643,6 +683,7 @@ internal object MonochromeSynth {
         val now = System.nanoTime()
         noteHitCost(now - t0, tRaster - t0, tKey - tRaster)
         raster.recycle()
+        kind = "monoCache"
         return@runCatching hit.mask
       }
       // 未命中：纯色盘现在才铺成整张像素（模型与 PlateFog 都要真值）。
@@ -824,7 +865,10 @@ internal object MonochromeSynth {
       // 就是这么在真机上完全看不见的：日志里只有「压不出掩码」，看不出**为什么**压不出。
       // 本项目已经吃过两次「提前 return 静默失效」的亏，异常这条同理。
       Log.w(TAG, "Mono: render threw at edge=$edge: ${it.javaClass.simpleName}: ${it.message}")
-    }.getOrNull()
+    }.getOrNull().also {
+      // 三档各自计时（含负缓存出口）。`mono` 那本总账在 [forIcon] 里，两者相减即"等锁"。
+      Stats.timing(kind, System.nanoTime() - t0)
+    }
   }
 
   /**
