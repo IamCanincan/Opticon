@@ -943,7 +943,9 @@ internal object MonochromeSynth {
         append(sig).append('	')
         append(edge).append('	')
         append(if (out.mask != null) "mask" else "null").append('	')
-        append(out.report.take(240))
+        append(out.report.take(240)).append('	')
+        // 缓存键：导出日志里的每一行都能直接对到设备上的 `<键>_<边长>.a8` 掩码文件。
+        append("键=").append(MonoKey.hex(key))
       },
     )
     return n
