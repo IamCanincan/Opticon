@@ -54,13 +54,17 @@ internal object Stats {
    *   重启之后桌面会把所有图标重新问一遍，那正好是"再记一遍"的时机。
    * ⚠ 热路径：每次只做一次 HashMap 查 + 少量字符串拼接；攒够 [EVENT_BATCH] 才真发。
    */
-  fun event(dedupeKey: String, line: String) {
+  /**
+   * @param flushNow 立刻发走（不等攒满）。通知那条路一次只有几张图，靠 20 次的计数
+   *   可能要等十几条通知才凑够一次 flush —— 那几行会一直压在内存里。
+   */
+  fun event(dedupeKey: String, line: String, flushNow: Boolean = false) {
     // ⚠ 攒满这一批时要**当场发走**：只清空不发送 = 这批明细凭空丢了。
     val batch = synchronized(pending) {
       if (seen.size >= EVENT_SEEN_MAX) seen.clear()
       if (!seen.add(dedupeKey)) return
       pending.add(procName() + "	" + line)
-      if (pending.size >= EVENT_BATCH) flushLocked() else ""
+      if (flushNow || pending.size >= EVENT_BATCH) flushLocked() else ""
     }
     if (batch.isNotEmpty()) runCatching { ModuleRuntime.publishStats(snapshot(), batch) }
   }

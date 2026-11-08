@@ -34,10 +34,12 @@ if (lines.length === 0) { console.log("!! 文件是空的：" + file); process.e
 
 const crop = [];
 const mono = [];
+const notify = [];
 for (const l of lines) {
   const f = l.split("\t");
   if (f.length < 5) continue;
   if (f[3] === "裁圆") crop.push(f);
+  else if (f[3] === "通知") notify.push(f);
   else if (f.length >= 7) mono.push(f);
 }
 if (crop.length + mono.length === 0) {
@@ -86,7 +88,8 @@ const show = (name, arr, cap = 6) => {
 };
 
 console.log("事件日志：" + file);
-console.log("  行数 " + lines.length + "（裁圆 " + crop.length + " / 单色 " + mono.length + "）");
+console.log("  行数 " + lines.length + "（裁圆 " + crop.length + " / 单色 " + mono.length +
+  " / 通知 " + notify.length + "）");
 console.log("");
 console.log("[裁圆] 按进程：" + Object.entries(byProc).map(([p, n]) => p + "=" + n).join(" · "));
 console.log("  白底=1        " + plate);
@@ -101,4 +104,18 @@ show("退族>0", buckets.veto);
 show("底占>=0.85", buckets.highGround);
 show("底占>=0.93", buckets.veryHighGround);
 console.log("");
+// ---- 通知 ----
+if (notify.length) {
+  const kinds = {};
+  const patched = [];
+  for (const f of notify) {
+    const kind = f[3] || "?";
+    kinds[kind] = (kinds[kind] || 0) + 1;
+    if (kind === "被补") patched.push(pkgOf(f[2]));
+  }
+  console.log("[通知] 分支：" +
+    Object.entries(kinds).map(([k, n]) => k + "=" + n).join(" · "));
+  if (patched.length) show("被补（我们改的）", patched);
+  console.log("");
+}
 console.log("说明：这些是**候选**，不是「要改」的清单 —— 阈值怎么动要看判据台与看图。");
