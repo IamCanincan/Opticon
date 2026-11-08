@@ -56,10 +56,15 @@ const pkgOf = (label) => (label || "?").split("/")[0].split(" ")[0] || "?";
 
 // ---- 裁圆 ----
 let plate = 0, ring = 0, boxed = 0, grown = 0;
+const platePkgs = [];
 const byProc = {};
 for (const f of crop) {
   const s = f.join("\t");
-  if (/白底=1/.test(s)) plate++;
+  if (/白底=1/.test(s)) {
+    plate++;
+    const pkg = pkgOf(f[2]);
+    if (!platePkgs.includes(pkg)) platePkgs.push(pkg);
+  }
   if (/细环=1/.test(s)) ring++;
   if (!/框=-/.test(s)) boxed++;
   const m = s.match(/缩=([0-9.]+)/);
@@ -96,6 +101,9 @@ console.log("  白底=1        " + plate);
 console.log("  细环=1        " + ring);
 console.log("  有框（非满幅）" + boxed);
 console.log("  缩>1.01       " + grown);
+if (platePkgs.length) {
+  console.log("  白底=1 的包（" + platePkgs.length + "）：" + platePkgs.join(" · "));
+}
 console.log("");
 console.log("[单色] 异常/值得看的桶：");
 show("mask=null", buckets.nullMask);
