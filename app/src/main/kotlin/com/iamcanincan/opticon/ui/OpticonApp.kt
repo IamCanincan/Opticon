@@ -722,10 +722,19 @@ private fun FloatingNavBar(
                                 requireUnconsumed = false,
                                 pass = PointerEventPass.Initial,
                             )
-                            // 只有按在活动格上才拿起（KeyLens 同样只认 .active）
-                            if (nearestIndex(down.position.x) != selectedIndex) return@awaitEachGesture
+                            // 🔴 **整颗药丸都是拖拽区**（2026-11-10 主人：「底栏拖拽应不必特意点到选中光圈
+                            //   才能滑，应自动吸附到手指触摸处，在底栏中不能超出底栏」）。
+                            //   旧写法要求"按在活动格上"才拿起（照抄 KeyLens 的 `.active`）—— 手指落在
+                            //   空格上会**直接不响应**，得先瞄准光圈才能拖。
+                            //   现在：按下即拿起，光圈立刻吸附到手指的 x（绘制时夹在药丸内，见下面 ghost）。
+                            //   ⚠ 按下就 consume，子项的点击不再报第二次（选页由松手那一下统一做）。
+                            down.consume()
+                            dragging = true
+                            dragX = down.position.x
+                            dragTarget = nearestIndex(down.position.x)
                             val startX = down.position.x
                             val startY = down.position.y
+                            // 轻震动仍按"真的横向拖起来"给：单纯点一下不该震。
                             var started = false
                             while (true) {
                                 val event = awaitPointerEvent(PointerEventPass.Initial)
@@ -737,31 +746,24 @@ private fun FloatingNavBar(
                                     abs(dx) > abs(dy)
                                 ) {
                                     started = true
-                                    dragging = true
-                                    dragX = change.position.x
-                                    dragTarget = nearestIndex(change.position.x)
                                     haptic.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
                                 }
                                 // ⚠ 必须**先**判定抬起再 consume：`changedToUp()` 把"已消费"算作
                                 //   不是抬起（要忽略消费得用 IgnoreConsumed 版），先消费就永远
                                 //   走不到松手切页 —— 2026-11-05 真机上手势能拿起、松手没反应的根因。
                                 val isUp = change.changedToUp()
-                                if (started) {
-                                    dragX = change.position.x
-                                    dragTarget = nearestIndex(change.position.x)
-                                    // 吃掉后续事件，让下面的可点击 Surface 不再触发点击
-                                    change.consume()
-                                }
+                                dragX = change.position.x
+                                dragTarget = nearestIndex(change.position.x)
+                                // 吃掉后续事件，让下面的可点击 Surface 不再触发点击
+                                change.consume()
                                 if (isUp) {
-                                    if (started) {
-                                        val target = nearestIndex(change.position.x)
-                                        if (target != selectedIndex) onSelect(target)
-                                    }
+                                    val target = nearestIndex(change.position.x)
+                                    if (target != selectedIndex) onSelect(target)
                                     break
                                 }
                                 if (!change.pressed) break
                             }
-                            if (started) dragging = false
+                            dragging = false
                         }
                     },
                 horizontalArrangement = Arrangement.spacedBy(NavGap),
