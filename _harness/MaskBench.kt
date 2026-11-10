@@ -1,7 +1,6 @@
 package harness
 
 import com.iamcanincan.opticon.circle.MonochromeMask
-import com.iamcanincan.opticon.circle.MonoVeto
 import com.iamcanincan.opticon.circle.bgMarks
 import com.iamcanincan.opticon.circle.overBg
 import java.awt.image.BufferedImage
@@ -146,10 +145,6 @@ fun main(args: Array<String>) {
     //   A/B 的**负对照**：不带旗的那一遍必须与这一臂逐张不同、且与上一轮的产物逐张相同。
     val r = MonochromeMask.build(src, edge, edge, plateLayer, under, trimSubject = trimOn,
       plateIsSubject = args.contains("--plate-subject"), dropStrip = !args.contains("--keep-strip"))
-    // 〔艺术〕整幅插画会不会被生产放弃合成 —— 用的是生产那条纯函数（[MonoVeto.fullBleedArt]），
-    //   **不是在这里另抄一份式子**；台子只负责把射程印出来（哪几张、铺满多少）。
-    println("    〔艺术〕铺满=${"%.0f".format(MonoVeto.inkCover(r.mask, edge) * 100)}%" +
-      " 弃=${MonoVeto.fullBleedArt(r.mask, edge)}")
     // `--cutPlate=t`：模拟第九轮「纯色盘 · 内部 · 近盘色 · 只压雾 → 归零」的波及面。
     //   **只在台子上，生产里一行都没有**（甲类参照 +5.3k/0 受伤，乙类净负，尚未落码）。
     args.firstOrNull { it.startsWith("--cutPlate=") }?.substringAfter("=")?.toIntOrNull()?.let { t ->

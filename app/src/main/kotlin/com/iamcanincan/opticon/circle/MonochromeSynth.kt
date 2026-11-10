@@ -863,16 +863,7 @@ internal object MonochromeSynth {
       // 面积合适"的好形状，一个可疑指标都不触发 —— 而它恰恰是要看的东西。所以点名的必带。
       // 带不带还得过预算那一关，见 [MonoDump.maybe] 里 `WATCH_RESERVE_KB` 那一段。
       if (isWatched || (MonoDump.AUTO_SUSPICIOUS && MonoDump.suspicious(out))) dump()
-      var ramp = out.mask
-      // ── 整幅插画：放弃合成（2026-11-10）──
-      // 照片/插画那一类（王者荣耀、智游）没有"图案"可摘，模型只能整幅做浓淡 ——
-      // 交出去在桌面上就是一张**灰照片**。这一档交 null = 桌面照旧（显示原图）。
-      // 判据在 [MonoVeto.fullBleedArt]（纯函数，判据台量得到）：语料 83 张里只开火 4 张。
-      if (ramp != null && MonoVeto.fullBleedArt(ramp, edge)) {
-        noteGiveUp(edge, label,
-          "整幅插画（墨铺满 ${"%.0f".format(MonoVeto.inkCover(ramp, edge) * 100)}%）")
-        ramp = null
-      }
+      val ramp = out.mask
       if (ramp == null) {
         // 判据不成立 = 这张以后再问还是一样，记个负缓存（只进内存，见 [MonoCache]）。
         MonoCache.store(key, edge, null)
