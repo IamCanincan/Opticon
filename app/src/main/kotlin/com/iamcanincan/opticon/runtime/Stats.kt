@@ -41,8 +41,18 @@ internal object Stats {
   private val pending = ArrayList<String>()
   private val seen = HashSet<String>()
 
+  /**
+   * 进程名**只取一次**（2026-11-10 全量检查）。
+   *
+   * 原来 `bump()` / `event()` 每次都现取：API 28+ 是 `Application.getProcessName()` 的一次静态调用，
+   * 26/27 更贵 —— 要读一次 `/proc/self/cmdline`。而进程名在进程生命周期内根本不会变，
+   * 一次全量重画（~685 张）就是几百次白取。前缀 `"<进程>/"` 也一并存着，省掉每次的第二次拼接。
+   */
+  private val procNameCached: String by lazy { procName() }
+  private val procPrefix: String by lazy { procNameCached + "/" }
+
   fun bump(key: String) {
-    val k = procName() + "/" + key
+    val k = procPrefix + key
     counts.merge(k, 1) { a, b -> a + b }
     if (total.incrementAndGet() % FLUSH_EVERY == 0L) flush()
   }
@@ -77,7 +87,7 @@ internal object Stats {
    * @param flushNow 立刻发走（不等攒满）。通知那条路一次只有几张图，靠 20 次的计数
    *   可能要等十几条通知才凑够一次 flush —— 那几行会一直压在内存里。
    */
-  fun event(dedupeKey: String, line: String, flushNow: Boolean = false) {
+  fun event(dedupeKey: String, flushNow: Boolean = false, line: () -> String) {
     // ⚠ 整个函数**绝不允许抛**：它挂在图标绘制/通知处理的热路径上，
     //   真出了什么事（OOM、拼串、广播）也只能丢一条记录，不能让图标画不出来。
     runCatching {
@@ -85,7 +95,10 @@ internal object Stats {
       val batch = synchronized(pending) {
         if (seen.size >= EVENT_SEEN_MAX) seen.clear()
         if (!seen.add(dedupeKey)) return
-        pending.add(procName() + "	" + line)
+        // ⚠ **行是懒的**（2026-11-10 全量检查）：这条记录每张图一行、`buildString` 里还有三四个
+        //   `"%.2f".format()`（String.format 是这个热路径上最贵的一步），而去重能把其中绝大多数
+        //   丢掉 —— 真机一个图标会被重建 5.9 次，等于 5/6 的格式化白做。先查去重表，命中就一行都不拼。
+        pending.add(procPrefix + line())
         if (flushNow || pending.size >= EVENT_BATCH) flushLocked() else ""
       }
       if (batch.isNotEmpty()) ModuleRuntime.publishStats(snapshot(), batch, perfSnapshot())

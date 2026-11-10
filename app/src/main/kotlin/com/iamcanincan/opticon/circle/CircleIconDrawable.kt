@@ -402,6 +402,7 @@ private class MaskedDrawable(
       // 只记第一次 draw —— 这个方法每帧都会进来。
       com.iamcanincan.opticon.runtime.Stats.event(
         "crop|${IconNames.of(icon)}",
+      ) {
         buildString {
           append(System.currentTimeMillis()).append('	')
           append(IconNames.of(icon)).append('	')
@@ -419,8 +420,8 @@ private class MaskedDrawable(
             // 走的是不是"老式裸图"那条入口（keep 60~76%）。只在那条入口上出现。
             if (boxWin?.bare == true) append('\t').append("裸=1")
           }
-        },
-      )
+        }
+      }
     }
     if (drawLogLeft.decrementAndGet() >= 0) {
       Log.d(TAG, "裁圆绘制: ${IconNames.of(icon)} bounds=${width}x$height " +

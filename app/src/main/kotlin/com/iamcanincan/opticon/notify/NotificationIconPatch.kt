@@ -408,18 +408,19 @@ object NotificationIconPatch {
         // 每张通知图标一条记录（与裁圆/单色同一种形状），导出的日志里能按包名和分支分桶。
         com.iamcanincan.opticon.runtime.Stats.event(
             "notify|$pkg|$kind",
-            buildString {
-                append(System.currentTimeMillis()).append('	')
-                append(pkg).append('	')
-                append("通知").append('	')
-                append(kind).append('	')
-                append("源=").append(src.width).append('x').append(src.height).append('	')
-                append("出=").append(if (out == null) "-" else out.width.toString() + "x" + out.height).append('	')
-                append("尺=").append(inPct).append('%')
-            },
             // 通知一次只有几张：立刻发走，别等攒满 200 条。
             flushNow = true,
-        )
+        ) {
+            buildString {
+                append(System.currentTimeMillis()).append('\t')
+                append(pkg).append('\t')
+                append("通知").append('\t')
+                append(kind).append('\t')
+                append("源=").append(src.width).append('x').append(src.height).append('\t')
+                append("出=").append(if (out == null) "-" else out.width.toString() + "x" + out.height).append('\t')
+                append("尺=").append(inPct).append('%')
+            }
+        }
         val tail = if (out == null) "" else
             " → 出 " + out.width + "x" + out.height + " 尺=" + (IconBitmap.sizeRuler(out) * 100).roundToInt() + "%"
         ModuleRuntime.logI("通知尺 $kind 源 ${src.width}x${src.height} 尺=$inPct%$tail 首见 $pkg")

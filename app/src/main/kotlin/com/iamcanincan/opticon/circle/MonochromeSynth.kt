@@ -1024,6 +1024,7 @@ internal object MonochromeSynth {
     // 用的是这条 diag 行里已经算好的那串读数，热路径上只多一次查表 + 拼接。
     com.iamcanincan.opticon.runtime.Stats.event(
       "$sig|$edge",
+    ) {
       buildString {
         append(System.currentTimeMillis()).append('	')
         append(label.substringBefore(' ')).append('	')
@@ -1033,8 +1034,8 @@ internal object MonochromeSynth {
         append(out.report.take(240)).append('	')
         // 缓存键：导出日志里的每一行都能直接对到设备上的 `<键>_<边长>.a8` 掩码文件。
         append("键=").append(MonoKey.hex(key))
-      },
-    )
+      }
+    }
     return n
   }
 
