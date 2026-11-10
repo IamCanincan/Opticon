@@ -431,7 +431,9 @@ private class MaskedDrawable(
       boxWin = runCatching { measureWindow(iw, ih, canonical) }.getOrNull()
       // 快捷方式的满幅分支返回 null（窗口那格不用），底盘这件事由 [plateShortcut] 带出来 ——
       // 必须在 [measureWindow] 之后合，否则会被这一行的 `== true` 覆盖掉。
-      plateWhite = boxWin?.plate == true || plateShortcut
+      // ⚠ 快捷方式**一律不铺白底**（2026-11-10 主人：「滴滴和 libchecker 的快捷方式还包着白边」）：
+    //   它自己已经画在桌面给的徽章圆里，再铺一层白盘就多出一圈白边。几何照旧（窗口/满幅不变）。
+    plateWhite = !isShortcut && (boxWin?.plate == true || plateShortcut)
       // 这张小图是**每个图标多出来的一次绘制**，所以成本要能看见（本仓吃过"只报数不量毫秒"的亏）。
       // 这一行也要带包名：它是**唯一一条"这张没动"的读数** —— 不带名字就没法回答
       // "某张在彩色那支到底动没动"（2026-10-14 判元宝时正是卡在这里，只能靠反推）。
