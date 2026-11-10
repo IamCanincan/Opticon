@@ -358,7 +358,10 @@ internal object IconCropWindow {
     //     · 贴吧/饿了么 框 69~70%、填充率 **1.00**、keep 75% ← 方盘，切角只是修圆
     //   两者 keep 都在 75~88%，所以不能抬 KEEP_RATIO（抬了方盘全跟着换支）。
     val bboxFill = if (bw > 0 && bh > 0) keepTotal.toDouble() / (bw.toDouble() * bh) else 1.0
-    fun plateWin(): Window? {
+    // @param geomOnly 这条 plate 是**纯几何**入口进来的（spiky / byGlyph）—— 它对"哪个像素算墨"
+    //   一个主张都没有，所以下游的极性（[Window.polaritySubject]）必须跳过它。
+    //   2026-11-10 当场量到：漏了这一位，滴滴那 4 个快捷方式的单色从线稿翻成"黑圆+挖空"。
+    fun plateWin(geomOnly: Boolean): Window? {
       val ext = extents(px, sw, sh, cx, cy)
       val far = ext[0]
       val body = ext[1]
@@ -370,10 +373,10 @@ internal object IconCropWindow {
       val rInk = sqrt(keepTotal / (4f * PLATE_INK))
       val rWin = maxOf(rBox, rInk) * SHRINK_EXTRA
       return window(cx, cy, rWin, sw, sh, plate = true, keepPct = keepPct,
-        boxW = bw, boxH = bh, rBox = rBox, rCover = rCover, bodyOverFar = body / far, spiky = spiky,
+        boxW = bw, boxH = bh, rBox = rBox, rCover = rCover, bodyOverFar = body / far, spiky = spiky || geomOnly,
         byKeep = byKeep)
     }
-    if (keepTotal > 0 && (byKeep || spiky)) return plateWin()
+    if (keepTotal > 0 && (byKeep || spiky)) return plateWin(false)
 
     if (rCover < 1f) return null
     // ③' 只拦"本来就要按圆裁"的那一档：rCover < 1（连一个整圆都盖不满）= 本来就不裁、不缩，
@@ -385,7 +388,7 @@ internal object IconCropWindow {
     val byGlyph = keepTotal > 0 && bw * 100 <= sw * GLYPH_BOX_MAX_PCT &&
       bboxFill < GLYPH_FILL_MAX && keep < keepTotal * GLYPH_KEEP_RATIO &&
       cropZoom <= GEO_ZOOM_CAP
-    if (byGlyph) return plateWin()
+    if (byGlyph) return plateWin(true)
     // ④ 裁得好的：按不透明圆盘内切、填满圆。不收边、不铺白底。
     //    满幅的那些直接不动（逐位不变）—— 它的内切圆本来就被自己填满，再放大那一两个百分点
     //    会让整屏图标都悄悄长大。
