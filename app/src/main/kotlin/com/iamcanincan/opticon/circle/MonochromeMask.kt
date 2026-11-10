@@ -66,16 +66,22 @@ internal object MonochromeMask {
 
   /**
    * 【剪影】整幅插画那一档：**任意墨**（α ≥ [A_BOX]）盖住整格画布到这个比例，交出去就是一张
-   * 灰照片 —— 这一档改交剪影（见 [artSilhouette]）。2026-11-10 主人对着离线四联对照
-   * （原图 / 浓淡 / 剪影35% / 剪影55%）判「这个剪影效果其实可以」，选的 35% 这一档。
+   * 灰照片 —— 这一档改交剪影（见 [artSilhouette]）。2026-11-10 主人对着离线对照
+   * （原图 / 2档 / 3档 / 4档 / 6档）判「先用三档」，取 [ART_CUTS] / [ART_ALPHA] 这一组。
    *
    * 射程（真机语料 133 张、其中 83 张用我们的掩码）：70% 只开火 4 张插画/原画
    * （智游 91、王者 89、星轨派对 89、王者国际服 75），下一张 `browndust2` 只有 56。
    */
   private const val ART_COVER = 0.70f
 
-  /** 剪影的分位：不透明像素里亮度最低的这么多比例落墨（35%：脸留白、头发与轮廓落墨）。 */
-  private const val ART_QUANTILE = 0.35f
+  /**
+   * 剪影的档位：分位线（升序）与每档的墨浓 —— 最后一档 0 = 透明。
+   *
+   * 三档 = 暗部 35% 实墨、35–70% 半墨、更亮的都透明。两档（只有深/透明）在王者那种
+   * 有光影的脸上是一块死黑；三档把脸颊/颧骨的层次留住，又不至于变回灰照片。
+   */
+  private val ART_CUTS = floatArrayOf(0.35f, 0.70f)
+  private val ART_ALPHA = intArrayOf(255, 128, 0)
 
   /**
    * 「盘自己的外沿」有多宽：内侧挨着底、外侧这么几步之内就是空气的那些实心格。
@@ -1230,7 +1236,7 @@ internal object MonochromeMask {
       //   这一档改交剪影（[artSilhouette]）；只有墨铺满整格 ≥ [ART_COVER] 的那几张走到。
       val m = baseOut.mask ?: return baseOut
       if (inkCover(m, w, h) < ART_COVER) return baseOut
-      val sil = artSilhouette(pixels, w, h, ART_QUANTILE)
+      val sil = artSilhouette(pixels, w, h)
       var x0 = w; var y0 = h; var x1 = -1; var y1 = -1
       for (y in 0 until h) {
         val row = y * w
@@ -1248,7 +1254,7 @@ internal object MonochromeMask {
       val st = measure(sil, w, h, bx, s, bridge = false, despeckle = true)
       val fill = st.kept.toFloat() / (bx.width().toLong() * bx.height())
       return Output(sil, fill, st.hole, st.largest, st.components, st.smallShare, softShare(st, bx),
-        "${baseOut.report} 剪影=${(ART_QUANTILE * 100).toInt()}%", baseOut.hyp, baseOut.h0why,
+        "${baseOut.report} 剪影=${ART_ALPHA.size}档", baseOut.hyp, baseOut.h0why,
         baseOut.veto, baseOut.plateInked, baseOut.dust)
     }
     if (!ramp.report.contains("调=1")) {
@@ -7133,16 +7139,16 @@ internal object MonochromeMask {
   }
 
   /**
-   * 【剪影】把一整幅插画按亮度二分：不透明像素里最暗的 [q] 比例落墨、其余透明。
+   * 【剪影】把一整幅插画按亮度分档：不透明像素按 [ART_CUTS] 分成几段，各段给 [ART_ALPHA] 的墨浓。
    *
    * 为什么要有它（2026-11-10）：插画没有"图案/背景"可分，模型只能整幅做浓淡 ——
-   * 交出去就是一张灰照片。主人对着离线四联对照（原图 / 浓淡 / 剪影35% / 剪影55%）
-   * 判「这个剪影效果其实可以」，于是这一档改成剪影。
+   * 交出去就是一张灰照片。主人看过离线对照后定「先用三档」：两档在有光影的脸上是一块死黑，
+   * 三档能留住脸颊/颧骨的层次，又不至于变回灰照片。
    *
    * 分位按**这张自己的**不透明像素算（不自带阈值）：同一张图换尺寸/换设备答案不变。
-   * 边界用 `[A_BOX]` 判"有没有画东西"（与内容外接框同一条线），墨用二值 255。
+   * 边界用 `[A_BOX]` 判"有没有画东西"（与内容外接框同一条线）。
    */
-  private fun artSilhouette(px: IntArray, w: Int, h: Int, q: Float): IntArray {
+  private fun artSilhouette(px: IntArray, w: Int, h: Int): IntArray {
     val n = w * h
     val hist = IntArray(256)
     var opaque = 0
@@ -7156,13 +7162,15 @@ internal object MonochromeMask {
       opaque++
     }
     if (opaque == 0) return IntArray(n)
-    val want = (opaque * q).toInt()
+    // 每段的上界（含）：按分位落到具体亮度上，最后一段一定给满。
+    val cuts = IntArray(ART_CUTS.size)
     var acc = 0
-    var thr = 0
+    var ci = 0
     for (v in 0 until 256) {
       acc += hist[v]
-      if (acc >= want) { thr = v; break }
+      while (ci < ART_CUTS.size && acc >= (opaque * ART_CUTS[ci]).toInt()) cuts[ci++] = v
     }
+    while (ci < cuts.size) cuts[ci++] = 255
     val out = IntArray(n)
     for (i in 0 until n) {
       val p = px[i]
@@ -7170,7 +7178,11 @@ internal object MonochromeMask {
       val r = (p shr 16) and 0xff
       val g = (p shr 8) and 0xff
       val b = p and 0xff
-      if ((r * 299 + g * 587 + b * 114) / 1000 <= thr) out[i] = 0xff shl 24
+      val l = (r * 299 + g * 587 + b * 114) / 1000
+      var band = 0
+      while (band < cuts.size && l > cuts[band]) band++
+      val a = ART_ALPHA[band]
+      if (a > 0) out[i] = a shl 24
     }
     return out
   }
