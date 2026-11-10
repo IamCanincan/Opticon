@@ -65,6 +65,19 @@ internal object MonochromeMask {
   private const val A_AIR = 64
 
   /**
+   * 【剪影】整幅插画那一档：**任意墨**（α ≥ [A_BOX]）盖住整格画布到这个比例，交出去就是一张
+   * 灰照片 —— 这一档改交剪影（见 [artSilhouette]）。2026-11-10 主人对着离线四联对照
+   * （原图 / 浓淡 / 剪影35% / 剪影55%）判「这个剪影效果其实可以」，选的 35% 这一档。
+   *
+   * 射程（真机语料 133 张、其中 83 张用我们的掩码）：70% 只开火 4 张插画/原画
+   * （智游 91、王者 89、星轨派对 89、王者国际服 75），下一张 `browndust2` 只有 56。
+   */
+  private const val ART_COVER = 0.70f
+
+  /** 剪影的分位：不透明像素里亮度最低的这么多比例落墨（35%：脸留白、头发与轮廓落墨）。 */
+  private const val ART_QUANTILE = 0.35f
+
+  /**
    * 「盘自己的外沿」有多宽：内侧挨着底、外侧这么几步之内就是空气的那些实心格。
    *
    * 为什么需要这一条：判连通比的是"含 `(1−β)` 的 dep"，容差却是**不含** β 量的（见
@@ -1205,12 +1218,38 @@ internal object MonochromeMask {
         else trim(plateCloudErase(o, pixels, s, w, h), w, h)
       // 【亮侧内容】默认**关**（2026-11-10 先量射程）：台子用 `--light-ink` 打开做 A/B，
       //   验过再翻默认值。见 [inkEnclosedLight]。
-      if (!lightInk) return base
-      val painted = inkEnclosedLight(base, pixels, s, w, h)
-      if (painted == 0) return base
-      return Output(base.mask, base.boxFill, base.hole, base.largest, base.components,
-        base.smallShare, base.soft, "${base.report} 亮字=$painted", base.hyp, base.h0why,
-        base.veto, base.plateInked, base.dust)
+      val baseOut = if (!lightInk || base.mask == null) base
+      else {
+        val painted = inkEnclosedLight(base, pixels, s, w, h)
+        if (painted == 0) base
+        else Output(base.mask, base.boxFill, base.hole, base.largest, base.components,
+          base.smallShare, base.soft, "${base.report} 亮字=$painted", base.hyp, base.h0why,
+          base.veto, base.plateInked, base.dust)
+      }
+      // 【剪影】整幅插画：没有"图案/背景"可分，整幅做浓淡交出去就是一张灰照片。
+      //   这一档改交剪影（[artSilhouette]）；只有墨铺满整格 ≥ [ART_COVER] 的那几张走到。
+      val m = baseOut.mask ?: return baseOut
+      if (inkCover(m, w, h) < ART_COVER) return baseOut
+      val sil = artSilhouette(pixels, w, h, ART_QUANTILE)
+      var x0 = w; var y0 = h; var x1 = -1; var y1 = -1
+      for (y in 0 until h) {
+        val row = y * w
+        for (x in 0 until w) {
+          if (sil[row + x] == 0) continue
+          if (x < x0) x0 = x
+          if (x > x1) x1 = x
+          if (y < y0) y0 = y
+          if (y > y1) y1 = y
+        }
+      }
+      if (x1 < 0) return baseOut
+      // 剪影过一遍形状体检（`despeckle`）：二分出来的孤立噪点在这里被擦掉，别把它带上屏。
+      val bx = Rect(x0, y0, x1 + 1, y1 + 1)
+      val st = measure(sil, w, h, bx, s, bridge = false, despeckle = true)
+      val fill = st.kept.toFloat() / (bx.width().toLong() * bx.height())
+      return Output(sil, fill, st.hole, st.largest, st.components, st.smallShare, softShare(st, bx),
+        "${baseOut.report} 剪影=${(ART_QUANTILE * 100).toInt()}%", baseOut.hyp, baseOut.h0why,
+        baseOut.veto, baseOut.plateInked, baseOut.dust)
     }
     if (!ramp.report.contains("调=1")) {
       // 参照支。**「按线条分割」那一刀也走同一套"两支各交一遍再按成品选"** —— 理由是量出来的：
@@ -7083,6 +7122,58 @@ internal object MonochromeMask {
   }
 
   // ─────────────────────────── 形状体检（两支共用） ───────────────────────────
+
+  /** 掩码里**任意墨**（α ≥ [A_BOX]）占整格画布的比例。判「整幅插画」只看这一条。 */
+  private fun inkCover(mask: IntArray?, w: Int, h: Int): Float {
+    if (mask == null || w <= 0 || h <= 0 || mask.size < w * h) return 0f
+    val n = w * h
+    var k = 0
+    for (i in 0 until n) if ((mask[i] ushr 24) >= A_BOX) k++
+    return k.toFloat() / n
+  }
+
+  /**
+   * 【剪影】把一整幅插画按亮度二分：不透明像素里最暗的 [q] 比例落墨、其余透明。
+   *
+   * 为什么要有它（2026-11-10）：插画没有"图案/背景"可分，模型只能整幅做浓淡 ——
+   * 交出去就是一张灰照片。主人对着离线四联对照（原图 / 浓淡 / 剪影35% / 剪影55%）
+   * 判「这个剪影效果其实可以」，于是这一档改成剪影。
+   *
+   * 分位按**这张自己的**不透明像素算（不自带阈值）：同一张图换尺寸/换设备答案不变。
+   * 边界用 `[A_BOX]` 判"有没有画东西"（与内容外接框同一条线），墨用二值 255。
+   */
+  private fun artSilhouette(px: IntArray, w: Int, h: Int, q: Float): IntArray {
+    val n = w * h
+    val hist = IntArray(256)
+    var opaque = 0
+    for (i in 0 until n) {
+      val p = px[i]
+      if ((p ushr 24) < A_SOLID) continue
+      val r = (p shr 16) and 0xff
+      val g = (p shr 8) and 0xff
+      val b = p and 0xff
+      hist[(r * 299 + g * 587 + b * 114) / 1000]++
+      opaque++
+    }
+    if (opaque == 0) return IntArray(n)
+    val want = (opaque * q).toInt()
+    var acc = 0
+    var thr = 0
+    for (v in 0 until 256) {
+      acc += hist[v]
+      if (acc >= want) { thr = v; break }
+    }
+    val out = IntArray(n)
+    for (i in 0 until n) {
+      val p = px[i]
+      if ((p ushr 24) < A_BOX) continue
+      val r = (p shr 16) and 0xff
+      val g = (p shr 8) and 0xff
+      val b = p and 0xff
+      if ((r * 299 + g * 587 + b * 114) / 1000 <= thr) out[i] = 0xff shl 24
+    }
+    return out
+  }
 
   /**
    * 数出「这块掩码像不像一个图形」，并按需修整。**就地**改 [argb]（桥出来的像素要写进去）。
