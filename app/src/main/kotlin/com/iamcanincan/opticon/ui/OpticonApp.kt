@@ -91,6 +91,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -675,15 +676,25 @@ private fun FloatingNavBar(
         return entries[best].index
     }
 
+    // 位移前的药丸高度：`offset {}` 是**布局期**的偏移，拿不到 `size`，所以自己量一次。
+    var navHeightPx by remember { mutableIntStateOf(0) }
+
     Box(
         modifier = modifier
+            // 🔴 **过渡里不许给这一层加 `alpha`**（2026-11-10 主人：「返回后底栏的阴影会一瞬间变方」）。
+            //   把系统动画放慢 10 倍抓帧，现场是：过渡中底栏**下半截被一条直线切掉、阴影成一个方块**，
+            //   稳态（alpha=1）完全正常。原因：`alpha < 1` 会把整层渲染进一张**和底栏等大**的离屏位图，
+            //   药丸自己的阴影就画在那张位图之外 —— 被裁成直边。实测对照：只删掉 `alpha` 这一行，
+            //   同一时刻的阴影立刻恢复成跟着药丸圆角走。
+            //   ⇒ 收起/出现**只走位移 + 缩放，不做淡出**（药丸本来就整个移出屏幕，淡出看不出区别）。
+            //   位移也留在布局期（`offset {}`），这样即使以后又有人给这层加 alpha，阴影也不会被推出去。
+            .offset { IntOffset(0, (hideFraction.coerceIn(0f, 1f) * (navHeightPx + bottomGapPx + navInsetPx)).roundToInt()) }
+            .onSizeChanged { navHeightPx = it.height }
             .graphicsLayer {
                 val f = hideFraction.coerceIn(0f, 1f)
-                translationY = f * (size.height + bottomGapPx + navInsetPx)
                 val s = 1f - 0.06f * f
                 scaleX = s
                 scaleY = s
-                alpha = 1f - f
             }
             .onGloballyPositioned { navWidthPx = it.size.width }
             // ⚠ 收起 ≠ 只是画到屏幕外：KeyLens 在 `nav-hidden` 上同时写 `aria-hidden` 与
@@ -692,7 +703,10 @@ private fun FloatingNavBar(
             .semantics { if (hideFraction > 0.5f) invisibleToUser() },
     ) {
         Surface(
-            shape = RoundedCornerShape(percent = 50),
+            // 固定 32dp（药丸高度 52+6×2=64dp 的一半），不用 `percent = 50`：
+            //   **纯防御**，不依赖当帧测到的尺寸（`animateContentSize` / 首帧尺寸未定时百分比半径会塌）。
+            //   ⚠ 它**不是**「阴影一下变方」的病因 —— 那条的真凶是下面 `alpha` 那一层，别记错。
+            shape = RoundedCornerShape((NavItemHeight + NavPadding * 2) / 2),
             color = scheme.surfaceContainer,
             border = BorderStroke(1.dp, scheme.outlineVariant.copy(alpha = 0.38f)),
             shadowElevation = 10.dp,
@@ -898,7 +912,9 @@ private fun NavItem(
             },
         onClick = { onSelect(index) },
         enabled = enabled,
-        shape = RoundedCornerShape(percent = 50),
+        // 同上：固定 26dp（= 52dp 的一半），不跟测量尺寸走 —— 选中那格会用 `animateContentSize`
+        // 横向撑开，百分比圆角在动画的头几帧同样是"先塌成方角"。
+        shape = RoundedCornerShape(NavItemHeight / 2),
         color = containerColor,
         contentColor = contentColor,
         interactionSource = interaction,
