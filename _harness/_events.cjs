@@ -46,7 +46,7 @@ for (const l of lines) {
   else if (f[3] === "通知") notify.push(f);
   else if (f.length >= 7) mono.push(f);
 }
-if (crop.length + mono.length === 0) {
+if (crop.length + mono.length + notify.length === 0) {
   console.log("!! 一行都没解析出来（格式变了？）行数=" + lines.length);
   process.exit(2);
 }
@@ -121,9 +121,16 @@ if (notify.length) {
   const kinds = {};
   const patched = [];
   for (const f of notify) {
-    const kind = f[3] || "?";
+    // 通知行的字段是 `进程 时刻 包名 通知 分支 源= 出= 尺=` —— 分支在 f[4]。
+    // （2026-11-10 现撞：写成 f[3] 时分桶永远只印 `通知=N`，被补那批一条都列不出来。）
+    const kind = f[4] || "?";
     kinds[kind] = (kinds[kind] || 0) + 1;
     if (kind === "被补") patched.push(pkgOf(f[2]));
+  }
+  // 自检：分支列整列都是「通知」= 又读到第 4 列去了。分桶坏掉时输出照样"有数"，
+  // 只有这一句能让它出声（2026-11-10 就是这样静默了一个多月）。
+  if (Object.keys(kinds).length === 1 && kinds["通知"]) {
+    console.log("!! 通知分支列读错（整列都是「通知」）—— 分桶结果不可信");
   }
   console.log("[通知] 分支：" +
     Object.entries(kinds).map(([k, n]) => k + "=" + n).join(" · "));
