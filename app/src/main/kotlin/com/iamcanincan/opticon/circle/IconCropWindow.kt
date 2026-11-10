@@ -351,7 +351,14 @@ internal object IconCropWindow {
     val spiky = rCover < rBox * COVER_BOX_FLOOR
     // keep 判据**只在这里算一次**（未取整），分支与日志共用同一个布尔 —— 别让日志再拿 `keepPct` 反推。
     val byKeep = keepTotal > 0 && keep < keepTotal * KEEP_RATIO
-    if (keepTotal > 0 && (byKeep || spiky)) {
+    // ③' 【带留白的图形】内容框明显小于画布、又不是一块方盘（外接框填充率低）—— 按圆裁会把图形的角
+    //   切掉。2026-11-10 主人点名 `Device Policy`（立方体）「应缩入白底，而不是裁切」。
+    //   为什么这条能分开而 `keep` 分不开（`_harness/WinProbeKt`，rec10 的 64 张**原始图标**）：
+    //     · 立方体  框 79%、填充率 **0.76**、keep 88%   ← 图形，切角 = 切掉设计
+    //     · 贴吧/饿了么 框 69~70%、填充率 **1.00**、keep 75% ← 方盘，切角只是修圆
+    //   两者 keep 都在 75~88%，所以不能抬 KEEP_RATIO（抬了方盘全跟着换支）。
+    val bboxFill = if (bw > 0 && bh > 0) keepTotal.toDouble() / (bw.toDouble() * bh) else 1.0
+    fun plateWin(): Window? {
       val ext = extents(px, sw, sh, cx, cy)
       val far = ext[0]
       val body = ext[1]
@@ -366,8 +373,19 @@ internal object IconCropWindow {
         boxW = bw, boxH = bh, rBox = rBox, rCover = rCover, bodyOverFar = body / far, spiky = spiky,
         byKeep = byKeep)
     }
+    if (keepTotal > 0 && (byKeep || spiky)) return plateWin()
 
     if (rCover < 1f) return null
+    // ③' 只拦"本来就要按圆裁"的那一档：rCover < 1（连一个整圆都盖不满）= 本来就不裁、不缩，
+    //    这条入口**不放宽**它（混元 框 46%、填充率 0.79 会被误放大 1.44 倍 —— 2026-11-10 当场量到）。
+    // ⚠ 还要"本来真会裁"：放大超过 [GEO_ZOOM_CAP] 的那批是 `measure()` 直接退回 null 的
+    //   （混元：rCover 只有 25.9 → 裁的话要放大 2.47 倍，所以它一直是"不裁不动"）。
+    //   少了这一条，它们会被这条新入口顺手捡起来放大 1.44 倍 —— 2026-11-10 当场量到。
+    val cropZoom = if (rCover >= 1f) sw / (2f * rCover) else Float.MAX_VALUE
+    val byGlyph = keepTotal > 0 && bw * 100 <= sw * GLYPH_BOX_MAX_PCT &&
+      bboxFill < GLYPH_FILL_MAX && keep < keepTotal * GLYPH_KEEP_RATIO &&
+      cropZoom <= GEO_ZOOM_CAP
+    if (byGlyph) return plateWin()
     // ④ 裁得好的：按不透明圆盘内切、填满圆。不收边、不铺白底。
     //    满幅的那些直接不动（逐位不变）—— 它的内切圆本来就被自己填满，再放大那一两个百分点
     //    会让整屏图标都悄悄长大。
@@ -697,6 +715,12 @@ private const val KEEP_RATIO = 0.6f
  * 量具：`_harness/WinKt.kt`（单张或整目录过真判据，打印档位 / zoom / rCover）。
  */
 private const val COVER_BOX_FLOOR = 0.80f
+
+/** 【带留白的图形】三条线（见 `scan` 里 `byGlyph`）：内容框 ≤ 画布 85%、外接框填充率 < 0.90、
+ *  按圆裁还会切掉 >5% 的墨。数来自 rec10 的 64 张原始图标：方盘填充率 1.00、立体图形 0.76~0.78。 */
+private const val GLYPH_BOX_MAX_PCT = 85
+private const val GLYPH_FILL_MAX = 0.90
+private const val GLYPH_KEEP_RATIO = 0.95f
 
 /**
  * "裁不动"那类留多少边 —— 从**平台自己的安全区**推出来的，不是拍脑袋：
