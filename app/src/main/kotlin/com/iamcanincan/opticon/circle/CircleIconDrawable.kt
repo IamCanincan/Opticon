@@ -274,7 +274,7 @@ private class MaskedDrawable(
   private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
   private val maskMode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
 
-  /** 圆内的那层白底（见 [draw] 里那一段）。 */
+  /** 圆内的那层底盘（见 [draw] 里那一段）。颜色在 draw 时按 [plateDark] 定，默认白。 */
   private val platePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
 
   /**
@@ -316,6 +316,22 @@ private class MaskedDrawable(
    * ⚠ 原本裁得好、本来就有实色底的图标一个像素都不铺 —— 铺了就是白边。
    */
   private var plateWhite = false
+
+  /**
+   * 底盘用**黑**不用白：图案本身太浅，压在白盘上看不见（2026-11-10 主人：
+   * 「那这种看不清的就加黑底」—— 菜鸟的四条快捷方式是近白线条，落在白盘上等于没有）。
+   *
+   * 判据只看**图案自己的不透明像素**：深色格占不到 [PLATE_DARK_PCT]% ⇒ 这张图里没有一处
+   * 靠深色认出来的形状 ⇒ 白盘衬不出它。图案里带深色的一律留在白盘 —— 那些图标白盘在
+   * 圆边上本来就是一块留白，换黑会凭空多出一圈黑边。
+   * ⚠ 为什么不用平均亮度：真机上"浅底 + 深色图形"与"整片近白的线条"均值只差 6 点，
+   *   而两者的正确答案相反（读数在 [PLATE_DARK_L] 上面那段）。
+   */
+  private var plateDark = false
+  /** 图案不透明像素的平均亮度（0..255）；-1 = 这张没有不透明像素。只进日志，装机后核阈值用。 */
+  private var plateInkL = -1
+  /** 深色格的占比（%，整数）：判据本身，只进日志。 */
+  private var plateDarkPct = 0
 
   /** 这张图标是否已经往统计明细里记过一条（draw 每帧都会进来，只记第一次）。 */
   private var notedCrop = false
@@ -363,7 +379,10 @@ private class MaskedDrawable(
     // 本来就有实色底、裁得好的图标一个像素都不铺 —— 铺了就是白边。
     // ⚠ 白底画在**前景层的位图里**，不动 AdaptiveIconDrawable 的背景层：那一层的颜色
     //   是给取色合成器当盘色用的（10-09 定案），换掉它会连带改单色那一支的输出。
-    if (plateWhite) layer.drawCircle(width / 2f, height / 2f, minOf(width, height) / 2f, platePaint)
+    if (plateWhite) {
+      platePaint.color = if (plateDark) Color.BLACK else Color.WHITE
+      layer.drawCircle(width / 2f, height / 2f, minOf(width, height) / 2f, platePaint)
+    }
 
     // cover：填满 bounds，保持宽高比，多出来的居中裁掉 —— 基准是图案外框
     val boxWidth = (box?.width() ?: intrinsicWidth).coerceAtLeast(1).toFloat()
@@ -389,6 +408,12 @@ private class MaskedDrawable(
           append("白底=").append(if (plateWhite) 1 else 0).append('	')
           append("细环=").append(if (edgeRing) 1 else 0).append('	')
           append("尺寸=").append(width).append('x').append(height)
+          // 后加的两位只在真铺了盘时出现（是白是黑 + 判据用的那个数）。
+          // 前面每个字段一位不动 —— `_events.cjs` 按 `白底=1` 数家数。
+          if (plateWhite) {
+            append('\t').append("黑底=").append(if (plateDark) 1 else 0)
+            append('\t').append("墨L=").append(plateInkL)
+          }
         },
       )
     }
@@ -493,8 +518,11 @@ private class MaskedDrawable(
       if (IconCropWindow.shortcutFullBleed(win, px, sw, sh)) {
         // 原图没有实色底盘（圆外透明）→ 图案按满幅、不缩；底盘铺**与不规则图标同一块白盘**
         //（主人 2026-10-26：「不应该和别的不规则图标同个道理吗」）。
+        // 图案自己太白的话白盘上看不见 → 换黑底（[plateDark]）。
         plateShortcut = true
-        Log.d(TAG, "裁圆外框: ${IconNames.of(icon)} 快捷方式：细环 + 图案在圆内 → 按满幅：不缩，铺白盘（同不规则图标）")
+        decidePlateDark(px)
+        Log.d(TAG, "裁圆外框: ${IconNames.of(icon)} 快捷方式：细环 + 图案在圆内 → 按满幅：不缩，" +
+          "铺${if (plateDark) "黑" else "白"}盘（同不规则图标，墨L=$plateInkL 深格=$plateDarkPct%）")
         return null
       }
       if (edgeRing) Log.d(TAG, "裁圆外框: ${IconNames.of(icon)} 快捷方式：图案碰到圆外 → 保留缩小+补白")
@@ -506,6 +534,7 @@ private class MaskedDrawable(
     //   真机就打出过 `放大 0.57×`（明明是缩）。plate 档的 zoom 可以 <1 也可以 >1，档位不是方向。
     val dir = if (win.zoom < 1f) "缩" else "放"
     if (win.plate) {
+      decidePlateDark(px)
       // ⚠ `入口=` 这一位是 2026-10-16 补的：plate 档有**两条语义完全不同的入口**
       //   （keep = "圆会咬掉一大块形状，这块大色块是要整块保住的图案"；spiky = 纯几何"圆盘比外框小太多"），
       //   而这一行原本**两条都印同一句 `（<60%）`** —— kodi 真机打出来就是 `裁了只剩 72%（<60%）`，
@@ -524,13 +553,35 @@ private class MaskedDrawable(
       //   就是 plate 这一档（彩色量 draw() 那张、染色量喂进模型那张，两个 keepPct 不是一回事）。
       Log.d(TAG, "裁圆外框: $who 画布 ${iw}x$ih 图案 ${win.boxW}x${win.boxH}（扫描 ${win.scanW}x${win.scanH}）" +
         " 裁了只剩 ${win.keepPct}%$why → 不裁、缩进圆里" +
-        " body/far=${"%.2f".format(win.bodyOverFar)} $dir ${"%.2f".format(win.zoom)}×，圆内补白 入口=$entry")
+        " body/far=${"%.2f".format(win.bodyOverFar)} $dir ${"%.2f".format(win.zoom)}×，圆内补白 入口=$entry" +
+        " 盘=${if (plateDark) "黑" else "白"} 墨L=$plateInkL 深格=$plateDarkPct%")
     } else {
       Log.d(TAG, "裁圆外框: $who 画布 ${iw}x$ih 图案 ${win.boxW}x${win.boxH}（扫描 ${win.scanW}x${win.scanH}）裁了还剩 " +
         "${win.keepPct}% 外框内切圆 r=${"%.1f".format(win.rBox)}" +
         " 不透明圆盘 r=${"%.1f".format(win.rCover)} → $dir ${"%.2f".format(win.zoom)}×")
     }
     return win
+  }
+
+  /**
+   * 铺盘之前先问一句：**这块盘该是白是黑**（判据见 [plateDark]）。
+   *
+   * 只在这张真要铺盘时才调：满幅那张（真机上的多数）一次都不算。
+   */
+  private fun decidePlateDark(px: IntArray) {
+    var n = 0
+    var dark = 0
+    var sum = 0L
+    for (p in px) {
+      if (p ushr 24 < 128) continue
+      val l = ((p shr 16 and 0xFF) * 299 + (p shr 8 and 0xFF) * 587 + (p and 0xFF) * 114) / 1000
+      n++
+      sum += l
+      if (l < PLATE_DARK_L) dark++
+    }
+    plateInkL = if (n == 0) -1 else (sum / n).toInt()
+    plateDarkPct = if (n == 0) 100 else (dark * 100 / n)
+    plateDark = n > 0 && dark * 100 < n * PLATE_DARK_PCT
   }
 
   /** 贴边细环的判据本体在 [IconCropWindow.edgeRing]（彩色/染色共用一份）。 */
@@ -594,6 +645,20 @@ private fun circleMaskPath(width: Int, height: Int, inset: Float = 0f) = Path().
  * 整圈才算真去掉。图案最远 0.58R，收 2% 碰不到它。
  */
 private const val EDGE_RING_INSET = 0.02f
+
+/**
+ * 圆底盘换黑的那条线：图案里**几乎没有深色格**（[MaskedDrawable.decidePlateDark] 用）。
+ *
+ * 判据不是"平均亮度"—— 真机 27 张铺盘快捷方式里，4 张菜鸟的近白图案均值 240.4~240.9，
+ * 紧接着的 4 张"浅底 + 深色图形"是 232.5~234.4，均值只差 6 点；而它们该不该换盘完全相反
+ * （后者形状是靠深色图形认的，本来就看得见）。真正分开它们的是**有没有一处深色**：
+ * 那 4 张一格深色都没有（整片 L=238），其余 23 张都至少有一片 L≤163。
+ *
+ * [PLATE_DARK_L] = 200（对纯白约 1.7:1），[PLATE_DARK_PCT] = 1 允许千分之几的杂点/抗锯齿。
+ * 低于这条线还看得出轮廓的，一律留白盘。
+ */
+private const val PLATE_DARK_L = 200
+private const val PLATE_DARK_PCT = 1
 
 /**
  * 诊断用：所有通道最终都汇到这里，所以在这里打一次日志就能知道**这条通道到底跑没跑、在哪个宿主里跑**。
