@@ -805,8 +805,9 @@ private fun FloatingNavBar(
                 shadowElevation = 10.dp,
             ) {
                 Box(contentAlignment = Alignment.Center) {
+                    // 光晕里画的是**将要选中的那一格**的图标（不是当前格）：拖到哪就预览哪一页。
                     Icon(
-                        imageVector = entries.first { it.index == selectedIndex }.icon,
+                        imageVector = entries.first { it.index == dragTarget }.icon,
                         contentDescription = null,
                         modifier = Modifier.size(NavIconSize),
                     )
