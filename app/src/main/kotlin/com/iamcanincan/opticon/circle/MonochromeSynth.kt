@@ -622,7 +622,7 @@ internal object MonochromeSynth {
       val fgOnly = adaptive && !flatten
       // 窗口**照量**（几何那一档与日志还要用它，见下），搬不搬由 `win` 定。
       // ⚠ **只在缓存未命中时才需要**：输入（pixels/edge/flags）已经在键里，命中路径白扫一遍 384²。
-      val winMeasured by lazy(LazyThreadSafetyMode.NONE) { if (circle) IconCropWindow.measure(pixels, edge) else null }
+      val winMeasured by lazy(LazyThreadSafetyMode.NONE) { if (circle) IconCropWindow.measure(pixels, edge, shortcut) else null }
       // 快捷方式："彩色那支按满幅"的结论要读**彩色那一本账**（同一张像素、同一套格子、同一条
       // 细环判据）。不能拿 384 的判据格再量一遍：实测 45 张快捷方式里有 2 张（拼多多两条）
       // 细环判据在 108 与 384 两格上结论相反（`ringFits` 的 0.95R 边界被放大后的环内沿顶到）
@@ -1370,7 +1370,7 @@ internal object MonochromeSynth {
     return try {
       val px = IntArray(w * h)
       bmp.getPixels(px, 0, w, 0, 0, w, h)
-      val win = runCatching { IconCropWindow.of(px, w, h) }.getOrNull() ?: return ColourWindow(null, false)
+      val win = runCatching { IconCropWindow.of(px, w, h, shortcut) }.getOrNull() ?: return ColourWindow(null, false)
       // 快捷方式：彩色那支"细环 + 图案在圆内 → 按满幅"的结论在这里算一次 —— 染色侧的
       // **摆放**（还要不要收可见区）与极性都读它，保证是同一张像素、同一个答案。
       // 判据本体在 [IconCropWindow.shortcutFullBleed]；窗口本身照旧返回（模型输入不改）。

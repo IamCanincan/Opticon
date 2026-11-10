@@ -95,6 +95,9 @@ class CircleIconDrawable(
    * 命中时把遮罩圆收 [EDGE_RING_INSET]（约 1.2%），环整圈切掉，图案本身不动。
    */
   private val trimEdgeRing: Boolean = false,
+  /** 这张是**快捷方式**：它铺不铺白底是另一件事（白底画进徽章里就成了白圈，2026-10-25 / 2026-11-10 两次）。
+   *  只影响裁圆判据（IconCropWindow 的 shortcut 位），不参与别的。 */
+  private val isShortcut: Boolean = false,
 ) :
   AdaptiveIconDrawable(
     // 背景：**桌面自己给主题图标用的那块盘**（2026-10-09），取不到时退回白。
@@ -111,7 +114,7 @@ class CircleIconDrawable(
     //   回滚 = 把这一行改回 `Color.WHITE`（或 `Color.TRANSPARENT`）。
     ColorDrawable(themedPlateColor()),
     // 前景：原图标套上圆形遮罩，再缩到可见区
-    ViewportDrawable(MaskedDrawable(icon, trimEdgeRing)),
+    ViewportDrawable(MaskedDrawable(icon, trimEdgeRing, isShortcut)),
   ) {
 
   /** 原图标留一份引用，只为了 [getConstantState] 能重建出副本。 */
@@ -175,7 +178,7 @@ class CircleIconDrawable(
       // ⚠ `trimEdgeRing` 必须一起带过去：桌面每次 bind 都是 `getConstantState().newDrawable()`，
       //   漏了它副本就退回"白盘 + 细环"那一条（2026-10-25 全量检查抓到）。
       override fun newDrawable(): Drawable =
-        CircleIconDrawable(src?.newDrawable() ?: sourceIcon, trimEdgeRing)
+        CircleIconDrawable(src?.newDrawable() ?: sourceIcon, trimEdgeRing, isShortcut)
 
       override fun getChangingConfigurations(): Int = changingConfigurations
     }
@@ -263,6 +266,9 @@ private class MaskedDrawable(
   private val icon: Drawable,
   /** 快捷方式那一路才开：去掉贴边的细环（判据与来历见 [CircleIconDrawable] 的构造参数）。 */
   private val trimEdgeRing: Boolean = false,
+  /** 这张是**快捷方式**：它铺不铺白底是另一件事（白底画进徽章里就成了白圈，2026-10-25 / 2026-11-10 两次）。
+   *  只影响裁圆判据（IconCropWindow 的 shortcut 位），不参与别的。 */
+  private val isShortcut: Boolean = false,
 ) : Drawable() {
 
   private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
@@ -471,7 +477,7 @@ private class MaskedDrawable(
       edgeRing = IconCropWindow.edgeRing(px, sw, sh)
       if (edgeRing) Log.d(TAG, "裁圆：去掉贴边细环 ${IconNames.of(icon)}（扫描 ${sw}x${sh}）")
     }
-    val win = IconCropWindow.of(px, sw, sh) ?: return null
+    val win = IconCropWindow.of(px, sw, sh, isShortcut) ?: return null
     // 快捷方式里"透明底 + 一个图案"的那一类（拼多多的四条动态快捷方式就是）没有实心内容可裁：
     // `keepPct=0` 会让共用判据落进"不规则图标"那一档，进而**缩小 + 圆内补白** —— 屏幕上就是
     // 图案外面多了一整块白盘（主人 2026-10-25：「拼多多的快捷方式比别的图标多套了一圈」）。
@@ -551,7 +557,7 @@ private class MaskedDrawable(
       object : ConstantState() {
         // ⚠ `trimEdgeRing` 必须一起带过去（2026-10-26 全量检查）：这层自己的副本以前也丢它，
         //   和顶层 `CircleIconDrawable.getConstantState` 那次是同一类洞（见那边的注释）。
-        override fun newDrawable(): Drawable = MaskedDrawable(src.newDrawable(), trimEdgeRing)
+        override fun newDrawable(): Drawable = MaskedDrawable(src.newDrawable(), trimEdgeRing, isShortcut)
 
         override fun getChangingConfigurations(): Int = src.changingConfigurations
       }
@@ -735,5 +741,12 @@ fun clipToCircle(icon: Drawable, from: String): Drawable {
       "${icon.intrinsicWidth}x${icon.intrinsicHeight}")
   }
   return if (icon is CircleIconDrawable) icon
-  else CircleIconDrawable(icon, trimEdgeRing = from.contains("Shortcut"))
+  else {
+    // ⚠ 只按 from 认不全：libchecker 的动态快捷方式从另一条路进来（from 里没有 "Shortcut"），
+    //   结果那三条仍被当成应用图标铺了白底（2026-11-10 真机记录：白底=1）。
+    //   标签带斜杠的（pm:包名/id）= 快捷方式；不带斜杠的（pm:包名）= PackageManager 拿的应用图标，同一口径。
+    val label = IconNames.of(icon)
+    val sc = from.contains("Shortcut") || (label.startsWith("pm:") && label.contains('/'))
+    CircleIconDrawable(icon, trimEdgeRing = from.contains("Shortcut"), isShortcut = sc)
+  }
 }

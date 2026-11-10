@@ -147,8 +147,8 @@ internal object IconCropWindow {
    * 时由调用方自己判）。生产、第十六闸、reframe 差异台三处**都必须走这里** ——
    * 各自重写一遍 `of(...).takeIf { zoom <= 自己那份 1.82f }`，闸测的就又是镜像。
    */
-  internal fun measure(px: IntArray, edge: Int): Window? =
-    of(px, edge, edge)?.takeIf { it.zoom <= GEO_ZOOM_CAP }
+  internal fun measure(px: IntArray, edge: Int, shortcut: Boolean = false): Window? =
+    of(px, edge, edge, shortcut)?.takeIf { it.zoom <= GEO_ZOOM_CAP }
 
   /**
    * 裁剪窗口，坐标是**被量那张图的 0..1 比例**（与像素尺寸无关，所以换边长可比）。
@@ -238,13 +238,15 @@ internal object IconCropWindow {
    *   每条约 100 B，生日风险极低，但不能靠"极低"过关 —— 反证钉在 `_harness/WinCacheKt.kt`
    *   （同一张必命中、改一格必不命中旧键、两张交替各拿各的窗口、满幅负缓存），改这块缓存后跑它。
    */
-  fun of(px: IntArray, w: Int, h: Int): Window? {
+  fun of(px: IntArray, w: Int, h: Int, shortcut: Boolean = false): Window? {
     if (w <= 0 || h <= 0 || px.size < w * h) return null
     val shrink = minOf(1f, SCAN_EDGE.toFloat() / maxOf(w, h))
     val sw = maxOf(1, (w * shrink).roundToInt())
     val sh = maxOf(1, (h * shrink).roundToInt())
     val s = if (sw == w && sh == h) px else downsample(px, w, h, sw, sh)
-    val key = gridKey(s, sw, sh)
+    // ⚠ 快捷方式与同像素的应用图标**窗口可以不同**（keep 线不同）⇒ 键里必须带这一位，
+    //   否则先算的那一张会把答案借给另一张。
+    val key = gridKey(s, sw, sh) * 2L + (if (shortcut) 1L else 0L)
     synchronized(winCache) {
       if (winCache.containsKey(key)) {
         winHits++
@@ -252,7 +254,7 @@ internal object IconCropWindow {
       }
     }
     val t0 = System.nanoTime()
-    val win = scan(s, sw, sh)
+    val win = scan(s, sw, sh, shortcut)
     val dt = System.nanoTime() - t0
     synchronized(winCache) {
       winMisses++
@@ -312,7 +314,7 @@ internal object IconCropWindow {
   }
 
   /** 在已经 ≤[SCAN_EDGE] 的格子上跑三条出口。 */
-  private fun scan(px: IntArray, sw: Int, sh: Int): Window? {
+  private fun scan(px: IntArray, sw: Int, sh: Int, shortcut: Boolean): Window? {
     // ① 图案在哪（外框）：一行/一列要有足够像素才算数，挡掉孤立噪点把框撑开
     var x0 = sw; var x1 = -1; var y0 = sh; var y1 = -1
     val rowMin = maxOf(BOX_ROW_MIN_PIXELS, sw / BOX_ROW_DIVISOR)
@@ -350,6 +352,9 @@ internal object IconCropWindow {
     //      主人原话：「我觉得这个可以用那个缩小并加白底的那个算法」。
     val spiky = rCover < rBox * COVER_BOX_FLOOR
     // keep 判据**只在这里算一次**（未取整），分支与日志共用同一个布尔 —— 别让日志再拿 `keepPct` 反推。
+    // 【keep 线】快捷方式保持 60%（它们铺不铺白底是另一件事：白底画在徽章里就成了白圈）；
+    //   应用图标抬到 72%：2026-11-10 主人点名 exchange / 日历同步 / 通讯录同步（keep 62~70%）
+    //   「应缩进白圆中」，而看着正常的方盘分别是 75%（贴吧/饿了么）—— 线摆在这 70↔75 的空档里。
     val byKeep = keepTotal > 0 && keep < keepTotal * KEEP_RATIO
     // ③' 【带留白的图形】内容框明显小于画布、又不是一块方盘（外接框填充率低）—— 按圆裁会把图形的角
     //   切掉。2026-11-10 主人点名 `Device Policy`（立方体）「应缩入白底，而不是裁切」。
@@ -385,9 +390,13 @@ internal object IconCropWindow {
     //   （混元：rCover 只有 25.9 → 裁的话要放大 2.47 倍，所以它一直是"不裁不动"）。
     //   少了这一条，它们会被这条新入口顺手捡起来放大 1.44 倍 —— 2026-11-10 当场量到。
     val cropZoom = if (rCover >= 1f) sw / (2f * rCover) else Float.MAX_VALUE
-    val byGlyph = keepTotal > 0 && bw * 100 <= sw * GLYPH_BOX_MAX_PCT &&
-      bboxFill < GLYPH_FILL_MAX && keep < keepTotal * GLYPH_KEEP_RATIO &&
-      cropZoom <= GEO_ZOOM_CAP
+    // 两条臂：① 正方形盘之外、填充率明显低的「立体图形」（Device Policy 0.76）；
+    //   ② 填充率 0.90~0.98 的「平图形」（exchange/日历同步/通讯录同步：0.90/0.98/0.94、keep 62~70%）——
+    //   方盘是 1.00，所以第二臂的 0.99 那条线把它们挡住；全盘抬 keep 线会撞密度闸（96↔384 归属不同批）。
+    val glyphLow = bw * 100 <= sw * GLYPH_BOX_MAX_PCT &&
+      bboxFill < GLYPH_FILL_MAX && keep < keepTotal * GLYPH_KEEP_RATIO
+    val byGlyph = !shortcut && keepTotal > 0 &&
+      glyphLow && cropZoom <= GEO_ZOOM_CAP
     if (byGlyph) return plateWin(true)
     // ④ 裁得好的：按不透明圆盘内切、填满圆。不收边、不铺白底。
     //    满幅的那些直接不动（逐位不变）—— 它的内切圆本来就被自己填满，再放大那一两个百分点
@@ -704,6 +713,8 @@ private const val BOX_COVER_ALPHA = 128
  * 真机空档：这一档最高 56%，下一档最低 72%（收版那档样本 78%）—— 线摆在中间有余量。
  */
 private const val KEEP_RATIO = 0.6f
+
+
 
 /**
  * 「不透明圆盘 ÷ 外框内切圆」低于这条线 = 图案是**字母 / 尖角**那一类，不是圆盘 —— 也走"缩进 + 补白"。
