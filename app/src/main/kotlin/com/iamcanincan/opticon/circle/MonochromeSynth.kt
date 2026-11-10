@@ -15,6 +15,8 @@ import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.InsetDrawable
+import android.graphics.drawable.LayerDrawable
 import android.util.Log
 
 import com.iamcanincan.opticon.runtime.ModuleRuntime
@@ -507,7 +509,9 @@ internal object MonochromeSynth {
       // ⚠ 必须显式转一下：`source` 的静态类型是 `Drawable`，`background` 是 `AdaptiveIconDrawable`
       //   那一对 getter 才有的（下面 351 行那处已经在 `adaptive` 分支里，靠智能转换过）。
       val bg = (source as? AdaptiveIconDrawable)?.background
-      val bgIsPlate = bg is ColorDrawable || bg is GradientDrawable
+      // `isBlankWhiteBg`：背景层是一张**纯白位图**时，它同样没有资格当"内容"（2026-11-10
+      // `com.algermusic.app`：纯白背景层把设计框撑满，深蓝底板没被认成底 → 整块交成半透明墨）。
+      val bgIsPlate = bg is ColorDrawable || bg is GradientDrawable || isBlankWhiteBg(bg)
       // 纯色背景的**颜色**也要交给模型（2026-10-23 Pinduoduo 白心案）：那层盘不在前景里，
       // 但它的颜色会从前景的镂空里透出来 —— 模型拿不到它，就把同色的小物品当成墨、
       // 把白心当成空气。下面先把它作为 `under` 交进去；当前景自己用到了这个颜色时，
@@ -1521,6 +1525,59 @@ internal object MonochromeSynth {
     }
     return out
   }
+
+  /** 拆 `InsetDrawable` / 单层 `LayerDrawable` 的壳，拿到底下真正画的那个 drawable。 */
+  private fun unwrapDrawable(d: Drawable?, depth: Int = 0): Drawable? {
+    if (d == null || depth > 4) return null
+    return when (d) {
+      is InsetDrawable -> unwrapDrawable(d.drawable, depth + 1)
+      is LayerDrawable ->
+        if (d.numberOfLayers == 1) unwrapDrawable(d.getDrawable(0), depth + 1) else null
+      else -> d
+    }
+  }
+
+  /** 「纯白」那条线（0..255 的亮度）。语料 109 张带背景层的自适应图标里，不透明纯色背景 69 张，
+   *  32 张落在这条线以上（#FFFFFF 为主，其次 241~252 的近白）—— 线摆在 234↔241 那个空档里。 */
+  private const val BLANK_BG_L = 235
+
+  /**
+   * 背景层是**一张纯白位图** ⇒ 它不承载任何图形，等同于空气。
+   *
+   * 为什么要有这一条（2026-11-10 `com.algermusic.app`）：那枚图标的前景是一整张插画
+   * （深蓝圆角底板 + 人物），背景层却是 `InsetDrawable` 包着的一张**纯白**位图。按旧判据
+   * 它不是 `ColorDrawable`，于是整张合成后"设计框"被白方块撑满、外圈取样全落在白上 ——
+   * 那块深蓝底板**没被认成底**，交成 α≈141 的墨，屏幕上就是"黑方块 + 挖空的脸"
+   * （真机 `底占=0.03`；只取前景层后 `底占=0.63`、`归零=10709`）。
+   *
+   * 判据只回答"这一层是不是空气"，与前景无关 —— 与 [render] 里 `bgIsPlate` 同一语义。
+   */
+  private fun isBlankWhiteBg(d: Drawable?): Boolean = runCatching {
+    val bd = unwrapDrawable(d) as? BitmapDrawable ?: return@runCatching false
+    val bm = bd.bitmap ?: return@runCatching false
+    val w = bm.width
+    val h = bm.height
+    if (w <= 0 || h <= 0) return@runCatching false
+    val first = bm.getPixel(0, 0)
+    if ((first ushr 24) != 255) return@runCatching false
+    val lum = (299 * ((first shr 16) and 0xff) + 587 * ((first shr 8) and 0xff) +
+      114 * (first and 0xff)) / 1000
+    if (lum < BLANK_BG_L) return@runCatching false
+    // 抽样口径与量波及面时那把尺一致（`_harness` 那轮：24×24 网格、逐点 ARGB 全等），
+    // 否则"判据说 32 张、生产又是另一个数"。只在冷路径上跑，几百次取像素可以忽略。
+    val sx = maxOf(1, w / 24)
+    val sy = maxOf(1, h / 24)
+    var y = 0
+    while (y < h) {
+      var x = 0
+      while (x < w) {
+        if (bm.getPixel(x, y) != first) return@runCatching false
+        x += sx
+      }
+      y += sy
+    }
+    true
+  }.getOrDefault(false)
 }
 
 /**
