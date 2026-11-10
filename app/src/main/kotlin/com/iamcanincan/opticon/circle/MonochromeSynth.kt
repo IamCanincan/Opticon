@@ -1370,11 +1370,13 @@ internal object MonochromeSynth {
     return try {
       val px = IntArray(w * h)
       bmp.getPixels(px, 0, w, 0, 0, w, h)
-      // ⚠ 第四位 = **老式**（非自适应）：彩色那支的"老式裸图"入口（keep 60~76% → 缩进白圆）
-      //   只对没有背景层的图标开火，染色这边量的是同一个 `source`，必须给同一个答案，
-      //   否则同一张图彩色缩进白圆、单色仍按圆裁（几何分家）。
+      // ⚠ **这里不传 legacy**（2026-11-10 装机回滚）：单色这一路的"快捷方式"位与本类不是同一个来源
+      //   （那头是 `trimEdgeRing`，彩色那头是标签里的 `pm:包名/id`）。把 legacy 传进来之后，
+      //   B站 的 search/download-list/uninstall 三个快捷方式在彩色那边是 `白底=0`、这里却被
+      //   当成"老式裸图"进了 plate 档 —— 掩码当场翻掉（底占 0.86→0.87、字均 196→204），
+      //   屏幕上就是"白圈 + 图形反色"。两侧判据不同源时**宁可不传**，让单色保持它原来的行为。
       val win = runCatching {
-        IconCropWindow.of(px, w, h, shortcut, source !is AdaptiveIconDrawable)
+        IconCropWindow.of(px, w, h, shortcut)
       }.getOrNull() ?: return ColourWindow(null, false)
       // 快捷方式：彩色那支"细环 + 图案在圆内 → 按满幅"的结论在这里算一次 —— 染色侧的
       // **摆放**（还要不要收可见区）与极性都读它，保证是同一张像素、同一个答案。

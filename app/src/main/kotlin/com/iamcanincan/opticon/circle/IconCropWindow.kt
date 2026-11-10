@@ -394,7 +394,9 @@ internal object IconCropWindow {
     //   分得开的只有"有没有背景层"这条结构事实，也正是主人给快捷方式定的那条：
     //   无背景的加背景、有背景的做成圆。方盘（自适应）切角只是修圆，图案一个像素不丢。
     //   ⚠ [BARE_KEEP_RATIO] 只对老式开火 ⇒ 那 5 点的尺寸漂移不适用（老式是位图，重采样后判据格几乎不动）。
-    val byBare = legacy && keepTotal > 0 && keep < keepTotal * BARE_KEEP_RATIO &&
+    //   ⚠ **快捷方式不吃这一条**（2026-11-10 装机现量：B站 3 个快捷方式被它拖进 plate ——
+    //     屏幕上多一圈白边、图形还被极性翻成反色）。快捷方式铺不铺盘由它自己那套（细环 + keep=0）定。
+    val byBare = !shortcut && legacy && keepTotal > 0 && keep < keepTotal * BARE_KEEP_RATIO &&
       bw * 100 <= sw * BARE_BOX_MAX_PCT
     // @param geomOnly 这条 plate 是**纯几何**入口进来的（spiky / byGlyph）—— 它对"哪个像素算墨"
     //   一个主张都没有，所以下游的极性（[Window.polaritySubject]）必须跳过它。
