@@ -1178,7 +1178,11 @@ internal object MonochromeMask {
     /** 「横幅退族」那一刀开不开（见 [dropStripFamilies]）。**生产默认开**；
      *  判据台拿 `--keep-strip` 传 `false` 跑"这一刀不存在时"的那一份，A/B 的负对照就是它 ——
      *  与 [buildOnce] 里 `cutBorder` 同一个方向：默认值是真行为，旗标是反着的那一臂。 */
-    dropStrip: Boolean = true): Output {
+    dropStrip: Boolean = true,
+    /** 【亮侧内容】把"底里被围住的近白块"也交墨（见 [inkEnclosedLight]）。
+     *  2026-11-10 量过四份语料（rec_model 64 / yard_model 154 / rec_promo 62 / rec3u 62）
+     *  **只有 `com.MobileTicket` 一张变**，故默认开；台子的 `--light-ink` 旗标保留（A/B 的旧臂）。 */
+    lightInk: Boolean = true): Output {
     // ⚠ 这一遍**不切背景**，`picksRef` 拿到的就是"这一刀还不存在时"的那份成品 —— 与 SepTone
     //   那条 `sepOff` 同一个先例：**选支这件事必须与改动前完全同口径**。
     //   第一版把切背景直接写进交付循环，7 张（金山文档/高德/谷歌翻译/美的/拼多多/学信网/WebAPK）
@@ -1196,8 +1200,18 @@ internal object MonochromeMask {
     // 【底云】见 [plateCloudErase]。⚠ 与【广色度】同一条规矩：**只施加在交付的那几份成品上**，
     //   挑支用的 `ramp` / `cut` / `ref0` 一律不过 —— 四道守卫（`meanAlpha` / `渣` / `largest` /
     //   `components`）读的就是掩码本身，刀先进比较，守卫就是被自己改过的数喂的。
-    fun cloud(o: Output) = if (!trimSubject) plateCloudErase(o, pixels, s, w, h)
-      else trim(plateCloudErase(o, pixels, s, w, h), w, h)
+    fun cloud(o: Output): Output {
+      val base = if (!trimSubject) plateCloudErase(o, pixels, s, w, h)
+        else trim(plateCloudErase(o, pixels, s, w, h), w, h)
+      // 【亮侧内容】默认**关**（2026-11-10 先量射程）：台子用 `--light-ink` 打开做 A/B，
+      //   验过再翻默认值。见 [inkEnclosedLight]。
+      if (!lightInk) return base
+      val painted = inkEnclosedLight(base, pixels, s, w, h)
+      if (painted == 0) return base
+      return Output(base.mask, base.boxFill, base.hole, base.largest, base.components,
+        base.smallShare, base.soft, "${base.report} 亮字=$painted", base.hyp, base.h0why,
+        base.veto, base.plateInked, base.dust)
+    }
     if (!ramp.report.contains("调=1")) {
       // 参照支。**「按线条分割」那一刀也走同一套"两支各交一遍再按成品选"** —— 理由是量出来的：
       //   易班被切掉之后，后面的 `stretchMark` / `measure` 又把墨补回来，净效果
@@ -1529,6 +1543,109 @@ internal object MonochromeMask {
     return Output(o.mask, o.boxFill, o.hole, o.largest, o.components, o.smallShare, o.soft,
       "${o.report} 底云=$erased", o.hyp, o.h0why, o.veto, o.plateInked, o.dust)
   }
+
+  /**
+   * 【亮侧内容】底里被围住、且比底亮得多的一块（字/标记）**交墨** —— 交付阶段，与 [plateCloudErase]
+   * 同一层。
+   *
+   * 2026-11-10 主人点名 `com.MobileTicket`（铁路12306）「文字没有」：青渐变底 0.77 + 红标 + 底部
+   * 白字 2.2%，白字在掩码里整片 α=0。把白字临时涂暗再跑同一套掩码，字就出来 ⇒ 病不在洪泛、
+   * 不在分辨率，在"**亮侧内容交多少墨**"：参照支的浓度只认"墨在暗侧"（[SPLIT_DOWN]=8%），
+   * 同一张图上"亮侧也有墨"没有出口。
+   *
+   * 判据（五条，v1）：
+   *  ① 底自己不是白的（底的平均 L\\* < [LIGHT_INK_PLATE_MAX]）—— 白底上的白内容就是底本身；
+   *  ② 候选 = 不透明、当前 α=0、L\\* ≥ [LIGHT_INK_MIN] 的格（近白）；
+   *  ③ 连成一块，面积在 [[LIGHT_INK_MIN_CELLS], [LIGHT_INK_MAX_PCT]] 之间
+   *     （上限拦"整块白背景"：白背景是底，不是字）；
+   *  ④ **被底围住**：四邻必须都是不透明且 α=0 的格 —— 挨空气/画布外的近白块是镂空，不是字；
+   *  ⑤ 外接框填充率 < [LIGHT_INK_MAX_FILL]（字是细笔画；一块白高光/白饼会被这条挡掉）。
+   *
+   * @return 这一刀实际改了几格（0 = 没动）。
+   */
+  private fun inkEnclosedLight(o: Output, src: IntArray, s: Scratch, w: Int, h: Int): Int {
+    val mask = o.mask ?: return 0
+    val n = w * h
+    if (s.labL.size < n || n == 0) return 0
+    val alpha = IntArray(n) { (mask[it] ushr 24) and 0xff }
+    val opaque = BooleanArray(n) { ((src[it] ushr 24) and 0xff) == 255 }
+    // ⚠ 亮度**从 `src` 现算**，不用 `s.labL`：那张缓存属于"最后一次 buildOnce"
+    //   （2026-11-10 现撞：拿它比，亮青色底板被当成字，整条横带翻成墨）。这里要的是
+    //   "交付这张掩码"的同一坐标，只有 `src` 保证对齐。
+    val lum = IntArray(n) { i ->
+      val p = src[i]
+      (299 * ((p shr 16) and 0xff) + 587 * ((p shr 8) and 0xff) + 114 * (p and 0xff)) / 1000
+    }
+    // ① 底不是白的：拿"不透明且当前无墨"的格当底，算平均亮度。
+    var plateN = 0L
+    var plateL = 0L
+    for (i in 0 until n) if (opaque[i] && alpha[i] == 0) { plateN++; plateL += lum[i] }
+    if (plateN < CLOUD_MIN_PLATE_CELLS) return 0
+    val plateMean = plateL.toDouble() / plateN
+    if (plateMean >= LIGHT_INK_PLATE_MAX) return 0
+    // ② 候选：比底亮出 [LIGHT_INK_DELTA] 且自己够亮（相对线挡底板自己的渐变，绝对线挡中间调）。
+    val isCand = BooleanArray(n)
+    for (i in 0 until n) {
+      if (!opaque[i] || alpha[i] != 0) continue
+      if (lum[i] < LIGHT_INK_MIN) continue
+      if (lum[i] - plateMean < LIGHT_INK_DELTA) continue
+      isCand[i] = true
+    }
+    val seen = BooleanArray(n)
+    val q = IntArray(n)
+    val cells = IntArray(n)
+    var painted = 0
+    for (start in 0 until n) {
+      if (!isCand[start] || seen[start]) continue
+      var hd = 0
+      var tl = 0
+      var closed = true
+      q[tl++] = start
+      seen[start] = true
+      var x0 = w; var y0 = h; var x1 = -1; var y1 = -1
+      while (hd < tl) {
+        val c = q[hd++]
+        cells[hd - 1] = c
+        val cy = c / w
+        val cx = c - cy * w
+        if (cx < x0) x0 = cx
+        if (cx > x1) x1 = cx
+        if (cy < y0) y0 = cy
+        if (cy > y1) y1 = cy
+        // ④ 四邻都得是"底"（不透明且无墨）；挨空气/画布外 = 不围合。
+        for (d in 0 until 4) {
+          val nx = cx + if (d == 0) -1 else if (d == 1) 1 else 0
+          val ny = cy + if (d == 2) -1 else if (d == 3) 1 else 0
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) { closed = false; continue }
+          val j = ny * w + nx
+          if (!opaque[j] || alpha[j] != 0) { closed = false; continue }
+          if (isCand[j] && !seen[j]) { seen[j] = true; q[tl++] = j }
+        }
+      }
+      if (!closed || tl < LIGHT_INK_MIN_CELLS || tl * 100 > n * LIGHT_INK_MAX_PCT) continue
+      // ⑤ 细笔画：外接框填充率
+      val fill = tl.toDouble() / ((x1 - x0 + 1).toLong() * (y1 - y0 + 1))
+      if (fill >= LIGHT_INK_MAX_FILL) continue
+      for (k in 0 until tl) mask[cells[k]] = 0xFF shl 24
+      painted += tl
+    }
+    return painted
+  }
+
+  /** 底的平均亮度（0..255）到这条线以上 = 白底，[inkEnclosedLight] 整把刀不开火。 */
+  private const val LIGHT_INK_PLATE_MAX = 205
+
+  /** 比底的平均亮度**再亮**这么多才算"亮侧内容"。12306：底均 ≈135、字缘 ≈190（+55）、笔画芯 ≈232。 */
+  private const val LIGHT_INK_DELTA = 45
+  /** 候选自己的绝对亮度下限（0..255）：挡中间调；与 [LIGHT_INK_DELTA] 一起用。 */
+  private const val LIGHT_INK_MIN = 170
+  /** 一块至少这么多格才配叫"字/标记"（384² 上 0.05% ≈ 80 格；12306 每个字 ~250~350 格，
+   *  第一版按整段 3,205 格取 260，结果只捞到两个字 —— 笔画是**逐字分开**的连通块）。 */
+  private const val LIGHT_INK_MIN_CELLS = 80
+  /** 上限（占画布百分比）：白背景是底，不是字。 */
+  private const val LIGHT_INK_MAX_PCT = 15
+  /** 外接框填充率上限：字是细笔画；白高光/白饼会比这更像一整块。 */
+  private const val LIGHT_INK_MAX_FILL = 0.6
 
   /** 淡墨的上界 —— 与全仓 `淡(<200)` 同一个口径：过了这条线就是实墨，不归这把刀。 */
   private const val CLOUD_FILM_MAX = 200

@@ -22,12 +22,15 @@ fun main(args: Array<String>) {
   val outDir = File(plain.getOrElse(1) { "_alpha" })
   val edge = (args.firstOrNull { it.startsWith("--edge=") }?.substringAfter("=") ?: "384").toInt()
   val drop = !args.contains("--keep-strip")
+  // 2026-11-10 【亮侧内容】的 A/B 臂：不开 = 生产行为（默认），开了 = [MonochromeMask.build] 的 lightInk。
+  val light = args.contains("--light-ink")
   if (!dir.isDirectory) { println("!! 目录不存在：${dir.path}"); exitProcess(2) }
   outDir.mkdirs()
   var n = 0
   for (c in cases(dir, edge, inset = false, fgAll = false)) {
     if (c.src.size != edge * edge) continue
-    val r = MonochromeMask.build(c.src, edge, edge, c.plateLayer, c.under, dropStrip = drop)
+    val r = MonochromeMask.build(c.src, edge, edge, c.plateLayer, c.under, dropStrip = drop,
+      lightInk = light)
     val mask = r.mask ?: continue
     val b = ByteArray(edge * edge)
     for (i in b.indices) b[i] = ((mask[i] ushr 24) and 0xff).toByte()

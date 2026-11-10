@@ -6,8 +6,8 @@
  "res": 619,
  "lv": 180,
  "driftN": 5,
- "rho": 0.92,
- "rhoBad": 36,
+ "rho": 0.915,
+ "rhoBad": 37,
  "cap": 47.3,
  "jitterBad": 0,
  "jitterMax": 7,
@@ -23,5 +23,5 @@
  "pass": 62,
  "gap": 0,
  "fail": 6,
- "at": "2026-11-07"
+ "at": "2026-11-10 06:10"
 }
