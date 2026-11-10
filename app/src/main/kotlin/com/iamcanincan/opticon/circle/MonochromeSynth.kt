@@ -1370,7 +1370,12 @@ internal object MonochromeSynth {
     return try {
       val px = IntArray(w * h)
       bmp.getPixels(px, 0, w, 0, 0, w, h)
-      val win = runCatching { IconCropWindow.of(px, w, h, shortcut) }.getOrNull() ?: return ColourWindow(null, false)
+      // ⚠ 第四位 = **老式**（非自适应）：彩色那支的"老式裸图"入口（keep 60~76% → 缩进白圆）
+      //   只对没有背景层的图标开火，染色这边量的是同一个 `source`，必须给同一个答案，
+      //   否则同一张图彩色缩进白圆、单色仍按圆裁（几何分家）。
+      val win = runCatching {
+        IconCropWindow.of(px, w, h, shortcut, source !is AdaptiveIconDrawable)
+      }.getOrNull() ?: return ColourWindow(null, false)
       // 快捷方式：彩色那支"细环 + 图案在圆内 → 按满幅"的结论在这里算一次 —— 染色侧的
       // **摆放**（还要不要收可见区）与极性都读它，保证是同一张像素、同一个答案。
       // 判据本体在 [IconCropWindow.shortcutFullBleed]；窗口本身照旧返回（模型输入不改）。

@@ -67,6 +67,9 @@ internal object IconCropWindow {
   /** 那条线换算成百分数，只给日志用（同理：别让调用方自己写 60）。 */
   internal val keepRatioPercent: Int get() = (KEEP_RATIO * 100f).roundToInt()
 
+  /** 老式图标那条线（[BARE_KEEP_RATIO]）的百分数，只给日志用。 */
+  internal val bareRatioPercent: Int get() = (BARE_KEEP_RATIO * 100f).roundToInt()
+
   /** spiky 那条线（圆盘半径 / 外框半径）也露给判据台 —— 第十七闸的"近线带"要在**生产这份**上量，不许台子里再抄一个 0.80。 */
   internal val coverBoxFloor: Float get() = COVER_BOX_FLOOR
 
@@ -147,8 +150,9 @@ internal object IconCropWindow {
    * 时由调用方自己判）。生产、第十六闸、reframe 差异台三处**都必须走这里** ——
    * 各自重写一遍 `of(...).takeIf { zoom <= 自己那份 1.82f }`，闸测的就又是镜像。
    */
-  internal fun measure(px: IntArray, edge: Int, shortcut: Boolean = false): Window? =
-    of(px, edge, edge, shortcut)?.takeIf { it.zoom <= GEO_ZOOM_CAP }
+  internal fun measure(
+    px: IntArray, edge: Int, shortcut: Boolean = false, legacy: Boolean = false,
+  ): Window? = of(px, edge, edge, shortcut, legacy)?.takeIf { it.zoom <= GEO_ZOOM_CAP }
 
   /**
    * 裁剪窗口，坐标是**被量那张图的 0..1 比例**（与像素尺寸无关，所以换边长可比）。
@@ -184,6 +188,17 @@ internal object IconCropWindow {
      * ⚠ 它**不参与任何判断**，只进日志（极性那条判据仍按 `keepPct` 取整值比 50，那是已验收的行为）。
      */
     val byKeep: Boolean,
+    /**
+     * 这一档是由**「老式图标（非自适应）+ 会被圆切掉两成以上」**那条入口进来的（[BARE_KEEP_RATIO]）。
+     *
+     * 为什么是"老式"：自适应图标自带背景层，圆切掉的永远是那块**底**的四个角 —— 屏幕上只是把方底
+     * 修成圆，图案本身一个像素没丢（贴吧/饿了么/QQ/菜鸟/转转/华为市场全是这一档，它们按圆裁是对的）。
+     * 老式 PNG 没有背景层，`keep` 一低就说明切掉的是**图形自己的轮廓**（交换服务那只信封的翻盖、
+     * 日历卡的四个角、名片的圆角）。主人 2026-11-10 判：「应缩进白圆中」。
+     * ⚠ 五位候选尺（keep / 外接框填充率 / 角瓣透明度 / 圆角半径+长宽比 / 角瓣颜色离散度）在语料 85 张
+     *   上与这三张**全部重叠**，只有"有没有背景层"这条结构事实分得开 —— 别再拿形状尺来试。
+     */
+    val bare: Boolean = false,
   ) {
     /**
      * 这一档要不要把**染色的极性**接管过去（"这张图里没有底，整块都是要保住的图案"）。
@@ -210,7 +225,7 @@ internal object IconCropWindow {
     fun inLayer(f: Float): Window = Window(
       (l + f) / (1f + 2f * f), (t + f) / (1f + 2f * f),
       (r + f) / (1f + 2f * f), (b + f) / (1f + 2f * f),
-      plate, keepPct, zoom, boxW, boxH, rBox, rCover, scanW, scanH, bodyOverFar, spiky, byKeep,
+      plate, keepPct, zoom, boxW, boxH, rBox, rCover, scanW, scanH, bodyOverFar, spiky, byKeep, bare,
     )
   }
 
@@ -238,15 +253,20 @@ internal object IconCropWindow {
    *   每条约 100 B，生日风险极低，但不能靠"极低"过关 —— 反证钉在 `_harness/WinCacheKt.kt`
    *   （同一张必命中、改一格必不命中旧键、两张交替各拿各的窗口、满幅负缓存），改这块缓存后跑它。
    */
-  fun of(px: IntArray, w: Int, h: Int, shortcut: Boolean = false): Window? {
+  fun of(
+    px: IntArray, w: Int, h: Int,
+    shortcut: Boolean = false,
+    /** 这张是**老式图标**（非自适应，没有背景层）。只给 [BARE_KEEP_RATIO] 那条入口用。 */
+    legacy: Boolean = false,
+  ): Window? {
     if (w <= 0 || h <= 0 || px.size < w * h) return null
     val shrink = minOf(1f, SCAN_EDGE.toFloat() / maxOf(w, h))
     val sw = maxOf(1, (w * shrink).roundToInt())
     val sh = maxOf(1, (h * shrink).roundToInt())
     val s = if (sw == w && sh == h) px else downsample(px, w, h, sw, sh)
     // ⚠ 快捷方式与同像素的应用图标**窗口可以不同**（keep 线不同）⇒ 键里必须带这一位，
-    //   否则先算的那一张会把答案借给另一张。
-    val key = gridKey(s, sw, sh) * 2L + (if (shortcut) 1L else 0L)
+    //   否则先算的那一张会把答案借给另一张。**老式/自适应也要带**（[BARE_KEEP_RATIO] 那条只对老式开火）。
+    val key = gridKey(s, sw, sh) * 4L + (if (shortcut) 1L else 0L) + (if (legacy) 2L else 0L)
     synchronized(winCache) {
       if (winCache.containsKey(key)) {
         winHits++
@@ -254,7 +274,7 @@ internal object IconCropWindow {
       }
     }
     val t0 = System.nanoTime()
-    val win = scan(s, sw, sh, shortcut)
+    val win = scan(s, sw, sh, shortcut, legacy)
     val dt = System.nanoTime() - t0
     synchronized(winCache) {
       winMisses++
@@ -314,7 +334,7 @@ internal object IconCropWindow {
   }
 
   /** 在已经 ≤[SCAN_EDGE] 的格子上跑三条出口。 */
-  private fun scan(px: IntArray, sw: Int, sh: Int, shortcut: Boolean): Window? {
+  private fun scan(px: IntArray, sw: Int, sh: Int, shortcut: Boolean, legacy: Boolean): Window? {
     // ① 图案在哪（外框）：一行/一列要有足够像素才算数，挡掉孤立噪点把框撑开
     var x0 = sw; var x1 = -1; var y0 = sh; var y1 = -1
     val rowMin = maxOf(BOX_ROW_MIN_PIXELS, sw / BOX_ROW_DIVISOR)
@@ -352,9 +372,12 @@ internal object IconCropWindow {
     //      主人原话：「我觉得这个可以用那个缩小并加白底的那个算法」。
     val spiky = rCover < rBox * COVER_BOX_FLOOR
     // keep 判据**只在这里算一次**（未取整），分支与日志共用同一个布尔 —— 别让日志再拿 `keepPct` 反推。
-    // 【keep 线】快捷方式保持 60%（它们铺不铺白底是另一件事：白底画在徽章里就成了白圈）；
-    //   应用图标抬到 72%：2026-11-10 主人点名 exchange / 日历同步 / 通讯录同步（keep 62~70%）
-    //   「应缩进白圆中」，而看着正常的方盘分别是 75%（贴吧/饿了么）—— 线摆在这 70↔75 的空档里。
+    // 【keep 线 = 60%，应用图标与快捷方式走同一条】
+    //   2026-11-10 曾把应用图标那条抬到 72%（主人点名 exchange / 日历同步 / 通讯录同步，
+    //   keep 62~70%，「应缩进白圆中」，而看着正常的方盘是 75%）—— **被第 17 闸否掉**：
+    //   同一张图 192 档 keep=75 zoom=1.52、384 档 keep=70 zoom=0.81，线落在 70↔75 之间就会
+    //   "桌面缩、设置页裁"。⇒ 线不动，那三张仍走"裁"；要治得先换一根**不随尺寸变**的尺。
+    //   ⚠ 上面那条 72% 只在这里留作记录，别照着它改代码（常量仍是 [KEEP_RATIO]）。
     val byKeep = keepTotal > 0 && keep < keepTotal * KEEP_RATIO
     // ③' 【带留白的图形】内容框明显小于画布、又不是一块方盘（外接框填充率低）—— 按圆裁会把图形的角
     //   切掉。2026-11-10 主人点名 `Device Policy`（立方体）「应缩入白底，而不是裁切」。
@@ -363,10 +386,21 @@ internal object IconCropWindow {
     //     · 贴吧/饿了么 框 69~70%、填充率 **1.00**、keep 75% ← 方盘，切角只是修圆
     //   两者 keep 都在 75~88%，所以不能抬 KEEP_RATIO（抬了方盘全跟着换支）。
     val bboxFill = if (bw > 0 && bh > 0) keepTotal.toDouble() / (bw.toDouble() * bh) else 1.0
+    // ③'' 【没有背景层的老式图标】keep 掉进 60~76% 这一带 —— 切掉的是**图形自己的轮廓**。
+    //   为什么不再试形状尺：2026-11-10 把这五根都量过，与那三张**全部重叠** ——
+    //     keep（70/65/62% vs 语料方盘 79~82%）、外接框填充率（0.90/0.98/0.94 vs 1.00）、
+    //     角瓣透明度（34/6/18% vs 0~19%）、圆角半径+长宽比（9.9/11.8/23.2%、0.98/1.13/1.06 vs
+    //     语料 21 张圆角矩形 6.3~14.8%、1.00，QQ/菜鸟/转转/华为市场/银联都在其中）、角瓣颜色离散度。
+    //   分得开的只有"有没有背景层"这条结构事实，也正是主人给快捷方式定的那条：
+    //   无背景的加背景、有背景的做成圆。方盘（自适应）切角只是修圆，图案一个像素不丢。
+    //   ⚠ [BARE_KEEP_RATIO] 只对老式开火 ⇒ 那 5 点的尺寸漂移不适用（老式是位图，重采样后判据格几乎不动）。
+    val byBare = legacy && keepTotal > 0 && keep < keepTotal * BARE_KEEP_RATIO &&
+      bw * 100 <= sw * BARE_BOX_MAX_PCT
     // @param geomOnly 这条 plate 是**纯几何**入口进来的（spiky / byGlyph）—— 它对"哪个像素算墨"
     //   一个主张都没有，所以下游的极性（[Window.polaritySubject]）必须跳过它。
     //   2026-11-10 当场量到：漏了这一位，滴滴那 4 个快捷方式的单色从线稿翻成"黑圆+挖空"。
-    fun plateWin(geomOnly: Boolean): Window? {
+    //   ⚠ [byBare] 走的是 `geomOnly=false`：老式图标本来就**没有底**，图形就是主体 —— 极性该跟着它。
+    fun plateWin(geomOnly: Boolean, bare: Boolean = false): Window? {
       val ext = extents(px, sw, sh, cx, cy)
       val far = ext[0]
       val body = ext[1]
@@ -379,9 +413,10 @@ internal object IconCropWindow {
       val rWin = maxOf(rBox, rInk) * SHRINK_EXTRA
       return window(cx, cy, rWin, sw, sh, plate = true, keepPct = keepPct,
         boxW = bw, boxH = bh, rBox = rBox, rCover = rCover, bodyOverFar = body / far, spiky = spiky || geomOnly,
-        byKeep = byKeep)
+        byKeep = byKeep, bare = bare)
     }
     if (keepTotal > 0 && (byKeep || spiky)) return plateWin(false)
+    if (byBare) return plateWin(false, bare = true)
 
     if (rCover < 1f) return null
     // ③' 只拦"本来就要按圆裁"的那一档：rCover < 1（连一个整圆都盖不满）= 本来就不裁、不缩，
@@ -410,7 +445,7 @@ internal object IconCropWindow {
   private fun window(
     cx: Int, cy: Int, r: Float, sw: Int, sh: Int, plate: Boolean, keepPct: Int,
     boxW: Int, boxH: Int, rBox: Float, rCover: Float, bodyOverFar: Float, spiky: Boolean,
-    byKeep: Boolean,
+    byKeep: Boolean, bare: Boolean = false,
   ): Window {
     val l = cx + 0.5f - r
     val t = cy + 0.5f - r
@@ -418,7 +453,7 @@ internal object IconCropWindow {
     val bottom = cy + 0.5f + r
     val zoom = maxOf(sw / (right - l), sh / (bottom - t))
     return Window(l / sw, t / sh, right / sw, bottom / sh, plate, keepPct, zoom,
-      boxW, boxH, rBox, rCover, sw, sh, bodyOverFar, spiky, byKeep)
+      boxW, boxH, rBox, rCover, sw, sh, bodyOverFar, spiky, byKeep, bare)
   }
 
   /**
@@ -713,6 +748,30 @@ private const val BOX_COVER_ALPHA = 128
  * 真机空档：这一档最高 56%，下一档最低 72%（收版那档样本 78%）—— 线摆在中间有余量。
  */
 private const val KEEP_RATIO = 0.6f
+
+/**
+ * **老式图标**（非自适应、没有背景层）另有一条 keep 线：[KEEP_RATIO] 到 76% 之间也算"裁不动"。
+ *
+ * 为什么有第二条：正方形按圆裁留下 π/4 = 78.5%，**背景是一块方盘**的图标（贴吧/饿了么/QQ/菜鸟/
+ * 转转/华为市场…）正好落在 79~82% —— 它们被切掉的只是那块**底**的四个角，图案一个像素不丢，
+ * 按圆裁是对的。而老式 PNG 没有底，keep 掉到 60~76% 意味着切掉的是**图形自己的轮廓**
+ * （交换服务那只信封的翻盖、日历卡的四个角、名片的圆角）—— 主人 2026-11-10 判「应缩进白圆中」。
+ *
+ * 为什么是 [BARE_KEEP_RATIO] = 72% + [BARE_BOX_MAX_PCT] = 95% 两道独立闸（2026-11-10 现量，别改单条）：
+ *  · keep 一条单独不够——**老式图标整体就住在 74~76%**（本机 32 张老式：最小 74%，21 张在 74~76）。
+ *    线摆 76 会把这 21 张正常图标（银联/高德/滴滴/闲鱼/12306/转转/工商…）全拖去铺白边，那是主人否过的白边。
+ *  · 加"内容框 ≤95% 画布"这一条才分开：32 张老式里 **30 张内容框都是 100%**（满画布），
+ *    这三张是 90/93/80%（带留白的产品标志）。chromium 那张 webapk（框 86%、keep 75%）在这一条上过、
+ *    在 keep 那条被挡住 —— 它自带橙色圆角方底，裁圆是对的。
+ *  · 尺寸稳定性：三张在 96/192/384 三档量出来是 69~70 / 65~66 / 60~62（漂 ≤1 点）；
+ *    老式正常图标在三档里最低 72%（chsi@96）—— 所以 keep 线取 72 仍有 2 点余量，且第二道闸兜底。
+ * ⚠ 别再拿形状尺（长宽比/圆角/填充率/角瓣颜色/角瓣同色度）来替它 —— 2026-11-10 逐条量过，
+ *   与这三张全部重叠（王者荣耀的角瓣同色度 6%，是这批里最低的，它按圆裁完全正常）。
+ */
+private const val BARE_KEEP_RATIO = 0.72f
+
+/** 老式裸图那条路的第二条闸：内容框占画布的比例上限（满画布 = 它自己就是一张方图，不是带留白的标志）。 */
+private const val BARE_BOX_MAX_PCT = 95
 
 
 

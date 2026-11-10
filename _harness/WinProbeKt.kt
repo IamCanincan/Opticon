@@ -40,10 +40,10 @@ fun main(args: Array<String>) {
   val bw = x1 - x0 + 1; val bh = y1 - y0 + 1
   val fill = if (bw > 0 && bh > 0) ink.toDouble() / (bw.toLong() * bh) else 0.0
   println("  内容框=$bw" + "x$bh（占画布 ${"%.0f".format(bw * 100.0 / sw)}%）  填充率=${"%.2f".format(fill)}")
-  val w = IconCropWindow.measure(px, sw).let { it }
+  val w = IconCropWindow.measure(px, sw, legacy = args.contains("--legacy")).let { it }
   println("${f.name}  ${img.width}x${img.height} → 判据格 ${sw}x$sh")
   if (w == null) { println("  窗口=null（满幅不动 / 超上限），即「不裁也不缩」"); return }
   println("  窗口=[${"%.3f".format(w.l)},${"%.3f".format(w.t)}]-[${"%.3f".format(w.r)},${"%.3f".format(w.b)}]" +
     "  plate=${w.plate}  keep=${w.keepPct}%  zoom=${"%.3f".format(w.zoom)}" +
-    "  rCover/rBox=${"%.3f".format(w.rCover / w.rBox)}  spiky=${w.spiky}  box=${w.boxW}x${w.boxH}")
+    "  rCover/rBox=${"%.3f".format(w.rCover / w.rBox)}  spiky=${w.spiky}  bare=${w.bare}  box=${w.boxW}x${w.boxH}")
 }

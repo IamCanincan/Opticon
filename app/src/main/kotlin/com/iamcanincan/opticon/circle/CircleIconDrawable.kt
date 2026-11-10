@@ -114,7 +114,8 @@ class CircleIconDrawable(
     //   回滚 = 把这一行改回 `Color.WHITE`（或 `Color.TRANSPARENT`）。
     ColorDrawable(themedPlateColor()),
     // 前景：原图标套上圆形遮罩，再缩到可见区
-    ViewportDrawable(MaskedDrawable(icon, trimEdgeRing, isShortcut)),
+    // ⚠ 第四位是**老式**（非自适应）：它没有背景层，裁圆切掉的就是图形自己的轮廓 —— 判据要读这一位。
+    ViewportDrawable(MaskedDrawable(icon, trimEdgeRing, isShortcut, icon !is AdaptiveIconDrawable)),
   ) {
 
   /** 原图标留一份引用，只为了 [getConstantState] 能重建出副本。 */
@@ -269,6 +270,8 @@ private class MaskedDrawable(
   /** 这张是**快捷方式**：它铺不铺白底是另一件事（白底画进徽章里就成了白圈，2026-10-25 / 2026-11-10 两次）。
    *  只影响裁圆判据（IconCropWindow 的 shortcut 位），不参与别的。 */
   private val isShortcut: Boolean = false,
+  /** 原图标是**老式**（非自适应，没有背景层）：裁圆切掉的是图形自己的轮廓，[IconCropWindow] 要读这一位。 */
+  private val isLegacy: Boolean = false,
 ) : Drawable() {
 
   private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
@@ -413,6 +416,8 @@ private class MaskedDrawable(
           if (plateWhite) {
             append('\t').append("黑底=").append(if (plateDark) 1 else 0)
             append('\t').append("墨L=").append(plateInkL)
+            // 走的是不是"老式裸图"那条入口（keep 60~76%）。只在那条入口上出现。
+            if (boxWin?.bare == true) append('\t').append("裸=1")
           }
         },
       )
@@ -502,7 +507,7 @@ private class MaskedDrawable(
       edgeRing = IconCropWindow.edgeRing(px, sw, sh)
       if (edgeRing) Log.d(TAG, "裁圆：去掉贴边细环 ${IconNames.of(icon)}（扫描 ${sw}x${sh}）")
     }
-    val win = IconCropWindow.of(px, sw, sh, isShortcut) ?: return null
+    val win = IconCropWindow.of(px, sw, sh, isShortcut, isLegacy) ?: return null
     // 快捷方式里"透明底 + 一个图案"的那一类（拼多多的四条动态快捷方式就是）没有实心内容可裁：
     // `keepPct=0` 会让共用判据落进"不规则图标"那一档，进而**缩小 + 圆内补白** —— 屏幕上就是
     // 图案外面多了一整块白盘（主人 2026-10-25：「拼多多的快捷方式比别的图标多套了一圈」）。
@@ -547,8 +552,17 @@ private class MaskedDrawable(
       // ⚠ 这里读 `win.byKeep`（**未取整**的分支原值），不再用 `keepPct < 60` 反推 ——
       //   `keepPct` 是四舍五入过的，`[59.5,60)` 那批会被印成"没过线"而分支其实走的 keep。
       val byKeep = win.byKeep
-      val why = if (byKeep) "（<${IconCropWindow.keepRatioPercent}%）" else ""
-      val entry = if (win.spiky && byKeep) "keep+spiky" else if (win.spiky) "spiky" else "keep"
+      // 第三位 2026-11-10：老式图标那条（keep 掉进 60~76%）—— 它只对"没有背景层"的图标开火，
+      //   语义与 keep 那档相同（不裁、缩进圆里），但**不是**"圆会咬掉一大块"那种，别在日志里混成一句。
+      val bare = win.bare
+      val why = if (byKeep) "（<${IconCropWindow.keepRatioPercent}%）"
+        else if (bare) "（老式 keep<${IconCropWindow.bareRatioPercent}%）" else ""
+      val entry = when {
+        win.spiky && byKeep -> "keep+spiky"
+        win.spiky -> "spiky"
+        bare -> "裸"
+        else -> "keep"
+      }
       // `（扫描 WxH）` 以前**只在非 plate 分支打** —— 偏偏最需要拿它核对"两边量的是不是同一格"的
       //   就是 plate 这一档（彩色量 draw() 那张、染色量喂进模型那张，两个 keepPct 不是一回事）。
       Log.d(TAG, "裁圆外框: $who 画布 ${iw}x$ih 图案 ${win.boxW}x${win.boxH}（扫描 ${win.scanW}x${win.scanH}）" +
@@ -608,7 +622,7 @@ private class MaskedDrawable(
       object : ConstantState() {
         // ⚠ `trimEdgeRing` 必须一起带过去（2026-10-26 全量检查）：这层自己的副本以前也丢它，
         //   和顶层 `CircleIconDrawable.getConstantState` 那次是同一类洞（见那边的注释）。
-        override fun newDrawable(): Drawable = MaskedDrawable(src.newDrawable(), trimEdgeRing, isShortcut)
+        override fun newDrawable(): Drawable = MaskedDrawable(src.newDrawable(), trimEdgeRing, isShortcut, isLegacy)
 
         override fun getChangingConfigurations(): Int = src.changingConfigurations
       }
