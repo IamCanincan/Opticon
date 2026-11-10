@@ -311,6 +311,18 @@ internal object MonochromeSynth {
   private val winKeyNs = java.util.concurrent.atomic.AtomicLong()
   private val winCalls = java.util.concurrent.atomic.AtomicLong()
 
+  // ── 冷合成账（2026-11-10）──
+  // 统计页只有一个 `单色 163ms/张` 的均值：光栅、键、准备、判据、交付各占多少不知道，
+  // 于是"下一刀该砍哪"只能猜。这里按段累计，每 [COLD_LOG_EVERY] 次打一行平均值到 logcat
+  // （**不进统计页**：那一行已经够长，再加五段会挤掉真正该看的东西）。
+  // 每张只多两次 `nanoTime`（各约 20ns）与五次原子加 —— 冷路径本来就要几百毫秒。
+  private val coldRasterNs = java.util.concurrent.atomic.AtomicLong()
+  private val coldKeyNs = java.util.concurrent.atomic.AtomicLong()
+  private val coldPrepNs = java.util.concurrent.atomic.AtomicLong()
+  private val coldBuildNs = java.util.concurrent.atomic.AtomicLong()
+  private val coldTailNs = java.util.concurrent.atomic.AtomicLong()
+  private val coldCalls = java.util.concurrent.atomic.AtomicLong()
+
   // 命中路径每次 bind 都要一块 `edge²` 的像素数组（384² = 590KB）。`render` 是 @Synchronized，
   // 按 size 复用同一块即可；一次桌面启动 ~1600 次 bind，省掉的是同尺寸短命数组的分配与 GC。
   // ⚠ 数组只在这一次调用里用（取像素 → 键 → 模型/日志），不许被任何异步路径留住。
@@ -456,6 +468,28 @@ internal object MonochromeSynth {
   }
 
   private const val HIT_LOG_EVERY = 50L
+
+  /**
+   * 冷合成的分段账（见上面那组 `cold*` 原子量）。每 [COLD_LOG_EVERY] 次打一行**平均值**，
+   * 单位毫秒 —— 冷合成一次几百毫秒，微秒那一位没意义。
+   * ⚠ 一条日志一次成型（本仓记过账：占位符写在前半段会让参数整体错位）。
+   */
+  private fun noteColdSplit(raster: Long, key: Long, prep: Long, build: Long, tail: Long) {
+    coldRasterNs.addAndGet(raster)
+    coldKeyNs.addAndGet(key)
+    coldPrepNs.addAndGet(prep)
+    coldBuildNs.addAndGet(build)
+    coldTailNs.addAndGet(tail)
+    val n = coldCalls.incrementAndGet()
+    if (n % COLD_LOG_EVERY != 0L) return
+    val sum = coldRasterNs.get() + coldKeyNs.get() + coldPrepNs.get() + coldBuildNs.get() + coldTailNs.get()
+    Log.d(TAG, "Mono: 冷合成#$n 均=${sum / n / 1_000_000}ms" +
+      " 光栅=${coldRasterNs.get() / n / 1_000_000} 键=${coldKeyNs.get() / n / 1_000_000}" +
+      " 准备=${coldPrepNs.get() / n / 1_000_000} 判据=${coldBuildNs.get() / n / 1_000_000}" +
+      " 交付=${coldTailNs.get() / n / 1_000_000}")
+  }
+
+  private const val COLD_LOG_EVERY = 32L
 
   private const val LOG_FIRST = 3
 
@@ -755,6 +789,7 @@ internal object MonochromeSynth {
       //   `label` 的第一段是 `IconNames.of(source)`，两种形式都要认（`包名/类型/入口名` 与
       //   `pm:包名`）—— 只配前一种的话，快捷方式那一批永远开不了火，见 [IconNames.matchesPkg]。
       val trimOn = MonochromeMask.TRIM_PKGS.any { IconNames.matchesPkg(label, it) }
+      val tBuild0 = System.nanoTime()
       var out = MonochromeMask.build(pxIn, edge, edge, plateLayer, underIn, plateSubject,
         trimSubject = trimOn)
       // ── 细环满幅快捷方式：淡灰盘不是墨（2026-10-25）──
@@ -776,6 +811,7 @@ internal object MonochromeSynth {
           }
         }
       }
+      val tBuildDone = System.nanoTime()
       // H0 的射程跟着记：见 [noteSynthesized] 那条汇总为什么带它。
       noteH0(out.h0why)
       noteVeto(out.veto)
@@ -861,6 +897,9 @@ internal object MonochromeSynth {
       // 命中时返回的必须与屏幕上的是同一个东西，否则「判据吃的那张」与「屏上那张」又分家。
       // `label` 只进归属索引（[MonoCache.noteOwner]），不参与键、不参与判定。
       MonoCache.store(key, edge, placed, label)
+      // 冷合成分段（光栅 / 键 / 准备 / 判据 / 交付）；每 32 次一行，见 [noteColdSplit]。
+      noteColdSplit(tRaster - t0, tKey - tRaster, tBuild0 - tKey, tBuildDone - tBuild0,
+        System.nanoTime() - tBuildDone)
       placed
     }.onFailure {
       // ⚠ 这一条不能省：上面整个块包在 runCatching 里，任何异常都会被 `getOrNull()` 变成一个
