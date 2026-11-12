@@ -228,10 +228,12 @@
     <!-- 更新卡片 -->
     <!-- 卡片标题和按钮共用这一句 -->
     <string name="update_title">检查更新</string>
+    <string name="update_prompt_title">发现新版本</string>
+    <string name="update_later">稍后</string>
     <string name="action_open_repo">在 GitHub 上查看</string>
     <string name="update_checking">检查中…</string>
     <string name="update_go_download">打开发布页</string>
-    <string name="update_disclaimer">仅当点击下方按钮时建立网络连接：优先直连 GitHub，失败后使用公共镜像。这是本应用唯一的网络行为，不包含统计或上报。</string>
+    <string name="update_disclaimer">打开应用时会自动检查一次更新，也可点下方按钮手动检查：优先直连 GitHub，失败后使用公共镜像。这是本应用唯一的网络行为，不包含统计或上报。</string>
 
     <!-- 更新结果（由 UpdateChecker.Result 翻译成 UpdateState.Done.message）-->
     <string name="update_result_newer">发现新版本 %1$s（当前 %2$s）。</string>
@@ -249,7 +251,7 @@
 
     <!-- 隐私：这块信息之前只写在 README 里，界面上也该有一份 -->
     <string name="privacy_title">网络访问与数据上报</string>
-    <string name="privacy_body">仅在用户主动点击「检查更新」时建立网络连接；不包含后台轮询、统计上报或广告。注入进程内的挂钩代码不进行网络访问。</string>
+    <string name="privacy_body">打开应用时会自动检查一次更新（也可在「关于」页手动检查）；只在检查更新时建立网络连接，不包含后台轮询、统计上报或广告。注入进程内的挂钩代码不进行网络访问。</string>
 
     <!-- 关于（分区标题直接复用底栏的 tab_about，免得两处文案不一致被判重复）-->
     <string name="about_version">版本 %1$s · MIT 许可</string>

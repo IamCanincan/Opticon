@@ -48,6 +48,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
@@ -58,6 +59,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -138,6 +140,14 @@ private const val TAB_SETTINGS = 3
 
 /** 底栏格数 = Pager 的页数 */
 private const val PAGE_COUNT = 4
+
+/**
+ * 自动检查更新「每进程一次」。
+ *
+ * 放文件级而不是 `remember`：转屏 / 从后台回来会重建 Activity，`remember` 活不过去，
+ * 那样每次重进都会再联网一次。这个标记只求活到进程结束。
+ */
+@Volatile private var autoUpdateChecked = false
 
 // 底栏几何照搬 KeyLens 的 webui：药丸 6dp 内边距 + 每格 52dp + 44dp 圆形光晕 + 24dp 图标。
 // 四格在 360dp 屏上仍留边（展开文字那格约 98dp，其余 52dp，合计约 254dp）。
@@ -342,12 +352,31 @@ fun OpticonApp() {
     // 而 IO 线程上那条 HttpURLConnection 并不因取消而中断，最长还白等约 40 秒），
     // 那块承诺「常驻」的结果 chip 也会一片空白。
     var updateState by remember { mutableStateOf<UpdateState>(UpdateState.Idle) }
+    // 自动检查发现的更新：只弹一次提示。两个字符串进 rememberSaveable —— 转屏不丢。
+    var updatePromptMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    var updatePromptUrl by rememberSaveable { mutableStateOf<String?>(null) }
     val checkUpdate: () -> Unit = {
         val version = BuildConfig.VERSION_NAME
         updateState = UpdateState.Checking
         scope.launch {
             val result = withContext(Dispatchers.IO) { UpdateChecker.check(version) }
             updateState = result.toState(context, version)
+        }
+    }
+
+    // 开启应用时自动查一次更新（每进程一次）：只关心"有新版"，失败 / 已是最新都不打扰。
+    // 联网放 IO；判据与手动检查是同一个 `UpdateChecker`，结果同样写进 `updateState`，
+    // 所以「关于」页那块常驻结果也一并更新。
+    LaunchedEffect(Unit) {
+        if (autoUpdateChecked) return@LaunchedEffect
+        autoUpdateChecked = true
+        val version = BuildConfig.VERSION_NAME
+        val result = withContext(Dispatchers.IO) { UpdateChecker.check(version) }
+        if (result is UpdateChecker.Result.Newer) {
+            val done = result.toState(context, version) as? UpdateState.Done ?: return@LaunchedEffect
+            updateState = done
+            updatePromptMessage = done.message
+            updatePromptUrl = done.url
         }
     }
 
@@ -572,6 +601,41 @@ fun OpticonApp() {
                 .navigationBarsPadding()
                 .padding(bottom = 104.dp),
         )
+
+        // 自动检查到新版才弹：正文就是「关于」页那块结果 chip 的同一句话（发现新版本 X（当前 Y））。
+        val promptMessage = updatePromptMessage
+        val promptUrl = updatePromptUrl
+        if (promptMessage != null && promptUrl != null) {
+            AlertDialog(
+                onDismissRequest = {
+                    updatePromptMessage = null
+                    updatePromptUrl = null
+                },
+                title = { Text(stringResource(R.string.update_prompt_title)) },
+                text = { Text(promptMessage) },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            updatePromptMessage = null
+                            updatePromptUrl = null
+                            if (!openExternalUrl(uriHandler, promptUrl)) notify(openLinkFailed)
+                        }
+                    ) {
+                        Text(stringResource(R.string.update_go_download))
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = {
+                            updatePromptMessage = null
+                            updatePromptUrl = null
+                        }
+                    ) {
+                        Text(stringResource(R.string.update_later))
+                    }
+                },
+            )
+        }
     }
 }
 
