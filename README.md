@@ -31,8 +31,8 @@
    ```
    android                                  系统服务，解析应用信息
    system                                   系统进程，部分 ROM 在这里解析图标
-   com.android.launcher3                    桌面与应用抽屉（类原生 ROM，必选）
-   com.google.android.apps.nexuslauncher    桌面与应用抽屉（Pixel / Nexus，必选）
+   com.android.launcher3                    桌面与应用抽屉（类原生 ROM，两个桌面二选一）
+   com.google.android.apps.nexuslauncher    桌面与应用抽屉（Pixel / Nexus，两个桌面二选一）
    com.android.systemui                     状态栏、最近任务、通知
    com.android.settings                     设置里的应用列表
    com.google.android.settings.intelligence 设置搜索与建议里的应用图标
@@ -170,8 +170,9 @@ Hooked com.android.settings
 （本机默认档 22dp，630dpi ⇒ ≈87px）配 `fitCenter`，等比缩放会把"交出去 48 还是 96"吃掉，
 **只剩留白比例决定观感大小**。定义钉在 `SelfTest` 第 33 组三条断言上（含分岔口那一条：32×8 在 32×16 上按长边=1.0、按面积会量到 0.25）。
 
-✅ **被补那一族已归一**（2026-10-22）：交付前把墨框长边缩到 **0.95×画布**、等比、居中（`fitInk`），
-0.95 取参照族中位 0.949。**已适配那批仍然一个像素都不碰** —— 所以"参照族自己跨 0.40–1.00"这条事实没变，
+✅ **被补那一族已归一**（2026-10-22；2026-11-07 收窄）：交付前把墨框长边放到 **0.95×画布**、等比、居中（`fitInk`），
+0.95 取参照族中位 0.949。⚠ **只放大、不缩小**：够大的源（含满墨 100%）原样交回，只把偏小的放到 0.95 ——
+否则屏幕上会看到"这个图标变小了"。**已适配那批仍然一个像素都不碰** —— 所以"参照族自己跨 0.40–1.00"这条事实没变，
 作废的是"被补交出去的留白 = 源自己的留白"那半句。另修过一处**变形**：非方形源以前被
 `setBounds(0,0,96,96)` 拉成正方，现在等比 fit + 居中（`iconBounds`，见 `docs/KNOWN-LIMITS.md`）。
 同轮还落了两条兜底：`stripTextBand`（已单色 + 一行字，去掉那条在 22dp 上糊成灰带的文字）与

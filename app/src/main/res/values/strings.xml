@@ -10,9 +10,9 @@
         老式写法（xposeddescription meta-data / module.prop 里的 description=）已经不用，
         那是给 API <= 93 的旧框架用的，留着反而让模块变成「兼容模式」。
 
-        长度约定：中文 <= 26 字，太长在模块列表里会占好几行。**现在 19 字**（主人定的：压回约定内，
-        不钉死版本号那类信息也不放进来）。曾经到过 35 字 —— 补上「单色合成」那一路之后没人重新量过长度，
-        那条注释还写着"当前 21 字"。**改这一行时必须重新数字**，别相信旁边那句话。
+        长度约定：中文 <= 26 字，太长在模块列表里会占好几行。**现在 17 字**（主人定的：压回约定内，
+        不钉死版本号那类信息也不放进来）。曾经到过 35 字，注释里的字数也落后过一次（写着 21 字、
+        实际不是）。**改这一行时必须重新数字**，别相信旁边那句话。
         备选（17 字）：「桌面图标裁圆、取色剪影、通知小图标」。
         三路功能都要提到 —— 用户在 LSPosed 列表里只看得到这一行。
     -->
@@ -26,8 +26,8 @@
     <string name="permission_process_control_description">仅允许 Opticon 请求已注入进程清除图标缓存或重启自身。</string>
 
     <!--
-        底部导航：三个功能各一页（裁圆 / 单色 / 通知），再加模块（作用域/步骤/验证/运维）
-        与关于（更新/版本）。五格 —— 三格时药丸太短，五格仍能一行放下。
+        底部导航四格：主页 / 功能 / 统计 / 设置。
+        三个功能不占底栏 —— 开关在「功能」页那一行，说明与效果是二级页（从主页那行进）。
     -->
     <string name="tab_crop">裁圆</string>
     <string name="tab_mono">单色</string>
@@ -88,10 +88,10 @@
     <string name="settings_role">作用域、启用验证、运维与关于</string>
     <string name="stats_note">这些数字在说什么：裁圆 = 裁过的图标次数（桌面 / 状态栏 / 最近任务都算）；单色 = 我们替应用生成单色层的张数；通知 · 被补 = 我们把彩色通知图标改成黑白的次数；通知 · 已适配 = 应用本来就给黑白的次数（我们没动）。</string>
 
-    <!-- ============ 「图标」页 ============ -->
+    <!-- ============ 「裁圆」页 ============ -->
 
 
-    <!-- 裁圆总开关 -->
+    <!-- 裁圆的说明卡（开关在「功能」页那一行） -->
     <string name="circle_switch_title">图标裁切为正圆</string>
     <string name="circle_switch_body">应用图标（含自适应图标）统一裁切为正圆；适用于桌面、应用列表与最近任务。</string>
     <!-- 开关切换后的 Snackbar：桌面有预渲染缓存，需说明清除缓存后才会生效 -->
@@ -150,7 +150,7 @@
     <string name="step_1">在框架中启用本模块</string>
     <string name="step_1_hint">在框架管理器中启用本模块。</string>
     <string name="step_2">按「作用域」页的清单选择生效进程</string>
-    <string name="step_2_hint">至少选择 com.android.launcher3，方可在桌面观察裁圆与单色层（单色合成只在桌面进程里挂，裁圆则在每个被注入的进程里各自生效）；通知功能还需 com.android.systemui。</string>
+    <string name="step_2_hint">至少选择你系统上在用的桌面（com.android.launcher3 或 com.google.android.apps.nexuslauncher），方可在桌面观察裁圆与单色层（单色合成只在桌面进程里挂，裁圆则在每个被注入的进程里各自生效）；通知功能还需 com.android.systemui。</string>
     <string name="step_3">重启设备</string>
     <string name="step_3_hint">框架不支持模块热加载，需重启设备。</string>
     <string name="step_4">桌面没更新时，清一次图标缓存</string>
@@ -188,9 +188,9 @@
     <string name="effect_sample_original_detail">系统形状</string>
     <string name="effect_sample_cropped_detail">满幅图案</string>
     <string name="effect_sample_shrink_title">保留完整</string>
-    <string name="effect_caption_shrink">缩放 + 白底</string>
+    <string name="effect_caption_shrink">缩放 + 补底盘</string>
     <string name="effect_sample_shortcut_title">快捷方式</string>
-    <string name="effect_caption_shortcut">原始尺寸 + 白底</string>
+    <string name="effect_caption_shortcut">原始尺寸 + 补底盘</string>
 
     <!--
         单色遮罩极性修正。这条和裁圆是**两个独立开关**：它管的是 Android 16 强制取色下
