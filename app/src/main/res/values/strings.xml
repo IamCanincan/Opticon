@@ -78,14 +78,14 @@
     <string name="features_note_group">开关什么时候生效</string>
     <string name="features_effect_title">约一秒内生效</string>
     <string name="features_effect_body">开关写入后模块每秒重读一次配置：新画的图标、新收到的通知立刻按新设置处理。切开关时：裁圆 / 单色会清桌面缓存并重启桌面，桌面图标随之重画；通知会重启系统界面，通知随之重建。设置、分享面板这些进程要等它们自己重新加载。万一仍没变化，到「设置 → 运维操作」手动按一次。</string>
-    <string name="settings_scope_sub">显示应用图标的进程在这里勾选</string>
+    <string name="settings_scope_sub">会画应用图标的进程清单（在框架管理器中勾选）</string>
     <string name="settings_setup_title">启用与验证</string>
     <string name="settings_setup_sub">四步启用、一条 adb 命令验证</string>
     <string name="settings_tools_sub">清除桌面缓存、重启相关进程</string>
-    <string name="settings_about_sub">版本与检查更新</string>
+    <string name="settings_about_sub">版本、功能范围与检查更新</string>
     <string name="action_back">返回</string>
     <string name="stats_role">总览占比，按功能列出来源</string>
-    <string name="settings_role">作用域、运维与关于</string>
+    <string name="settings_role">作用域、启用验证、运维与关于</string>
     <string name="stats_note">这些数字在说什么：裁圆 = 裁过的图标次数（桌面 / 状态栏 / 最近任务都算）；单色 = 我们替应用生成单色层的张数；通知 · 被补 = 我们把彩色通知图标改成黑白的次数；通知 · 已适配 = 应用本来就给黑白的次数（我们没动）。</string>
 
     <!-- ============ 「图标」页 ============ -->
@@ -98,7 +98,7 @@
 
     <!-- 状态卡 -->
     <string name="status_title">模块启用状态</string>
-    <string name="status_body">模块的启用状态与作用域生效情况需在框架管理器中确认；本界面仅提供作用域清单与启用步骤。</string>
+    <string name="status_body">模块的启用状态与作用域生效情况需在框架管理器中确认；本应用仅提供作用域清单与启用步骤。</string>
 
     <!-- 作用域分组 -->
     <string name="section_scope">作用域</string>
@@ -119,10 +119,10 @@
     <string name="scope_systemprocess_desc">系统进程；部分 ROM 在此解析图标。</string>
 
     <string name="scope_launcher_title">AOSP 桌面</string>
-    <string name="scope_launcher_desc">桌面与应用抽屉（类原生 ROM）；Android 16 强制动态取色下，未适配应用的单色图标亦在此修正。</string>
+    <string name="scope_launcher_desc">桌面与应用抽屉（类原生 ROM，与 Pixel 桌面二选一）；Android 16 强制动态取色下，未适配应用的单色图标亦在此修正。</string>
 
     <string name="scope_launcher_pixel_title">Pixel 桌面</string>
-    <string name="scope_launcher_pixel_desc">桌面与应用抽屉（Pixel / Nexus）；Android 16 强制动态取色下，未适配应用的单色图标亦在此修正。</string>
+    <string name="scope_launcher_pixel_desc">桌面与应用抽屉（Pixel / Nexus，与 AOSP 桌面二选一）；Android 16 强制动态取色下，未适配应用的单色图标亦在此修正。</string>
 
     <string name="scope_systemui_title">系统界面</string>
     <string name="scope_systemui_desc">状态栏与最近任务；通知小图标的修复在此执行。</string>
@@ -149,12 +149,12 @@
     <!-- 启用步骤 -->
     <string name="step_1">在框架中启用本模块</string>
     <string name="step_1_hint">在框架管理器中启用本模块。</string>
-    <string name="step_2">按上方清单选择生效进程</string>
+    <string name="step_2">按「作用域」页的清单选择生效进程</string>
     <string name="step_2_hint">至少选择 com.android.launcher3，方可在桌面观察裁圆与单色层（单色合成只在桌面进程里挂，裁圆则在每个被注入的进程里各自生效）；通知功能还需 com.android.systemui。</string>
     <string name="step_3">重启设备</string>
     <string name="step_3_hint">框架不支持模块热加载，需重启设备。</string>
-    <string name="step_4">桌面未更新时，强制停止桌面进程并重新启动</string>
-    <string name="step_4_hint">设备启动时，框架守护进程可能晚于 launcher3 启动，导致该进程未被注入。</string>
+    <string name="step_4">桌面没更新时，清一次图标缓存</string>
+    <string name="step_4_hint">到「运维操作」按「清除缓存并重启桌面」；仍没变化，多为设备启动时框架守护进程晚于 launcher3 启动、该进程未被注入。</string>
 
     <!-- 验证 -->
     <string name="section_verify">验证是否生效</string>
@@ -178,7 +178,7 @@
     <string name="switch_applied_systemui">已应用：正在重启系统界面，通知会按新设置重画</string>
     <string name="switch_applied_all">已应用：正在清桌面缓存并重启系统界面</string>
     <string name="restart_sent">请求已发送：目标进程将重启。</string>
-    <string name="tools_hint">通常仅在图标未随设置更新时使用。若无响应，表示该进程未注入模块；请核对上方作用域并重启设备。</string>
+    <string name="tools_hint">通常仅在图标未随设置更新时使用。若无响应，表示该进程未注入模块；请到「作用域」页核对清单并重启设备。</string>
 
     <!-- 效果示意（形状对比图）-->
     <string name="section_effect">效果</string>
