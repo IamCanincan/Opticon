@@ -35,7 +35,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * 会为**没提供单色图标**的应用现场生成一张掩码，而它算出来的**极性经常是反的**：深色字形 +
  * 浅色底的图标会变成「字形是洞、底色是形」，整个反掉。
  *
- * 与其等它算错、再把输出整张翻回来（那是 [IconHooks] 里 `hookForcedThemedMono` 干的事），
+ * 与其等它算错、再把输出整张翻回来（那需要一个专门的翻转钩子；现在直接合成，不走那条路），
  * 不如**在 `AdaptiveIconDrawable.getMonochrome()` 上直接返回一个极性正确的合成层**：
  * 桌面只在这个 getter 返回 null 时才去 new 那个 Factory，所以我们一返回非 null，
  * 那条算错的路径根本不会进。

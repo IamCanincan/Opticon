@@ -123,7 +123,7 @@ private fun PrivacyCard() {
       IconTile(
         icon = Icons.Default.Lock,
         // 中性底板：琥珀（tertiary）留给"要动手、有代价"的运维操作，
-        // 隐私说明是纯信息，不该抢那个颜色（同一套语言见「图标」页）。
+        // 隐私说明是纯信息，不该抢那个颜色（同一套语言见「功能」页的图标方块）。
         containerColor = scheme.surfaceContainerHighest,
         contentColor = scheme.onSurfaceVariant,
       )
@@ -218,7 +218,7 @@ private fun AboutCard(onOpen: (String) -> Unit) {
  * 检查更新的状态机。
  *
  * ⚠ 状态和发起检查的那次 launch 都**归外壳（`OpticonApp`）持有**，不在这里 ——
- * 这页是 `HorizontalPager` 的一页，切走就离开组合，`remember` 会被清掉、
+ * 这页是盖在 Pager 上的二级页，切走 / 返回就离开组合，`remember` 会被清掉、
  * `rememberCoroutineScope` 会被取消。放在这里的后果是：切一下页结论就没了，
  * 而且后台那条 HttpURLConnection 的协程被取消后并不会中断，IO 线程照旧白等最长约 40 秒。
  */

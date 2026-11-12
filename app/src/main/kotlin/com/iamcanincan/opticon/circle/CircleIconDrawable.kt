@@ -92,7 +92,7 @@ class CircleIconDrawable(
    * 1px 灰环（r=53→54 平均 alpha 10→128），裁成圆之后那圈正好压在圆的边上，看起来像我们
    * 多套了一圈；高德等同批位图在同半径是 42–51 的渐变，没有这个跳变。
    * 判据只看"贴边那一格平均不透明、往里三格就透明"这条**形状关系**，不认颜色；
-   * 命中时把遮罩圆收 [EDGE_RING_INSET]（约 1.2%），环整圈切掉，图案本身不动。
+   * 命中时把遮罩圆收 [EDGE_RING_INSET]（2%），环整圈切掉，图案本身不动。
    */
   private val trimEdgeRing: Boolean = false,
   /** 这张是**快捷方式**：它铺不铺白底是另一件事（白底画进徽章里就成了白圈，2026-10-25 / 2026-11-10 两次）。
@@ -250,17 +250,17 @@ private class ViewportDrawable(private val inner: Drawable) : Drawable() {
  *    这一档**不收边、不铺白底**。图案本来就满幅的（真机 61 张里 59 张）在 [BOX_FULL_RATIO]
  *    处直接早退，与改前**逐位不变**。
  *  - **裁不动的**（宽幅 banner、铃铛、十字、环 —— 裁下去只剩 [KEEP_RATIO] 以下）→ **不裁**：
- *    整幅缩进圆里，圆内先铺一层白底（[plateWhite]），盖不满的地方由它补上，圆于是始终是完整的。
+ *    整幅缩进圆里，圆内先铺一层底盘（[plateWhite]，默认白、图案里没有深色格时改黑），盖不满的地方由它补上，圆于是始终是完整的。
  *    缩多少由三条尺子里**最严**的那条定：主体进安全区（[SAFE_ZONE]）、尖角不贴边（[TIP_FLOOR]）、
  *    墨量对齐（[PLATE_INK]），最后再乘一刀 [SHRINK_EXTRA]。
  *  - **例外：无底盘快捷方式**（细环 + 图案在圆内，2026-10-26）→ 几何按**满幅、不缩**，
- *    但"原图没有实色底"这件事照同一条道理补上：铺**同一块白底**（主人：「不应该和别的不规则图标
+ *    但"原图没有实色底"这件事照同一条道理补上：铺**同一块底盘**（颜色白/黑由 [decidePlateDark] 定；主人：「不应该和别的不规则图标
  *    同个道理吗」）。它不是第三档 —— 几何走满幅，只有"补底"借用这一档的白盘。
  *
  * ⚠ 第三轮曾经把"收一刀薄边 + 铺白底"做成**全局**的（主人那句"不要贴着边缘"与"稍微小一点"），
- *   第四轮被"我刚才说的都是针对不规则图标"收回 —— 所以现在**只有没有实色底的那两类**铺白底，
+ *   第四轮被"我刚才说的都是针对不规则图标"收回 —— 所以现在**只有没有实色底的那两类**铺底盘，
  *   而**缩小只给裁不动那一档**（无底盘快捷方式按满幅、不缩）。
- *   白底画在**前景层的位图里**，绝不动 `AdaptiveIconDrawable` 的背景层：那一层的颜色是给
+ *   底盘画在**前景层的位图里**，绝不动 `AdaptiveIconDrawable` 的背景层：那一层的颜色是给
  *   取色合成器当盘色用的（10-09 定案），换掉它会连带改单色那一支的输出。
  */
 private class MaskedDrawable(
@@ -285,7 +285,7 @@ private class MaskedDrawable(
    *
    * 主人先要求「那应该也给它补上底盘」；我第一版铺的是主题盘色，他当场纠回：
    * 「不应该和别的不规则图标同个道理吗」—— 所以这里**不另起一种颜色**，直接用
-   * [platePaint] 那同一块白底（不规则图标用的就是它）。图案仍按满幅、不缩。
+   * [platePaint] 那同一块底盘（颜色白/黑由 [decidePlateDark] 定）。图案仍按满幅、不缩。
    */
   private var plateShortcut = false
 
@@ -369,7 +369,7 @@ private class MaskedDrawable(
     val box = contentBox(intrinsicWidth, intrinsicHeight, sizeUnknown)
 
     // 贴边细环是**量完窗口才知道的**，而遮罩在上一段就已经建好了 —— 变了就重做一次路径。
-    // 只收 [EDGE_RING_INSET]（约 1.2%）：够把 1px 环切掉，图案本身看不出来。
+    // 只收 [EDGE_RING_INSET]（2%）：够把 1px 环切掉，图案本身看不出来。
     val inset = if (edgeRing) minOf(width, height) * EDGE_RING_INSET else 0f
     if (cacheInset != inset) {
       mask = circleMaskPath(width, height, inset)

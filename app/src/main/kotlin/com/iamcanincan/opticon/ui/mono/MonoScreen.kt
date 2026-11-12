@@ -66,7 +66,7 @@ fun MonoScreen() {
 
 /**
  * 单色层示意：左=原图标（浅底深形），右=剪影（深形为墨，浅色区域交给桌面主题盘）。
- * 与裁圆页的效果卡共用 [SampleTile] / [EffectShowcaseCard]，两页的示意语言一致。
+ * 效果卡用 [EffectShowcaseCard]（与通知页同一套），格子用共享 [SampleTile]（裁圆页也用）。
  */
 @Composable
 private fun MonoEffectCard() {

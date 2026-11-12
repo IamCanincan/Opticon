@@ -259,8 +259,9 @@ object SystemUiHooks {
 
     /**
      * 通知行 inflate 之前把小图标换掉。
-     * 换图发生在这里，这也是本模块在 SystemUI 里唯一的挂钩点 —— 压出来的单色剪影
-     * 本来就该由系统按主题上色，后面没有什么需要再护住的。
+     * 三个落点之一（另两个：`NotificationListener.onNotificationPosted` 管刚发布的通知 / 状态栏，
+     * `IconManager.createIcons` 管 SystemUI 重启后的顶栏重建）—— 压出来的单色剪影本来就该由系统
+     * 按主题上色，后面没有什么需要再护住的。
      *
      * 返回是否已就位（false = 目标类还 load 不出来，调用方要重试）。
      */

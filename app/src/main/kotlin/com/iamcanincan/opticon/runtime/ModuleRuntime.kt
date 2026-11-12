@@ -256,7 +256,7 @@ object ModuleRuntime {
      * 把统计快照广播给模块应用（「统计」页的数据来源）。
      *
      * 宿主进程读不到应用的数据目录、应用也读不到宿主的内存，实测能通的只有广播这一条
-     * （与  同一条路）。频次由 [Stats] 控制（每 20 次计数一次），这里不额外节流。
+     * （与 `CacheAck` 同一条路）。频次由 [Stats] 控制（每 20 次计数一次），这里不额外节流。
      */
     internal fun publishStats(snapshot: String, events: String = "", perf: String = "") {
         val ctx = hostContext() ?: return

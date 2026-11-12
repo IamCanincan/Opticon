@@ -16,7 +16,7 @@ import java.util.concurrent.atomic.AtomicLong
  * ⚠ 计数是**每个进程各一份**：桌面与系统界面各数各的，键里带进程名区分 ——
  *   混在一起会让"裁圆次数"被两个进程各加一遍。
  */
-/** 统计快照的广播动作（应用侧  收）。 */
+/** 统计快照的广播动作（应用侧 `StatsReceiver` 收）。 */
 const val ACTION_STATS = "com.iamcanincan.opticon.STATS"
 
 internal object Stats {
@@ -105,7 +105,7 @@ internal object Stats {
     }
   }
 
-  /** 快照：`键=值;键=值`（按值降序，应用侧直接画条形图）。 */
+  /** 快照：`键=值;键=值`（按值降序；应用侧再按功能分组画饼图与堆叠条）。 */
   fun snapshot(): String =
     counts.entries.sortedByDescending { it.value }.take(24)
       .joinToString(";") { it.key + "=" + it.value }

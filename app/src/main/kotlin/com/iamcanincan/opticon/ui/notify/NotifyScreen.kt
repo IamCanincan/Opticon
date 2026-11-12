@@ -38,7 +38,7 @@ import com.iamcanincan.opticon.ui.ScreenList
  * 「通知」页。
  *
  * 2026-10-26 三个功能分页后：说明卡与裁圆 / 单色共用 [FeatureInfoCard]，
- * 说明区与其它页共用 [ScreenList]/[Section]。
+ * 说明区与其它页共用 [ScreenList]/[GroupTitle]。
  *
  * 开关只在「功能」页那一行（2026-11-12 单一入口）；这里只讲通知图标做了什么、怎么验证。
  */

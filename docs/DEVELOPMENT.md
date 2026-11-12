@@ -1,7 +1,6 @@
 # 开发：离线判据台与真图标重放
 
-取色这条链的判据全是数字，而数字**不能靠推演定**。仓库里 `_harness/`（被 `.gitignore` 的
-`/_*/` 挡住，不入库）是一台纯 JVM 的判据台：手写一组 `android.graphics` 桩，把**仓里那份真
+取色这条链的判据全是数字，而数字**不能靠推演定**。仓库里 `_harness/`（**2026-10-21 起已入库**；语料图片大多仍在本机）是一台纯 JVM 的判据台：手写一组 `android.graphics` 桩，把**仓里那份真
 `MonochromeMask.kt`** 连驱动一起喂给 kotlinc，跑的是同一份代码而不是副本。
 
 ```sh
@@ -36,9 +35,9 @@ java -cp out;stubs_out;<stdlib> harness.ReplayKt ../_dump.txt captured   # 重�
   **不是"算法对边长不敏感"**；而底线就等于实测值（**余量 0**），所以以后任何一次**真**漂移会当场把第十闸变红。
   别把"全绿"读成后者。另：`框内随边长漂移>0.15` 与 `bench/reg/drift.tsv` 点名表是**同一批东西的两个写法**，
   不是两处独立证据；这些张数**数的是行，不是应用**。
-  这台子对着 `bench/baseline.json` 比 12 项（113 张真图的 `淡/字均净中位/残盘/档数`、`MonoKt`
-  三条单调性审计、兼容性台 PASS/GAP/FAIL、`框内` 随边长的漂移张数）。拿已知退步的那一轮喂它：
-  `淡 35 vs 基线 25`、`字均净 216 vs 224` —— **当场红，退出码 1**。
+  这台子对着 `bench/baseline.json` 比 **15 项**（分母 64 张：`残盘 / 档数 / ρ色 / 抖动 / 顶平 / 漂移`、
+  兼容性台 PASS/GAP/FAIL、对表配对与空输入、平色饼两栏）；`淡 / 字均净` 两行只报不判（`_regress.cjs` 的 REF）。
+  拿已知退步的那一轮喂它 —— 任何判定项朝坏的方向越过基线就**当场红，退出码 1**。
   ⚠ 它只报**总量**，而"淡 +1"既可能是"一张真坏了"也可能是"边界上抖了一下" —— 点名靠
   `node _abdiff.cjs 96,192,384,768`：它把 `ab.sh` 两份字节码各跑一遍的 `bench/reg/{old,new}_<边长>.txt`
   逐张对齐，列出**新掉进淡的**与**新爬出淡的**是哪几张、各自的 `H/框内/顶占比` 怎么变的。
@@ -98,7 +97,7 @@ java -cp out;stubs_out;<stdlib> harness.ReplayKt ../_dump.txt captured   # 重�
 - **`ObjKt`（平色饼计数）** —— 判据台里**唯一一条只看产品自己、不看外部答案**的质量闸：
   **源图本来有 ≥4 档亮度、交出去却塌到有效档数 Neff ≤2.5** 的图标数。**只数模型真会处理的那些**
   （语料带 `index.tsv` 时按 `mono` 列排除自带单色层的 —— 那批按硬规则一个像素都不碰，
-  数进来等于给自己刷分，见上面那条更正）。当前 **10 / 174**（真机未适配 61 + 老语料 113）。
+  数进来等于给自己刷分，见上面那条更正）。当前 **11 / 124**（读 `bench/baseline.json` 的 `flatN/flatDen`）。
 - **`TonalGateKt`（入场判据的定线台）** —— 直接调**仓里那一个** `MonochromeMask.tonalClass`，
   把它的三个判据数在语料上排开，并列出"阈值往下挪一格就会进来的那批"。
   为什么单独要一台：`TonalKt` 是我另算的一套量（逐像素 ΔL、全分辨率精确色），而阈值要钉在
@@ -211,9 +210,9 @@ java -cp out;stubs_out;<stdlib> harness.ReplayKt ../_dump.txt captured   # 重�
     没有就**剔出中位数**、单独印 `blank=N` 并点名（chrome 那一张就是这么露出来的，见更新日志）。
     判分表因此判**两项**：`配对总数 = n + blank` 少了红（对岸被动过）、`blank` 多了红
     （抓取通道在交空图层）—— 分开判，"剔掉一张不该计的"才不会被读成"丢了一份答案"。
-  - 接进 `regress.sh` 第 **5/7** 段：`YARDDIR=corpus_audit3`（前景层 + 人画层都在）→ 基线现在是
-    **`n=62 blank=1 med=1.9 mean=7.4 iouMed=0.812 dAlphaMed=8.1`**（2026-10-08 重钉两次；此前它默认吃
-    `corpus_dev2` 那张合成图，印的是已收回的 `0.844`）。配对数 / 平色饼分母**一掉就红**，
+  - 接进 `regress.sh` 第 **5/7** 段：`YARDDIR` 默认 `yard_model`（前景层 + 人画层都在）→ 基线现在是
+    **`n=62 blank=0 med=0.5 mean=6 iouMed=0.94 dAlphaMed=8.4`**（读 `bench/baseline.json`；
+    `corpus_audit3` / `corpus_dev2` 是已作废的旧口径，拿它们跑第 5 闸会被 fg 闸当场拦掉）。配对数 / 平色饼分母**一掉就红**，
     `配对数、平色饼分母、以及 iouMed|dAlphaMed 缺数`都算退步 —— 而 `med/mean/iouMed/dAlphaMed`
     **只报不判**（对岸全部自带单色层，根本不进模型）。⚠ **"没跑出来"绝不算通过**：
     `NaN > b` 与 `NaN < b` 都是 false，所以判分器专门加了「没数就不算绿、也不许 `--update` 成基线」
@@ -310,7 +309,7 @@ java -cp out;stubs_out;<stdlib> harness.ReplayKt ../_dump.txt captured   # 重�
     规矩：**判定本体抽成只有一份的 `*gate.sh`，回归台与变异台 `.` 同一段**。现在的清单（`grep -c` 现量，不是名单）：
     `_harness/namedfloor.sh`（第七闸，`_namedfloor_mut.cjs` 五条）、`selftestgate.sh`（第二闸）、`corpusgate.sh`（第三段，`_corpusgate_mut.cjs` 四条）、
     `twobookgate.sh`（第 19 闸，用例 19 + 21）、`adaptgate.sh`（第 8 与第 20 闸：用例 20 改生产那一行，
-    `_adaptgate_mut.cjs` 六条改的是**分母在不在** —— 入口门是输入级的东西，语义变异台永远碰不到它）。
+    `_adaptgate_mut.cjs` 五条改的是**分母在不在** —— 入口门是输入级的东西，语义变异台永远碰不到它）。
     用法一律 `. ./X.sh; x_gate [后缀]`，后缀让变异台把输出写到 `*_mut.txt`，**不许覆盖活账本**。
   - ✅ **第 21 闸「分母去向账」**（2026-10-22，`node _corpusmap.cjs`）：这一闸不量像素，量的是
     "某类图标到底在哪道闸的分母里"这句话**还查得动吗**。它把 `regress.sh` 与 `*gate.sh` 里的
@@ -319,7 +318,7 @@ java -cp out;stubs_out;<stdlib> harness.ReplayKt ../_dump.txt captured   # 重�
     然后两头查：**新冒出一份"在册却没人吃"的语料 ⇒ 红；名单里那四条历史件不在了 ⇒ 也红**（理由随之作废）。
     在册判据 = 有 `index.tsv` **且**被某份程序引用（不然我把历次量测的临时目录全报成漏，噪声会淹死真漏）。
     控制台 `_corpusmap_mut.cjs`：四条 + 一条元对照（把那句退码摘掉，第 1 条必须假通过）。
-    现读：`13 份在册 / 9 份被吃`，`22 段 = 判定 22 + 扫描 0：语义 10 / 脚本 9 / 活证据 3 / 无 0`。
+    现读：`16 份在册 / 9 份被吃`，`25 段 = 判定 25 + 扫描 0：改过生产源码 11 / 有脚本 10 / 活证据 3 / 只有注释 1 / 无 0`。
   - ❌ **撤回：第 22 闸「主体上墨账」（2026-10-22 立、当天撤）** —— 撤的理由不是它红了，是**它量错了轴**。
     我当时把 MaskBench 的 `框内` 读成"内容框占画幅"，而它是 `fill = kept / boxArea` = **墨在模型自己
     那个内容框里的密度** ⇒ 量的是"这个符号本身有多实"（实心字形天然 ≥0.9、线稿天然 0.09），
@@ -469,17 +468,17 @@ Android SDK、发布 keystore 更在仓库外），所以**"仓库拷过来了"�
 | JDK 17+ | 本机 `D:\Java\jdk-*`（**目录名带补丁号，会随升级改名**） | `cd _harness && sh build.sh` 第一行会印 `[jdk] <路径> (<版本>)` —— **每一轮的 JDK 是当场量出来的，不是写死的**。⚠ 2026-10-08：这台机器把 `D:\Java\jdk-21` 原地改成了 `jdk-21.0.11`，而 `jdk.sh` 里那五条候选是**写死版本号**的，于是一套判据台当场断、`JAVA_HOME` 也是空的。现在改成"列根目录 → 通配展开 → 版本从高到低试 → 最后才 PATH（仍验主版本号）"。历史坑仍在：PATH 上曾经排第一的是 Oracle 的 1.8，裸写 `java` 拿到它时 `-Dstdout.encoding=UTF-8` 不认，中文键名直接成问号 |
 | Android SDK 37 | `local.properties` 里那个 `sdk.dir` | `ls $SDK/platforms` 要有 `android-37.0`（`AndroidVersion.ApiLevel=37.0`；这一档**没有** `android-37` 这个包名，`sdkmanager` 里它叫 `platforms;android-37.0`）。`--licenses` 必须先接受，否则 AGP 缺组件时不会自动补 |
 | Gradle 9.7.1 分发 | `~/.gradle/wrapper/dists/gradle-9.7.1-bin/<hash>/` | `sh gradlew --version`。**⚠ 这台机器上 Java 直连 `services.gradle.org` 的 TLS 被掐**（curl 直连却通），所以 wrapper 自己下不动；走镜像取 zip，按 `<hash>/` 下 `gradle-9.7.1/` + 一个同名 `.zip.ok` 摆好即可。** sha256 一定要对 `downloads.gradle.org` 上的官方值**，别对镜像的 |
-| kotlinc 2.4.20 四件 | `~/.gradle/caches/modules-2/files-2.1/`（判据台按 glob 找它） | `sh _harness/build.sh` 要 `0 error`。手工补 jar 时**目录名用文件的 sha1**（就是 gradle 自己的摆法），并对 Maven Central 的 `.sha1` 逐个核。**⚠ 但这条 gate 盖不到三份文件**：`build.sh` 的编译清单里**没有** `MonochromeSynth.kt` / `CircleIconDrawable.kt` / `IconHooks.kt`（它们要 Android 类，台子编不动）—— 改这三份时**唯一的编译 gate 是 `./gradlew :app:assembleRelease`**。2026-10-17 就因此提交过一次**编译不过**的改动（`plateLayer` 与下面那位撞名 + 缺 `GradientDrawable` 的 import），装机时才被抓出来。**改这三份 → 提交前先跑一次 gradle，别只看判据台绿。** 这条现在不用记了：`sh _harness/precommit.sh`（退 **1** = 碰了"判据台清单外"的生产源码、而 release 成品不比它们新 —— 工作树碰的算、**最近一次提交碰的也算**（2026-10-22 补：只看未提交的工作树时，HEAD 里正躺着一份"提交在装机之后、从来没编过"的生产源码）；退 **2** = 它自己从 `build.sh` 解析不出清单，不许读成"没碰生产源码"）。名单**从 `build.sh` 现读**、不在闸里再抄一份；自证台 `_precommit_mut.cjs` **十二条用例 + 两条元对照**（全在 `D:/tmp/pcgate` 里 `git init` 现造，不动工作区）：一条把闸改成"APK 存在就放行"证第 5 条测的是"新旧"，一条把"也查最近一次提交"那一半摘掉证第 9 条真在看那一半。 |
+| kotlinc 2.4.20 四件 | `~/.gradle/caches/modules-2/files-2.1/`（判据台按 glob 找它） | `sh _harness/build.sh` 要 `0 error`。手工补 jar 时**目录名用文件的 sha1**（就是 gradle 自己的摆法），并对 Maven Central 的 `.sha1` 逐个核。**⚠ 但这条 gate 盖不到大多数生产文件**：`build.sh` 只编 45 份里的 **13 份**，`MonochromeSynth.kt` / `CircleIconDrawable.kt` / `IconHooks.kt` 这些要 Android 类的（还有整个 `ui/`、`runtime/`…）台子都编不动—— 改这三份时**唯一的编译 gate 是 `./gradlew :app:assembleRelease`**。2026-10-17 就因此提交过一次**编译不过**的改动（`plateLayer` 与下面那位撞名 + 缺 `GradientDrawable` 的 import），装机时才被抓出来。**改这三份 → 提交前先跑一次 gradle，别只看判据台绿。** 这条现在不用记了：`sh _harness/precommit.sh`（退 **1** = 碰了"判据台清单外"的生产源码、而 release 成品不比它们新 —— 工作树碰的算、**最近一次提交碰的也算**（2026-10-22 补：只看未提交的工作树时，HEAD 里正躺着一份"提交在装机之后、从来没编过"的生产源码）；退 **2** = 它自己从 `build.sh` 解析不出清单，不许读成"没碰生产源码"）。名单**从 `build.sh` 现读**、不在闸里再抄一份；自证台 `_precommit_mut.cjs` **十条用例 + 两条元对照**（全在 `D:/tmp/pcgate` 里 `git init` 现造，不动工作区）：一条把闸改成"APK 存在就放行"证第 5 条测的是"新旧"，一条把"也查最近一次提交"那一半摘掉证第 9 条真在看那一半。 |
 | 发布 keystore | `C:/Users/20653/.opticon/opticon-release.jks` | `keytool -list -v` 的 SHA256 必须是 `9757…5e64` —— 与 `app-release.apk` 用 `apksigner verify --print-certs` 打出来的**逐位相同**才算同一把钥匙。对不上就是签名冲突，设备上那张只能卸载重装（本应用配置会丢） |
-| 判据台语料 | `_harness/{rec_model,yard_model,plate_model,rec3u,rec3,corpus_audit3,corpus_runtime,dev1001,captured_live,twobook_ctrl,shortcut_model,adapted_model,shortcut_bit}` | ⚠ **2026-10-21 起"裁判"本体已入库**（`.gitignore` 里给 `_harness/` 开了白名单），但**抓回来的语料目录大多仍在本机**，只靠整目录拷；少了任何一档，**20 道回归闸**就少一项可比（缺语料时那一段会**入口门拦下并说清怎么重建**，不许悄悄少一份分母）。**已入库的四份例外**：`rec_blank`（34 张，没了就是没了）、`twobook_ctrl`（1 张合成对照）、**`shortcut_model` 183 张 + `adapted_model` 67 张 + `shortcut_bit` 45 张**（2026-10-22 补的三类，见下）。⚠ **口径三份各管一段，别混**：`rec_model` 是回归台默认 `CORPUS`（2026-10-11 从 `rec3u` 换过来的 —— 素材新，而且与 `MonochromeSynth` 同分支同几何；`rec3u` 是真机 dump，口径对但目录里**没有 `_modelbg.png`**，`盘刀` 在它上面从来不开火）；`yard_model` 是**第 5 闸对表**要的 `YARDDIR`（10-12 换的，同时有 `_mono` + `_model` + `_modelbg`；`corpus_audit3` 是它的旧口径，现在拿它跑第 5 闸会被 fg 闸当场拦掉）；`plate_model` 是**第 16 闸极性入口账**专用的 68 张（`rec_model` 对那一刀是**空跑**：开火 0 张、波及 0 张）；**第 17 闸跨 canvas 判据不变账**用的就是默认 `rec_model`，只是每张在 `192/384/768` 三档各重采样一遍（⚠ **128 故意不进对照**：低于扫描边长时 `of()` 不降采样，那是第三条路径，不是"屏幕上两个尺寸"）；**`twobook_ctrl` 是第 19 闸的对照语料**（一张合成图 + 它的 index，`node _mk_twobook_ctrl.cjs` 现造 ⇒ 既入库也可重建）—— 真语料 132 张上"极性翻 0 张"，这道闸对"把极性退回判据那一本"不会响，而这一张两本账判定本来就相反。⚠ **第 19 闸跑两档**：默认 384 之外再按 `--edge=96` 跑一遍并钉 `twoacct96.pin` —— 384 档两本账的格子本来就是同一张（`格子分岔=0`），只有把边长压到 `SCAN_EDGE` 之下才分岔（现量 113 张）；那一段另有**两条不看基线**的当场断言（`格子分岔` 不许是 0、96 与 384 的**归属**必须一字不差 —— 只比 `开火集 / 老开火集 / 翻名单`，`分支=` 那张**差表允许随档动**，2026-10-22 我把它写宽过一次、当场自己红了），重钉基线也躲不过。🔴 同日还把**彩色那本搬到生产几何**：非自适应那一支按文件的 **intrinsic** 尺寸算（`scanSize(iw,ih,false)`），机器行多三位 `原生= / 原生分岔= / 原生退回=`；现量 384 档 `原生=248 原生分岔=23` 而**所有旧字段一格没动**（⇒ "两本合一"不靠 edge 近似撑着），96 档 `原生分岔=240` 且那一支 `差≥3=16 最大差=5` 而 `极性翻=0`。🔑 **2026-10-22 第四次干净克隆验收（实测"够不够"，不是抄名单）**：`git clone` 到仓库外、**把 adb 摘出 PATH**、只拷这九份本机语料进去（`rec_model plate_model yard_model rec3 rec3u corpus_audit3 corpus_runtime dev1001 captured_live`）⇒ `sh regress.sh` **全绿 EXIT=0**，逐行与原树 diff 只差两处：一行成本计时（354ms↔379ms，机器噪声）与一句诚实的「没有 `bench/yard_why.txt` —— 归因侧档跳过，红绿灯不受影响」（那份归因侧档不入库）。⚠ 这证的是**充分**，不是"每份都必要"。空克隆（不拷语料）那一轮也跑了：第 3 段**点名缺哪一份、怎么重建**、退 1，不是"一声不响地死"。
+| 判据台语料 | `_harness/{rec_model,yard_model,plate_model,rec3u,rec3,corpus_audit3,corpus_runtime,dev1001,captured_live,twobook_ctrl,shortcut_model,adapted_model,shortcut_bit}` | ⚠ **2026-10-21 起"裁判"本体已入库**（`.gitignore` 里给 `_harness/` 开了白名单），但**抓回来的语料目录大多仍在本机**，只靠整目录拷；少了任何一档，**25 道回归闸**就少一项可比（缺语料时那一段会**入口门拦下并说清怎么重建**，不许悄悄少一份分母）。**已入库的六份例外**：`rec_blank`（34 张，没了就是没了）、`twobook_ctrl`（1 张合成对照）、**`shortcut_model` 183 张 + `adapted_model` 67 张 + `shortcut_bit` 45 张**（2026-10-22 补的三类，见下）、**`notif_model` 118 张**（通知小图标语料，第 25 闸的分母）。⚠ **口径三份各管一段，别混**：`rec_model` 是回归台默认 `CORPUS`（2026-10-11 从 `rec3u` 换过来的 —— 素材新，而且与 `MonochromeSynth` 同分支同几何；`rec3u` 是真机 dump，口径对但目录里**没有 `_modelbg.png`**，`盘刀` 在它上面从来不开火）；`yard_model` 是**第 5 闸对表**要的 `YARDDIR`（10-12 换的，同时有 `_mono` + `_model` + `_modelbg`；`corpus_audit3` 是它的旧口径，现在拿它跑第 5 闸会被 fg 闸当场拦掉）；`plate_model` 是**第 16 闸极性入口账**专用的 68 张（`rec_model` 对那一刀是**空跑**：开火 0 张、波及 0 张）；**第 17 闸跨 canvas 判据不变账**用的就是默认 `rec_model`，只是每张在 `192/384/768` 三档各重采样一遍（⚠ **128 故意不进对照**：低于扫描边长时 `of()` 不降采样，那是第三条路径，不是"屏幕上两个尺寸"）；**`twobook_ctrl` 是第 19 闸的对照语料**（一张合成图 + 它的 index，`node _mk_twobook_ctrl.cjs` 现造 ⇒ 既入库也可重建）—— 真语料 132 张上"极性翻 0 张"，这道闸对"把极性退回判据那一本"不会响，而这一张两本账判定本来就相反。⚠ **第 19 闸跑两档**：默认 384 之外再按 `--edge=96` 跑一遍并钉 `twoacct96.pin` —— 384 档两本账的格子本来就是同一张（`格子分岔=0`），只有把边长压到 `SCAN_EDGE` 之下才分岔（现量 113 张）；那一段另有**两条不看基线**的当场断言（`格子分岔` 不许是 0、96 与 384 的**归属**必须一字不差 —— 只比 `开火集 / 老开火集 / 翻名单`，`分支=` 那张**差表允许随档动**，2026-10-22 我把它写宽过一次、当场自己红了），重钉基线也躲不过。🔴 同日还把**彩色那本搬到生产几何**：非自适应那一支按文件的 **intrinsic** 尺寸算（`scanSize(iw,ih,false)`），机器行多三位 `原生= / 原生分岔= / 原生退回=`；现量 384 档 `原生=248 原生分岔=23` 而**所有旧字段一格没动**（⇒ "两本合一"不靠 edge 近似撑着），96 档 `原生分岔=240` 且那一支 `差≥3=16 最大差=5` 而 `极性翻=0`。🔑 **2026-10-22 第四次干净克隆验收（实测"够不够"，不是抄名单）**：`git clone` 到仓库外、**把 adb 摘出 PATH**、只拷这九份本机语料进去（`rec_model plate_model yard_model rec3 rec3u corpus_audit3 corpus_runtime dev1001 captured_live`）⇒ `sh regress.sh` **全绿 EXIT=0**，逐行与原树 diff 只差两处：一行成本计时（354ms↔379ms，机器噪声）与一句诚实的「没有 `bench/yard_why.txt` —— 归因侧档跳过，红绿灯不受影响」（那份归因侧档不入库）。⚠ 这证的是**充分**，不是"每份都必要"。空克隆（不拷语料）那一轮也跑了：第 3 段**点名缺哪一份、怎么重建**、退 1，不是"一声不响地死"。
 🔴 **另两份是"类别覆盖"补票（2026-10-22）**：`shortcut_model`（183 张**长按快捷方式**）—— 极性那一刀离线 132 张"翻 0 张"、真机却翻了两张快捷方式，因为主语料**全是启动图标**；建法 `node _shotdump.cjs <dumpsys shortcut> --logs=<logcat> --marker=…` → 设备抓 → `node _mkrec_model.cjs <pull> shortcut_model`。
 `adapted_model`（67 张**应用自带单色层**，每张带 `*_mono.png`）—— 建语料脚本过去按 `mono=有 ⇒ 直通、不上模型` 把这一整类剔掉，可第 8 闸的 veto 恰恰从这批里挑 2 张**改由我们画**（etar、飞鸟）⇒ **我们接管的输出之前不在任何尺下**；建法 `node _mkrec_model.cjs <抓取目录> adapted_model --only=adapted`，吃它的是第 8 闸（该不该接管）与第 20 闸（接管后交出去的是什么：`字均净`/`零`/`淡` 中位 + 接管名单）。
 ⚠ 第 20 闸那几根中位**不是收益表**：这一类没有对岸（设计师那一层就是那块饼），只能防"更坏"。
-重建：`node _mkrec_model.cjs <抓取目录> rec_model`。 实际张数账：`rec_model 62 图 + 20 张 _modelbg / plate_model 68 / yard_model 62 对 / rec3u 62 / rec3 113（里面 51 个与别人逐字节相同 —— 拿它当分母读数会偏，见更新日志「45% 是重复行」那条）/ corpus_runtime 123 / dev1001 35 / twobook_ctrl 1`。🔴 **这两份主语料全是「启动图标」，一张快捷方式都没有**（2026-10-21 装机现量：极性那一刀在 132 张上翻 0 张，真机却翻了两张 `com.android.contacts` 的长按快捷方式）⇒ 凡是"离线量到 0 变化 ⇒ 预测屏幕上不变"这类话，**必须同句写出哪一类它没覆盖**；要覆盖那一类得从桌面 `app_icons.db` / `ShortcutInfo` 那条通道另抓一份语料。⚠ **旧口径目录只为复现历史数而留**：`corpus_dev2` 是合成图口径、`corpus_audit3` 的 `*_fg` 是**可见区几何**（与模型吃的那层差 1.5 倍构图）—— 拿它们跑现在的闸会**当场红**，那不是回归，是口径。**换分母 = 换实验**：10-11 那次换过之后六项判据全部重钉，旧绝对值从此不可比。 |
-| Node | `node -v` | 判据台的 `.cjs` 脚本（`_regress.cjs` / `_abdiff.cjs` / `_undump.cjs`）都要它。⚠ **装机侧的守卫也在这批里、同样不入库**：`_notifyguard.cjs`（通知行裁圆还在不在，退码 0/1/2）+ 它的变异测 `_notifyguardmut.cjs`、`_wcverify.cjs`（缓存前后逐字对照）、`_a8sweep.cjs` / `_a8cmp.cjs`（拉交付掩码逐格比）、`_xedge.cjs`（真机跨 canvas 判据账）。换机器时**整目录拷 `_harness/`**，少了这些就等于那些守卫没了 |
+重建：`node _mkrec_model.cjs <抓取目录> rec_model`。 实际张数账：`rec_model 64 图 + 20 张 _modelbg / plate_model 68 / yard_model 62 对 / rec3u 62 / rec3 113（里面 51 个与别人逐字节相同 —— 拿它当分母读数会偏，见更新日志「45% 是重复行」那条）/ corpus_runtime 123 / dev1001 35 / twobook_ctrl 1`。🔴 **这两份主语料全是「启动图标」，一张快捷方式都没有**（2026-10-21 装机现量：极性那一刀在 132 张上翻 0 张，真机却翻了两张 `com.android.contacts` 的长按快捷方式）⇒ 凡是"离线量到 0 变化 ⇒ 预测屏幕上不变"这类话，**必须同句写出哪一类它没覆盖**；要覆盖那一类得从桌面 `app_icons.db` / `ShortcutInfo` 那条通道另抓一份语料。⚠ **旧口径目录只为复现历史数而留**：`corpus_dev2` 是合成图口径、`corpus_audit3` 的 `*_fg` 是**可见区几何**（与模型吃的那层差 1.5 倍构图）—— 拿它们跑现在的闸会**当场红**，那不是回归，是口径。**换分母 = 换实验**：10-11 那次换过之后六项判据全部重钉，旧绝对值从此不可比。 |
+| Node | `node -v` | 判据台的 `.cjs` 脚本（`_regress.cjs` / `_abdiff.cjs` / `_undump.cjs`）都要它。⚠ **装机侧的守卫也在这批里（已随 `_harness/` 入库）**：`_croprange.cjs`（裁圆射程，退码 0/1/2）+ 它的变异测 `_croprangemut.cjs`（`_notifyguard.cjs` 已随「默认全裁、只排磁贴」那条规则退休）、`_wcverify.cjs`（缓存前后逐字对照）、`_a8sweep.cjs` / `_a8cmp.cjs`（拉交付掩码逐格比）、`_xedge.cjs`（真机跨 canvas 判据账）。换机器时**整目录拷 `_harness/`**，少了这些就等于那些守卫没了 |
 
 点齐之后**第一件事是跑 `cd _harness && sh regress.sh`，逐位对上 `bench/baseline.json` 再动代码** ——
-对不上就是量具换了，这一轮测的所有数都不能要。基线现钉在 **2026-10-13 那次重钉**之后：
-`faint 28 / medZ 214 / res 1480 / lv 179 / driftN 2 / rho .947 / rhoBad 32 / cap 47.3 /
-yard 62·0.6·6.1·IoU .94 / flat 11-122 / 兼容性 58-0-10`（键名照 `bench/baseline.json` 读，
+对不上就是量具换了，这一轮测的所有数都不能要。基线现钉在 **2026-11-10 09:54 那次**（`at` 字段）：
+`n 64 / res 619 / lv 180 / driftN 5 / rho .915 / rhoBad 37 / cap 47.3 / jitterBad 0 /
+yard 62·0·0.5·6·IoU .94 / flat 11-124 / 兼容性 62-0-6`（键名照 `bench/baseline.json` 读，
 **别引用 10-11 之前的绝对值** —— 分母换过，不可比）。

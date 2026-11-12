@@ -163,7 +163,7 @@ private fun StatusCard() {
   )
 }
 
-/** 作用域清单：一张卡片里 10 行，每行 = 图标方块 + 标题 + 描述 + 标签。 */
+/** 作用域清单：10 行，每行自己一张卡（首尾大圆角、行间 2dp）= 图标方块 + 标题 + 描述 + 标签。 */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ScopeGroup(onNotify: (String) -> Unit) {
