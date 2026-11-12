@@ -107,8 +107,9 @@ launcher / settings / system_server 那几条是给图标功能用的（裁圆�
 > 界面全部走 Material 3 Expressive：圆角用 `MaterialTheme.shapes.*` 的语义档位、
 > 内容卡一律走共享的 `OpticonCard`、配色只用 `colorScheme` 的语义角色，浅色 / 深色两套都成立。
 >
-> ⚠ **唯一的写死颜色**是「关于」页那块图标底板的 `@color/opticon_icon_background`
-> （品牌淡粉）：那是在复刻桌面图标本体，本来就不该跟随取色。
+> ⚠ 界面里**没有写死颜色**；写死的只有**桌面图标本体**的背景 `@color/opticon_icon_background`
+> （品牌淡粉）—— 那是在复刻应用图标，本来就不该跟随取色。「关于」页的标记（`OpticonMark`）
+> 走的是主题色，不是这块粉。
 
 设置写进自己的 SharedPreferences，模块侧通过本应用暴露的**只读 ContentProvider**
 （`com.iamcanincan.opticon.config`，只读，按调用方包名认自家人）

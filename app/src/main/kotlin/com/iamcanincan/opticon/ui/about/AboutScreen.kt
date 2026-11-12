@@ -32,6 +32,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.BuildConfig
 import com.iamcanincan.opticon.R
+import com.iamcanincan.opticon.ui.GroupTitle
 import com.iamcanincan.opticon.ui.IconTile
 import com.iamcanincan.opticon.ui.NoteList
 import com.iamcanincan.opticon.ui.OpticonCard
@@ -76,6 +77,8 @@ internal fun LazyListScope.aboutItems(
 ) {
   // 品牌卡先行：先给身份与版本，再给更新与隐私。
   item { AboutCard(onOpen = open) }
+
+  item { GroupTitle(stringResource(R.string.section_range)) }
 
   item {
     NoteList(
@@ -138,18 +141,18 @@ private fun PrivacyCard() {
 }
 
 /**
- * 关于：版本/许可 + 跳转 GitHub 的按钮。
+ * 关于：身份（图标 + App 名 + 版本）+ 说明 + 跳转 GitHub 的按钮。
  *
- * ⚠ 这里**不重复 App 名**：顶栏已经有它了，每页再来一遍标记 + 版本是重复
- *   （README「界面」一节记的就是这条）。所以这块只放**图标本体 + 版本 + 说明 + 入口**，
- *   内容居中 —— 本页本来就短，居中的一块比左上角一行更能撑住这一页。
+ * ⚠ **App 名必须写在这里**：这一页是二级页，顶栏标题是「关于」、品牌标记也被返回箭头让位，
+ *   整页没有一处会说出应用叫什么。以前那句"顶栏已经有它了"对二级页不成立。
  *
  * ⚠ [onOpen] 由页面传进来（内部走 [openExternalUrl]），不在这里直接拿 `LocalUriHandler`：
  *   失败要能弹提示，而这页自己没有 Snackbar 的作用域（那是外壳的）。
  */
 @Composable
 private fun AboutCard(onOpen: (String) -> Unit) {
-  OpticonCard {
+  // 比普通卡多留一点内边距：整块是居中的身份区，贴边会显得挤。
+  OpticonCard(padding = 24.dp) {
     Column(
       modifier = Modifier.fillMaxWidth(),
       horizontalAlignment = Alignment.CenterHorizontally,
@@ -159,11 +162,17 @@ private fun AboutCard(onOpen: (String) -> Unit) {
 
       Spacer(modifier = Modifier.height(14.dp))
       Text(
-        text = stringResource(R.string.about_version, BuildConfig.VERSION_NAME),
-        style = MaterialTheme.typography.titleMedium,
+        text = stringResource(R.string.app_name),
+        style = MaterialTheme.typography.headlineSmall,
         color = MaterialTheme.colorScheme.onSurface,
       )
-      Spacer(modifier = Modifier.height(6.dp))
+      Spacer(modifier = Modifier.height(4.dp))
+      Text(
+        text = stringResource(R.string.about_version, BuildConfig.VERSION_NAME),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+      Spacer(modifier = Modifier.height(10.dp))
       Text(
         text = stringResource(R.string.about_body),
         style = MaterialTheme.typography.bodyMedium,
