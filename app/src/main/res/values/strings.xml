@@ -40,20 +40,20 @@
     <string name="stats_title">各功能处理次数</string>
     <string name="stats_empty">还没有收到上报</string>
     <string name="stats_empty_title">还没有计数</string>
-    <string name="stats_empty_body">到桌面划一划、随手开几个应用；桌面与系统界面每处理 20 次回报一次，之后这里就按功能列出次数。</string>
-    <string name="stats_at">上次更新 %1$s（由桌面 / 系统界面上报）</string>
+    <string name="stats_empty_body">到桌面划一划、随手开几个应用；桌面、系统界面这些被注入的进程每处理 20 次回报一次，之后这里就按功能列出次数。</string>
+    <string name="stats_at">上次更新 %1$s（由被注入的进程上报）</string>
     <string name="stats_refresh">刷新</string>
     <string name="stats_by_feature">按功能</string>
     <string name="stats_export">导出</string>
     <string name="stats_export_done">已导出：%1$s</string>
-    <string name="stats_export_empty">还没有明细可导出（桌面重画过图标之后才会有）</string>
+    <string name="stats_export_empty">还没有明细可导出（处理过图标或通知之后才会有）</string>
     <string name="stats_total_unit">次处理</string>
     <string name="stats_percent">%1$d%%</string>
     <string name="stats_times">次</string>
     <string name="stats_share">占 %1$d%%</string>
     <string name="home_sub">图标裁圆 · 单色极性 · 通知小图标，三项都可以单独开关。下面一眼看全当前状态。</string>
     <string name="home_features">功能状态</string>
-    <string name="home_sub_crop">桌面图标统一裁成圆形</string>
+    <string name="home_sub_crop">应用图标统一裁成圆形</string>
     <string name="home_sub_mono">未适配图标的黑白极性修正</string>
     <string name="home_sub_notify">通知小图标改成黑白剪影</string>
     <string name="home_role">当前状态</string>
@@ -65,10 +65,10 @@
     <string name="home_count">%1$d 次</string>
     <string name="home_tips">提示</string>
     <string name="home_tip_stale_title">改完开关没变化？</string>
-    <string name="home_tip_stale_body">现在改完开关会自动清缓存并重启桌面；万一还是没变化，到「设置 → 运维操作」手动按一次。</string>
+    <string name="home_tip_stale_body">现在改完开关会自动清缓存 / 重启对应的界面进程；万一还是没变化，到「设置 → 运维操作」手动按一次。</string>
     <string name="home_tip_count_title">这些数字是什么？</string>
-    <string name="home_tip_count_body">桌面与系统界面各处理了多少次，每 20 次回报一次；明细在「统计」页。</string>
-    <string name="home_total_none">桌面与系统界面每处理 20 次回报一次，稍等就有数字。</string>
+    <string name="home_tip_count_body">桌面、系统界面等被注入的进程各处理了多少次，每 20 次回报一次；明细在「统计」页。</string>
+    <string name="home_total_none">桌面、系统界面这些进程每处理 20 次回报一次，稍等就有数字。</string>
     <string name="features_role">三个功能的开关；每个功能的说明与效果从主页那一行进去</string>
     <string name="features_group">三个功能</string>
     <string name="settings_group">配置与关于</string>
@@ -77,7 +77,7 @@
     <string name="features_all_hint">三个功能一起开 / 关；排查时先全关最省事。</string>
     <string name="features_note_group">开关什么时候生效</string>
     <string name="features_effect_title">约一秒内生效</string>
-    <string name="features_effect_body">开关写入后模块每秒重读一次配置：新画的图标、新收到的通知立刻按新设置处理。切开关时界面还会自动清一次桌面缓存（通知那一路重启系统界面），已经画出来的也会重画；万一仍没变化，到「设置 → 运维操作」手动按一次。</string>
+    <string name="features_effect_body">开关写入后模块每秒重读一次配置：新画的图标、新收到的通知立刻按新设置处理。切开关时：裁圆 / 单色会清桌面缓存并重启桌面，桌面图标随之重画；通知会重启系统界面，通知随之重建。设置、分享面板这些进程要等它们自己重新加载。万一仍没变化，到「设置 → 运维操作」手动按一次。</string>
     <string name="settings_scope_sub">显示应用图标的进程在这里勾选</string>
     <string name="settings_setup_title">启用与验证</string>
     <string name="settings_setup_sub">四步启用、一条 adb 命令验证</string>
@@ -102,7 +102,7 @@
 
     <!-- 作用域分组 -->
     <string name="section_scope">作用域</string>
-    <string name="scope_hint">图标裁圆与单色合成都发生在这些进程中；解析应用图标的进程需识别模块写入的标记。作用域不固定：显示应用图标的应用均可在框架管理器中勾选；未勾选的进程会收到无法解析的资源 ID。</string>
+    <string name="scope_hint">图标裁圆与单色合成都发生在这些进程中；解析应用图标的进程需识别模块写入的标记。作用域不固定：显示应用图标的应用均可在框架管理器中勾选；未勾选的进程显示原图标（不会被裁圆 / 合成），不会出错。</string>
 
     <!-- 作用域标签（3 种，多个作用域共享同一档位）-->
     <string name="scope_tag_required">必选</string>
@@ -150,7 +150,7 @@
     <string name="step_1">在框架中启用本模块</string>
     <string name="step_1_hint">在框架管理器中启用本模块。</string>
     <string name="step_2">按上方清单选择生效进程</string>
-    <string name="step_2_hint">至少选择 com.android.launcher3，方可在桌面观察裁圆与单色层（两者均在桌面进程内执行）；通知功能还需 com.android.systemui。</string>
+    <string name="step_2_hint">至少选择 com.android.launcher3，方可在桌面观察裁圆与单色层（单色合成只在桌面进程里挂，裁圆则在每个被注入的进程里各自生效）；通知功能还需 com.android.systemui。</string>
     <string name="step_3">重启设备</string>
     <string name="step_3_hint">框架不支持模块热加载，需重启设备。</string>
     <string name="step_4">桌面未更新时，强制停止桌面进程并重新启动</string>
@@ -158,7 +158,7 @@
 
     <!-- 验证 -->
     <string name="section_verify">验证是否生效</string>
-    <string name="verify_body">执行下方命令。出现 install in 或 Hooked 表示模块已注入对应进程；通知功能应检查 patched。</string>
+    <string name="verify_body">执行下方命令。出现 install in 或 Hooked 表示模块已注入对应进程；通知那一行 patched 只在真有图标需要修时才出现，没有它不代表没生效。</string>
     <string name="verify_logcat">adb logcat -s Opticon</string>
     <string name="verify_copy">复制命令</string>
     <string name="verify_copied">已复制到剪贴板</string>
@@ -174,16 +174,16 @@
     <string name="action_restart_systemui">重启系统界面</string>
     <string name="action_restart_others">重启设置等进程</string>
     <string name="cache_sent">请求已发送：桌面进程将重启，并按当前设置重建图标。</string>
-    <string name="switch_applied_cache">已应用：桌面图标缓存已清除，桌面正在重启</string>
-    <string name="switch_applied_systemui">已应用：系统界面已重启，通知会按新设置重画</string>
-    <string name="switch_applied_all">已应用：已清桌面缓存并重启系统界面</string>
+    <string name="switch_applied_cache">已应用：正在清桌面缓存并重启桌面</string>
+    <string name="switch_applied_systemui">已应用：正在重启系统界面，通知会按新设置重画</string>
+    <string name="switch_applied_all">已应用：正在清桌面缓存并重启系统界面</string>
     <string name="restart_sent">请求已发送：目标进程将重启。</string>
     <string name="tools_hint">通常仅在图标未随设置更新时使用。若无响应，表示该进程未注入模块；请核对上方作用域并重启设备。</string>
 
     <!-- 效果示意（形状对比图）-->
     <string name="section_effect">效果</string>
     <string name="effect_title">统一裁切为正圆</string>
-    <string name="effect_body">图案铺满画布的图标直接裁切为正圆；无法裁切的图标保持完整，缩放后置于圆内并补充白色底；透明底快捷方式按原始尺寸置于白色底上。</string>
+    <string name="effect_body">图案铺满画布的图标直接裁切为正圆；无法裁切的图标保持完整，缩放后置于圆内并补一层底盘（默认白，图案本身几乎没有深色时改黑）；透明底快捷方式按原始尺寸置于底盘上。</string>
     <!-- 效果示意四格：标题一行 + 细节一行；原样/正圆是主对照，保留完整/快捷方式是两档例外 -->
     <string name="effect_sample_original_detail">系统形状</string>
     <string name="effect_sample_cropped_detail">满幅图案</string>
@@ -213,9 +213,9 @@
     <string name="section_notes">说明</string>
     <string name="note_adaptive">自适应图标同样会被裁切为圆形；系统默认形状（圆角方、水滴等）并非圆形。</string>
     <string name="note_tiles">快速设置磁贴使用单色图形，不在裁切范围内。</string>
-    <string name="note_mono_scope">已提供单色层的应用将原样透传，模块不对其像素作修改。</string>
+    <string name="note_mono_scope">已提供单色层的应用，那张单色层将原样透传，模块不改它的像素。</string>
     <string name="note_mono_cache">剪影按图标内容缓存于宿主应用的缓存目录（上限 48 MB，系统存储不足时可能被清除）。模块版本或图标内容变更后缓存自动失效；升级后的首次重启加载会较慢。</string>
-    <string name="note_launcher3">Android 16 及以上会禁用桌面自带的背景板；圆形遮罩（以及部分图标圆内的白色底）由模块绘制。</string>
+    <string name="note_launcher3">Android 16 及以上会禁用桌面自带的背景板；圆形遮罩（以及部分图标圆内的底盘）由模块绘制。</string>
     <string name="note_themed_icon">本应用图标包含 monochrome 层；在 Android 13 及以上启动器启用“主题图标”时，将按壁纸取色渲染。</string>
 
     <!-- 关于页：功能范围（覆盖什么、有意排除什么） -->
@@ -261,7 +261,7 @@
     <string name="notify_switch_body">在「功能」页关闭后不再处理任何通知。设置即时生效；切开关会自动重启系统界面，已显示的通知也会重建。</string>
     <!-- 通知页示意卡：左=灰白色块，右=修复后的可辨识图标 -->
     <string name="notify_effect_title">通知小图标示意</string>
-    <string name="notify_effect_body">部分通知的小图标在内容区显示为灰白色块；模块按应用图标生成可辨识的剪影。状态栏图标由系统统一着色，不在此列。</string>
+    <string name="notify_effect_body">部分通知的小图标在内容区显示为灰白色块；模块按应用图标生成可辨识的剪影。状态栏那排图标与它同源，由系统只取透明度统一着色，所以看不出颜色差别。</string>
     <string name="notify_sample_before_detail">灰白色块</string>
     <string name="notify_sample_after_title">修复后</string>
     <string name="notify_sample_after_detail">可辨识图标</string>

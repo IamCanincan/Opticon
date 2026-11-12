@@ -63,7 +63,7 @@ internal fun HomeScreen(onOpen: (SubPage) -> Unit) {
   val onCount = listOf(options.circleEnabled, options.monoInvert, options.notifyEnabled).count { it }
   val scheme = MaterialTheme.colorScheme
   // 「运行中」必须是读数、不能是写死的一句话：模块被关掉 / 钩子没注入时，宿主就不会再回报计数。
-  // 判据用已有的「上次上报时间」，不新开探针 —— 桌面与系统界面每处理 20 次才回报一次，
+  // 判据用已有的「上次上报时间」，不新开探针 —— 被注入的进程每处理 20 次才回报一次，
   // 所以窗口给 10 分钟：短于它多半是刚好在忙，长于它就是真的没动静了。
   val fresh = at != 0L && System.currentTimeMillis() - at < FRESH_MS
 
