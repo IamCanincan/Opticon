@@ -28,7 +28,6 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.compositionLocalOf
@@ -493,25 +492,20 @@ internal fun HeroCard(
 }
 
 /**
- * 三个功能页共用的**功能开关卡**（2026-10-26 统一）。
+ * 三个功能页共用的**功能说明卡**（2026-11-12：开关收归「功能」页，二级页只讲这个功能是什么）。
  *
- * 主色 container + 反色图标方块 + 标题 / 开关一行 + **整宽说明** + 同语义水印。
- * 为什么不直接用 [HeroCard]：HeroCard 的正文和标题挤在同一个 Row 里，正文会被右侧开关压窄；
+ * 主色 container + 反色图标方块 + 标题 + **整宽说明** + 同语义水印。
+ * 为什么不直接用 [HeroCard]：HeroCard 的正文和标题挤在同一个 Row 里，正文会被右侧控件压窄；
  * 功能说明比模块状态长（单色那条尤其），必须让正文占满整宽。这里保留 HeroCard 的色彩与水印语言，
  * 只把正文放到下一行 —— 三个功能页因此长得一模一样。
  *
- * ⚠ 2026-11-08 主人：「应只有开关按钮部分点击才能开关，不然太灵敏了」——
- *   整张卡不再 `toggleable`（原来点正文也会把开关翻过去），只有右边的 Switch 自己吃点击。
+ * ⚠ 卡上**没有开关**：每个功能的开关只有「功能」页那一行一处（单一入口）。
  */
 @Composable
-internal fun FeatureSwitchCard(
+internal fun FeatureInfoCard(
   icon: ImageVector,
   title: String,
   body: String,
-  checked: Boolean,
-  onCheckedChange: (Boolean) -> Unit,
-  /** 卡底那句"改完会怎样"。默认是清桌面缓存（裁圆 / 单色），通知页传重启系统界面那句。 */
-  hint: String = stringResource(R.string.feature_cache_hint),
 ) {
   val scheme = MaterialTheme.colorScheme
   OpticonCard(
@@ -543,21 +537,12 @@ internal fun FeatureSwitchCard(
             color = scheme.onPrimaryContainer,
             modifier = Modifier.weight(1f),
           )
-          Spacer(modifier = Modifier.width(8.dp))
-          Switch(checked = checked, onCheckedChange = onCheckedChange)
         }
         Spacer(modifier = Modifier.height(12.dp))
         Text(
           text = body,
           style = MaterialTheme.typography.bodyMedium,
           color = scheme.onPrimaryContainer.copy(alpha = 0.82f),
-        )
-        // 用户报过的那件事：改完开关，屏幕上没变化，以为开关没生效。三页共用这一张卡，提示就写在这里。
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-          text = hint,
-          style = MaterialTheme.typography.bodySmall,
-          color = scheme.onPrimaryContainer.copy(alpha = 0.72f),
         )
       }
     }

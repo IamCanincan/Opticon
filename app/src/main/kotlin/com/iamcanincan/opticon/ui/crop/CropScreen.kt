@@ -20,21 +20,14 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.R
-import com.iamcanincan.opticon.runtime.ModulePrefs
-import com.iamcanincan.opticon.ui.FeatureSwitchCard
-import com.iamcanincan.opticon.ui.clearIconCache
+import com.iamcanincan.opticon.ui.FeatureInfoCard
 import com.iamcanincan.opticon.ui.GroupTitle
 import com.iamcanincan.opticon.ui.NoteList
 import com.iamcanincan.opticon.ui.OpticonCard
@@ -49,13 +42,19 @@ import com.iamcanincan.opticon.ui.ScreenList
  * 顶栏与底部导航让出的空间由外壳扣掉（`OpticonApp` 里的 `Modifier.padding(inner)`），
  * 这里只管列表自己的边距 —— 各页共用同一份脚手架，见 [ScreenList]。
  *
- * ⚠ [onNotify] 由外壳提供、走外壳的协程作用域：这页是 Pager 的一页，切走就被销毁，
- * 用页面自己的 scope 发 Snackbar 会在切页那一刻被取消掉。
+ * ⚠ 开关不在这里（2026-11-12）：只有「功能」页那一行能改，这页只说明这个功能做什么。
  */
 @Composable
-fun CropScreen(onNotify: (String) -> Unit) {
+fun CropScreen() {
   ScreenList {
-    item { MasterSwitchCard(onNotify) }
+    // 「功能」页那一行的开关决定开不开；这里只说明这个功能是什么（单一入口，2026-11-12）。
+    item {
+      FeatureInfoCard(
+        icon = Icons.Default.Circle,
+        title = stringResource(R.string.circle_switch_title),
+        body = stringResource(R.string.circle_switch_body),
+      )
+    }
     item { GroupTitle(stringResource(R.string.section_effect)) }
     item { EffectCard() }
     item { GroupTitle(stringResource(R.string.section_notes)) }
@@ -71,41 +70,6 @@ fun CropScreen(onNotify: (String) -> Unit) {
   }
 }
 
-
-
-/**
- * 裁圆总开关。
- *
- * 写进 SharedPreferences 即可，模块侧按 TTL 自行重读（见 `ModuleRuntime`），
- * 无需广播或重启进程。
- *
- * ⚠ 关闭后，**已绘制在桌面上的图标不会立即恢复**：桌面存在图标缓存，
- * 需在「模块」页的运维操作中清除缓存或重启桌面。
- */
-@Composable
-private fun MasterSwitchCard(onNotify: (String) -> Unit) {
-  val context = LocalContext.current
-  val prefs = remember { ModulePrefs.of(context) }
-  var enabled by remember {
-    mutableStateOf(prefs.getBoolean(ModulePrefs.KEY_CIRCLE_ENABLED, ModulePrefs.DEFAULT_CIRCLE_ENABLED))
-  }
-  val applied = stringResource(R.string.switch_applied_cache)
-
-  FeatureSwitchCard(
-    icon = Icons.Default.Circle,
-    title = stringResource(R.string.circle_switch_title),
-    body = stringResource(R.string.circle_switch_body),
-    checked = enabled,
-    onCheckedChange = { value ->
-      enabled = value
-      prefs.edit().putBoolean(ModulePrefs.KEY_CIRCLE_ENABLED, value).apply()
-      // 2026-11-08 主人：开关后自动做后续动作 —— 桌面把图标位图缓存在自己的库里，
-      // 不主动清一次，"开关改了屏幕没变化"就永远要用户自己跑去运维页按一次。
-      clearIconCache(context)
-      onNotify(applied)
-    },
-  )
-}
 
 
 /**

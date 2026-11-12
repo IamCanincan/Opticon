@@ -19,23 +19,16 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.R
-import com.iamcanincan.opticon.runtime.ModulePrefs
 import com.iamcanincan.opticon.ui.CommandRow
 import com.iamcanincan.opticon.ui.EffectShowcaseCard
-import com.iamcanincan.opticon.ui.FeatureSwitchCard
-import com.iamcanincan.opticon.ui.restartSystemUi
+import com.iamcanincan.opticon.ui.FeatureInfoCard
 import com.iamcanincan.opticon.ui.GroupTitle
 import com.iamcanincan.opticon.ui.OpticonCard
 import com.iamcanincan.opticon.ui.SampleTile
@@ -44,36 +37,19 @@ import com.iamcanincan.opticon.ui.ScreenList
 /**
  * 「通知」页。
  *
- * 2026-10-26 三个功能分页后：开关卡与裁圆 / 单色共用 [FeatureSwitchCard]，
- * 说明区与其它页共用 [ScreenList]/[Section]。本页只有一个开关 —— 通知小图标是否修复。
- * 设置即时写入，模块侧下次读取配置时生效，无需额外保存动作。
+ * 2026-10-26 三个功能分页后：说明卡与裁圆 / 单色共用 [FeatureInfoCard]，
+ * 说明区与其它页共用 [ScreenList]/[Section]。
+ *
+ * 开关只在「功能」页那一行（2026-11-12 单一入口）；这里只讲通知图标做了什么、怎么验证。
  */
 @Composable
 fun NotifyScreen(onNotify: (String) -> Unit) {
-    val context = LocalContext.current
-    // 默认配置由外壳（OpticonApp）在首次打开时写入，这里只读。
-    val prefs = remember { ModulePrefs.of(context) }
-    val applied = stringResource(R.string.switch_applied_systemui)
-
-    var enabled by remember {
-        mutableStateOf(prefs.getBoolean(ModulePrefs.KEY_NOTIFY_ENABLED, ModulePrefs.DEFAULT_NOTIFY_ENABLED))
-    }
-
     ScreenList {
         item {
-            FeatureSwitchCard(
+            FeatureInfoCard(
                 icon = Icons.Default.Notifications,
                 title = stringResource(R.string.notify_switch_title),
                 body = stringResource(R.string.notify_switch_body),
-                hint = stringResource(R.string.notify_switch_hint),
-                checked = enabled,
-                onCheckedChange = { value ->
-                    enabled = value
-                    prefs.edit().putBoolean(ModulePrefs.KEY_NOTIFY_ENABLED, value).apply()
-                    // 通知行由系统界面绘制、已显示的那几条不会自己重绘：重启一次系统界面让它们重建。
-                    restartSystemUi(context)
-                    onNotify(applied)
-                },
             )
         }
 

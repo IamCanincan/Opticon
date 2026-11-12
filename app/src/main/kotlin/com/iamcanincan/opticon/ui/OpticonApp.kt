@@ -178,7 +178,7 @@ private val NavEntries = listOf(
  * 应用外壳：顶栏 + **悬浮药丸式**底部导航 + 五个页面。
  *
  * 分页按**内容归属**来，三个功能各占一页：
- * - 「裁圆」「单色」「通知」是**功能页** —— 各自的开关和只跟它自己有关的说明；
+ * - 「裁圆」「单色」「通知」是**功能页** —— 只跟它自己有关的说明与效果（开关在「功能」页）；
  * - 「模块」是**共用页** —— 作用域清单（三路功能都要勾）、启用步骤、验证方式、运维按钮；
  * - 「关于」是**信息页** —— 检查更新与版本信息（"看看就好"的那类内容）。
  *
@@ -499,7 +499,7 @@ fun OpticonApp() {
                         when (page) {
                             // 四个一级页分工：主页「看」、功能「改」、统计「查」、设置「配」。
                             TAB_HOME -> HomeScreen(onOpen = { subPage = it })
-                            TAB_FEATURES -> FeaturesScreen(onNotify = notify, onOpen = { subPage = it })
+                            TAB_FEATURES -> FeaturesScreen(onNotify = notify)
                             TAB_STATS -> StatsScreen(onNotify = notify)
                             else -> ModuleScreen(onOpen = { subPage = it })
                         }
@@ -525,8 +525,8 @@ fun OpticonApp() {
                                 .background(pageBackground)
                         ) {
                             when (sub) {
-                                SubPage.CROP -> CropScreen(onNotify = notify)
-                                SubPage.MONO -> MonoScreen(onNotify = notify)
+                                SubPage.CROP -> CropScreen()
+                                SubPage.MONO -> MonoScreen()
                                 SubPage.NOTIFY -> NotifyScreen(onNotify = notify)
                                 SubPage.SCOPE -> ScopeScreen(onNotify = notify)
                                 SubPage.SETUP -> SetupScreen(onNotify = notify)

@@ -7,16 +7,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.InvertColors
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Schedule
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -48,15 +44,15 @@ import com.iamcanincan.opticon.ui.groupRowShape
 /**
  * 「功能」一级页 = **开关面板**（2026-11-07 主人：「这界面功能怎么还重复了」）。
  *
- * 之前这一页和主页都在列同样三个功能（连次数和开/关胶囊都一样），是重复。现在分工写死：
- * - 主页**看**：状态结论与次数（只读；点一行进详情）；
+ * 分工写死：
+ * - 主页**看**：状态结论与次数，点一行进该功能的二级页（说明与效果都在那里）；
  * - 功能页**改**：三个开关直接切，外加一个「全部开启 / 全部关闭」。
  *
- * 每一行右侧还有一枚箭头，点它进这个功能的二级页（效果示意与说明都在那里）；
- * 行上其余地方吃的是"切开关"，两者不抢手势。
+ * ⚠ 开关**只有这里一处**（2026-11-12）：三个功能的二级页里不再放开关；反过来，
+ *   这一页也不再挂进详情的箭头 —— 每个功能的入口只有主页那一行，避免两个入口各改一遍。
  */
 @Composable
-internal fun FeaturesScreen(onNotify: (String) -> Unit, onOpen: (SubPage) -> Unit) {
+internal fun FeaturesScreen(onNotify: (String) -> Unit) {
   val context = LocalContext.current
   val prefs = remember { ModulePrefs.of(context) }
   var crop by remember {
@@ -103,7 +99,6 @@ internal fun FeaturesScreen(onNotify: (String) -> Unit, onOpen: (SubPage) -> Uni
           SwitchRow(
             entry = row,
             shape = groupRowShape(i, rows.size),
-            onDetail = { onOpen(row.page) },
             onToggle = { value ->
               when (row.page) {
                 SubPage.CROP -> {
@@ -178,14 +173,13 @@ private data class Entry(
 )
 
 /**
- * 一行开关：整行可点 = 切开关；右侧箭头进详情，最右才是 `Switch`（只做展示 ——
- * 整行已经是同一个开关语义，读屏只报一站）。
+ * 一行开关：只有最右的 `Switch` 吃点击（2026-11-08 主人：「应只有开关按钮部分点击才能开关」）；
+ * 行内其余部分是展示。进详情的箭头已收掉（2026-11-12）：详情只从主页那行进。
  */
 @Composable
 private fun SwitchRow(
   entry: Entry,
   shape: androidx.compose.ui.graphics.Shape,
-  onDetail: () -> Unit,
   onToggle: (Boolean) -> Unit,
 ) {
   val scheme = MaterialTheme.colorScheme
@@ -215,16 +209,8 @@ private fun SwitchRow(
           color = scheme.onSurfaceVariant,
         )
       }
-      // ⚠ 只有箭头和开关本身可点：2026-11-08 主人「应只有开关按钮部分点击才能开关，
-      //   不然太灵敏了」—— 原来整行是 toggleable，点在文字上也会把开关翻过去。
-      IconButton(onClick = onDetail) {
-        Icon(
-          imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-          contentDescription = stringResource(R.string.features_open_detail),
-          tint = scheme.onSurfaceVariant,
-          modifier = Modifier.size(20.dp),
-        )
-      }
+      // ⚠ 2026-11-08 主人「应只有开关按钮部分点击才能开关，不然太灵敏了」——
+      //   整行不是 toggleable，点在文字上不会把开关翻过去。
       Switch(checked = entry.on, onCheckedChange = onToggle)
     }
   }

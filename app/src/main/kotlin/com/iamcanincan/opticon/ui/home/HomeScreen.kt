@@ -124,7 +124,7 @@ internal fun HomeScreen(onOpen: (SubPage) -> Unit) {
 
     item { GroupTitle(stringResource(R.string.home_features)) }
 
-    // 功能列表：点一行进对应功能的二级页（开关与效果都在那里）。
+    // 功能列表：点一行进对应功能的二级页（说明与效果在那里；开关只在「功能」页）。
     item {
       // 首尾大圆角、中间小圆角，行间只留 2dp（2026-11-07 主人：小圆角的边要贴得更近点）。
       Column(verticalArrangement = Arrangement.spacedBy(GroupGap)) {
