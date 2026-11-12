@@ -339,7 +339,29 @@ private class MaskedDrawable(
   /** 这张图标是否已经往统计明细里记过一条（draw 每帧都会进来，只记第一次）。 */
   private var notedCrop = false
 
+  /** draw 抛异常只报一次（每帧都打会把 logcat 刷满）。 */
+  private var drawFailLogged = false
+
   override fun draw(canvas: Canvas) {
+    // ⚠ 第三方 drawable 可能在 draw 里抛（畸形 StateListDrawable / 坏 VectorDrawable /
+    //   已 recycle 的位图）。这一层是被宿主直接画在 UI 里的，异常会一路把宿主带崩
+    //   （第三方反馈的 Settings 崩溃就属于"我们不该把宿主拖下水"这一类）。
+    //   兜底 = 原样画一次：宁可不圆，也不崩。
+    try {
+      drawInner(canvas)
+    } catch (t: Throwable) {
+      if (!drawFailLogged) {
+        drawFailLogged = true
+        Log.w(TAG, "裁圆：draw 抛了，退回原图（${t.javaClass.simpleName}: ${t.message}）")
+      }
+      runCatching {
+        icon.setBounds(bounds)
+        icon.draw(canvas)
+      }
+    }
+  }
+
+  private fun drawInner(canvas: Canvas) {
     val width = bounds.width()
     val height = bounds.height()
     if (width <= 0 || height <= 0) return
