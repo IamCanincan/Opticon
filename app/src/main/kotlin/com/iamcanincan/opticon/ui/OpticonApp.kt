@@ -326,7 +326,7 @@ fun OpticonApp() {
     )
     val pageTitle = subPage?.let { stringResource(it.titleRes) } ?: rootTitle
 
-    // 首次打开就把默认配置落盘。放在外壳而不是各页面里：默认打开的是「图标」页，而模块侧有
+    // 首次打开就把默认配置落盘。放在外壳而不是各页面里：一开始打开的是「主页」，而模块侧有
     // 几条回退通道要先认「这份文件是不是 Opticon 的配置」—— 判据是
     // `ModulePrefs.CONFIG_KEYS` 里**任意一个键存在**（见 looksLikeConfig）。从没打开过界面的
     // 用户文件里一个键都没有，那几条通道就不该拿它当配置，否则空文件会被当成"用户全用默认值"

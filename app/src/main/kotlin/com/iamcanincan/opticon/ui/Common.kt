@@ -126,10 +126,11 @@ internal val GroupGap = 2.dp
 /**
  * 一级页的入口行：图标 + 标题/副标题 + 可选尾随 + 右箭头。点进去是对应的二级页。
  *
- * 主页的三个功能、功能页的三个入口、设置页的四项，全用它 —— 一处定间距和字号，
- * 四页的入口行才不会一页一个样。
+ * 主页的三个功能、设置页的四项、功能页的「全部开启 / 全部关闭」那一行，全用它 ——
+ * 一处定间距和字号，各页的入口行才不会一页一个样。
+ * （功能页那三个功能行不是它：那些行只有开关本身可点，用的是 `SwitchRow`。）
  *
- * @param trailing 右侧附加内容（开关状态胶囊 / 次数），放在箭头左边
+ * @param trailing 右侧附加内容（次数），放在箭头左边
  * @param showChevron 能不能点进去。为 false 时这一行只是展示（不画箭头）
  */
 @Composable
@@ -415,24 +416,16 @@ internal fun IconTile(
 
 /**
  * 一页开头的「主卡」：整张卡铺一个 container 色，里面是
- * 反色图标方块 + 标题 + 一句说明，右侧可选挂一个控件（一般是 `Switch`）。
- *
- * 「图标」页的总开关卡和「模块」页的状态卡本来就是同一个东西（后者只是不挂开关），
- * 连边距和字号都一样，所以合成一份。
+ * 反色图标方块 + 标题 + 一句说明。目前只有「设置」页的状态卡用它。
  *
  * ⚠ 方块是**反着上色**的：底板用 [contentColor]、图标用 [containerColor]。
  *   整张卡已经是 container 色了，方块再顺色就跟卡片糊成一片、等于没有方块。
  *
- * ⚠ [trailing] 是挂在**这一行**最右边的（原来两处都是这么摆的，这里保持原样），
- *   不传 [trailing] 时连那 8dp 的右侧间隔也不生成 —— 模块页的状态卡右边直接收口。
- *   至于「开关该不该待在这一行」，两页没留过说明，别当成定死的约束。
- *
- * ⚠ [modifier] 是给**整张卡**的。⚠ 2026-11-08 起不再建议用 `toggleable` 把整张卡做成开关
- *   （主人：「只有开关按钮部分点击才能开关」）—— 现在各处的开关都由右侧 `Switch` 自己吃点击。
+ * ⚠ 2026-11-12 起卡上**不挂右侧控件**：功能开关全部收在「功能」页那一行，
+ *   功能页自己的说明卡是 [FeatureInfoCard]，与这张不是一回事。
  *
  * @param containerColor 卡片底色，同时当图标的颜色（见上面的反色说明）
  * @param contentColor 卡上的文字色，同时当图标方块的底色
- * @param trailing 右侧控件，为 null 时整行不留右侧间隔
  */
 @Composable
 internal fun HeroCard(
@@ -442,7 +435,6 @@ internal fun HeroCard(
   title: String,
   body: String,
   modifier: Modifier = Modifier,
-  trailing: (@Composable () -> Unit)? = null,
 ) {
   Card(
     modifier = modifier.fillMaxWidth(),
@@ -481,10 +473,6 @@ internal fun HeroCard(
             style = MaterialTheme.typography.bodyMedium,
             color = contentColor,
           )
-        }
-        if (trailing != null) {
-          Spacer(modifier = Modifier.width(8.dp))
-          trailing()
         }
       }
     }

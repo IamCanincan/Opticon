@@ -110,7 +110,8 @@ launcher / settings / system_server 那几条是给图标功能用的（裁圆�
 
 设置写进自己的 SharedPreferences，模块侧通过本应用暴露的**只读 ContentProvider**
 （`com.iamcanincan.opticon.config`，只读，按调用方包名认自家人）
-跨进程读取，按 1 秒 TTL 重读 —— 所以改完开关立刻生效，不用重启进程。
+跨进程读取，按 1 秒 TTL 重读 —— 所以改完开关立刻生效，不用重启进程
+（切开关时界面会顺带清一次桌面缓存 / 重启系统界面，让已经画出来的也重画）。
 
 ## 验证
 
@@ -417,7 +418,7 @@ Android 16 的「强制动态取色」会给**没做单色适配**的应用现�
 「已适配的不动」不用判条件：桌面只在 `getMonochrome()` 为 null 时才 new 那个 Factory，
 自带单色层的应用根本走不到这条路径。
 
-开关是**有的**（单色页 →「未适配的图标由本模块生成单色层」）：关掉 = 完全交回桌面自己处理。
+开关是**有的**（「功能」页 →「未适配图标的单色层」）：关掉 = 完全交回桌面自己处理。
 它不是口味旋钮，而是"这台 ROM 上厂商已经修过极性、我们整体不该介入"时的逃生口。
 一张一张定"这个应用翻不翻"的调试面板已经删掉了（2026-09-30）：它给的是"绕开判据"，
 而这一路要的是把判据量对。
@@ -685,14 +686,14 @@ com.iamcanincan.opticon
 │   ├── OpticonApp             外壳：顶栏 + 悬浮药丸导航 + Pager + 二级页分派与预测式返回
 │   ├── SubPage                二级页枚举（裁圆 / 单色 / 通知 / 作用域 / 启用与验证 / 运维 / 关于）
 │   ├── Actions                界面里的"让改动立刻生效"广播（清缓存 / 重启系统界面 / 重启其他进程）
-│   ├── Common                 各页共用：ScreenList / MenuRow / OpticonCard / HeroCard / IconTile / NoteList / CommandRow
-│   ├── home/HomeScreen        「主页」一级页（状态 + 三个功能的次数）
+│   ├── Common                 各页共用：ScreenList / MenuRow / OpticonCard / HeroCard / FeatureInfoCard / IconTile / NoteList / CommandRow
+│   ├── home/HomeScreen        「主页」一级页（状态 + 三个功能的次数 + 进它们二级页的入口）
 │   ├── features/FeaturesScreen「功能」一级页（三个开关 + 全部开关 + 生效说明）
 │   ├── stats/StatsScreen      「统计」一级页（分支计数条形图）
 │   ├── stats/StatsStore       统计快照落盘 + 接宿主广播
-│   ├── crop/CropScreen        二级页「裁圆」（开关 / 效果示意 / 说明）
-│   ├── mono/MonoScreen        二级页「单色」（单色层开关 / 说明）
-│   ├── notify/NotifyScreen    二级页「通知」（通知小图标）
+│   ├── crop/CropScreen        二级页「裁圆」（说明 / 效果示意 / 注意事项）
+│   ├── mono/MonoScreen        二级页「单色」（说明 / 效果示意 / 注意事项）
+│   ├── notify/NotifyScreen    二级页「通知」（说明 / 效果示意 / 验证）
 │   ├── module/ModuleScreen    「设置」一级页 + 三个二级页（作用域 / 启用与验证 / 运维操作）
 │   ├── about/AboutScreen      二级页「关于」（版本 / 检查更新 / 隐私）
 │   └── theme/Theme            M3E 主题（动态取色）

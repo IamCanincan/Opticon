@@ -77,7 +77,7 @@
     <string name="features_all_hint">三个功能一起开 / 关；排查时先全关最省事。</string>
     <string name="features_note_group">开关什么时候生效</string>
     <string name="features_effect_title">约一秒内生效</string>
-    <string name="features_effect_body">开关写入后模块每秒重读一次配置：新画的图标、新收到的通知立刻按新设置处理；已经显示出来的图标不会自己重画，那种情况清一次桌面图标缓存。</string>
+    <string name="features_effect_body">开关写入后模块每秒重读一次配置：新画的图标、新收到的通知立刻按新设置处理。切开关时界面还会自动清一次桌面缓存（通知那一路重启系统界面），已经画出来的也会重画；万一仍没变化，到「设置 → 运维操作」手动按一次。</string>
     <string name="settings_scope_sub">显示应用图标的进程在这里勾选</string>
     <string name="settings_setup_title">启用与验证</string>
     <string name="settings_setup_sub">四步启用、一条 adb 命令验证</string>
@@ -167,7 +167,7 @@
     <string name="section_tools">运维操作</string>
     <string name="tools_body">上述操作由模块在目标进程内执行，无需 root 权限，不调用 shell 命令。</string>
     <string name="cache_title">清除桌面图标缓存</string>
-    <string name="cache_body">桌面将图标位图缓存于其数据库；开关或模块变更后，缓存可能不会自动更新。点击下方按钮可删除该缓存并重启桌面进程（屏幕会短暂闪烁）。模块的掩码缓存按内容与安装标识自动失效，无需手动清理。</string>
+    <string name="cache_body">桌面将图标位图缓存于其数据库；开关或模块变更后一般会自动重画，个别情况仍可能读到旧缓存。点击下方按钮可删除该缓存并重启桌面进程（屏幕会短暂闪烁）。模块的掩码缓存按内容与安装标识自动失效，无需手动清理。</string>
     <string name="action_clear_launcher">清除缓存并重启桌面</string>
     <string name="restart_title">重启界面进程</string>
     <string name="restart_body">系统界面、设置、分享面板这些进程会自己缓存已经画好的图标；重启它们之后，下次打开会用当前设置重新绘制。</string>
@@ -197,7 +197,7 @@
         桌面替「未适配」应用现场生成的那张单色遮罩，和形状无关。2026-10-26 起单色独立成页。
     -->
     <string name="mono_switch_title">未适配图标的单色层</string>
-    <string name="mono_switch_body">在 Android 16 强制动态取色下，为未提供单色层的应用生成极性正确的单色剪影。关闭后由桌面自身算法处理，该类图标的明暗关系可能反转。</string>
+    <string name="mono_switch_body">在 Android 16 强制动态取色下，为未提供单色层的应用生成极性正确的单色剪影。在「功能」页关闭后由桌面自身算法处理，该类图标的明暗关系可能反转。</string>
     <!-- 单色页的示意卡：左=原图标（浅底深形），右=剪影（深形为墨，洞交给桌面主题盘） -->
     <string name="mono_effect_title">单色层示意</string>
     <string name="mono_effect_body">未提供单色层的应用由模块生成剪影：深色图形保留为墨，浅色区域交由桌面主题盘显示。</string>
@@ -258,7 +258,7 @@
     <!-- ============ 「通知」页 ============ -->
 
     <string name="notify_switch_title">通知小图标修复</string>
-    <string name="notify_switch_body">关闭后不再处理任何通知。设置即时生效；已显示的通知需重新加载后应用。</string>
+    <string name="notify_switch_body">在「功能」页关闭后不再处理任何通知。设置即时生效；切开关会自动重启系统界面，已显示的通知也会重建。</string>
     <!-- 通知页示意卡：左=灰白色块，右=修复后的可辨识图标 -->
     <string name="notify_effect_title">通知小图标示意</string>
     <string name="notify_effect_body">部分通知的小图标在内容区显示为灰白色块；模块按应用图标生成可辨识的剪影。状态栏图标由系统统一着色，不在此列。</string>
