@@ -94,7 +94,15 @@ private fun Int.isMarkableIcon(): Boolean {
   return this != 0 && pkg != 0x01 && pkg != 0x00 && !isMarkedIcon()
 }
 
-private fun Int.isMarkedIcon() = (this and 0xff000000.toInt()) == MARKED_PACKAGE_ID
+/**
+ * 认标记 id：顶字节对上**并且**槽位还在表里。
+ *
+ * ⚠ 只比顶字节会把"某个真实 APK 的资源包号恰好是 0x6e"误认成我们的标记 id（然后被还原成
+ * 一个不存在的 id → 图标空白 / 点开闪退）。槽位表 2026-11-13 起不再清空，所以真正的标记 id
+ * 一定查得到；多一次 `containsKey` 只在顶字节命中时发生，热路径（普通 0x7f id）不多付钱。
+ */
+private fun Int.isMarkedIcon(): Boolean =
+  (this and 0xff000000.toInt()) == MARKED_PACKAGE_ID && slotOrigin.containsKey(this and 0x00ffffff)
 
 private fun Int.marked(): Int {
   markSlots[this]?.let { return MARKED_PACKAGE_ID or it }
@@ -104,6 +112,12 @@ private fun Int.marked(): Int {
       Log.w(TAG, "标记槽位表已满（$MARK_SLOT_LIMIT），停止新标记；已标记的 id 仍可还原")
     }
     return this
+  }
+  // 历史读数：旧上限是 4096，超过它就会触发旧版的"整表清空"。这三行让反馈方一看日志就知道
+  // 自己这台机有没有摸到过那条线（每进程最多三行，不进热路径的正文）。
+  val size = markSlots.size
+  if (size == 2048 || size == 4096 || size == 8192) {
+    Log.i(TAG, "标记槽位表 $size 项（长寿命进程如 Settings 会很高；2026-11-13 起表满不清空）")
   }
   val slot = nextSlot.getAndIncrement() and 0x00ffffff
   markSlots.putIfAbsent(this, slot)
@@ -1686,7 +1700,15 @@ internal object IconNames {
   @Synchronized
   fun remember(icon: Drawable, name: String) {
     if (name.isEmpty()) return
-    if (byDrawable.size >= LIMIT) { byDrawable.clear(); byState.clear() }
+    // ⚠ 表满**停止登记、绝不清空**（2026-11-13）：清空会让**还在用的**图标名字变回 `?`，
+    //   而 `clipToCircle` 靠 `pm:` 前缀认快捷方式、合成侧靠包名开按包规则 —— 一次清表就是
+    //   一整批图标悄悄换了判断。宁可新图标不具名（`?`），也不动旧映射。
+    if (byDrawable.size >= LIMIT) {
+      if (namesFullLogged.compareAndSet(false, true)) {
+        Log.d(TAG, "IconNames: 表满（$LIMIT），停止登记新名字；旧映射保持有效")
+      }
+      return
+    }
     put(icon, name)
     // ⚠ 必须连**子层**一起记。桌面后来交给我们的那个 AdaptiveIconDrawable 往往不是这里
     //   返回的同一个实例（每次 getDrawable 都从 ConstantState 新建一个），而
@@ -1755,6 +1777,9 @@ internal object IconNames {
   }
 
   private const val LIMIT = 4096
+
+  /** 表满只报一次。 */
+  private val namesFullLogged = AtomicBoolean(false)
 
   /** 探针放行条数：各三行就够分清"没写"还是"写的不是同一个对象"，不在热路径上刷日志。 */
   private const val PROBE_LIMIT = 3
