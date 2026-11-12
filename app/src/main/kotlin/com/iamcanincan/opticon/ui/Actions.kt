@@ -31,6 +31,8 @@ private val OTHER_RESTARTABLE =
     "com.google.android.settings.intelligence",
     "com.android.intentresolver",
     "com.android.permissioncontroller",
+    // 数字健康也画应用图标、也在作用域清单里；2026-11-12 补进这一键。
+    "com.google.android.apps.wellbeing",
   )
 
 /** 清掉桌面的图标位图缓存并重启桌面（裁圆 / 单色改完都要这一步）。 */
