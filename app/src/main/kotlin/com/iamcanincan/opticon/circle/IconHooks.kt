@@ -42,6 +42,7 @@ import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.Volatile
 
@@ -70,8 +71,22 @@ private val markSlots = ConcurrentHashMap<Int, Int>()   // 原 id → 槽位
 private val slotOrigin = ConcurrentHashMap<Int, Int>()  // 槽位 → 原 id
 private val nextSlot = AtomicInteger(1)
 
-/** 槽位表上限：图标 id 每进程几百个量级，超了整表重来（与 [IconNames] 同一套做法）。 */
-private const val MARK_SLOT_LIMIT = 4096
+/**
+ * 槽位表上限：低 24 位就是槽位，实际用不完。
+ *
+ * ⚠ **满了就停止新标记，绝不整表清空**（2026-11-13 第三方反馈后改）：清空会让**已经打在
+ * 对象上的**标记 id 在还原时查不到表，退回 `0x7f|槽位` —— 那是个不存在的资源 id。
+ * Settings 里的表现就是图标全空白、点开任一项 `Resources$NotFoundException` 闪退
+ * （反馈：启用 `com.android.settings` 作用域后无障碍页全崩；取消作用域就正常 —— 因为
+ * 不注入时这些 id 根本不会被本进程重新打标记）。表满只意味着之后的新图标保持原样。
+ */
+private const val MARK_SLOT_LIMIT = 0x00ffffff
+
+/** 表满只报一次，别刷屏。 */
+private val markFullLogged = AtomicBoolean(false)
+
+/** 还原失败（槽位不在表里）的限流日志额度。 */
+private val unmarkMissLeft = AtomicInteger(20)
 
 /** 能不能给这个 id 打标记：不是框架资源（0x01）、不是共享库（0x00）、也还没打过。 */
 private fun Int.isMarkableIcon(): Boolean {
@@ -83,9 +98,12 @@ private fun Int.isMarkedIcon() = (this and 0xff000000.toInt()) == MARKED_PACKAGE
 
 private fun Int.marked(): Int {
   markSlots[this]?.let { return MARKED_PACKAGE_ID or it }
+  // ⚠ 表满**不清表**（见 [MARK_SLOT_LIMIT]）：清表会让在途的标记 id 永远还原不回来。
   if (markSlots.size >= MARK_SLOT_LIMIT) {
-    markSlots.clear()
-    slotOrigin.clear()
+    if (markFullLogged.compareAndSet(false, true)) {
+      Log.w(TAG, "标记槽位表已满（$MARK_SLOT_LIMIT），停止新标记；已标记的 id 仍可还原")
+    }
+    return this
   }
   val slot = nextSlot.getAndIncrement() and 0x00ffffff
   markSlots.putIfAbsent(this, slot)
@@ -98,8 +116,20 @@ private fun Int.marked(): Int {
  * 还原真身：查表。查不到是"不该发生"的情况（说明标记不是本进程做的）；那时退回老写法，
  * 至少不比换掉之前差，但这类 id 的包号如果不是 0x7f 就仍然解不出来 —— 所以别把查表当成兜底。
  */
-private fun Int.unmarked(): Int =
-  slotOrigin[this and 0x00ffffff] ?: ((this and 0x00ffffff) or REAL_PACKAGE_ID)
+private fun Int.unmarked(): Int {
+  val slot = this and 0x00ffffff
+  slotOrigin[slot]?.let { return it }
+  // 查不到 = 标记不是本进程做的，或者表被清过（2026-11-13 起不再清）。退回老写法，
+  // 并留一条限流日志：这个数非零就说明还有标记 id 在丢（现象是图标空白 / 点开闪退）。
+  if (unmarkMissLeft.decrementAndGet() >= 0) {
+    Log.w(
+      TAG,
+      "还原失败：槽位 $slot 不在表里（表内 ${slotOrigin.size} 项），退回 0x7f|槽位；" +
+        "这一张会按不存在的资源 id 去加载",
+    )
+  }
+  return slot or REAL_PACKAGE_ID
+}
 
 /**
  * 打标记的重入保护。
