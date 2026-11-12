@@ -367,6 +367,9 @@ fun OpticonApp() {
     // 开启应用时自动查一次更新（每进程一次）：只关心"有新版"，失败 / 已是最新都不打扰。
     // 联网放 IO；判据与手动检查是同一个 `UpdateChecker`，结果同样写进 `updateState`，
     // 所以「关于」页那块常驻结果也一并更新。
+    //
+    // ⚠ **不做节流，也没有「跳过此版本」**（2026-11-13 定案）：每次启动请求一次，有新版就再弹。
+    //   主人原话「不耗电其实就没关系」—— 这不是嫌吵的场景，别自作主张加 24h 限流。
     LaunchedEffect(Unit) {
         if (autoUpdateChecked) return@LaunchedEffect
         autoUpdateChecked = true
