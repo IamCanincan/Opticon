@@ -1,20 +1,14 @@
 package com.iamcanincan.opticon.ui.about
 
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Lock
@@ -31,10 +25,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.res.colorResource
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -44,6 +35,7 @@ import com.iamcanincan.opticon.R
 import com.iamcanincan.opticon.ui.IconTile
 import com.iamcanincan.opticon.ui.NoteList
 import com.iamcanincan.opticon.ui.OpticonCard
+import com.iamcanincan.opticon.ui.OpticonMark
 import com.iamcanincan.opticon.ui.RepoUrl
 import com.iamcanincan.opticon.ui.ScreenList
 import com.iamcanincan.opticon.ui.openExternalUrl
@@ -162,23 +154,8 @@ private fun AboutCard(onOpen: (String) -> Unit) {
       modifier = Modifier.fillMaxWidth(),
       horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-      // 桌面图标本体（背景 + 前景两个 vector）当品牌标记：与桌面上那个图标同源，
-      // 底色取 `@color/opticon_icon_background`（品牌淡粉，全 Android 版本固定不跟随壁纸）。
-      // ⚠ 必须带描边：那抹淡粉在**浅色**卡面上几乎与卡同色（#FCE4EC on 近白），
-      //   没有这条线就只剩一个悬空的黑字。
-      Box(
-        modifier =
-          Modifier.size(64.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(colorResource(R.color.opticon_icon_background))
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(18.dp))
-      ) {
-        Image(
-          painter = painterResource(R.drawable.ic_launcher_foreground),
-          contentDescription = null,
-          modifier = Modifier.fillMaxSize(),
-        )
-      }
+      // 与顶栏、桌面同一个标记（[OpticonMark]）：圆底主题色 + 单色层字形。
+      OpticonMark(size = 64.dp)
 
       Spacer(modifier = Modifier.height(14.dp))
       Text(

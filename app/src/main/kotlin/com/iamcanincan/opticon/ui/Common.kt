@@ -2,6 +2,7 @@ package com.iamcanincan.opticon.ui
 
 import android.content.ClipData
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -39,10 +41,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.UriHandler
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
@@ -411,6 +415,32 @@ internal fun IconTile(
         modifier = Modifier.size(22.dp),
       )
     }
+  }
+}
+
+/**
+ * 应用标记：与桌面上的**主题图标**同一种渲染 —— 圆底取动态主色、字形取单色层。
+ *
+ * 顶栏（40dp）与「关于」页（64dp）共用这一份：两处都在回答"这个应用长什么样"，
+ * 不能再一个用旧的粉底方图标、一个用主题色圆底（2026-11-07 主人：「还是和桌面图标不一样」）。
+ *
+ * ⚠ 字形用 `ic_launcher_monochrome`（自带安全边距），再放大 [glyphScale] 倍才接近桌面上的字占比。
+ */
+@Composable
+internal fun OpticonMark(size: Dp, glyphScale: Float = 1.5f) {
+  Box(
+    modifier =
+      Modifier.size(size)
+        .clip(CircleShape)
+        .background(MaterialTheme.colorScheme.primary),
+    contentAlignment = Alignment.Center,
+  ) {
+    Icon(
+      painter = painterResource(R.drawable.ic_launcher_monochrome),
+      contentDescription = null,
+      tint = MaterialTheme.colorScheme.onPrimary,
+      modifier = Modifier.fillMaxSize(0.92f).graphicsLayer(scaleX = glyphScale, scaleY = glyphScale),
+    )
   }
 }
 

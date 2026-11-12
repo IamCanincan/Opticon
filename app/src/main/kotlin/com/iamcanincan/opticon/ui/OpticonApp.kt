@@ -97,7 +97,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.invisibleToUser
 import androidx.compose.ui.semantics.selected
@@ -577,31 +576,14 @@ fun OpticonApp() {
 }
 
 /**
- * 顶栏左侧的品牌标记：与桌面图标同源（背景 + 前景两层）。
+ * 顶栏左侧的品牌标记：与桌面主题图标、以及「关于」页的标记同一个组件（[OpticonMark]）。
  *
- * 加它的理由：整页是卡片叠卡片，顶栏只有一行字，视觉上没有任何"这是 Opticon"的锚点；
- * 而关于页已经在用同一张图标当品牌，这里只是把身份带到第一屏。
+ * 加它的理由：整页是卡片叠卡片，顶栏只有一行字，视觉上没有任何"这是 Opticon"的锚点。
  * 2026-11-08 主人「oi logo 稍微画大点」：34dp → **40dp**，字形占圆的比例不变（仍是 1.5×）。
  */
 @Composable
 private fun BrandMark() {
-  // 主人桌面用的是**主题图标**：圆底取动态主色、字形取单色层。这里照那个渲染，
-  // 而不是彩色版的两层叠放（2026-11-07："还是和桌面图标不一样"）。
-  Box(
-    modifier =
-      Modifier.size(40.dp)
-        .clip(androidx.compose.foundation.shape.CircleShape)
-        .background(MaterialTheme.colorScheme.primary),
-    contentAlignment = androidx.compose.ui.Alignment.Center,
-  ) {
-    androidx.compose.material3.Icon(
-      painter = painterResource(R.drawable.ic_launcher_monochrome),
-      contentDescription = null,
-      tint = MaterialTheme.colorScheme.onPrimary,
-      // 单色层自带安全边距（字形只占视口中间一块），再放大 1.5× 才接近桌面图标的字占比。
-      modifier = Modifier.fillMaxSize(0.92f).graphicsLayer(scaleX = 1.5f, scaleY = 1.5f),
-    )
-  }
+  OpticonMark(size = 40.dp)
 }
 
 /**

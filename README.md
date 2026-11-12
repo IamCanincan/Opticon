@@ -87,6 +87,7 @@
   底色是 `surfaceContainer`（KeyLens 的 navigation-container 同一档）+ 38% `outlineVariant` 描边，
   **不是** `surface`（写死的浅色配色里 `surface` 与 `background` 是同一个值，深色下 `surface` 还比背景暗）。
 - **顶栏**：左侧是返回箭头（能退回去的页面才画）+ 品牌标记 + 页标题，右侧是源码入口；二级页不画品牌标记。
+  品牌标记与「关于」页顶部是同一个 `OpticonMark`（圆底主题色 + 单色层字形，与桌面上的主题图标一致）。
 - **开关只有开关本身可点**（2026-11-08）：整行 / 整张卡不再 `toggleable`，点正文不会误翻开关。
   切完开关会**自动做后续动作**（`ui/Actions.kt`）：裁圆 / 单色 → 清桌面图标缓存并重启桌面；
   通知 → 重启系统界面。做完弹一条 Snackbar 说明刚刚做了什么。
@@ -692,7 +693,7 @@ com.iamcanincan.opticon
 │   ├── OpticonApp             外壳：顶栏 + 悬浮药丸导航 + Pager + 二级页分派与预测式返回
 │   ├── SubPage                二级页枚举（裁圆 / 单色 / 通知 / 作用域 / 启用与验证 / 运维 / 关于）
 │   ├── Actions                界面里的"让改动立刻生效"广播（清缓存 / 重启系统界面 / 重启其他进程）
-│   ├── Common                 各页共用：ScreenList / MenuRow / OpticonCard / HeroCard / FeatureInfoCard / IconTile / NoteList / CommandRow
+│   ├── Common                 各页共用：ScreenList / MenuRow / OpticonCard / HeroCard / FeatureInfoCard / OpticonMark / IconTile / NoteList / CommandRow
 │   ├── home/HomeScreen        「主页」一级页（状态 + 三个功能的次数 + 进它们二级页的入口）
 │   ├── features/FeaturesScreen「功能」一级页（三个开关 + 全部开关 + 生效说明）
 │   ├── stats/StatsScreen      「统计」一级页（分支计数条形图）
