@@ -477,8 +477,8 @@ private fun friendlyProcess(proc: String): String = when (proc) {
 }
 
 /**
- * `crop:1200000/4;mono:34000000/2;monoCold:…/…` →
- * 第一行 `耗时 单色 23.2ms（780 次）· 裁圆 2.7ms（861 次）`
+ * `mono:34000000/2;monoCold:…/…` →
+ * 第一行 `耗时 单色 23.2ms（780 次）`
  * 第二行 `单色构成 快键 0.1ms×624 · 缓存 4.9ms×156 · 冷合成 108ms×… · 等锁 1.0ms · 实例命中 0.3ms×…`
  *
  * 为什么要第二行：一个「单色 23.2ms」的均值把**等锁、快键命中（亚毫秒）、
@@ -488,7 +488,7 @@ private fun friendlyProcess(proc: String): String = when (proc) {
 private fun perfLines(perf: String?): List<String> {
   if (perf.isNullOrBlank()) return emptyList()
   val names = mapOf(
-    "crop" to "裁圆", "mono" to "单色",
+    "mono" to "单色",
     "monoFast" to "快键", "monoCache" to "缓存", "monoCold" to "冷合成",
     "monoWait" to "等锁", "monoInst" to "实例命中",
   )
@@ -506,7 +506,7 @@ private fun perfLines(perf: String?): List<String> {
     val text = (if (m >= 100) "%.0f" else "%.1f").format(m) + "ms"
     return (names[k] ?: k) + " " + if (withCount) "$text（$n 次）" else "$text×$n"
   }
-  val head = listOfNotNull(ms("mono", true), ms("crop", true))
+  val head = listOfNotNull(ms("mono", true))
   val split = listOfNotNull(
     ms("monoFast", false), ms("monoCache", false), ms("monoCold", false),
     ms("monoWait", false), ms("monoInst", false),

@@ -15,7 +15,7 @@ import android.net.Uri
 import android.os.Build
 import androidx.core.content.res.ResourcesCompat
 import kotlin.math.roundToInt
-import com.iamcanincan.opticon.circle.uncroppedIcon
+import com.iamcanincan.opticon.circle.unwrappedIcon
 import com.iamcanincan.opticon.runtime.MemberLookup
 
 
@@ -150,7 +150,7 @@ object IconBitmap {
     fun fromResources(context: Context, resId: Int): Bitmap {
         val drawable = ResourcesCompat.getDrawable(context.resources, resId, null)
         // SystemUI 里的 Resources 出口也被裁圆钩子挂着：拿裁过的圆去压剪影会变成一块饼。
-        return if (drawable != null) rasterize(uncroppedIcon(drawable))
+        return if (drawable != null) rasterize(unwrappedIcon(drawable))
           else Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
     }
 
@@ -585,10 +585,10 @@ object IconBitmap {
                         null
                     }
                 }
-                else -> icon.loadDrawable(context)?.let { rasterize(uncroppedIcon(it)) }
+                else -> icon.loadDrawable(context)?.let { rasterize(unwrappedIcon(it)) }
             }
         } else {
-            icon.loadDrawable(context)?.let { rasterize(uncroppedIcon(it)) }
+            icon.loadDrawable(context)?.let { rasterize(unwrappedIcon(it)) }
         }
     } catch (_: Throwable) {
         null

@@ -10,13 +10,13 @@
         老式写法（xposeddescription meta-data / module.prop 里的 description=）已经不用，
         那是给 API <= 93 的旧框架用的，留着反而让模块变成「兼容模式」。
 
-        长度约定：中文 <= 26 字，太长在模块列表里会占好几行。**现在 17 字**（主人定的：压回约定内，
-        不钉死版本号那类信息也不放进来）。曾经到过 35 字，注释里的字数也落后过一次（写着 21 字、
-        实际不是）。**改这一行时必须重新数字**，别相信旁边那句话。
-        备选（17 字）：「桌面图标裁圆、取色剪影、通知小图标」。
+        长度约定：中文 <= 26 字，太长在模块列表里会占好几行。**现在 21 字**（含两个顿号；
+        主人定的：压回约定内，不钉死版本号那类信息也不放进来）。曾经到过 35 字，注释里的字数
+        也落后过一次（写着 21 字、实际不是）。**改这一行时必须重新数字**，别相信旁边那句话。
+        备选（20 字）：「老式图标转自适应、单色剪影、通知小图标」。
         三路功能都要提到 —— 用户在 LSPosed 列表里只看得到这一行。
     -->
-    <string name="xposed_description">图标裁圆、单色剪影、通知小图标修复</string>
+    <string name="xposed_description">老式图标自适应化、单色剪影、通知小图标修复</string>
 
     <!--
         自有权限 PROCESS_CONTROL 的名字与说明（出现在系统「设置 → 应用」里）。
@@ -29,7 +29,7 @@
         底部导航四格：主页 / 功能 / 统计 / 设置。
         三个功能不占底栏 —— 开关在「功能」页那一行，说明与效果是二级页（从主页那行进）。
     -->
-    <string name="tab_crop">裁圆</string>
+    <string name="tab_crop">自适应</string>
     <string name="tab_mono">单色</string>
     <string name="tab_notify">通知</string>
     <string name="tab_about">关于</string>
@@ -51,7 +51,7 @@
     <string name="stats_percent">%1$d%%</string>
     <string name="stats_times">次</string>
     <string name="stats_share">占 %1$d%%</string>
-    <string name="home_sub">图标裁圆 · 单色极性 · 通知小图标，三项都可以单独开关。下面一眼看全当前状态。</string>
+    <string name="home_sub">图标自适应 · 单色极性 · 通知小图标，三项都可以单独开关。下面一眼看全当前状态。</string>
     <string name="home_features">功能状态</string>
     <string name="home_sub_crop">应用图标统一裁成圆形</string>
     <string name="home_sub_mono">未适配图标的黑白极性修正</string>
@@ -77,7 +77,7 @@
     <string name="features_all_hint">三个功能一起开 / 关；排查时先全关最省事。</string>
     <string name="features_note_group">开关什么时候生效</string>
     <string name="features_effect_title">约一秒内生效</string>
-    <string name="features_effect_body">开关写入后模块每秒重读一次配置：新画的图标、新收到的通知立刻按新设置处理。切开关时：裁圆 / 单色会清桌面缓存并重启桌面，桌面图标随之重画；通知会重启系统界面，通知随之重建。设置、分享面板这些进程要等它们自己重新加载。万一仍没变化，到「设置 → 运维操作」手动按一次。</string>
+    <string name="features_effect_body">开关写入后模块每秒重读一次配置：新画的图标、新收到的通知立刻按新设置处理。切开关时：自适应 / 单色会清桌面缓存并重启桌面，桌面图标随之重画；通知会重启系统界面，通知随之重建。设置、分享面板这些进程要等它们自己重新加载。万一仍没变化，到「设置 → 运维操作」手动按一次。</string>
     <string name="settings_scope_sub">会画应用图标的进程清单（在框架管理器中勾选）</string>
     <string name="settings_setup_title">启用与验证</string>
     <string name="settings_setup_sub">四步启用、一条 adb 命令验证</string>
@@ -86,14 +86,14 @@
     <string name="action_back">返回</string>
     <string name="stats_role">总览占比，按功能列出来源</string>
     <string name="settings_role">作用域、启用验证、运维与关于</string>
-    <string name="stats_note">这些数字在说什么：裁圆 = 裁过的图标次数（桌面 / 状态栏 / 最近任务都算）；单色 = 我们替应用生成单色层的张数；通知 · 被补 = 我们把彩色通知图标改成黑白的次数；通知 · 已适配 = 应用本来就给黑白的次数（我们没动）。</string>
+    <string name="stats_note">这些数字在说什么：自适应 = 把多少个非自适应（老式）图标做成了自适应图标（桌面 / 状态栏 / 最近任务都算）；单色 = 我们替应用生成单色层的张数；通知 · 被补 = 我们把彩色通知图标改成黑白的次数；通知 · 已适配 = 应用本来就给黑白的次数（我们没动）。</string>
 
-    <!-- ============ 「裁圆」页 ============ -->
+    <!-- ============ 「自适应」页 ============ -->
 
 
-    <!-- 裁圆的说明卡（开关在「功能」页那一行） -->
-    <string name="circle_switch_title">图标裁切为正圆</string>
-    <string name="circle_switch_body">应用图标（含自适应图标）统一裁切为正圆；适用于桌面、应用列表与最近任务。</string>
+    <!-- 自适应的说明卡（开关在「功能」页那一行） -->
+    <string name="circle_switch_title">老式图标做成自适应图标</string>
+    <string name="circle_switch_body">非自适应（老式）图标套一层自适应壳：原图缩到安全区、垫上图标自己的底色，形状交给系统。自适应图标保持原样。桌面、应用列表、应用信息页与最近任务因此是同一份图标。</string>
     <!-- 开关切换后的 Snackbar：桌面有预渲染缓存，需说明清除缓存后才会生效 -->
 
     <!-- 状态卡 -->
@@ -102,7 +102,7 @@
 
     <!-- 作用域分组 -->
     <string name="section_scope">作用域</string>
-    <string name="scope_hint">图标裁圆与单色合成都发生在这些进程中；解析应用图标的进程需识别模块写入的标记。作用域不固定：显示应用图标的应用均可在框架管理器中勾选；未勾选的进程显示原图标（不会被裁圆 / 合成），不会出错。</string>
+    <string name="scope_hint">图标自适应与单色合成都发生在这些进程中；解析应用图标的进程需识别模块写入的标记。作用域不固定：显示应用图标的应用均可在框架管理器中勾选；未勾选的进程显示原图标（不会被包装 / 合成），不会出错。</string>
 
     <!-- 作用域标签（3 种，多个作用域共享同一档位）-->
     <string name="scope_tag_required">必选</string>
@@ -150,7 +150,7 @@
     <string name="step_1">在框架中启用本模块</string>
     <string name="step_1_hint">在框架管理器中启用本模块。</string>
     <string name="step_2">按「作用域」页的清单选择生效进程</string>
-    <string name="step_2_hint">至少选择你系统上在用的桌面（com.android.launcher3 或 com.google.android.apps.nexuslauncher），方可在桌面观察裁圆与单色层（单色合成只在桌面进程里挂，裁圆则在每个被注入的进程里各自生效）；通知功能还需 com.android.systemui。</string>
+    <string name="step_2_hint">至少选择你系统上在用的桌面（com.android.launcher3 或 com.google.android.apps.nexuslauncher），方可在桌面观察自适应包装与单色层（单色合成只在桌面进程里挂，自适应包装则在每个被注入的进程里各自生效）；通知功能还需 com.android.systemui。</string>
     <string name="step_3">重启设备</string>
     <string name="step_3_hint">框架不支持模块热加载，需重启设备。</string>
     <string name="step_4">桌面没更新时，清一次图标缓存</string>
@@ -182,18 +182,18 @@
 
     <!-- 效果示意（形状对比图）-->
     <string name="section_effect">效果</string>
-    <string name="effect_title">统一裁切为正圆</string>
-    <string name="effect_body">图案铺满画布的图标直接裁切为正圆；无法裁切的图标保持完整，缩放后置于圆内并补一层底盘（默认白，图案本身几乎没有深色时改黑）；透明底快捷方式按原始尺寸置于底盘上。</string>
-    <!-- 效果示意四格：标题一行 + 细节一行；原样/正圆是主对照，保留完整/快捷方式是两档例外 -->
-    <string name="effect_sample_original_detail">系统形状</string>
-    <string name="effect_sample_cropped_detail">满幅图案</string>
-    <string name="effect_sample_shrink_title">保留完整</string>
-    <string name="effect_caption_shrink">缩放 + 补底盘</string>
+    <string name="effect_title">老式图标 → 自适应图标</string>
+    <string name="effect_body">非自适应图标套一层自适应壳：原图按系统的安全区比例缩小、垫上图标自己边上的底色，再交给系统按当前图标形状裁切。自适应图标本身与「形状已经就是一个圆盘」的老式图标保持原样。</string>
+    <!-- 效果示意四格：标题一行 + 细节一行；原样/自适应是主对照，本来成圆/快捷方式是两档说明 -->
+    <string name="effect_sample_original_detail">非自适应</string>
+    <string name="effect_sample_cropped_detail">缩到安全区</string>
+    <string name="effect_sample_shrink_title">本来就是圆的</string>
+    <string name="effect_caption_shrink">不动</string>
     <string name="effect_sample_shortcut_title">快捷方式</string>
-    <string name="effect_caption_shortcut">原始尺寸 + 补底盘</string>
+    <string name="effect_caption_shortcut">同样走这套</string>
 
     <!--
-        单色遮罩极性修正。这条和裁圆是**两个独立开关**：它管的是 Android 16 强制取色下
+        单色遮罩极性修正。这条和自适应是**两个独立开关**：它管的是 Android 16 强制取色下
         桌面替「未适配」应用现场生成的那张单色遮罩，和形状无关。2026-10-26 起单色独立成页。
     -->
     <string name="mono_switch_title">未适配图标的单色层</string>
@@ -205,22 +205,22 @@
     <string name="mono_sample_original_detail">浅底深形</string>
     <string name="mono_sample_silhouette_title">剪影</string>
     <string name="mono_sample_silhouette_detail">深形为墨</string>
-    <!-- 效果示意图两块色块下面那行小字：左=系统原样、右=裁切后。用短词，别和 effect_title 重复 -->
+    <!-- 效果示意图两块色块下面那行小字：左=系统原样、右=自适应化之后。用短词，别和 effect_title 重复 -->
     <string name="effect_caption_before">原样</string>
-    <string name="effect_caption_after">正圆</string>
+    <string name="effect_caption_after">自适应</string>
 
     <!-- 说明 -->
     <string name="section_notes">说明</string>
-    <string name="note_adaptive">自适应图标同样会被裁切为圆形；系统默认形状（圆角方、水滴等）并非圆形。</string>
-    <string name="note_tiles">快速设置磁贴使用单色图形，不在裁切范围内。</string>
+    <string name="note_adaptive">自适应图标不再改动；形状由系统遮罩决定（桌面设成圆，它就是圆）。只有非自适应（老式）图标会被做成自适应图标。</string>
+    <string name="note_tiles">快速设置磁贴不参与这一路。</string>
     <string name="note_mono_scope">已提供单色层的应用，那张单色层将原样透传，模块不改它的像素。</string>
     <string name="note_mono_cache">剪影按图标内容缓存于宿主应用的缓存目录（上限 48 MB，系统存储不足时可能被清除）。模块版本或图标内容变更后缓存自动失效；升级后的首次重启加载会较慢。</string>
-    <string name="note_launcher3">Android 16 及以上会禁用桌面自带的背景板；圆形遮罩（以及部分图标圆内的底盘）由模块绘制。</string>
+    <string name="note_launcher3">Android 16 及以上由桌面绘制主题背景板；老式图标补的那块底盘取的是它自己边上的颜色，不是主题色。</string>
     <string name="note_themed_icon">本应用图标包含 monochrome 层；在 Android 13 及以上启动器启用“主题图标”时，将按壁纸取色渲染。</string>
 
     <!-- 关于页：功能范围（覆盖什么、有意排除什么） -->
     <string name="section_range">功能范围</string>
-    <string name="range_crop">裁圆：所有已注入进程中的应用图标；快速设置磁贴除外。</string>
+    <string name="range_crop">自适应：所有已注入进程中的非自适应应用图标；快速设置磁贴除外。</string>
     <string name="range_mono">单色：未提供单色层的自适应图标；已提供者原样透传。</string>
     <string name="range_notify">通知：新通知、通知行与状态栏重建；已适配应用跳过，大图与头像不处理。</string>
     <string name="range_scope">作用域由框架管理器决定；未注入的进程不受影响。</string>
@@ -256,7 +256,7 @@
     <!-- 关于（分区标题直接复用底栏的 tab_about，免得两处文案不一致被判重复）-->
     <string name="about_version">版本 %1$s · MIT 许可</string>
     <!-- Opti = 优化，con = icon。**三件事**都落在"图标"上（形状、强制取色的剪影、通知里的小图），别写成互不相干的几块功能 -->
-    <string name="about_body">源码与文档见 GitHub。Opticon 关注图标显示的三类问题：桌面图标裁切为正圆、强制动态取色下未适配应用的单色剪影，以及通知栏小图标。</string>
+    <string name="about_body">源码与文档见 GitHub。Opticon 关注图标显示的三类问题：非自适应图标的自适应化、强制动态取色下未适配应用的单色剪影，以及通知栏小图标。</string>
 
     <!-- ============ 「通知」页 ============ -->
 

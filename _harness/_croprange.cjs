@@ -13,10 +13,10 @@
 const fs = require('fs');
 const files = process.argv.slice(2);
 if (!files.length) { console.error('用法: node _croprange.cjs <logcat…>'); process.exit(2); }
-const RX_NEW = /裁圆新开 host=(\S+) 通道=(.+?)（第一次）/;
-const RX_CLIP = /clip from=(\S+) host=(\S+)/;
-const RX_TILE = /裁圆按磁贴挡下 host=(\S+)/;
-const RX_ANY = /裁圆|clip from=/;
+const RX_NEW = /自适应新开 host=(\S+) 通道=(.+?)（第一次）/;
+const RX_CLIP = /自适应 from=(\S+) host=(\S+)/;
+const RX_TILE = /自适应按磁贴挡下 host=(\S+)/;
+const RX_ANY = /自适应 from=|自适应新开/;
 const hosts = new Map(), tiles = new Map(), clipped = new Set();
 let anyOpticon = 0;
 for (const f of files) {
@@ -30,10 +30,10 @@ for (const f of files) {
     else if (RX_ANY.test(line)) anyOpticon++;
   }
 }
-console.log(`读了 ${files.length} 份日志：Opticon 裁圆相关 ${anyOpticon} 行；被裁过的宿主 ${clipped.size} 个；按磁贴挡下 ${[...tiles.values()].reduce((a, b) => a + b, 0)} 次`);
+console.log(`读了 ${files.length} 份日志：Opticon 自适应相关 ${anyOpticon} 行；被裁过的宿主 ${clipped.size} 个；按磁贴挡下 ${[...tiles.values()].reduce((a, b) => a + b, 0)} 次`);
 for (const [k, n] of [...hosts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12)) console.log(`   ${String(n).padStart(3)}  ${k}`);
 if (!anyOpticon) {
-  console.error('!! ⚪ 这一轮里一行裁圆账都没有 —— 不是"没问题"，是**没测到**（模块没重启 / 屏幕没开 / 抓错了段）');
+  console.error('!! ⚪ 这一轮里一行自适应账都没有 —— 不是"没问题"，是**没测到**（模块没重启 / 屏幕没开 / 抓错了段）');
   process.exit(2);
 }
 const MUST = ['com.android.systemui', 'com.android.launcher3', 'com.google.android.apps.nexuslauncher', 'com.android.settings'];
@@ -53,4 +53,4 @@ if (seen.length < 2) {
 }
 console.log(`✅ 射程两头都对：SystemUI 有裁（通知行那类）· 磁贴挡下 ${[...tiles.values()].join('/')} 次 · 覆盖宿主 ${clipped.size} 户`);
 console.log('   （**注意**：这一行只证明"账对"，不证明"屏上好看"。第三方 app 那一族现在也裁了，');
-console.log('    哪一户不该裁，拿 `裁圆新开 host=` 点名，往 TILE_CALLERS 旁边加排除，**不要回去改默认值**。）');
+console.log('    哪一户不该裁，拿 `自适应新开 host=` 点名，往 TILE_CALLERS 旁边加排除，**不要回去改默认值**。）');

@@ -605,7 +605,7 @@ internal object MonochromeSynth {
       // 裁圆那个窗口 —— 量在**模型真吃的那一张**上（`raster` 的像素）。只在「强制裁圆」开着时量。
       // 搬的是**算好的墨**（见下面「甲」那一段），判据本身不看这个窗口。
       // ⚠ **「只给前景层」那一支不许搬**（主人 2026-10-16：强制裁圆开着时，单色几何要和彩色完全一样）。
-      //   彩色那支（`MaskedDrawable.measureWindow`）量的是**整个图标** —— `AdaptiveIconDrawable.draw()`
+      // 彩色那支（原 `MaskedDrawable.measureWindow`，2026-11-13 已移除）量的是**整个图标** —— `AdaptiveIconDrawable.draw()`
       //   的合成图 = 盘 + 前景，而这一支的背景是纯色盘、盘把整张画布**铺满** → 彩色那边**恒判「满幅」**
       //   （内容按原位交付，屏幕上就是 1.5 倍铺出去）；这里量的是**前景层本身**（图形只占层画布的
       //   ~0.6）→ 拿到的窗口与彩色**不是同一档**，照着搬就是把前景撑到满盘。
@@ -1332,7 +1332,7 @@ internal object MonochromeSynth {
   }
 
   /**
-   * **彩色那一本账**：把这张图标按 [MaskedDrawable] 的画法与格子量一遍，取它的窗口。
+   * **彩色那一本账**：把这张图标按原彩色那支（`MaskedDrawable`，2026-11-13 已移除）的画法与格子量一遍，取它的窗口。
    *
    * 与判据那一本（[IconCropWindow.measure] 吃 `pixels`）的三处不同，全都是为了**逐字对上彩色那行**：
    *  · **画的是 `source`**（整张图标：盘 + 前景，`AdaptiveIconDrawable.draw()` 的视口画法），
@@ -1477,7 +1477,7 @@ internal object MonochromeSynth {
    * 本机实测 `edge = 384` → inset = 64，可见区 256（正是图标尺寸）。
    *
    * ⚠ 是 `edge × f / (1 + 2f)`（≈ edge/6），**不是** `edge × f`（= edge/4）—— 两者差 1.5 倍，
-   * 写错会让内容在可见区里只占 2/3、四周空一圈。`CircleIconDrawable.ViewportDrawable` 用的是
+   * 写错会让内容在可见区里只占 2/3、四周空一圈。`AdaptiveIconDrawable` 自己用的也是
    * 同一个式子（`frac = (1 − VIEW_PORT_SCALE) / 2`），两处口径一致。
    */
   private fun visibleInset(edge: Int): Int {
@@ -1489,7 +1489,7 @@ internal object MonochromeSynth {
    * 把**满幅口径**算出来的掩码缩进**可见区**，四周留透明。
    *
    * 非自适应图标（老式满幅 PNG、图标包给的整张图）的内容铺满整个 bounds，而它在图层 bounds 里
-   * 只该占中间那 2/3 —— 与裁圆那边 `MaskedDrawable` 的填充同一口径。不缩进的话，可见区里
+   * 只该占中间那 2/3 —— 与原彩色那支（`MaskedDrawable`，2026-11-13 已移除）的填充同一口径。不缩进的话，可见区里
    * 只剩这张图的中间 2/3，看起来就是「放大一圈 + 四周被切」。
    *
    * ⚠ 只能在掩码**算完之后**调用，不能提前到光栅化那一步 —— 为什么，见 [rasterize]。

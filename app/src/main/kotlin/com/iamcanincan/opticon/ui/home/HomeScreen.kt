@@ -240,14 +240,14 @@ private fun TipRow(icon: ImageVector, title: Int, body: Int, shape: androidx.com
 private const val FRESH_MS = 10 * 60 * 1000L
 
 /**
- * 快照按功能分成三堆（裁圆 / 单色 / 通知），再给一个总数。
+ * 快照按功能分成三堆（自适应 / 单色 / 通知），再给一个总数。
  *
  * ⚠ 单色 2026-11-08 才有账：进账点在 `MonochromeSynth.store`（新合成一张单色层记一次），
  *   所以它是「我们替多少张未适配图标做了单色层」；应用自带单色层的那一批我们不碰、也不计。
  */
 private fun splitCounts(snapshot: String?): Stats4 {
   if (snapshot.isNullOrBlank()) return Stats4(0, 0, 0, 0)
-  var crop = 0
+  var adapt = 0
   var mono = 0
   var notify = 0
   for (part in snapshot.split(';')) {
@@ -256,17 +256,17 @@ private fun splitCounts(snapshot: String?): Stats4 {
     val n = part.substring(eq + 1).toIntOrNull() ?: continue
     val branch = part.substring(0, eq).substringAfter('/')
     when {
-      branch.startsWith("裁圆") -> crop += n
+      branch.startsWith("自适应") -> adapt += n
       branch.startsWith("单色") -> mono += n
       branch.startsWith("通知") -> notify += n
     }
   }
-  return Stats4(crop, mono, notify, crop + mono + notify)
+  return Stats4(adapt, mono, notify, adapt + mono + notify)
 }
 
-/** 三堆 + 总数。解构按声明顺序，调用点写 `val (crop, mono, notify, total) = …`。 */
+/** 三堆 + 总数。解构按声明顺序，调用点写 `val (adapt, mono, notify, total) = …`。 */
 private data class Stats4(
-  val crop: Int,
+  val adapt: Int,
   val mono: Int,
   val notify: Int,
   val total: Int,

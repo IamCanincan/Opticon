@@ -244,7 +244,7 @@ private fun installHooks(xposed: XposedInterface, classLoader: ClassLoader, pack
   // 给 `clip from=… host=…` 那一行用的：本进程是谁。装配时置一次，热路径不查。
   clipHost = packageName
   // 射程不再有宿主名单（2026-10-21）：默认全裁，只排快速设置那一路 —— 判据在
-  // `CircleIconDrawable.clipToCircle`，"谁开始被裁"的账在那边的 `noteCrop`。
+  // `CircleIconDrawable.wrapLegacyIcon`，"谁开始被裁"的账在那边的 `noteCrop`。
   if (!hookIconLoaders(xposed, classLoader)) {
     Log.w(TAG, "No icon loader is found, nothing is hooked")
     return
@@ -345,17 +345,17 @@ private fun isLauncher(packageName: String) =
     packageName == "com.google.android.apps.nexuslauncher"
 
 /**
- * **强制裁圆的射程（2026-10-21 起：默认全裁，只排快速设置那一路）**
+ * **自适应化的射程（2026-10-21 起：默认全包，只排快速设置那一路）**
  * 主人原话：「裁圆算法应只排除快速设置的磁贴，别的应做到全覆盖」。
  *
- * 这里**不再有一份宿主名单** —— 判据与理由都在 `CircleIconDrawable.clipToCircle`
+ * 这里**不再有一份宿主名单** —— 判据与理由都在 `CircleIconDrawable.wrapLegacyIcon`
  * 与那边的 `TILE_CALLERS` / `calledByQuickSettings`（磁贴与通知行在框架里汇到同一个出口，
- * 只有调用方分得开），"谁开始被裁"的账在那边的 `noteCrop`。
- * 旧的两份名单（`CROP_HOSTS` / `EXTRA_CROP_CHANNELS`）随这次改版删掉了，
- * 它们的教训留在 `docs/devlog/2026-10-16.md` 第十七段与今天那一段。
+ * 只有调用方分得开），"谁被包了"的账在那边的 `noteWrap`。
+ * 旧的两份名单（`CROP_HOSTS` / `EXTRA_CROP_CHANNELS`）随 10-21 那次改版删掉了，
+ * 它们的教训留在 `docs/devlog/2026-10-16.md` 第十七段与 10-21 那一段。
  *
- * ⚠ **剩下唯一的"不裁"来自配置**：作用域（哪些进程被注入）是主人在模块界面里选的，
- *   README「安装」一节与「设置 → 作用域」页都写着 —— **没被注入的进程永远不裁**，这不是代码能补的。
+ * ⚠ **剩下唯一的"不包"来自配置**：作用域（哪些进程被注入）是主人在模块界面里选的，
+ *   README「安装」一节与「设置 → 作用域」页都写着 —— **没被注入的进程永远不包**，这不是代码能补的。
  */
 
 /**
@@ -683,7 +683,7 @@ private fun hookIconLoader(xposed: XposedInterface, method: Method): Boolean =
                 }
                 replacingIcon.set(true)
                 try {
-                  return@intercept clipToCircle(passed, "Resources.${method.name}·未标记包装")
+                  return@intercept wrapLegacyIcon(passed, "Resources.${method.name}·未标记包装")
                 } finally {
                   replacingIcon.set(false)
                 }
@@ -693,7 +693,7 @@ private fun hookIconLoader(xposed: XposedInterface, method: Method): Boolean =
           }
           val fallback =
             chain.proceed() as? Drawable ?: return@intercept null
-          return@intercept clipToCircle(fallback, "Resources.${method.name}·无id兜底")
+          return@intercept wrapLegacyIcon(fallback, "Resources.${method.name}·无id兜底")
         }
 
         replacingIcon.set(true)
@@ -720,7 +720,7 @@ private fun hookIconLoader(xposed: XposedInterface, method: Method): Boolean =
           //   （`pm:包名`）；两类出口都取不到才真不登记。
           val named = resourceName(chain.thisObject as? Resources, restored[index] as Int)
           IconNames.remember(icon, named.ifEmpty { packageFromArgs(args) })
-          clipToCircle(icon, "Resources.${method.name}·标记id")
+          wrapLegacyIcon(icon, "Resources.${method.name}·标记id")
         } finally {
           replacingIcon.set(false)
         }
@@ -741,7 +741,7 @@ private fun hookArchivedAppIcon(xposed: XposedInterface, classLoader: ClassLoade
         // 日志用的名字（见 packageFromArgs）：这条路上桌面根本不经过 Resources.getDrawable*，
         // 不在这里登记，`Mono: diag` 行就永远是 `?`。
         IconNames.remember(icon, packageFromArgs(chain.args))
-        clipToCircle(icon, "PM.${method.name}·归档应用")
+        wrapLegacyIcon(icon, "PM.${method.name}·归档应用")
       }
       hooked++
     }
@@ -753,8 +753,7 @@ private fun hookArchivedAppIcon(xposed: XposedInterface, classLoader: ClassLoade
  * 一些场景（电池页、某些缓存接口）不拿 resId 而是直接拿 Drawable —— 走
  * `getApplicationIcon` / `getActivityIcon` / `getDefaultActivityIcon` 等，
  * 它们直接返回 `Drawable`，没法用"resId 打标记"那套。这条路径用结果包装：
- * 不管原方法返回什么 Drawable，都套成 `CircleIconDrawable`（adaptive 图标
- * 系统自己会画圆，不动；其它一律裁圆）。
+ * 自适应图标原样放行（形状由系统定），非自适应图标包成自适应图标（`CircleIconDrawable`）。
  */
 private fun hookPackageManagerIconGetters(xposed: XposedInterface, classLoader: ClassLoader) {
   val packageManager = classOf("android.app.ApplicationPackageManager", classLoader)
@@ -765,7 +764,7 @@ private fun hookPackageManagerIconGetters(xposed: XposedInterface, classLoader: 
       runCatching {
         xposed.hook(method).intercept { chain ->
           val icon = chain.proceed() as? Drawable ?: return@intercept null
-          clipToCircle(icon, "PM.${method.name}")
+          wrapLegacyIcon(icon, "PM.${method.name}")
         }
         hooked++
       }
@@ -1006,7 +1005,7 @@ private fun hookTaskIcons(xposed: XposedInterface, classLoader: ClassLoader) {
         val index = args.indexOfFirst { it is Drawable }
         if (index < 0) return@intercept chain.proceed()
         val replaced = args.toMutableList()
-        replaced[index] = clipToCircle(args[index] as Drawable, "TaskIcon.${method.name}")
+        replaced[index] = wrapLegacyIcon(args[index] as Drawable, "TaskIcon.${method.name}")
         chain.proceed(replaced.toTypedArray())
       }
       hooked++
@@ -1020,9 +1019,8 @@ private fun hookTaskIcons(xposed: XposedInterface, classLoader: ClassLoader) {
  * 里读取 `IconOptions.drawFullBleed`：true 时会**在 launcher 内部给图标再加一层白色背景板
  * 并把内容缩到 safe zone**，false 时按图标原样画（full-bleed）。
  *
- * 我们已经把图标处理成"圆形、内容填满、圆外透明"——这时 launcher 再加白圆板 +
- * safe-zone 缩小就会让用户看到"白圆 + 缩小"（即上一版模块的"白边"观感）。
- * 把 `drawFullBleed` 设成 false 让 launcher 不再加它的背景板，我们的圆形就直接呈现在桌面。
+ * 我们的老式图标已经自带底盘 + 缩好的前景（`CircleIconDrawable` 就是一个自适应图标），
+ * 桌面再套一层白板就成了"白盘套白盘"。把 `drawFullBleed` 设成 false，让桌面画我们交的那一份。
  *
  * 旧 Android 版本没有这个开关，本 hook 自动 no-op。
  */
@@ -1067,8 +1065,7 @@ private fun hookPixelLauncher(xposed: XposedInterface, classLoader: ClassLoader)
       xposed.hook(method).intercept { chain ->
         val args = chain.args
         val iconOptions = args.getOrNull(1)
-        // 裁圆关掉时不要动这个开关：它存在的意义是让 launcher 别再加自己的白圆底板，
-        // 那是我们圆形图标的配套设置，原样图标不需要它。
+        // 自适应化关掉时不要动这个开关：那时图标原样交回去，桌面该怎么画就怎么画。
         if (ModuleRuntime.options().circleEnabled &&
           iconOptions != null && iconOptionsClass.isInstance(iconOptions)
         ) {
@@ -1181,7 +1178,7 @@ private fun hookSettingsAdaptiveIcon(xposed: XposedInterface, classLoader: Class
           "Settings.getAdaptiveIcon($sig) idx=$index in=${inIcon.javaClass.simpleName} adaptive=${inIcon is AdaptiveIconDrawable}",
         )
         val replaced = args.toMutableList()
-        replaced[index] = clipToCircle(inIcon, "Settings.getAdaptiveIcon")
+        replaced[index] = wrapLegacyIcon(inIcon, "Settings.getAdaptiveIcon")
         // ⚠ 这是**静态方法**（`Utils.getAdaptiveIcon`）：必须用 `proceed(args)`。
         //   用 `proceedWith(chain.thisObject, …)` 时 thisObject = null，libxposed 抛
         //   `NullPointerException: thisObject cannot be null` —— 第三方反馈的「无障碍页
@@ -1200,7 +1197,7 @@ private fun hookSettingsAdaptiveIcon(xposed: XposedInterface, classLoader: Class
  * 电池用量页的图标**不走** `PackageManager`，也不走 `Resources.getDrawable`：
  * 它先把图标装进 `BatteryDiffEntry.mAppIcon`（旧版是 `BatteryEntry.mIcon`），
  * UI 再从 `getAppIcon()` 或者直接从字段里取。整条链上没有任何我们挂过的出口 ——
- * 实测打开电池页时 `clipToCircle` 一次都没被调用（trace 日志 0 条）。
+ * 实测打开电池页时 `wrapLegacyIcon` 一次都没被调用（trace 日志 0 条）。
  *
  * 所以这里对着这两个类直接下手：
  * - `getAppIcon()`：包装返回值
@@ -1219,7 +1216,7 @@ private fun hookBatteryIcons(xposed: XposedInterface, classLoader: ClassLoader) 
           runCatching { xposed.deoptimize(method) }
           xposed.hook(method).intercept { chain ->
             val icon = chain.proceed() as? Drawable
-            if (icon == null) null else clipToCircle(icon, "Battery.${method.name}")
+            if (icon == null) null else wrapLegacyIcon(icon, "Battery.${method.name}")
           }
           hooked++
         }
@@ -1269,7 +1266,7 @@ private fun wrapIconField(owner: Any?, name: String, from: String) {
   runCatching {
     val field = fieldOf(owner.javaClass, name) ?: return
     val icon = field.get(owner) as? Drawable ?: return
-    if (icon !is AdaptiveIconDrawable) field.set(owner, clipToCircle(icon, from))
+    if (icon !is AdaptiveIconDrawable) field.set(owner, wrapLegacyIcon(icon, from))
   }
 }
 
@@ -1290,7 +1287,7 @@ private fun hookShortcutIcons(xposed: XposedInterface) {
         if (fallback != null) {
           IconNames.remember(fallback, "pm:" + name.removePrefix("pm:").substringBefore('/'))
         }
-        clipToCircle(fallback ?: icon, "LauncherApps.getShortcutIconDrawable")
+        wrapLegacyIcon(fallback ?: icon, "LauncherApps.getShortcutIconDrawable")
       }
       hooked++
     }
@@ -1725,7 +1722,7 @@ internal object IconNames {
   fun remember(icon: Drawable, name: String) {
     if (name.isEmpty()) return
     // ⚠ 表满**停止登记、绝不清空**（2026-11-13）：清空会让**还在用的**图标名字变回 `?`，
-    //   而 `clipToCircle` 靠 `pm:` 前缀认快捷方式、合成侧靠包名开按包规则 —— 一次清表就是
+    //   而 `wrapLegacyIcon` 靠 `pm:` 前缀认快捷方式、合成侧靠包名开按包规则 —— 一次清表就是
     //   一整批图标悄悄换了判断。宁可新图标不具名（`?`），也不动旧映射。
     if (byDrawable.size >= LIMIT) {
       if (namesFullLogged.compareAndSet(false, true)) {

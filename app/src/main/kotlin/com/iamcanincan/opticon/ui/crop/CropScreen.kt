@@ -35,9 +35,11 @@ import com.iamcanincan.opticon.ui.SampleTile
 import com.iamcanincan.opticon.ui.ScreenList
 
 /**
- * 「裁圆」页：只讲这一件事 —— 桌面图标裁成正圆，以及会影响它的系统行为说明。
+ * 「自适应」页：只讲这一件事 —— 非自适应（老式）图标做成自适应图标，以及会影响它的系统行为说明。
  *
  * 2026-10-26 三个功能分页：单色与通知各自独立成页；作用域 / 步骤 / 验证 / 运维在「模块」页。
+ * 2026-11-13 换口径：原来这一页讲"裁成正圆"，主人定了「图标裁圆应该去掉，转为将非自适应图标
+ * 优化为自适应图标」—— 现在讲的是包装（底盘 + 安全区内缩放 + 系统 mask）。
  *
  * 顶栏与底部导航让出的空间由外壳扣掉（`OpticonApp` 里的 `Modifier.padding(inner)`），
  * 这里只管列表自己的边距 —— 各页共用同一份脚手架，见 [ScreenList]。
@@ -73,7 +75,7 @@ fun CropScreen() {
 
 
 /**
- * 「效果」卡：一块四格样品板 —— 原样 / 裁圆 / 裁不动 / 快捷方式，下面一句结论。
+ * 「效果」卡：一块四格样品板 —— 原样 / 自适应 / 本来就是圆的 / 快捷方式，下面一句结论。
  *
  * 补这张卡是因为图标页原本只有「开关 + 说明」两块，首屏下半截全是空的；
  * 而且「改完之后到底变成什么样」光靠文字不好讲 —— 画出来一目了然。
@@ -82,8 +84,8 @@ fun CropScreen() {
  * 两档例外像临时挂在下面；四格共用同一块 `surfaceContainerHighest` 底板、同一套两行字，
  * 才像一条规则。白盘在浅色卡上也要有边界，所以用真白 + `outlineVariant` 描边。
  *
- * ⚠ 样本只是**示意图**，不是真实图标渲染：原样那块用中性圆角方表示系统可能给的任何形状
- * （圆角方 / 水滴 / 方）；其余三格用主色示意内容。
+ * ⚠ 样本只是**示意图**，不是真实图标渲染：原样那块用中性圆角方表示老式图标（一张方图）；
+ * 其余三格用主色示意「底盘 + 缩到安全区的图案」。
  */
 @Composable
 private fun EffectCard() {
@@ -101,7 +103,7 @@ private fun EffectCard() {
       )
       EffectTile(
         modifier = Modifier.weight(1f),
-        style = EffectStyle.CROPPED,
+        style = EffectStyle.WRAPPED,
         title = stringResource(R.string.effect_caption_after),
         detail = stringResource(R.string.effect_sample_cropped_detail),
       )
@@ -113,7 +115,7 @@ private fun EffectCard() {
     ) {
       EffectTile(
         modifier = Modifier.weight(1f),
-        style = EffectStyle.SHRUNK,
+        style = EffectStyle.ALREADY_ROUND,
         title = stringResource(R.string.effect_sample_shrink_title),
         detail = stringResource(R.string.effect_caption_shrink),
       )
@@ -139,7 +141,7 @@ private fun EffectCard() {
   }
 }
 
-private enum class EffectStyle { ORIGINAL, CROPPED, SHRUNK, SHORTCUT }
+private enum class EffectStyle { ORIGINAL, WRAPPED, ALREADY_ROUND, SHORTCUT }
 
 /**
  * 效果板的一格：统一的 68dp 底板 + 40dp 样本 + 两行字。
@@ -158,7 +160,7 @@ private fun EffectTile(
   SampleTile(modifier = modifier, title = title, detail = detail) {
     when (style) {
       // 用可识别的图形（相机 / 全景 / 闪电）代替抽象色块：一眼能看出"这是一张图"，
-      // 也把原样与正圆的关系说清楚（同一个相机，换形状）。
+      // 也把原样与自适应后的关系说清楚（同一个相机，缩进底盘里）。
       EffectStyle.ORIGINAL ->
         Box(
           modifier =
@@ -175,7 +177,8 @@ private fun EffectTile(
             modifier = Modifier.size(22.dp),
           )
         }
-      EffectStyle.CROPPED ->
+      // 自适应化：底盘（这里就是图标自己的底色）+ 缩到安全区的图案（约 70% 直径）。
+      EffectStyle.WRAPPED ->
         Box(
           modifier = Modifier.size(40.dp).clip(CircleShape).background(scheme.primary),
           contentAlignment = Alignment.Center,
@@ -184,15 +187,19 @@ private fun EffectTile(
             imageVector = Icons.Default.PhotoCamera,
             contentDescription = null,
             tint = scheme.onPrimary,
-            modifier = Modifier.size(22.dp),
+            modifier = Modifier.size(15.dp),
           )
         }
-      EffectStyle.SHRUNK ->
-        PlateSample {
+      // 本身就是圆盘的老式图标：形状已经等于遮罩，平台画它已经是对的 —— 不动。
+      EffectStyle.ALREADY_ROUND ->
+        Box(
+          modifier = Modifier.size(40.dp).clip(CircleShape).background(scheme.primary),
+          contentAlignment = Alignment.Center,
+        ) {
           Icon(
             imageVector = Icons.Default.Panorama,
             contentDescription = null,
-            tint = scheme.primary,
+            tint = scheme.onPrimary,
             modifier = Modifier.size(22.dp),
           )
         }
@@ -202,7 +209,7 @@ private fun EffectTile(
             imageVector = Icons.Default.Bolt,
             contentDescription = null,
             tint = scheme.primary,
-            modifier = Modifier.size(20.dp),
+            modifier = Modifier.size(15.dp),
           )
         }
     }
