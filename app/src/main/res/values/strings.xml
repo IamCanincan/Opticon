@@ -92,7 +92,7 @@
 
 
     <!-- 自适应的说明卡（开关在「功能」页那一行） -->
-    <string name="circle_switch_title">老式图标做成自适应图标</string>
+    <string name="circle_switch_title">老式图标自适应化</string>
     <string name="circle_switch_body">非自适应（老式）图标套一层自适应壳：原图缩到安全区、垫上图标自己的底色，形状交给系统。自适应图标保持原样。桌面、应用列表、应用信息页与最近任务因此是同一份图标。</string>
     <!-- 开关切换后的 Snackbar：桌面有预渲染缓存，需说明清除缓存后才会生效 -->
 
