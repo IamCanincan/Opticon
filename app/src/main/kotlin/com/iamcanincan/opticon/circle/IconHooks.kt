@@ -51,6 +51,18 @@ import kotlin.concurrent.Volatile
 private const val REAL_PACKAGE_ID = 0x7f000000
 private const val MARKED_PACKAGE_ID = 0x6e000000
 
+/**
+ * 槽位段从 `0x800000` 起（低 24 位的上半区）。
+ *
+ * 为什么不能从 1 开始分：真机上**真的有资源住在 `0x6e` 包号**（第三方反馈的日志里
+ * `com.android.systemui 原id=0x6e000059`）。槽位从 1 起分配时，我们的标记 id 与真实资源
+ * 共用一个空间 —— 真实 id 的低位一旦撞上某个槽位，就会被认成"标记"并还原成别人的 id。
+ * 真实资源的低 24 位从 `0x010000` 起按需分配，要单个 APK 有 **800 万个资源**才摸得到
+ * `0x800000`，实际不可能；抬到高位就排除了这种碰撞。
+ */
+private const val SLOT_BASE = 0x800000
+private const val SLOT_MASK = 0x7fffff
+
 // 应用图标解析不出来时系统用的那个默认图标，它同样不是圆形的。
 private const val DEFAULT_APP_ICON = android.R.drawable.sym_def_app_icon
 
@@ -80,7 +92,7 @@ private val nextSlot = AtomicInteger(1)
  * （反馈：启用 `com.android.settings` 作用域后无障碍页全崩；取消作用域就正常 —— 因为
  * 不注入时这些 id 根本不会被本进程重新打标记）。表满只意味着之后的新图标保持原样。
  */
-private const val MARK_SLOT_LIMIT = 0x00ffffff
+private const val MARK_SLOT_LIMIT = SLOT_BASE
 
 /** 表满只报一次，别刷屏。 */
 private val markFullLogged = AtomicBoolean(false)
@@ -95,14 +107,17 @@ private fun Int.isMarkableIcon(): Boolean {
 }
 
 /**
- * 认标记 id：顶字节对上**并且**槽位还在表里。
+ * 认标记 id：顶字节对上、低位落在**槽位段**（≥ [SLOT_BASE]）、而且槽位确实在表里。
  *
- * ⚠ 只比顶字节会把"某个真实 APK 的资源包号恰好是 0x6e"误认成我们的标记 id（然后被还原成
- * 一个不存在的 id → 图标空白 / 点开闪退）。槽位表 2026-11-13 起不再清空，所以真正的标记 id
- * 一定查得到；多一次 `containsKey` 只在顶字节命中时发生，热路径（普通 0x7f id）不多付钱。
+ * ⚠ 只比顶字节会把真实资源误认成我们的标记 id（真机上 `0x6e` 包号是真的有人用的）；
+ * 只看表也不行 —— 真实 id 的低位可能恰好等于某个槽位。三条一起才分得开。
+ * 多出的两次判断只在顶字节命中时发生，热路径（普通 0x7f id）不多付钱。
  */
-private fun Int.isMarkedIcon(): Boolean =
-  (this and 0xff000000.toInt()) == MARKED_PACKAGE_ID && slotOrigin.containsKey(this and 0x00ffffff)
+private fun Int.isMarkedIcon(): Boolean {
+  if ((this and 0xff000000.toInt()) != MARKED_PACKAGE_ID) return false
+  val slot = this and 0x00ffffff
+  return slot >= SLOT_BASE && slotOrigin.containsKey(slot)
+}
 
 private fun Int.marked(): Int {
   markSlots[this]?.let { return MARKED_PACKAGE_ID or it }
@@ -119,7 +134,8 @@ private fun Int.marked(): Int {
   if (size == 2048 || size == 4096 || size == 8192) {
     Log.i(TAG, "标记槽位表 $size 项（长寿命进程如 Settings 会很高；2026-11-13 起表满不清空）")
   }
-  val slot = nextSlot.getAndIncrement() and 0x00ffffff
+  // 槽位从 SLOT_BASE 起，与真实资源 id 的低位段分开（见 [SLOT_BASE]）。
+  val slot = SLOT_BASE or (nextSlot.getAndIncrement() and SLOT_MASK)
   markSlots.putIfAbsent(this, slot)
   val real = markSlots[this]!!
   slotOrigin[real] = this
