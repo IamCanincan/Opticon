@@ -17,6 +17,7 @@ import android.os.Build
 import android.util.Log
 import com.iamcanincan.opticon.runtime.ModuleRuntime
 import com.iamcanincan.opticon.runtime.TAG
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.ceil
 import kotlin.math.roundToInt
@@ -714,6 +715,9 @@ private const val CLIP_LOG_LIMIT = 40
 
 private val clipLogLeft = AtomicInteger(CLIP_LOG_LIMIT)
 
+/** 「包装自身抛了」只报一次（每张图标一行会把日志刷满）。 */
+private val clipFailLogged = AtomicBoolean(false)
+
 /** 宿主包名，装配时置一次；只为这一行日志服务。 */
 @Volatile
 var clipHost: String = "?"
@@ -828,7 +832,21 @@ private fun noteCrop(from: String) {
 internal fun uncroppedIcon(d: Drawable): Drawable =
   if (d is CircleIconDrawable) d.source else d
 
-fun clipToCircle(icon: Drawable, from: String): Drawable {
+/**
+ * 包装成圆形；**这一层本身绝不抛**。
+ *
+ * ⚠ 它被挂在宿主的取图热路径上，抛出去就是宿主崩（第三方反馈 Settings 崩溃那次，
+ *   根因虽是 `proceedWith` 的用法，但同类风险必须在这里堵死）：任何一步失败都原样放行。
+ */
+fun clipToCircle(icon: Drawable, from: String): Drawable =
+  runCatching { clipInner(icon, from) }.getOrElse {
+    if (clipFailLogged.compareAndSet(false, true)) {
+      Log.w(TAG, "裁圆：包装抛了，原样放行（${it.javaClass.simpleName}: ${it.message}）")
+    }
+    icon
+  }
+
+private fun clipInner(icon: Drawable, from: String): Drawable {
   // 配置按 TTL 重读，所以界面里关掉开关后很快生效，不用重启进程。
   if (!ModuleRuntime.options().circleEnabled) return icon
   // 射程（2026-10-21 起）：**默认全裁，唯一的排除是快速设置那一路**。

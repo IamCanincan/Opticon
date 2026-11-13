@@ -684,8 +684,11 @@ private fun hookIconLoader(xposed: XposedInterface, method: Method): Boolean =
         try {
           val restored = args.toMutableList()
           restored[index] = (args[index] as Int).unmarked()
+          // ⚠ 只换参数时用 `proceed(args)`，**不要** `proceedWith(chain.thisObject, args)`：
+          //   挂到的若是静态方法（`thisObject` 为 null），libxposed 会抛
+          //   `NullPointerException: thisObject cannot be null`，直接把宿主带崩。
           val icon =
-            chain.proceedWith(chain.thisObject, restored.toTypedArray()) as? Drawable
+            chain.proceed(restored.toTypedArray()) as? Drawable
               ?: return@intercept null
           // 只给日志用的名字。取的是**还原后的真实 id** —— args 里那份是打过标记的假 id，
           // 拿它问资源名只会得到异常或错名字。只在「这确实是个被标记的应用图标 id」这条
@@ -988,7 +991,7 @@ private fun hookTaskIcons(xposed: XposedInterface, classLoader: ClassLoader) {
         if (index < 0) return@intercept chain.proceed()
         val replaced = args.toMutableList()
         replaced[index] = clipToCircle(args[index] as Drawable, "TaskIcon.${method.name}")
-        chain.proceedWith(chain.thisObject, replaced.toTypedArray())
+        chain.proceed(replaced.toTypedArray())
       }
       hooked++
     }
@@ -1163,7 +1166,12 @@ private fun hookSettingsAdaptiveIcon(xposed: XposedInterface, classLoader: Class
         )
         val replaced = args.toMutableList()
         replaced[index] = clipToCircle(inIcon, "Settings.getAdaptiveIcon")
-        chain.proceedWith(chain.thisObject, replaced.toTypedArray())
+        // ⚠ 这是**静态方法**（`Utils.getAdaptiveIcon`）：必须用 `proceed(args)`。
+        //   用 `proceedWith(chain.thisObject, …)` 时 thisObject = null，libxposed 抛
+        //   `NullPointerException: thisObject cannot be null` —— 第三方反馈的「无障碍页
+        //   图标空白、点开闪退」就是这一行（栈：Settings.Utils.getAdaptiveIcon →
+        //   A11yServiceScreen.getIcon）。
+        chain.proceed(replaced.toTypedArray())
       }
       hooked++
     }
