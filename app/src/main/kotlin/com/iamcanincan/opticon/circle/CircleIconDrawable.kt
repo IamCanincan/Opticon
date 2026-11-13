@@ -180,7 +180,13 @@ private class BareForeground(
     drawFilled(canvas, view, m)
   }
 
-  /** 光栅化 → 铺内容（可放大）→ 边角延伸 → 贴回图层。 */
+  /**
+   * 光栅化 → 铺内容（可放大）→ 算边角延伸色 → **把延伸色垫在底下、再把图标叠上去** → 贴回图层。
+   *
+   * ⚠ 为什么画两遍：把透明区填成实色之后，图标自己那圈抗锯齿边（alpha 1..254）如果留在
+   * 透明底上，屏幕上是**一条半透明的缝**（2026-11-13 主人：「接缝有点大」）。第二遍把图标
+   * 叠在延伸色上，边缘与底色正常混合，缝就没了。
+   */
   private fun drawFilled(canvas: Canvas, view: Rect, m: IconMetrics) {
     val w = view.width()
     val h = view.height()
@@ -196,6 +202,21 @@ private class BareForeground(
       scratchH = h
     }
     bitmap.eraseColor(Color.TRANSPARENT)
+    drawIcon(layer, w, h, m, view)
+
+    val px = IntArray(w * h)
+    bitmap.getPixels(px, 0, w, 0, 0, w, h)
+    val fill = computeFill(px, w, h)
+
+    bitmap.eraseColor(Color.TRANSPARENT)
+    bitmap.setPixels(fill, 0, w, 0, 0, w, h)
+    drawIcon(layer, w, h, m, view)
+
+    canvas.drawBitmap(bitmap, null, view, null)
+  }
+
+  /** 把原图按补满倍率画进图层；两次绘制共用。 */
+  private fun drawIcon(layer: Canvas, w: Int, h: Int, m: IconMetrics, view: Rect) {
     val save = layer.save()
     if (fill > 1.001f) {
       // 内容框中心 → 图标槽中心：T(p) = 槽中心 + fill × (p − 内容中心)
@@ -209,12 +230,6 @@ private class BareForeground(
     inner.draw(layer)
     layer.restoreToCount(save)
     inner.setBounds(view)
-
-    val px = IntArray(w * h)
-    bitmap.getPixels(px, 0, w, 0, 0, w, h)
-    extendEdges(px, w, h)
-    bitmap.setPixels(px, 0, w, 0, 0, w, h)
-    canvas.drawBitmap(bitmap, null, view, null)
   }
 
   override fun onBoundsChange(bounds: Rect) {
@@ -258,6 +273,12 @@ private const val MAX_FILL = 6f
 
 /** 判"看得见"的 alpha 门槛（与量内容框同一把尺）。 */
 private const val ALPHA_MIN = 8
+
+/** 取边色时优先用"够实"的格：抗锯齿边色被拉出去就是一道浅色接缝。 */
+private const val SOLID_ALPHA = 160
+
+/** 取边色时往里让几格：边界那 1~2 格是抗锯齿混出来的浅色，照它铺就是一圈浅接缝。 */
+private const val EDGE_INSET = 1
 
 /**
  * 老式图标在图标槽里的处理参数。
@@ -336,22 +357,25 @@ internal fun measureIcon(icon: Drawable): IconMetrics? = runCatching {
  * 填的是源格自己的 RGB、alpha 记 255 —— 于是圆盘/圆角图标那四个角是它自己的边缘色，
  * 桌面的「图标形状」怎么裁都不会再露出壁纸。
  */
-private fun extendEdges(px: IntArray, w: Int, h: Int) {
+/**
+ * 算"边角该填什么颜色"。返回与 [px] 等长的数组：0 = 不填，其余 = 要铺的 ARGB。
+ *
+ * 颜色取**行向 + 列向各一条边线**的平均（渐变底两个方向都保得住）；边线取的是
+ * 往里让 [EDGE_INSET] 格的颜色 —— 边界那一两格是抗锯齿混出来的浅色，照它铺就是一圈浅接缝。
+ * 极角上既没有行也没有列的小三角，用 BFS 从最近的已给色格拓过去。
+ */
+private fun computeFill(px: IntArray, w: Int, h: Int): IntArray {
   val n = w * h
-  if (n <= 0) return
-  // ⚠ 颜色**不能**存在 state 里：纯白不透明格的 ARGB 就是 -1（0xFFFFFFFF），
-  //   与"外面未着色"撞值 —— 2026-11-13 真机崩的就是这个（白色图标被反复入队，
-  //   work 数组越界：length=66564; index=66564）。
-  //   state: 0 = 内部/未定，1 = 外面未着色，2 = 已着色（种子或已拓）
-  val state = ByteArray(n)
-  val color = IntArray(n)
+  val fill = IntArray(n)
+  if (n <= 0) return fill
+  val outside = ByteArray(n)
   val work = IntArray(n)
 
-  // 1) 从四条边出发，把"外面"的透明格标成 1（内部镂空走不到，保持 0）
+  // 1) 从四条边洪泛，标出"与外面连通"的透明格（内部镂空走不到）
   var sp = 0
   fun mark(i: Int) {
-    if (state[i] == 0.toByte() && (px[i] ushr 24) <= ALPHA_MIN) {
-      state[i] = 1.toByte()
+    if (outside[i] == 0.toByte() && (px[i] ushr 24) <= ALPHA_MIN) {
+      outside[i] = 1
       work[sp++] = i
     }
   }
@@ -373,43 +397,180 @@ private fun extendEdges(px: IntArray, w: Int, h: Int) {
     if (y + 1 < h) mark(i + w)
   }
 
-  // 2) 多源 BFS：所有实色格同时往外面拓（8 邻域，角上不留台阶）
+  // 2) 行/列的实色界（优先"够实"的格；取色时往里让 EDGE_INSET 格）
+  val rowLx = IntArray(h) { -1 }
+  val rowRx = IntArray(h) { -1 }
+  val rowLc = IntArray(h)
+  val rowRc = IntArray(h)
+  for (y in 0 until h) {
+    var lx = -1
+    var rx = -1
+    for (x in 0 until w) {
+      if ((px[y * w + x] ushr 24) >= SOLID_ALPHA) {
+        if (lx < 0) lx = x
+        rx = x
+      }
+    }
+    if (lx < 0) {
+      for (x in 0 until w) {
+        if ((px[y * w + x] ushr 24) > ALPHA_MIN) {
+          if (lx < 0) lx = x
+          rx = x
+        }
+      }
+    }
+    if (lx >= 0) {
+      rowLx[y] = lx
+      rowRx[y] = rx
+      rowLc[y] = px[y * w + minOf(lx + EDGE_INSET, rx)]
+      rowRc[y] = px[y * w + maxOf(rx - EDGE_INSET, lx)]
+    }
+  }
+  val colTy = IntArray(w) { -1 }
+  val colBy = IntArray(w) { -1 }
+  val colTc = IntArray(w)
+  val colBc = IntArray(w)
+  for (x in 0 until w) {
+    var ty = -1
+    var by = -1
+    for (y in 0 until h) {
+      if ((px[y * w + x] ushr 24) >= SOLID_ALPHA) {
+        if (ty < 0) ty = y
+        by = y
+      }
+    }
+    if (ty < 0) {
+      for (y in 0 until h) {
+        if ((px[y * w + x] ushr 24) > ALPHA_MIN) {
+          if (ty < 0) ty = y
+          by = y
+        }
+      }
+    }
+    if (ty >= 0) {
+      colTy[x] = ty
+      colBy[x] = by
+      colTc[x] = px[minOf(ty + EDGE_INSET, by) * w + x]
+      colBc[x] = px[maxOf(by - EDGE_INSET, ty) * w + x]
+    }
+  }
+
+  // 3) 行向 + 列向取平均
+  val filled = ByteArray(n)
+  val color = IntArray(n)
+  for (i in 0 until n) {
+    if (outside[i] == 0.toByte()) continue
+    val x = i % w
+    val y = i / w
+    var sumR = 0
+    var sumG = 0
+    var sumB = 0
+    var cnt = 0
+    if (rowLx[y] >= 0) {
+      val c = when {
+        x <= rowLx[y] -> rowLc[y]
+        x >= rowRx[y] -> rowRc[y]
+        else -> 0
+      }
+      if (c != 0) {
+        sumR += (c shr 16) and 0xFF
+        sumG += (c shr 8) and 0xFF
+        sumB += c and 0xFF
+        cnt++
+      }
+    }
+    if (colTy[x] >= 0) {
+      val c = when {
+        y <= colTy[x] -> colTc[x]
+        y >= colBy[x] -> colBc[x]
+        else -> 0
+      }
+      if (c != 0) {
+        sumR += (c shr 16) and 0xFF
+        sumG += (c shr 8) and 0xFF
+        sumB += c and 0xFF
+        cnt++
+      }
+    }
+    if (cnt > 0) {
+      color[i] = (0xFF shl 24) or ((sumR / cnt) shl 16) or ((sumG / cnt) shl 8) or (sumB / cnt)
+      filled[i] = 1
+    }
+  }
+
+  // 4) 极角：从最近的已给色格 BFS 拓过去
   var head = 0
   var tail = 0
   for (i in 0 until n) {
     if ((px[i] ushr 24) > ALPHA_MIN) {
-      state[i] = 2.toByte()
       color[i] = px[i]
-      work[tail++] = i
+      filled[i] = 1
     }
+    if (filled[i] == 1.toByte()) work[tail++] = i
   }
   while (head < tail) {
     val i = work[head++]
     val c = color[i]
     val x = i % w
     val y = i / w
-    if (x > 0) tail = take(i - 1, c, state, color, work, tail)
-    if (x + 1 < w) tail = take(i + 1, c, state, color, work, tail)
-    if (y > 0) tail = take(i - w, c, state, color, work, tail)
-    if (y + 1 < h) tail = take(i + w, c, state, color, work, tail)
-    if (x > 0 && y > 0) tail = take(i - w - 1, c, state, color, work, tail)
-    if (x + 1 < w && y > 0) tail = take(i - w + 1, c, state, color, work, tail)
-    if (x > 0 && y + 1 < h) tail = take(i + w - 1, c, state, color, work, tail)
-    if (x + 1 < w && y + 1 < h) tail = take(i + w + 1, c, state, color, work, tail)
+    if (x > 0) tail = spread(i - 1, c, outside, filled, color, work, tail)
+    if (x + 1 < w) tail = spread(i + 1, c, outside, filled, color, work, tail)
+    if (y > 0) tail = spread(i - w, c, outside, filled, color, work, tail)
+    if (y + 1 < h) tail = spread(i + w, c, outside, filled, color, work, tail)
+    if (x > 0 && y > 0) tail = spread(i - w - 1, c, outside, filled, color, work, tail)
+    if (x + 1 < w && y > 0) tail = spread(i - w + 1, c, outside, filled, color, work, tail)
+    if (x > 0 && y + 1 < h) tail = spread(i + w - 1, c, outside, filled, color, work, tail)
+    if (x + 1 < w && y + 1 < h) tail = spread(i + w + 1, c, outside, filled, color, work, tail)
   }
 
-  // 3) 写回：只动"原来是透明、又在外面的"格，内部镂空保持原样
+  // 5) 只交"外面"的格
   for (i in 0 until n) {
-    if (state[i] == 2.toByte() && (px[i] ushr 24) <= ALPHA_MIN) {
-      px[i] = (color[i] and 0x00FFFFFF) or 0xFF000000.toInt()
+    if (outside[i] == 1.toByte() && filled[i] == 1.toByte()) fill[i] = color[i]
+  }
+
+  // 6) 再往图标里垫 2 格：盖住图标自己那圈抗锯齿边（alpha 1..254）。
+  //    不垫的话，第二遍把图标叠上去时那圈半透明像素露出的是宿主底色 —— 屏幕上就是一条浅缝。
+  repeat(2) {
+    val snapshot = fill.copyOf()
+    for (i in 0 until n) {
+      if (fill[i] != 0) continue
+      if ((px[i] ushr 24) >= 250) continue
+      val x = i % w
+      val y = i / w
+      var sr = 0
+      var sg = 0
+      var sb = 0
+      var cnt = 0
+      fun near(j: Int) {
+        val c = snapshot[j]
+        if (c == 0) return
+        sr += (c shr 16) and 0xFF
+        sg += (c shr 8) and 0xFF
+        sb += c and 0xFF
+        cnt++
+      }
+      if (x > 0) near(i - 1)
+      if (x + 1 < w) near(i + 1)
+      if (y > 0) near(i - w)
+      if (y + 1 < h) near(i + w)
+      if (cnt > 0) fill[i] = (0xFF shl 24) or ((sr / cnt) shl 16) or ((sg / cnt) shl 8) or (sb / cnt)
     }
   }
+  return fill
 }
 
-/** BFS 的入队：只吃"外面且未着色"的格。返回新的队尾。 */
-private fun take(j: Int, c: Int, state: ByteArray, color: IntArray, work: IntArray, tail: Int): Int {
-  if (state[j] != 1.toByte()) return tail
-  state[j] = 2.toByte()
+/** BFS 入队：只吃"外面且还没给色"的格。 */
+private fun spread(
+  j: Int,
+  c: Int,
+  outside: ByteArray,
+  filled: ByteArray,
+  color: IntArray,
+  work: IntArray,
+  tail: Int,
+): Int {
+  if (outside[j] != 1.toByte() || filled[j] != 0.toByte()) return tail
+  filled[j] = 1
   color[j] = c
   work[tail] = j
   return tail + 1
