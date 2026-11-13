@@ -146,7 +146,28 @@ private class BareForeground(
   private var scratchW = 0
   private var scratchH = 0
 
+  /** draw 抛异常只报一次（这一层是被桌面直接画的，抛出去就是桌面崩）。 */
+  private var failLogged = false
+
   override fun draw(canvas: Canvas) {
+    // ⚠ 兜底：这一层被 BaseIconFactory / 桌面直接调用，异常会一路把桌面带崩
+    //   （2026-11-13 真机：边角延伸的 BFS 数组越界，桌面进 launcher-loader 就崩）。
+    //   宁可退回原图，也不把宿主拖下水。
+    try {
+      drawInner(canvas)
+    } catch (t: Throwable) {
+      if (!failLogged) {
+        failLogged = true
+        Log.w(TAG, "自适应：前景 draw 抛了，退回原图（${t.javaClass.simpleName}: ${t.message}）")
+      }
+      runCatching {
+        inner.setBounds(bounds)
+        inner.draw(canvas)
+      }
+    }
+  }
+
+  private fun drawInner(canvas: Canvas) {
     canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
     val view = inner.bounds
     if (view.isEmpty) return
@@ -318,15 +339,19 @@ internal fun measureIcon(icon: Drawable): IconMetrics? = runCatching {
 private fun extendEdges(px: IntArray, w: Int, h: Int) {
   val n = w * h
   if (n <= 0) return
-  // state：0 = 不参与（内部镂空 / 还没轮到），-1 = 外面且未着色，>0 = 颜色
-  val state = IntArray(n)
+  // ⚠ 颜色**不能**存在 state 里：纯白不透明格的 ARGB 就是 -1（0xFFFFFFFF），
+  //   与"外面未着色"撞值 —— 2026-11-13 真机崩的就是这个（白色图标被反复入队，
+  //   work 数组越界：length=66564; index=66564）。
+  //   state: 0 = 内部/未定，1 = 外面未着色，2 = 已着色（种子或已拓）
+  val state = ByteArray(n)
+  val color = IntArray(n)
   val work = IntArray(n)
 
-  // 1) 从四条边出发，把"外面"的透明格标成 -1（内部镂空走不到，保持 0）
+  // 1) 从四条边出发，把"外面"的透明格标成 1（内部镂空走不到，保持 0）
   var sp = 0
   fun mark(i: Int) {
-    if (state[i] == 0 && (px[i] ushr 24) <= ALPHA_MIN) {
-      state[i] = -1
+    if (state[i] == 0.toByte() && (px[i] ushr 24) <= ALPHA_MIN) {
+      state[i] = 1.toByte()
       work[sp++] = i
     }
   }
@@ -353,38 +378,39 @@ private fun extendEdges(px: IntArray, w: Int, h: Int) {
   var tail = 0
   for (i in 0 until n) {
     if ((px[i] ushr 24) > ALPHA_MIN) {
-      state[i] = px[i]
+      state[i] = 2.toByte()
+      color[i] = px[i]
       work[tail++] = i
     }
   }
   while (head < tail) {
     val i = work[head++]
-    val c = state[i]
+    val c = color[i]
     val x = i % w
     val y = i / w
-    if (x > 0) tail = take(i - 1, c, state, work, tail)
-    if (x + 1 < w) tail = take(i + 1, c, state, work, tail)
-    if (y > 0) tail = take(i - w, c, state, work, tail)
-    if (y + 1 < h) tail = take(i + w, c, state, work, tail)
-    if (x > 0 && y > 0) tail = take(i - w - 1, c, state, work, tail)
-    if (x + 1 < w && y > 0) tail = take(i - w + 1, c, state, work, tail)
-    if (x > 0 && y + 1 < h) tail = take(i + w - 1, c, state, work, tail)
-    if (x + 1 < w && y + 1 < h) tail = take(i + w + 1, c, state, work, tail)
+    if (x > 0) tail = take(i - 1, c, state, color, work, tail)
+    if (x + 1 < w) tail = take(i + 1, c, state, color, work, tail)
+    if (y > 0) tail = take(i - w, c, state, color, work, tail)
+    if (y + 1 < h) tail = take(i + w, c, state, color, work, tail)
+    if (x > 0 && y > 0) tail = take(i - w - 1, c, state, color, work, tail)
+    if (x + 1 < w && y > 0) tail = take(i - w + 1, c, state, color, work, tail)
+    if (x > 0 && y + 1 < h) tail = take(i + w - 1, c, state, color, work, tail)
+    if (x + 1 < w && y + 1 < h) tail = take(i + w + 1, c, state, color, work, tail)
   }
 
   // 3) 写回：只动"原来是透明、又在外面的"格，内部镂空保持原样
   for (i in 0 until n) {
-    val c = state[i]
-    if (c > 0 && (px[i] ushr 24) <= ALPHA_MIN) {
-      px[i] = (c and 0x00FFFFFF) or 0xFF000000.toInt()
+    if (state[i] == 2.toByte() && (px[i] ushr 24) <= ALPHA_MIN) {
+      px[i] = (color[i] and 0x00FFFFFF) or 0xFF000000.toInt()
     }
   }
 }
 
 /** BFS 的入队：只吃"外面且未着色"的格。返回新的队尾。 */
-private fun take(j: Int, c: Int, state: IntArray, work: IntArray, tail: Int): Int {
-  if (state[j] != -1) return tail
-  state[j] = c
+private fun take(j: Int, c: Int, state: ByteArray, color: IntArray, work: IntArray, tail: Int): Int {
+  if (state[j] != 1.toByte()) return tail
+  state[j] = 2.toByte()
+  color[j] = c
   work[tail] = j
   return tail + 1
 }
