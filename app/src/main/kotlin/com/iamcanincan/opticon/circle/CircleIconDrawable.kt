@@ -160,6 +160,9 @@ class CircleIconDrawable(
  * 底色上画，抗锯齿边与底色混合，不会留下一条半透明的浅缝。
  * 每一张老式图标都过这一步（渲染结果按尺寸档位缓存，不会每帧重算）。
  */
+/** 「带堆栈的第一条」只打一次（进程级）。 */
+private val failStackLogged = java.util.concurrent.atomic.AtomicBoolean(false)
+
 private class BareForeground(
   private val inner: Drawable,
   /** 共享渲染缓存（同一张图标的所有副本一份）。 */
@@ -177,8 +180,13 @@ private class BareForeground(
     inner.callback = this
   }
 
+  /** 正在往 Shared/RenderCache 里画 —— 这期间源图标 invalidate **不能** reset（会把正在用的位图清掉）。 */
+  private var rendering = false
+
   override fun invalidateDrawable(who: Drawable) {
-    if (who === inner) cache.reset()
+    // ⚠ 2026-11-13 真机：源图标 `setBounds` 时会 invalidateSelf，这里 reset 掉 cache.bitmap，
+    //   而 drawFilled 随后还拿着那张位图去 drawBitmap → c.bitmap 为 null → NPE → 全量走兜底。
+    if (who === inner && !rendering) cache.reset()
     invalidateSelf()
   }
 
@@ -205,18 +213,36 @@ private class BareForeground(
     } catch (t: Throwable) {
       if (!failLogged) {
         failLogged = true
-        Log.w(TAG, "自适应：前景 draw 抛了，退回原图（${t.javaClass.simpleName}: ${t.message}）")
+        // ⚠ 带堆栈：只打第一条（每张图标一个实例，不带栈会刷满且看不出来源）
+        if (failStackLogged.compareAndSet(false, true)) {
+          Log.w(TAG, "自适应：前景 draw 抛了（堆栈只打这一条）", t)
+        } else {
+          Log.w(TAG, "自适应：前景 draw 抛了，退回原图（${t.javaClass.simpleName}: ${t.message}）")
+        }
       }
       runCatching {
-        inner.setBounds(bounds)
+        // ⚠ 画在**可见区**，不是外层 bounds：外层是 1.5 倍的图层区，
+        //   按它画等于把图标居中放大 1.5 倍（2026-11-13 真机「过度放大」就是这一条）。
+        val v = visibleRect()
+        inner.setBounds(v)
         inner.draw(canvas)
       }
     }
   }
 
+  /** 可见区 = 外层 bounds 往里收 1/6（不读 inner.bounds：它会被 drawIcon 临时改动）。 */
+  private fun visibleRect(): Rect {
+    val b = bounds
+    val frac = (1f - VIEW_PORT_SCALE) / 2f
+    // 四舍五入而不是截断：384 × 1/6 = 63.999…，截断会少 1 格（真机打出来 view=[-1,-1][257,257]）
+    val dx = Math.round(b.width() * frac)
+    val dy = Math.round(b.height() * frac)
+    return Rect(b.left + dx, b.top + dy, b.right - dx, b.bottom - dy)
+  }
+
   private fun drawInner(canvas: Canvas) {
     canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
-    val view = inner.bounds
+    val view = visibleRect()
     if (view.isEmpty) return
     drawFilled(canvas, view)
   }
@@ -229,24 +255,36 @@ private class BareForeground(
    * 叠在延伸色上，边缘与底色正常混合，缝就没了。
    */
   private fun drawFilled(canvas: Canvas, view: Rect) {
-    val w = view.width()
-    val h = view.height()
-    if (w <= 0 || h <= 0) return
-    // 渲染尺寸吸附到档位：动画里大部分帧落同一档，只 blit 缓存
-    val rw = snapRender(w)
-    val rh = snapRender(h)
-    val c = cache
-    if (!c.matches(rw, rh, alpha)) {
-      val bitmap = Bitmap.createBitmap(rw, rh, Bitmap.Config.ARGB_8888)
-      val layer = Canvas(bitmap)
-      c.bitmap = bitmap
-      c.canvas = layer
-      c.w = rw
-      c.h = rh
-      c.alpha = alpha
-      renderInto(bitmap, layer, rw, rh, view)
+    var stage = "f0"
+    try {
+      val w = view.width()
+      val h = view.height()
+      if (w <= 0 || h <= 0) return
+      // 渲染尺寸吸附到档位：动画里大部分帧落同一档，只 blit 缓存
+      val rw = snapRender(w)
+      val rh = snapRender(h)
+      val c = cache
+      stage = "f1"
+      // ⚠ 必须用局部引用：渲染期间回调可能（合法地）reset 掉共享缓存，
+      //   这时 c.bitmap 已经是 null，但它**不影响**我们手里这张。
+      var bitmap = c.bitmap
+      if (bitmap == null || !c.matches(rw, rh, alpha)) {
+        bitmap = Bitmap.createBitmap(rw, rh, Bitmap.Config.ARGB_8888)
+        val layer = Canvas(bitmap)
+        c.bitmap = bitmap
+        c.canvas = layer
+        c.w = rw
+        c.h = rh
+        c.alpha = alpha
+        stage = "f2"
+        renderInto(bitmap, layer, rw, rh, view)
+      }
+      stage = "f3"
+      canvas.drawBitmap(bitmap, null, view, null)
+    } catch (t: Throwable) {
+      Log.w(TAG, "前景阶段: " + stage, t)
+      throw t
     }
-    canvas.drawBitmap(c.bitmap!!, null, view, null)
   }
 
   /** 渲染尺寸吸附到 [renderStep] 的倍数（太小就不吸，避免把 48px 的图标放大到 64）。 */
@@ -258,16 +296,26 @@ private class BareForeground(
 
   /** 画两遍：先量出填充色，再把填充垫在底下、图标叠上去。 */
   private fun renderInto(bitmap: Bitmap, layer: Canvas, w: Int, h: Int, view: Rect) {
-    bitmap.eraseColor(Color.TRANSPARENT)
-    drawIcon(layer, w, h, view)
-
-    val px = IntArray(w * h)
-    bitmap.getPixels(px, 0, w, 0, 0, w, h)
-    val fill = computeFill(px, w, h)
-
-    bitmap.eraseColor(Color.TRANSPARENT)
-    bitmap.setPixels(fill, 0, w, 0, 0, w, h)
-    drawIcon(layer, w, h, view)
+    var stage = "r0"
+    rendering = true
+    try {
+      stage = "r1"; bitmap.eraseColor(Color.TRANSPARENT)
+      stage = "r2"; drawIcon(layer, w, h, view)
+      stage = "r3"
+      val px = IntArray(w * h)
+      bitmap.getPixels(px, 0, w, 0, 0, w, h)
+      stage = "r4"
+      val fill = computeFill(px, w, h)
+      stage = "r5"; bitmap.eraseColor(Color.TRANSPARENT)
+      stage = "r6"; bitmap.setPixels(fill, 0, w, 0, 0, w, h)
+      stage = "r7"; drawIcon(layer, w, h, view)
+      stage = "r8"
+    } catch (t: Throwable) {
+      Log.w(TAG, "渲染阶段: " + stage, t)
+      throw t
+    } finally {
+      rendering = false
+    }
   }
 
   /** 把原图**按原尺寸**画进图层（不缩放、不裁切）；两次绘制共用。 */
