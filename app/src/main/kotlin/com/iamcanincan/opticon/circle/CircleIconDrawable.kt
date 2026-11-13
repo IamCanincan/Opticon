@@ -24,6 +24,30 @@ import java.util.concurrent.atomic.AtomicInteger
 private val VIEW_PORT_SCALE = 1f / (1f + 2f * AdaptiveIconDrawable.getExtraInsetFraction())
 
 /**
+ * 同一张图标的所有副本共享的渲染结果（按 尺寸 + alpha 失效）。
+ *
+ * 宿主的 bind 会走 `getConstantState().newDrawable()` 每次建一个新副本；不共享的话
+ * 每份副本各持一张 256² 位图（≈256 KB）并各渲一遍。共享之后一张图标只留一份。
+ */
+class RenderCache {
+  var bitmap: Bitmap? = null
+  var canvas: Canvas? = null
+  var w = 0
+  var h = 0
+  var alpha = 255
+
+  fun matches(w: Int, h: Int, a: Int): Boolean =
+    bitmap != null && this.w == w && this.h == h && alpha == a
+
+  fun reset() {
+    bitmap = null
+    canvas = null
+    w = 0
+    h = 0
+  }
+}
+
+/**
  * 把**非自适应（老式）图标**做成自适应图标：前景 = 原图，**不留底盘**，形状交给系统。
  *
  * ## 为什么不再自己裁圆（2026-11-13 主人定）
@@ -59,16 +83,21 @@ class CircleIconDrawable(
   private val metrics: IconMetrics? = null,
   /** 这张是**快捷方式**：只用于单色那支的几何判据（`MonochromeSynth.forIcon` 的 shortcut 位）。 */
   private val isShortcut: Boolean = false,
+  /** 所有副本共享的渲染缓存（[getConstantState] 的副本会拿到同一个）。 */
+  private val sharedCache: RenderCache = RenderCache(),
 ) : AdaptiveIconDrawable(
   // 不要底盘（2026-11-13）：老式图标自己就是整张图，另垫一块颜色等于替应用画了个底。
   // 用透明 ColorDrawable 而不是 null：有的宿主会直接读 `getBackground()`，空着比给个会抛的更安全。
   ColorDrawable(Color.TRANSPARENT),
-  // 前景：内容补满可见区，形状由桌面裁
-  BareForeground(icon, metrics),
+  // 前景：内容补满可见区，形状由桌面裁；所有副本共享同一份渲染缓存
+  BareForeground(icon, metrics, sharedCache),
 ) {
 
   /** 原图标留一份引用，只为了 [getConstantState] 能重建出副本。 */
   private val sourceIcon: Drawable = icon
+
+  /** [getConstantState] 只建一次：每次 bind 都新建一个 state 的话，副本之间就共享不到缓存了。 */
+  private var sharedState: ConstantState? = null
 
   /** 给**要未包装原图**的消费方（通知兜底 / 通知图标解码）。 */
   internal val source: Drawable get() = sourceIcon
@@ -102,12 +131,12 @@ class CircleIconDrawable(
    */
   override fun getConstantState(): ConstantState? {
     val src = sourceState
-    return object : ConstantState() {
+    return sharedState ?: object : ConstantState() {
       override fun newDrawable(): Drawable =
-        CircleIconDrawable(src?.newDrawable() ?: sourceIcon, metrics, isShortcut)
+        CircleIconDrawable(src?.newDrawable() ?: sourceIcon, metrics, isShortcut, sharedCache)
 
       override fun getChangingConfigurations(): Int = changingConfigurations
-    }
+    }.also { sharedState = it }
   }
 }
 
@@ -137,24 +166,38 @@ class CircleIconDrawable(
 private class BareForeground(
   private val inner: Drawable,
   private val metrics: IconMetrics? = null,
-) : Drawable() {
+  /** 共享渲染缓存（同一张图标的所有副本一份）。 */
+  private val shared: RenderCache = RenderCache(),
+) : Drawable(), Drawable.Callback {
+
+  /** 设了 colorFilter 时不走共享缓存（滤镜是每个实例自己的）。 */
+  private var hasFilter = false
+  private var local: RenderCache? = null
+  private val cache: RenderCache
+    get() = if (hasFilter) (local ?: RenderCache().also { local = it }) else shared
+
+  init {
+    // 源图标自己 invalidate（会动的图标、状态变化）时把缓存作废，否则会冻在第一帧。
+    inner.callback = this
+  }
+
+  override fun invalidateDrawable(who: Drawable) {
+    if (who === inner) cache.reset()
+    invalidateSelf()
+  }
+
+  override fun scheduleDrawable(who: Drawable, what: Runnable, `when`: Long) {
+    scheduleSelf(what, `when`)
+  }
+
+  override fun unscheduleDrawable(who: Drawable, what: Runnable) {
+    unscheduleSelf(what)
+  }
 
   /** 补满倍率；≤1 = 不动。上限见 [MAX_FILL]。 */
   private val fill: Float = metrics?.fill ?: 1f
 
-  /**
-   * 渲染好的成品位图，按**档位尺寸**缓存（见 [RENDER_STEP]）。
-   *
-   * 为什么要档位：这一层会被动画按 60fps、各种尺寸反复画（从应用回桌面、最近任务缩放）。
-   * 每帧都重新光栅化 + 算延伸，一来每帧上 MB 的临时数组会抖，二来临界尺寸上延伸色每帧
-   * 差一格，屏幕上就是「抖动」。现在把渲染尺寸吸附到 16px 的档位上，同一档里只算一次，
-   * 余下的尺寸变化交给 canvas 做平滑缩放。
-   */
-  private var cache: Bitmap? = null
-  private var cacheCanvas: Canvas? = null
-  private var cacheW = 0
-  private var cacheH = 0
-  /** 档位：渲染尺寸吸附到这个倍数。 */
+  /** 档位：渲染尺寸吸附到这个倍数（理由见 [RenderCache] 与 drawFilled 的注释）。 */
   private val renderStep = 16
 
   /** draw 抛异常只报一次（这一层是被桌面直接画的，抛出去就是桌面崩）。 */
@@ -205,18 +248,18 @@ private class BareForeground(
     // 渲染尺寸吸附到档位：动画里大部分帧落同一档，只 blit 缓存
     val rw = snapRender(w)
     val rh = snapRender(h)
-    var bitmap = cache
-    var layer = cacheCanvas
-    if (bitmap == null || layer == null || cacheW != rw || cacheH != rh) {
-      bitmap = Bitmap.createBitmap(rw, rh, Bitmap.Config.ARGB_8888)
-      layer = Canvas(bitmap)
-      cache = bitmap
-      cacheCanvas = layer
-      cacheW = rw
-      cacheH = rh
+    val c = cache
+    if (!c.matches(rw, rh, alpha)) {
+      val bitmap = Bitmap.createBitmap(rw, rh, Bitmap.Config.ARGB_8888)
+      val layer = Canvas(bitmap)
+      c.bitmap = bitmap
+      c.canvas = layer
+      c.w = rw
+      c.h = rh
+      c.alpha = alpha
       renderInto(bitmap, layer, rw, rh, m, view)
     }
-    canvas.drawBitmap(bitmap, null, view, null)
+    canvas.drawBitmap(c.bitmap!!, null, view, null)
   }
 
   /** 渲染尺寸吸附到 [renderStep] 的倍数（太小就不吸，避免把 48px 的图标放大到 64）。 */
@@ -264,14 +307,18 @@ private class BareForeground(
     inner.setBounds(bounds.left + dx, bounds.top + dy, bounds.right - dx, bounds.bottom - dy)
   }
 
+  private var alpha = 255
+
   override fun setAlpha(alpha: Int) {
+    this.alpha = alpha
     inner.alpha = alpha
-    cache = null
+    cache.reset()
   }
 
   override fun setColorFilter(colorFilter: ColorFilter?) {
+    hasFilter = colorFilter != null
     inner.colorFilter = colorFilter
-    cache = null
+    cache.reset()
   }
 
   @Suppress("OVERRIDE_DEPRECATION")
