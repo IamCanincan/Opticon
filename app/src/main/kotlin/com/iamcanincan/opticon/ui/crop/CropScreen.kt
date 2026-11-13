@@ -23,7 +23,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.R
@@ -85,7 +84,7 @@ fun CropScreen() {
  * 才像一条规则。白盘在浅色卡上也要有边界，所以用真白 + `outlineVariant` 描边。
  *
  * ⚠ 样本只是**示意图**，不是真实图标渲染：原样那块用中性圆角方表示老式图标（一张方图）；
- * 其余三格用主色示意「底盘 + 缩到安全区的图案」。
+ * 其余三格用主色示意「不留底盘、原图铺满、系统裁形」之后的样子。
  */
 @Composable
 private fun EffectCard() {
@@ -115,7 +114,7 @@ private fun EffectCard() {
     ) {
       EffectTile(
         modifier = Modifier.weight(1f),
-        style = EffectStyle.ALREADY_ROUND,
+        style = EffectStyle.TRANSPARENT,
         title = stringResource(R.string.effect_sample_shrink_title),
         detail = stringResource(R.string.effect_caption_shrink),
       )
@@ -141,7 +140,7 @@ private fun EffectCard() {
   }
 }
 
-private enum class EffectStyle { ORIGINAL, WRAPPED, ALREADY_ROUND, SHORTCUT }
+private enum class EffectStyle { ORIGINAL, WRAPPED, TRANSPARENT, SHORTCUT }
 
 /**
  * 效果板的一格：统一的 68dp 底板 + 40dp 样本 + 两行字。
@@ -177,7 +176,7 @@ private fun EffectTile(
             modifier = Modifier.size(22.dp),
           )
         }
-      // 自适应化：底盘（这里就是图标自己的底色）+ 缩到安全区的图案（约 70% 直径）。
+      // 自适应化：不留底盘，原图铺满图层，由系统按形状裁一刀（相机大小与左边一样）。
       EffectStyle.WRAPPED ->
         Box(
           modifier = Modifier.size(40.dp).clip(CircleShape).background(scheme.primary),
@@ -187,47 +186,30 @@ private fun EffectTile(
             imageVector = Icons.Default.PhotoCamera,
             contentDescription = null,
             tint = scheme.onPrimary,
-            modifier = Modifier.size(15.dp),
+            modifier = Modifier.size(22.dp),
           )
         }
-      // 本身就是圆盘的老式图标：形状已经等于遮罩，平台画它已经是对的 —— 不动。
-      EffectStyle.ALREADY_ROUND ->
+      // 透明底图标：没有底盘可选，做成自适应图标之后屏幕上只剩图案本身。
+      EffectStyle.TRANSPARENT ->
+        Icon(
+          imageVector = Icons.Default.Panorama,
+          contentDescription = null,
+          tint = scheme.primary,
+          modifier = Modifier.size(30.dp),
+        )
+      EffectStyle.SHORTCUT ->
         Box(
           modifier = Modifier.size(40.dp).clip(CircleShape).background(scheme.primary),
           contentAlignment = Alignment.Center,
         ) {
           Icon(
-            imageVector = Icons.Default.Panorama,
+            imageVector = Icons.Default.Bolt,
             contentDescription = null,
             tint = scheme.onPrimary,
             modifier = Modifier.size(22.dp),
           )
         }
-      EffectStyle.SHORTCUT ->
-        PlateSample {
-          Icon(
-            imageVector = Icons.Default.Bolt,
-            contentDescription = null,
-            tint = scheme.primary,
-            modifier = Modifier.size(15.dp),
-          )
-        }
     }
-  }
-}
-
-/** 圆内的白盘：真白 + 描边（浅色卡上不描边就融进去了），内容由调用方放。 */
-@Composable
-private fun PlateSample(content: @Composable () -> Unit) {
-  Box(
-    modifier =
-      Modifier.size(40.dp)
-        .clip(CircleShape)
-        .background(Color.White)
-        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape),
-    contentAlignment = Alignment.Center,
-  ) {
-    content()
   }
 }
 

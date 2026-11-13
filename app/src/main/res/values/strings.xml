@@ -93,7 +93,7 @@
 
     <!-- 自适应的说明卡（开关在「功能」页那一行） -->
     <string name="circle_switch_title">老式图标自适应化</string>
-    <string name="circle_switch_body">非自适应（老式）图标套一层自适应壳：原图缩到安全区、垫上图标自己的底色，形状交给系统。自适应图标保持原样。桌面、应用列表、应用信息页与最近任务因此是同一份图标。</string>
+    <string name="circle_switch_body">非自适应（老式）图标直接做成自适应图标：原图铺满前景层、不另加底盘，形状交给系统。自适应图标保持原样。桌面、应用列表、应用信息页与最近任务因此是同一份图标。</string>
     <!-- 开关切换后的 Snackbar：桌面有预渲染缓存，需说明清除缓存后才会生效 -->
 
     <!-- 状态卡 -->
@@ -183,12 +183,12 @@
     <!-- 效果示意（形状对比图）-->
     <string name="section_effect">效果</string>
     <string name="effect_title">老式图标 → 自适应图标</string>
-    <string name="effect_body">非自适应图标套一层自适应壳：原图按系统的安全区比例缩小、垫上图标自己边上的底色，再交给系统按当前图标形状裁切。自适应图标本身与「形状已经就是一个圆盘」的老式图标保持原样。</string>
+    <string name="effect_body">非自适应图标直接做成自适应图标：原图铺满前景层（尺寸不动）、不另加底盘，再由系统按当前图标形状裁切。自适应图标本身保持原样。</string>
     <!-- 效果示意四格：标题一行 + 细节一行；原样/自适应是主对照，本来成圆/快捷方式是两档说明 -->
     <string name="effect_sample_original_detail">非自适应</string>
-    <string name="effect_sample_cropped_detail">缩到安全区</string>
-    <string name="effect_sample_shrink_title">本来就是圆的</string>
-    <string name="effect_caption_shrink">不动</string>
+    <string name="effect_sample_cropped_detail">满幅 · 系统裁形</string>
+    <string name="effect_sample_shrink_title">透明底图标</string>
+    <string name="effect_caption_shrink">只剩图案</string>
     <string name="effect_sample_shortcut_title">快捷方式</string>
     <string name="effect_caption_shortcut">同样走这套</string>
 
@@ -215,7 +215,7 @@
     <string name="note_tiles">快速设置磁贴不参与这一路。</string>
     <string name="note_mono_scope">已提供单色层的应用，那张单色层将原样透传，模块不改它的像素。</string>
     <string name="note_mono_cache">剪影按图标内容缓存于宿主应用的缓存目录（上限 48 MB，系统存储不足时可能被清除）。模块版本或图标内容变更后缓存自动失效；升级后的首次重启加载会较慢。</string>
-    <string name="note_launcher3">Android 16 及以上由桌面绘制主题背景板；老式图标补的那块底盘取的是它自己边上的颜色，不是主题色。</string>
+    <string name="note_launcher3">Android 16 及以上不再让桌面给我们的图标补白板；老式图标做成自适应图标后不带底盘，图标透明的地方由桌面 / 壁纸透出来。</string>
     <string name="note_themed_icon">本应用图标包含 monochrome 层；在 Android 13 及以上启动器启用“主题图标”时，将按壁纸取色渲染。</string>
 
     <!-- 关于页：功能范围（覆盖什么、有意排除什么） -->
