@@ -142,11 +142,20 @@ private class BareForeground(
   /** 补满倍率；≤1 = 不动。上限见 [MAX_FILL]。 */
   private val fill: Float = metrics?.fill ?: 1f
 
-  /** 光栅化 + 延伸用的画布（按尺寸缓存，图标槽尺寸基本不变）。 */
-  private var scratch: Bitmap? = null
-  private var scratchCanvas: Canvas? = null
-  private var scratchW = 0
-  private var scratchH = 0
+  /**
+   * 渲染好的成品位图，按**档位尺寸**缓存（见 [RENDER_STEP]）。
+   *
+   * 为什么要档位：这一层会被动画按 60fps、各种尺寸反复画（从应用回桌面、最近任务缩放）。
+   * 每帧都重新光栅化 + 算延伸，一来每帧上 MB 的临时数组会抖，二来临界尺寸上延伸色每帧
+   * 差一格，屏幕上就是「抖动」。现在把渲染尺寸吸附到 16px 的档位上，同一档里只算一次，
+   * 余下的尺寸变化交给 canvas 做平滑缩放。
+   */
+  private var cache: Bitmap? = null
+  private var cacheCanvas: Canvas? = null
+  private var cacheW = 0
+  private var cacheH = 0
+  /** 档位：渲染尺寸吸附到这个倍数。 */
+  private val renderStep = 16
 
   /** draw 抛异常只报一次（这一层是被桌面直接画的，抛出去就是桌面崩）。 */
   private var failLogged = false
@@ -193,16 +202,32 @@ private class BareForeground(
     val w = view.width()
     val h = view.height()
     if (w <= 0 || h <= 0) return
-    var bitmap = scratch
-    var layer = scratchCanvas
-    if (bitmap == null || layer == null || scratchW != w || scratchH != h) {
-      bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+    // 渲染尺寸吸附到档位：动画里大部分帧落同一档，只 blit 缓存
+    val rw = snapRender(w)
+    val rh = snapRender(h)
+    var bitmap = cache
+    var layer = cacheCanvas
+    if (bitmap == null || layer == null || cacheW != rw || cacheH != rh) {
+      bitmap = Bitmap.createBitmap(rw, rh, Bitmap.Config.ARGB_8888)
       layer = Canvas(bitmap)
-      scratch = bitmap
-      scratchCanvas = layer
-      scratchW = w
-      scratchH = h
+      cache = bitmap
+      cacheCanvas = layer
+      cacheW = rw
+      cacheH = rh
+      renderInto(bitmap, layer, rw, rh, m, view)
     }
+    canvas.drawBitmap(bitmap, null, view, null)
+  }
+
+  /** 渲染尺寸吸附到 [renderStep] 的倍数（太小就不吸，避免把 48px 的图标放大到 64）。 */
+  private fun snapRender(size: Int): Int {
+    if (size < 64) return size
+    // 取上不取下：宁可渲染大一点再缩小（清晰），也不要把 70 渲成 64 再放大
+    return ((size + renderStep - 1) / renderStep) * renderStep
+  }
+
+  /** 画两遍：先量出填充色，再把填充垫在底下、图标叠上去。 */
+  private fun renderInto(bitmap: Bitmap, layer: Canvas, w: Int, h: Int, m: IconMetrics, view: Rect) {
     bitmap.eraseColor(Color.TRANSPARENT)
     drawIcon(layer, w, h, m, view)
 
@@ -213,8 +238,6 @@ private class BareForeground(
     bitmap.eraseColor(Color.TRANSPARENT)
     bitmap.setPixels(fill, 0, w, 0, 0, w, h)
     drawIcon(layer, w, h, m, view)
-
-    canvas.drawBitmap(bitmap, null, view, null)
   }
 
   /** 把原图按补满倍率画进图层；两次绘制共用。 */
@@ -243,10 +266,12 @@ private class BareForeground(
 
   override fun setAlpha(alpha: Int) {
     inner.alpha = alpha
+    cache = null
   }
 
   override fun setColorFilter(colorFilter: ColorFilter?) {
     inner.colorFilter = colorFilter
+    cache = null
   }
 
   @Suppress("OVERRIDE_DEPRECATION")
