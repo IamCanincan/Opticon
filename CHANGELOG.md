@@ -7,6 +7,17 @@
 - [docs/devlog/2026-10-11_10-14.md](docs/devlog/2026-10-11_10-14.md) —— v1.1.0 收官期 + v1.1.1 裁圆轮（末尾那 8 条）
 - [docs/devlog/2026-09-22_10-11.md](docs/devlog/2026-09-22_10-11.md) —— 单色合成引擎重构期
 
+## v1.1.9（2026-11-13）—— versionCode 13 · **已发布**（tag `v1.1.9`）
+
+**修复（2026-11-13）**
+- **启用 `com.android.settings` 作用域后，无障碍页图标空白、点开闪退**（第三方反馈；v1.1.8 未修好）。
+  真正根因：`Settings.Utils.getAdaptiveIcon` 是**静态方法**，钩子里却用了
+  `proceedWith(chain.thisObject, …)` —— `thisObject == null` 时 libxposed 抛
+  `NullPointerException: thisObject cannot be null`，直接把 Settings 带崩。
+  现在"只换参数"一律用 `proceed(args)`（保留接收者）。
+- `clipToCircle()` 外层加兜底：包装自身抛异常时**原样放行**，不再把宿主拖下水。
+- v1.1.8 的「槽位表满了不清表」保留 —— 那是另一个真实隐患，只是不是这次的病因。
+
 ## v1.1.8（2026-11-13）—— versionCode 12 · **已发布**（tag `v1.1.8`）
 
 **修复（2026-11-13）**
