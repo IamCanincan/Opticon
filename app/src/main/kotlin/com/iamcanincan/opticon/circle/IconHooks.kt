@@ -1015,12 +1015,19 @@ private fun hookTaskIcons(xposed: XposedInterface, classLoader: ClassLoader) {
 }
 
 /**
- * Android 16+ (BAKLAVA) 的 Pixel / AOSP Launcher3 在 `BaseIconFactory.createBadgedIconBitmap`
- * 里读取 `IconOptions.drawFullBleed`：true 时会**在 launcher 内部给图标再加一层白色背景板
- * 并把内容缩到 safe zone**，false 时按图标原样画（full-bleed）。
+ * Android 16+ (BAKLAVA) 的 Launcher3 在 `BaseIconFactory.createBadgedIconBitmap` 里读
+ * `IconOptions.drawFullBleed`（装箱 Boolean，可空）：
+ *  · `true`  → 渲染时**不调 `AdaptiveIconDrawable.draw()`**，而是自己把背景层 + 前景层
+ *    直接画进图标位图；形状稍后由桌面自己的 **`IconShape`**（桌面「图标形状」设置）裁；
+ *  · `false` → 调 `AdaptiveIconDrawable.draw()`，它会套 `config_icon_mask` 那一刀 ——
+ *    这台 ROM 上那份是**整圆**（`framework-res__lineage_pdx234__auto_generated_rro_product`
+ *    覆盖成 `M50 0A50 50,0,1,1,50 100A50 50,0,1,1,50 0`）。
  *
- * 我们的老式图标已经自带底盘 + 缩好的前景（`CircleIconDrawable` 就是一个自适应图标），
- * 桌面再套一层白板就成了"白盘套白盘"。把 `drawFullBleed` 设成 false，让桌面画我们交的那一份。
+ * ⚠ **2026-11-13 这一位从 `false` 翻成 `true`**：主人桌面把图标形状设成「圆角方」
+ * （`icon_shape_model=rounded_rect`），而模块强制 `false` 时，桌面缓存里我们交的图标全是
+ * 整圆（256²、有墨 78.3%、四角透明）—— 等于模块把桌面的形状设置盖掉了。
+ * 主人原话：「那些自适应图标你也强行变成圆形了，我桌面图标的形状是可以改的」。
+ * 改成 `true` 之后形状**完全由桌面的「图标形状」决定**，我们不参与。
  *
  * 旧 Android 版本没有这个开关，本 hook 自动 no-op。
  */
@@ -1075,7 +1082,10 @@ private fun hookPixelLauncher(xposed: XposedInterface, classLoader: ClassLoader)
           // 之前用 setBoolean 时每一张桌面图标都会在保护模式里被吞掉一次异常
           // （真机日志里累计 9994 次），hook 被整体跳过 —— 这个开关从头到尾没生效过。
           // Field.set() 会自动拆箱，基本类型和装箱类型都成立。
-          drawFullBleedField.set(iconOptions, false)
+          //
+          // `true` = 桌面自己把两层直接画进位图、形状走它自己的 IconShape（「图标形状」设置）；
+          // `false` = 走 `AdaptiveIconDrawable.draw()`，套框架那份 config_icon_mask（本机是整圆）。
+          drawFullBleedField.set(iconOptions, true)
         }
         chain.proceed()
       }

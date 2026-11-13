@@ -1,5 +1,6 @@
 package com.iamcanincan.opticon.circle
 
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ColorFilter
@@ -17,6 +18,12 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
+ * 可见区 = 图层 bounds 的多少。`AdaptiveIconDrawable` 把每一层的 bounds 撑到
+ * `(1 + 2 × extraInset) ×` 可见区（本机 1.5 倍），这个值随安卓版本变，所以动态取。
+ */
+private val VIEW_PORT_SCALE = 1f / (1f + 2f * AdaptiveIconDrawable.getExtraInsetFraction())
+
+/**
  * 把**非自适应（老式）图标**做成自适应图标：前景 = 原图，**不留底盘**，形状交给系统。
  *
  * ## 为什么不再自己裁圆（2026-11-13 主人定）
@@ -26,9 +33,14 @@ import java.util.concurrent.atomic.AtomicInteger
  *
  * 现在只做"把它变成自适应图标"这一件事：
  *  · 背景层：**空的**（主人 2026-11-13：「不要有底盘」）；
- *  · 前景层：原图按自适应图标的图层约定铺满（108dp 图层、可见区 72dp）——
- *    系统 mask 裁下去就是"图标自身按形状裁一刀"，与系统里其它自适应图标同一份几何；
- *  · 形状：`super.draw()` 走系统 mask（桌面设成圆，它就是圆）。
+ *  · 前景层：原图按可见区铺满（图层 bounds 往里收 1/6）—— 图案与图标槽 1:1；
+ *  · 补满：自带透明留白的老式图标按**内容外框**等比放大到铺满整个方块（主人 2026-11-13：
+ *    「非自适应的给它填补到完整的正方形」），放不下的部分裁掉；满幅的图一个像素不动；
+ *  · 形状：**桌面说了算**（主人 2026-11-13：「我桌面图标的形状是可以改的」）。
+ *    Launcher3 的 `drawFullBleed=true` 分支会把背景层 + 前景层直接画进图标位图、
+ *    再按桌面自己的 `IconShape`（「图标形状」设置）裁；`false` 才会套框架那份
+ *    `config_icon_mask`。模块在 [IconHooks] 里把这一位设成 `true`，所以桌面选圆角方就是
+ *    圆角方、选圆就是圆，我们一行形状代码都不留。
  *
  * ⚠ `AdaptiveIconDrawable.draw()` 会先把图层位图**涂成黑色**再画两层，所以没有背景层时
  * 前景这里必须先把那块黑清成透明（[BareForeground]），否则图标透明的地方在屏幕上就是黑的。
@@ -43,14 +55,16 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 class CircleIconDrawable(
   icon: Drawable,
+  /** 原图内容占画布的那块（归一化 0..1）；null = 满幅或量不出来。 */
+  private val content: ContentBox? = null,
   /** 这张是**快捷方式**：只用于单色那支的几何判据（`MonochromeSynth.forIcon` 的 shortcut 位）。 */
   private val isShortcut: Boolean = false,
 ) : AdaptiveIconDrawable(
   // 不要底盘（2026-11-13）：老式图标自己就是整张图，另垫一块颜色等于替应用画了个底。
   // 用透明 ColorDrawable 而不是 null：有的宿主会直接读 `getBackground()`，空着比给个会抛的更安全。
   ColorDrawable(Color.TRANSPARENT),
-  // 前景：原图按图层约定铺满，系统 mask 裁形状
-  BareForeground(icon),
+  // 前景：内容补满可见区，形状由桌面裁
+  BareForeground(icon, content),
 ) {
 
   /** 原图标留一份引用，只为了 [getConstantState] 能重建出副本。 */
@@ -90,7 +104,7 @@ class CircleIconDrawable(
     val src = sourceState
     return object : ConstantState() {
       override fun newDrawable(): Drawable =
-        CircleIconDrawable(src?.newDrawable() ?: sourceIcon, isShortcut)
+        CircleIconDrawable(src?.newDrawable() ?: sourceIcon, content, isShortcut)
 
       override fun getChangingConfigurations(): Int = changingConfigurations
     }
@@ -98,24 +112,61 @@ class CircleIconDrawable(
 }
 
 /**
- * 前景：先把图层位图里的黑色清掉，再原样画图标。
+ * 前景：先把图层位图里的黑色清掉，再把原图**补满**可见区（图层的 2/3）。
  *
  * `AdaptiveIconDrawable.draw()` 在画两层之前会 `mCanvas.drawColor(Color.BLACK)`；有背景层时
  * 黑被盖住，没有背景层时它就会从图标的透明处露出来。这里用 `CLEAR` 把整张图层清成透明 ——
  * 等价于"这张自适应图标没有底色"，透明处由桌面/壁纸透出来。
  *
- * 图标自身按图层的 bounds（可见区的 1.5 倍）铺满，系统 mask 再裁一刀 —— 与平台给自适应图标
- * 前景层的几何完全一致。
+ * 几何：Launcher3 把桌面图标按"背景层 + 前景层直接画"的方式渲染（`drawFullBleed=true`），
+ * 前景层拿到的 bounds 是**可见区的 1.5 倍**（每边多垫 25%）。原图是给 72dp 可视区画的，
+ * 所以这里把 bounds 往里收 `extraInset / (1 + 2 × extraInset)`（本机 = 1/6），
+ * 图案正好铺满可见区、与图标槽 1:1 —— 随后由桌面自己的「图标形状」裁一刀。
+ *
+ * **非自适应图标补满正方形**（主人 2026-11-13）：「填补到完整的正方形」。
+ * 老式 PNG 常自带一圈透明留白（图形只占中间一块），直接铺上去会缩在图标槽里。
+ * [content] 是原图可见内容的外框（归一化），这里按 `max(1/宽, 1/高)` 等比放大、把内容框
+ * 的中心对到图标槽中心 —— 内容铺满整个方块，放不下的部分裁掉（与"填满"是同一件事）。
+ * 满幅的图（真机上的多数）`content == null`，这条一刀都不动。
+ *
+ * （另一条路是宿主直接 `draw()`：那时系统 mask 会把这份铺满可见区的内容再裁一次。）
  */
-private class BareForeground(private val inner: Drawable) : Drawable() {
+private class BareForeground(
+  private val inner: Drawable,
+  private val content: ContentBox? = null,
+) : Drawable() {
+
+  /** 补满倍率；≤1 = 不动。上限见 [MAX_FILL]。 */
+  private val fill: Float = content?.let {
+    val w = (it.r - it.l).coerceAtLeast(0.01f)
+    val h = (it.b - it.t).coerceAtLeast(0.01f)
+    maxOf(1f / w, 1f / h).coerceAtMost(MAX_FILL)
+  } ?: 1f
 
   override fun draw(canvas: Canvas) {
     canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+    val box = content
+    if (box == null || fill <= 1.001f) {
+      inner.draw(canvas)
+      return
+    }
+    // 内容框中心 → 图标槽中心：T(p) = 槽中心 + fill × (p − 内容中心)
+    val view = inner.bounds
+    val cX = view.left + view.width() * (box.l + box.r) / 2f
+    val cY = view.top + view.height() * (box.t + box.b) / 2f
+    val save = canvas.save()
+    canvas.translate(view.exactCenterX(), view.exactCenterY())
+    canvas.scale(fill, fill)
+    canvas.translate(-cX, -cY)
     inner.draw(canvas)
+    canvas.restoreToCount(save)
   }
 
   override fun onBoundsChange(bounds: Rect) {
-    inner.setBounds(bounds)
+    val frac = (1f - VIEW_PORT_SCALE) / 2f
+    val dx = (bounds.width() * frac).toInt()
+    val dy = (bounds.height() * frac).toInt()
+    inner.setBounds(bounds.left + dx, bounds.top + dy, bounds.right - dx, bounds.bottom - dy)
   }
 
   override fun setAlpha(alpha: Int) {
@@ -135,13 +186,65 @@ private class BareForeground(private val inner: Drawable) : Drawable() {
 
   override fun getConstantState(): ConstantState? =
     inner.constantState?.let { src ->
+      val box = content
       object : ConstantState() {
-        override fun newDrawable(): Drawable = BareForeground(src.newDrawable())
+        override fun newDrawable(): Drawable = BareForeground(src.newDrawable(), box)
 
         override fun getChangingConfigurations(): Int = src.changingConfigurations
       }
     }
 }
+
+/** 量"内容占画布多少"用的光栅边长。 */
+private const val MEASURE_EDGE = 128
+
+/** 补满倍率上限：再小的内容（<1/6 画布）也不放得更大，否则整张糊掉、也量不准。 */
+private const val MAX_FILL = 6f
+
+/** 内容框（归一化 0..1）。 */
+data class ContentBox(val l: Float, val t: Float, val r: Float, val b: Float)
+
+/**
+ * 量原图**可见内容**的外框（alpha > 8）。满幅（两轴都 ≥97%）或量不出来 → null。
+ *
+ * 只在图标加载时跑一次。任何一步失败都返回 null（= 不补），与整条包装一样绝不把宿主拖下水。
+ */
+internal fun measureContent(icon: Drawable): ContentBox? = runCatching {
+  val n = MEASURE_EDGE
+  val bitmap = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888)
+  try {
+    Canvas(bitmap).also {
+      icon.setBounds(0, 0, n, n)
+      icon.draw(it)
+    }
+    val px = IntArray(n * n)
+    bitmap.getPixels(px, 0, n, 0, 0, n, n)
+    var l = n
+    var t = n
+    var r = -1
+    var b = -1
+    for (y in 0 until n) {
+      val row = y * n
+      for (x in 0 until n) {
+        if ((px[row + x] ushr 24) <= 8) continue
+        if (x < l) l = x
+        if (x > r) r = x
+        if (y < t) t = y
+        if (y > b) b = y
+      }
+    }
+    if (r < 0) return null
+    val bw = (r + 1 - l).toFloat() / n
+    val bh = (b + 1 - t).toFloat() / n
+    // 太小的一块：那不是"留白"，是杂点，补它只会把杂点放大
+    if (bw < 0.04f || bh < 0.04f) return null
+    // 满幅（真机上的多数）：一个像素都不动
+    if (bw >= 0.97f && bh >= 0.97f) return null
+    ContentBox(l / n.toFloat(), t / n.toFloat(), (r + 1f) / n, (b + 1f) / n)
+  } finally {
+    bitmap.recycle()
+  }
+}.getOrNull()
 
 /** 「包装自身抛了」只报一次（每张图标一行会把日志刷满）。 */
 private val clipFailLogged = AtomicBoolean(false)
@@ -257,10 +360,17 @@ private fun wrapInner(icon: Drawable, from: String): Drawable {
   // 已经包过的、以及**自适应图标**：都不动。自适应图标自带背景 + 前景，形状由系统 mask 定。
   if (icon is CircleIconDrawable || icon is AdaptiveIconDrawable) return icon
 
+  // 内容外框：只给"自带透明留白"的老式图标用（补满正方形）；满幅的返回 null。
+  val content = measureContent(icon)
   noteWrap(from)
   if (wrapLogLeft.decrementAndGet() >= 0) {
+    val fill = content?.let {
+      val w = (it.r - it.l).coerceAtLeast(0.01f)
+      val h = (it.b - it.t).coerceAtLeast(0.01f)
+      maxOf(1f / w, 1f / h).coerceAtMost(MAX_FILL)
+    } ?: 1f
     Log.d(TAG, "自适应 from=$from host=$clipHost : " + IconNames.of(icon) + " " +
-      "${icon.intrinsicWidth}x${icon.intrinsicHeight} 无底盘 满幅")
+      "${icon.intrinsicWidth}x${icon.intrinsicHeight} 无底盘 补满=" + "%.2f".format(fill) + "×")
   }
-  return CircleIconDrawable(icon, from.contains("Shortcut"))
+  return CircleIconDrawable(icon, content, from.contains("Shortcut"))
 }
