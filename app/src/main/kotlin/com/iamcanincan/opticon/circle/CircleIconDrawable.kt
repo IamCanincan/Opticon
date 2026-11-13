@@ -55,8 +55,8 @@ private val VIEW_PORT_SCALE = 1f / (1f + 2f * AdaptiveIconDrawable.getExtraInset
  */
 class CircleIconDrawable(
   icon: Drawable,
-  /** 原图内容占画布的那块（归一化 0..1）；null = 满幅或量不出来。 */
-  private val content: ContentBox? = null,
+  /** 原图的内容框 / 补满倍率 / 四边有没有透明格；null = 满幅且四边实色。 */
+  private val metrics: IconMetrics? = null,
   /** 这张是**快捷方式**：只用于单色那支的几何判据（`MonochromeSynth.forIcon` 的 shortcut 位）。 */
   private val isShortcut: Boolean = false,
 ) : AdaptiveIconDrawable(
@@ -64,7 +64,7 @@ class CircleIconDrawable(
   // 用透明 ColorDrawable 而不是 null：有的宿主会直接读 `getBackground()`，空着比给个会抛的更安全。
   ColorDrawable(Color.TRANSPARENT),
   // 前景：内容补满可见区，形状由桌面裁
-  BareForeground(icon, content),
+  BareForeground(icon, metrics),
 ) {
 
   /** 原图标留一份引用，只为了 [getConstantState] 能重建出副本。 */
@@ -104,7 +104,7 @@ class CircleIconDrawable(
     val src = sourceState
     return object : ConstantState() {
       override fun newDrawable(): Drawable =
-        CircleIconDrawable(src?.newDrawable() ?: sourceIcon, content, isShortcut)
+        CircleIconDrawable(src?.newDrawable() ?: sourceIcon, metrics, isShortcut)
 
       override fun getChangingConfigurations(): Int = changingConfigurations
     }
@@ -112,54 +112,88 @@ class CircleIconDrawable(
 }
 
 /**
- * 前景：先把图层位图里的黑色清掉，再把原图**补满**可见区（图层的 2/3）。
+ * 前景：清掉图层里的黑，把原图**补满**可见区，再把**边角透明处按最近的边缘颜色延伸填满**。
  *
  * `AdaptiveIconDrawable.draw()` 在画两层之前会 `mCanvas.drawColor(Color.BLACK)`；有背景层时
  * 黑被盖住，没有背景层时它就会从图标的透明处露出来。这里用 `CLEAR` 把整张图层清成透明 ——
- * 等价于"这张自适应图标没有底色"，透明处由桌面/壁纸透出来。
+ * 等价于"这张自适应图标没有底色"。
  *
  * 几何：Launcher3 把桌面图标按"背景层 + 前景层直接画"的方式渲染（`drawFullBleed=true`），
  * 前景层拿到的 bounds 是**可见区的 1.5 倍**（每边多垫 25%）。原图是给 72dp 可视区画的，
  * 所以这里把 bounds 往里收 `extraInset / (1 + 2 × extraInset)`（本机 = 1/6），
  * 图案正好铺满可见区、与图标槽 1:1 —— 随后由桌面自己的「图标形状」裁一刀。
  *
- * **非自适应图标补满正方形**（主人 2026-11-13）：「填补到完整的正方形」。
- * 老式 PNG 常自带一圈透明留白（图形只占中间一块），直接铺上去会缩在图标槽里。
- * [content] 是原图可见内容的外框（归一化），这里按 `max(1/宽, 1/高)` 等比放大、把内容框
- * 的中心对到图标槽中心 —— 内容铺满整个方块，放不下的部分裁掉（与"填满"是同一件事）。
- * 满幅的图（真机上的多数）`content == null`，这条一刀都不动。
+ * **补满**（主人 2026-11-13：「非自适应的给它填补到完整的正方形」）：[metrics] 是原图可见
+ * 内容的外框（归一化），按 `max(1/宽, 1/高)` 等比放大、内容中心对到槽中心 —— 内容铺满方块，
+ * 放不下的裁掉。满幅的图 `metrics == null`，直接原样画（快路径）。
  *
- * （另一条路是宿主直接 `draw()`：那时系统 mask 会把这份铺满可见区的内容再裁一次。）
+ * **边角延伸**（同日第二句：「边角透明的地方给它延伸完全」）：把图标光栅化到图标槽大小，
+ * 从**画布边界**找出与外面连通的透明区域（内部镂空不动），用多源 BFS 把最近的实色格
+ * 拓过去 —— 圆角/圆盘图标那四个透明角从此是它自己的边缘色，不再是壁纸。
+ * 这一步只在图标真的带透明边时才做（[IconMetrics] 在加载时量过）。
  */
 private class BareForeground(
   private val inner: Drawable,
-  private val content: ContentBox? = null,
+  private val metrics: IconMetrics? = null,
 ) : Drawable() {
 
   /** 补满倍率；≤1 = 不动。上限见 [MAX_FILL]。 */
-  private val fill: Float = content?.let {
-    val w = (it.r - it.l).coerceAtLeast(0.01f)
-    val h = (it.b - it.t).coerceAtLeast(0.01f)
-    maxOf(1f / w, 1f / h).coerceAtMost(MAX_FILL)
-  } ?: 1f
+  private val fill: Float = metrics?.fill ?: 1f
+
+  /** 光栅化 + 延伸用的画布（按尺寸缓存，图标槽尺寸基本不变）。 */
+  private var scratch: Bitmap? = null
+  private var scratchCanvas: Canvas? = null
+  private var scratchW = 0
+  private var scratchH = 0
 
   override fun draw(canvas: Canvas) {
     canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
-    val box = content
-    if (box == null || fill <= 1.001f) {
+    val view = inner.bounds
+    if (view.isEmpty) return
+    val m = metrics
+    if (m == null) {
+      // 满幅且四边不透明：一个像素都不用动
       inner.draw(canvas)
       return
     }
-    // 内容框中心 → 图标槽中心：T(p) = 槽中心 + fill × (p − 内容中心)
-    val view = inner.bounds
-    val cX = view.left + view.width() * (box.l + box.r) / 2f
-    val cY = view.top + view.height() * (box.t + box.b) / 2f
-    val save = canvas.save()
-    canvas.translate(view.exactCenterX(), view.exactCenterY())
-    canvas.scale(fill, fill)
-    canvas.translate(-cX, -cY)
-    inner.draw(canvas)
-    canvas.restoreToCount(save)
+    drawFilled(canvas, view, m)
+  }
+
+  /** 光栅化 → 铺内容（可放大）→ 边角延伸 → 贴回图层。 */
+  private fun drawFilled(canvas: Canvas, view: Rect, m: IconMetrics) {
+    val w = view.width()
+    val h = view.height()
+    if (w <= 0 || h <= 0) return
+    var bitmap = scratch
+    var layer = scratchCanvas
+    if (bitmap == null || layer == null || scratchW != w || scratchH != h) {
+      bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+      layer = Canvas(bitmap)
+      scratch = bitmap
+      scratchCanvas = layer
+      scratchW = w
+      scratchH = h
+    }
+    bitmap.eraseColor(Color.TRANSPARENT)
+    val save = layer.save()
+    if (fill > 1.001f) {
+      // 内容框中心 → 图标槽中心：T(p) = 槽中心 + fill × (p − 内容中心)
+      val cX = w * (m.l + m.r) / 2f
+      val cY = h * (m.t + m.b) / 2f
+      layer.translate(w / 2f, h / 2f)
+      layer.scale(fill, fill)
+      layer.translate(-cX, -cY)
+    }
+    inner.setBounds(0, 0, w, h)
+    inner.draw(layer)
+    layer.restoreToCount(save)
+    inner.setBounds(view)
+
+    val px = IntArray(w * h)
+    bitmap.getPixels(px, 0, w, 0, 0, w, h)
+    extendEdges(px, w, h)
+    bitmap.setPixels(px, 0, w, 0, 0, w, h)
+    canvas.drawBitmap(bitmap, null, view, null)
   }
 
   override fun onBoundsChange(bounds: Rect) {
@@ -186,30 +220,46 @@ private class BareForeground(
 
   override fun getConstantState(): ConstantState? =
     inner.constantState?.let { src ->
-      val box = content
+      val m = metrics
       object : ConstantState() {
-        override fun newDrawable(): Drawable = BareForeground(src.newDrawable(), box)
+        override fun newDrawable(): Drawable = BareForeground(src.newDrawable(), m)
 
         override fun getChangingConfigurations(): Int = src.changingConfigurations
       }
     }
 }
 
-/** 量"内容占画布多少"用的光栅边长。 */
+/** 量"内容占画布多少 / 四边透不透明"用的光栅边长。 */
 private const val MEASURE_EDGE = 128
 
 /** 补满倍率上限：再小的内容（<1/6 画布）也不放得更大，否则整张糊掉、也量不准。 */
 private const val MAX_FILL = 6f
 
-/** 内容框（归一化 0..1）。 */
-data class ContentBox(val l: Float, val t: Float, val r: Float, val b: Float)
+/** 判"看得见"的 alpha 门槛（与量内容框同一把尺）。 */
+private const val ALPHA_MIN = 8
 
 /**
- * 量原图**可见内容**的外框（alpha > 8）。满幅（两轴都 ≥97%）或量不出来 → null。
+ * 老式图标在图标槽里的处理参数。
  *
- * 只在图标加载时跑一次。任何一步失败都返回 null（= 不补），与整条包装一样绝不把宿主拖下水。
+ * @param l/t/r/b 可见内容的外框（归一化 0..1）。
+ * @param fill 补满倍率（`max(1/宽,1/高)`，封顶 [MAX_FILL]）。
+ * @param extend 四边有透明格（需要"边角延伸"）。
  */
-internal fun measureContent(icon: Drawable): ContentBox? = runCatching {
+data class IconMetrics(
+  val l: Float,
+  val t: Float,
+  val r: Float,
+  val b: Float,
+  val fill: Float,
+  val extend: Boolean,
+)
+
+/**
+ * 量原图：可见内容外框 + 四边有没有透明格。满幅且四边不透明 → null（一个像素都不用动）。
+ *
+ * 只在图标加载时跑一次。任何一步失败都返回 null（= 原样画），与整条包装一样绝不把宿主拖下水。
+ */
+internal fun measureIcon(icon: Drawable): IconMetrics? = runCatching {
   val n = MEASURE_EDGE
   val bitmap = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888)
   try {
@@ -223,10 +273,16 @@ internal fun measureContent(icon: Drawable): ContentBox? = runCatching {
     var t = n
     var r = -1
     var b = -1
+    var edgeOpen = false
     for (y in 0 until n) {
       val row = y * n
+      val edgeRow = y < 2 || y >= n - 2
       for (x in 0 until n) {
-        if ((px[row + x] ushr 24) <= 8) continue
+        val a = px[row + x] ushr 24
+        if (a <= ALPHA_MIN) {
+          if (edgeRow || x < 2 || x >= n - 2) edgeOpen = true
+          continue
+        }
         if (x < l) l = x
         if (x > r) r = x
         if (y < t) t = y
@@ -236,15 +292,102 @@ internal fun measureContent(icon: Drawable): ContentBox? = runCatching {
     if (r < 0) return null
     val bw = (r + 1 - l).toFloat() / n
     val bh = (b + 1 - t).toFloat() / n
+    // 满幅 + 四边都是实色：真机上的多数，一个像素都不动
+    if (bw >= 0.97f && bh >= 0.97f && !edgeOpen) return null
     // 太小的一块：那不是"留白"，是杂点，补它只会把杂点放大
-    if (bw < 0.04f || bh < 0.04f) return null
-    // 满幅（真机上的多数）：一个像素都不动
-    if (bw >= 0.97f && bh >= 0.97f) return null
-    ContentBox(l / n.toFloat(), t / n.toFloat(), (r + 1f) / n, (b + 1f) / n)
+    val fill = if (bw < 0.04f || bh < 0.04f) {
+      1f
+    } else {
+      maxOf(1f / bw, 1f / bh).coerceAtMost(MAX_FILL)
+    }
+    IconMetrics(l / n.toFloat(), t / n.toFloat(), (r + 1f) / n, (b + 1f) / n, fill, edgeOpen)
   } finally {
     bitmap.recycle()
   }
 }.getOrNull()
+
+/**
+ * 把**与画布边界连通的透明区域**用最近的实色格拓过去（多源 BFS，8 邻域）。
+ *
+ * 为什么要先限定"与边界连通"：图标内部的镂空（字母 O 的洞、图形的透明切口）是**内容**，
+ * 跟着外面一起填就把图案毁了。只有从边界能走到的透明格才算"边角"。
+ *
+ * 填的是源格自己的 RGB、alpha 记 255 —— 于是圆盘/圆角图标那四个角是它自己的边缘色，
+ * 桌面的「图标形状」怎么裁都不会再露出壁纸。
+ */
+private fun extendEdges(px: IntArray, w: Int, h: Int) {
+  val n = w * h
+  if (n <= 0) return
+  // state：0 = 不参与（内部镂空 / 还没轮到），-1 = 外面且未着色，>0 = 颜色
+  val state = IntArray(n)
+  val work = IntArray(n)
+
+  // 1) 从四条边出发，把"外面"的透明格标成 -1（内部镂空走不到，保持 0）
+  var sp = 0
+  fun mark(i: Int) {
+    if (state[i] == 0 && (px[i] ushr 24) <= ALPHA_MIN) {
+      state[i] = -1
+      work[sp++] = i
+    }
+  }
+  for (x in 0 until w) {
+    mark(x)
+    mark((h - 1) * w + x)
+  }
+  for (y in 0 until h) {
+    mark(y * w)
+    mark(y * w + w - 1)
+  }
+  while (sp > 0) {
+    val i = work[--sp]
+    val x = i % w
+    val y = i / w
+    if (x > 0) mark(i - 1)
+    if (x + 1 < w) mark(i + 1)
+    if (y > 0) mark(i - w)
+    if (y + 1 < h) mark(i + w)
+  }
+
+  // 2) 多源 BFS：所有实色格同时往外面拓（8 邻域，角上不留台阶）
+  var head = 0
+  var tail = 0
+  for (i in 0 until n) {
+    if ((px[i] ushr 24) > ALPHA_MIN) {
+      state[i] = px[i]
+      work[tail++] = i
+    }
+  }
+  while (head < tail) {
+    val i = work[head++]
+    val c = state[i]
+    val x = i % w
+    val y = i / w
+    if (x > 0) tail = take(i - 1, c, state, work, tail)
+    if (x + 1 < w) tail = take(i + 1, c, state, work, tail)
+    if (y > 0) tail = take(i - w, c, state, work, tail)
+    if (y + 1 < h) tail = take(i + w, c, state, work, tail)
+    if (x > 0 && y > 0) tail = take(i - w - 1, c, state, work, tail)
+    if (x + 1 < w && y > 0) tail = take(i - w + 1, c, state, work, tail)
+    if (x > 0 && y + 1 < h) tail = take(i + w - 1, c, state, work, tail)
+    if (x + 1 < w && y + 1 < h) tail = take(i + w + 1, c, state, work, tail)
+  }
+
+  // 3) 写回：只动"原来是透明、又在外面的"格，内部镂空保持原样
+  for (i in 0 until n) {
+    val c = state[i]
+    if (c > 0 && (px[i] ushr 24) <= ALPHA_MIN) {
+      px[i] = (c and 0x00FFFFFF) or 0xFF000000.toInt()
+    }
+  }
+}
+
+/** BFS 的入队：只吃"外面且未着色"的格。返回新的队尾。 */
+private fun take(j: Int, c: Int, state: IntArray, work: IntArray, tail: Int): Int {
+  if (state[j] != -1) return tail
+  state[j] = c
+  work[tail] = j
+  return tail + 1
+}
 
 /** 「包装自身抛了」只报一次（每张图标一行会把日志刷满）。 */
 private val clipFailLogged = AtomicBoolean(false)
@@ -361,16 +504,13 @@ private fun wrapInner(icon: Drawable, from: String): Drawable {
   if (icon is CircleIconDrawable || icon is AdaptiveIconDrawable) return icon
 
   // 内容外框：只给"自带透明留白"的老式图标用（补满正方形）；满幅的返回 null。
-  val content = measureContent(icon)
+  val metrics = measureIcon(icon)
   noteWrap(from)
   if (wrapLogLeft.decrementAndGet() >= 0) {
-    val fill = content?.let {
-      val w = (it.r - it.l).coerceAtLeast(0.01f)
-      val h = (it.b - it.t).coerceAtLeast(0.01f)
-      maxOf(1f / w, 1f / h).coerceAtMost(MAX_FILL)
-    } ?: 1f
+    val fill = metrics?.fill ?: 1f
     Log.d(TAG, "自适应 from=$from host=$clipHost : " + IconNames.of(icon) + " " +
-      "${icon.intrinsicWidth}x${icon.intrinsicHeight} 无底盘 补满=" + "%.2f".format(fill) + "×")
+      "${icon.intrinsicWidth}x${icon.intrinsicHeight} 无底盘 补满=" + "%.2f".format(fill) +
+        "× 延伸=" + (if (metrics?.extend == true) 1 else 0))
   }
-  return CircleIconDrawable(icon, content, from.contains("Shortcut"))
+  return CircleIconDrawable(icon, metrics, from.contains("Shortcut"))
 }
