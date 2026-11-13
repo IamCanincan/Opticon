@@ -128,8 +128,10 @@ class CircleIconDrawable(
  * 放不下的裁掉。满幅的图 `metrics == null`，直接原样画（快路径）。
  *
  * **边角延伸**（同日第二句：「边角透明的地方给它延伸完全」）：把图标光栅化到图标槽大小，
- * 从**画布边界**找出与外面连通的透明区域（内部镂空不动），用多源 BFS 把最近的实色格
- * 拓过去 —— 圆角/圆盘图标那四个透明角从此是它自己的边缘色，不再是壁纸。
+ * 从**画布边界**找出与外面连通的透明区域（内部镂空不动），**行向 + 列向各取一条边色再平均**
+ * 铺进去（极角上两个方向都没有的小三角，用 BFS 从最近的已给色格拓）—— 圆角/圆盘图标那
+ * 四个透明角从此是它自己的边缘色，不再是壁纸。铺完还往图标里垫 2 格，第二遍把图标叠在
+ * 底色上画，抗锯齿边与底色混合，不会留下一条半透明的浅缝。
  * 这一步只在图标真的带透明边时才做（[IconMetrics] 在加载时量过）。
  */
 private class BareForeground(
@@ -303,6 +305,7 @@ data class IconMetrics(
  */
 internal fun measureIcon(icon: Drawable): IconMetrics? = runCatching {
   val n = MEASURE_EDGE
+  val saved = Rect(icon.bounds)
   val bitmap = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888)
   try {
     Canvas(bitmap).also {
@@ -345,18 +348,10 @@ internal fun measureIcon(icon: Drawable): IconMetrics? = runCatching {
     IconMetrics(l / n.toFloat(), t / n.toFloat(), (r + 1f) / n, (b + 1f) / n, fill, edgeOpen)
   } finally {
     bitmap.recycle()
+    icon.bounds = saved
   }
 }.getOrNull()
 
-/**
- * 把**与画布边界连通的透明区域**用最近的实色格拓过去（多源 BFS，8 邻域）。
- *
- * 为什么要先限定"与边界连通"：图标内部的镂空（字母 O 的洞、图形的透明切口）是**内容**，
- * 跟着外面一起填就把图案毁了。只有从边界能走到的透明格才算"边角"。
- *
- * 填的是源格自己的 RGB、alpha 记 255 —— 于是圆盘/圆角图标那四个角是它自己的边缘色，
- * 桌面的「图标形状」怎么裁都不会再露出壁纸。
- */
 /**
  * 算"边角该填什么颜色"。返回与 [px] 等长的数组：0 = 不填，其余 = 要铺的 ARGB。
  *
@@ -530,8 +525,9 @@ private fun computeFill(px: IntArray, w: Int, h: Int): IntArray {
 
   // 6) 再往图标里垫 2 格：盖住图标自己那圈抗锯齿边（alpha 1..254）。
   //    不垫的话，第二遍把图标叠上去时那圈半透明像素露出的是宿主底色 —— 屏幕上就是一条浅缝。
+  val snapshot = IntArray(n)
   repeat(2) {
-    val snapshot = fill.copyOf()
+    System.arraycopy(fill, 0, snapshot, 0, n)
     for (i in 0 until n) {
       if (fill[i] != 0) continue
       if ((px[i] ushr 24) >= 250) continue
