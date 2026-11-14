@@ -26,6 +26,15 @@ fun main(args: Array<String>) {
   val minShare = args.firstOrNull { it.startsWith("--min=") }?.substringAfter('=')?.toDoubleOrNull() ?: 0.003
   val srcMin = args.firstOrNull { it.startsWith("--srcmin=") }?.substringAfter('=')?.toIntOrNull() ?: 4
   val neffMax = args.firstOrNull { it.startsWith("--neff=") }?.substringAfter('=')?.toDoubleOrNull() ?: 2.5
+  // 🔴 **走「剪影」那一支的图标，单独一条线**（2026-11-15）。Neff 只数**有墨的格**（α≥128），
+  //   而 11-10 主人定的三档把墨交在 `128 / 255` 两档上 ⇒ Neff 恒 ≈ **2.0**，正好落在 2.5 那条线下面。
+  //   于是这一族**按自己的设计**被这道闸数成"塌"：平色饼 11 → 20 涨的就是它（控制实验：`60e531a`=11、
+  //   `e30288e`=20，与 HEAD 一字不差；名单里 Neff 恰好 2.0 的 wisdomgame / sgame / sgameGlobal 就是这一支）。
+  //   不能挪 2.5 那条线（那会把真饼一起放掉），改成**问这一族自己的承诺**：三档的中间档要是丢了
+  //   （只剩 255 一档墨），Neff 会掉到 ≈1.0 ⇒ 这条线摆在 **1.5**（两档=2.0、一档=1.0，两边都留一半余量）。
+  //   ⚠ 这不是放水：`SelfTest` 里 11-15 新加的那两条「空/中/实各占 ≥10%」钉的是**合成样本上三档到位没有**，
+  //   这一条钉的是**真语料上有没有把中间档交丢** —— 两把尺问的是同一件事的两端。
+  val siloMax = args.firstOrNull { it.startsWith("--silocut=") }?.substringAfter('=')?.toDoubleOrNull() ?: 1.5
   val toneGap = args.firstOrNull { it.startsWith("--gap=") }?.substringAfter('=')?.toIntOrNull() ?: 8
   // 只数**模型真会处理的那些**：语料目录里带 `index.tsv`（CorpusCapture 抓的）时，
   // 按它的 `mono` 列排除自带单色层的 —— 那批按硬规则一个像素都不碰，数进来等于给自己刷分。
@@ -43,6 +52,7 @@ fun main(args: Array<String>) {
     if (c.size >= 19 && c[18] != "-" && c[18] != "null" && c[18] != "err") underOf[c[2]] = c[18]
   }
   var a = 0; var b = 0; var one = 0
+  var siloN = 0; var siloFlat = 0
   var shown = 0
   val rows = ArrayList<Pair<String, Pair<Int, Int>>>()
   val tonesAll = ArrayList<Int>(); val srcAll = ArrayList<Int>(); val flatInfo = ArrayList<Triple<String, Int, Double>>(); val objs = ArrayList<Int>(); val flat = ArrayList<Pair<String, Int>>()
@@ -62,6 +72,8 @@ fun main(args: Array<String>) {
     }
     val r = MonochromeMask.build(src, w, h, plateOf[f.name] == true, und)
     val out = r.mask ?: continue
+    // 这一张走的是「剪影」那一支吗（判据行里那个 `剪影=N档`）—— 决定它用哪条线，见上面 `siloMax` 那段。
+    val silo = r.report.contains("剪影=")
     val n = w * h
     // 只数"交出去有墨"的格
     val ink = BooleanArray(n) { (out[it] ushr 24) and 0xff >= 128 }
@@ -137,13 +149,22 @@ fun main(args: Array<String>) {
       neff <= neffMax -> b++
     }
     srcAll.add(srcLevels)
-    if (srcLevels >= srcMin && neff <= neffMax) { one++; flatInfo.add(Triple(f.nameWithoutExtension, srcLevels, neff)) }
+    if (silo) siloN++
+    if (srcLevels >= srcMin) {
+      // 两支各问各的：非剪影按 `neffMax`（2.5），剪影那一族按 `siloMax`（1.5，= 中间档丢了才算塌）
+      if (silo) {
+        if (neff <= siloMax) { siloFlat++; flatInfo.add(Triple(f.nameWithoutExtension + "〔剪影〕", srcLevels, neff)) }
+      } else if (neff <= neffMax) {
+        one++; flatInfo.add(Triple(f.nameWithoutExtension, srcLevels, neff))
+      }
+    }
     tonesAll.add(distinct); objs.add(big); flat.add(Pair(f.nameWithoutExtension, distinct))
   }
-  println("FLAT n=${tonesAll.size} flat=${one} 源档中位=${if (srcAll.isEmpty()) 0 else srcAll.sorted()[srcAll.size/2]} neff中位=${if (tonesAll.isEmpty()) 0 else tonesAll.sorted()[tonesAll.size/2]} adapted_skipped=${adapted.size}")
+  println("FLAT n=${tonesAll.size} flat=${one} 源档中位=${if (srcAll.isEmpty()) 0 else srcAll.sorted()[srcAll.size/2]} neff中位=${if (tonesAll.isEmpty()) 0 else tonesAll.sorted()[tonesAll.size/2]} adapted_skipped=${adapted.size} 剪影族=$siloN 剪影塌=$siloFlat")
   for ((nm, sl, nf) in flatInfo.sortedBy { it.third }) println("  塌 %-50s 源 %d 档 · 交付 %.1f 档".format(nm.replace(Regex("_[0-9a-f]{12}"), ""), sl, nf))
   println("目录 ${dir.path}：A 型（≥3 个互不相连的物体、Neff ≤ $neffMax）= $a 张")
   println("              B 型（整张就一块墨、≤2 种浓度）= $b 张   ·合计塌掉的 ${one} 张")
+  println("              剪影那一族：$siloN 张（按设计交两档墨，Neff≈2.0），其中**中间档丢了**的 $siloFlat 张（线摆 $siloMax）")
   println("\nA 型名单（这一刀能救的）：")
   for ((name, v) in rows.sortedByDescending { it.second.first })
     println("  %-52s 物体 %d 个 · 浓度 %d 种".format(name.replace(Regex("_[0-9a-f]{12}"), ""), v.first, v.second))
