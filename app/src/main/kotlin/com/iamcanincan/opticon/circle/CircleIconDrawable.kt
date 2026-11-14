@@ -411,35 +411,44 @@ private class BareForeground(
   }
 
   /**
-   * 轮廓去边：每一行/列最外 2 个不透明格的颜色，换成往里第 3 格的颜色。
+   * 轮廓去边：把每行/列最外 2 个**毛边**格清成透明，交给 [computeFill] 从新的边取色补进来。
    *
-   * 老式 PNG 的透明区常是黑色（RGB=0、alpha 有值），位图被放大（如 176→256）时，
-   * 抗锯齿和黑色混出**不透明的深色边**（实测 (2,21,29,a255)）—— 半透明的那些
-   * [bleedEdgeColor] 能修，被放大成不透明的只能在这里修掉，否则叠在补边上就是一条线。
-   */
-  /**
-   * 轮廓去边（**直接删最外 2 格**）：每一行/列最外 2 个可见格清成透明，交给补边长进去。
+   * 源 PNG 的透明区常是黑色（RGB=0、alpha 有值），位图放大时抗锯齿会混出**不透明的深色边**
+   * （实测 (2,21,29,a255)）；半透明的那些 [bleedEdgeColor] 能修，被放大成不透明的只能在这里清掉，
+   * 否则叠在补边上就是一条线。
    *
-   * 为什么是"删"而不是"换色"：源 PNG 的透明区是黑色，放大时抗锯齿会混出**不透明的深色边**
-   * （实测 (2,21,29,a255)）——换色要知道"里面那格"是什么，而这条边可能比取样深度还宽；
-   * 直接删掉后，computeFill 会从新的边（往里第 3 格）取色并补进来，边界就是补边的颜色，没有线。
+   * ⚠ 2026-11-14 收窄成"只抹毛边"：原来是无条件抹最外 2 格，会把本身就有边缘细节的图标
+   * （潮新闻 / 智游斗地主 / 吉星派对）糊掉。现在只清 alpha < 250 的 AA，或亮度 < [RIM_LUM]
+   * 且比内侧暗 [RIM_DELTA] 以上的不透明深色边；实色真细节一格不动。
+   * 实测这三张的左边缘与源图的平均亮度差：28.2→19.4、22.8→3.8、54.4→30.1。
    */
   private fun deFringe(px: IntArray, w: Int, h: Int) {
     val src = px.copyOf()
     fun visible(i: Int) = (src[i] ushr 24) > 8
+    // 只抹**毛边**：半透明的 AA（alpha < 250），或明显比里面暗的不透明黑边。
+    // 实色的真细节保留（2026-11-14：原来的"无条件抹最外 2 格"会把这 3 张的边缘细节糊掉）。
+    fun rim(i: Int, inner: Int) {
+      if (!visible(i)) return
+      val a = src[i] ushr 24
+      if (a < 250) {
+        px[i] = 0
+        return
+      }
+      if (lum31(src[i]) < RIM_LUM && lum31(src[inner]) - lum31(src[i]) > RIM_DELTA) px[i] = 0
+    }
     for (y in 0 until h) {
       val row = y * w
       var x0 = 0
       while (x0 < w && !visible(row + x0)) x0++
       if (x0 < w) for (k in 0 until 2) {
         val x = x0 + k
-        if (x < w && visible(row + x)) px[row + x] = 0
+        if (x < w && visible(row + x)) rim(row + x, row + minOf(x0 + 2, w - 1))
       }
       var x1 = w - 1
       while (x1 >= 0 && !visible(row + x1)) x1--
       if (x1 >= 0) for (k in 0 until 2) {
         val x = x1 - k
-        if (x >= 0 && visible(row + x)) px[row + x] = 0
+        if (x >= 0 && visible(row + x)) rim(row + x, row + maxOf(x1 - 2, 0))
       }
     }
     for (x in 0 until w) {
@@ -447,17 +456,24 @@ private class BareForeground(
       while (y0 < h && !visible(y0 * w + x)) y0++
       if (y0 < h) for (k in 0 until 2) {
         val y = y0 + k
-        if (y < h && visible(y * w + x)) px[y * w + x] = 0
+        if (y < h && visible(y * w + x)) rim(y * w + x, minOf(y0 + 2, h - 1) * w + x)
       }
       var y1 = h - 1
       while (y1 >= 0 && !visible(y1 * w + x)) y1--
       if (y1 >= 0) for (k in 0 until 2) {
         val y = y1 - k
-        if (y >= 0 && visible(y * w + x)) px[y * w + x] = 0
+        if (y >= 0 && visible(y * w + x)) rim(y * w + x, maxOf(y1 - 2, 0) * w + x)
       }
     }
   }
 
+  /** 亮度（Rec.601，0..255）：只给"深色毛边"判据用。 */
+  private fun lum31(c: Int): Int {
+    val r = (c shr 16) and 0xFF
+    val g = (c shr 8) and 0xFF
+    val b = c and 0xFF
+    return (r * 299 + g * 587 + b * 114) / 1000
+  }
   /** 源 over 补边（fill 里 0 = 没有补边，保持透明）。 */
   private fun composeOver(px: IntArray, fill: IntArray) {
     for (i in px.indices) {
@@ -646,6 +662,12 @@ private const val SOLID_ALPHA = 160
 
 /** 取边色时往里让几格：边界那 1~2 格是抗锯齿混出来的浅色，照它铺就是一圈浅接缝。 */
 private const val EDGE_INSET = 1
+
+/** 判"深色毛边"的亮度上限：源图透明区是黑 RGB 时，放大出来的边实测 (2,21,29) ≈ 15。 */
+private const val RIM_LUM = 60
+
+/** 外圈格比里面暗多少才算毛边（< 它就算真细节，保留）。 */
+private const val RIM_DELTA = 40
 
 /**
  * 内切圆占正方形的**面积比**：π/4 ≈ 0.785。
