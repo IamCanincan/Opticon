@@ -85,23 +85,26 @@ const grab = (p) => {
 const A = grab(oldDb), B = grab(newDb);
 const three = A.size > 0;                      // 没有旧库就出两联（彩色 | 单色），不拿同一张凑数
 const S = 236, GAP = 8;
-const picks = [];
-const seenPkg = new Set();
-for (const [c, v] of B) if (needles.some((n) => c.includes(n))) {
-  // 同一个包在库里有一堆行（启动图标 + 各种快捷方式/组件），只画第一次见的那一行，
-  // 否则四格里全是同一个图标，"还剩几张没修"当场就被重复项冒充掉。
-  const pkg = c.split('/')[0];
-  if (seenPkg.has(pkg)) continue;
-  seenPkg.add(pkg); picks.push([c, v]);
+// ⚠ 与 `_silmeter.cjs` 同一条取行规则：**第二段以包名开头者优先，其次最短**。
+//   按"第一个匹配的行"取会画到快捷方式/桌面组件那行（闲鱼那行 0.466 vs 启动图标 0.867），
+//   那等于把尺上一个已知假条目端到主人眼前 —— 图比数更有说服力，所以更不许错行。
+const firstOf = new Map();
+for (const [c, v] of B) {
+  const pkg = c.split('/')[0], seg = c.split('/')[1] || '';
+  const main = seg.startsWith(pkg) ? 0 : 1;
+  const cur = firstOf.get(pkg);
+  if (!cur || main < cur.main || (main === cur.main && seg.length < cur.seg.length)) firstOf.set(pkg, { c, v, main, seg });
 }
+const picks = [];
+for (const { c, v } of firstOf.values()) if (needles.some((n) => c.includes(n))) picks.push([c, v]);
 if (!picks.length) { console.log('!! 库里没配上这些子串：' + needles.join(' ')); process.exit(1); }
-const NROWS = Math.min(picks.length, 6);
+const NROWS = Math.min(picks.length, 7);
 const W = (S + GAP) * (three ? 3 : 2) + GAP, H = (S + GAP) * NROWS + GAP;
 const cv = Buffer.alloc(W * H * 4);
 for (let i = 0; i < W * H; i++) { cv[i * 4] = 20; cv[i * 4 + 1] = 20; cv[i * 4 + 2] = 24; cv[i * 4 + 3] = 255; }
 const put = (x, y, r, g, b) => { if (x < 0 || y < 0 || x >= W || y >= H) return; const i = (y * W + x) * 4; cv[i] = r; cv[i + 1] = g; cv[i + 2] = b; cv[i + 3] = 255; };
 const rows = [];
-picks.slice(0, 6).forEach(([c, v], k) => {
+picks.slice(0, 7).forEach(([c, v], k) => {
   const col = decode(Buffer.from(v.c)), mon = decodeMono(Buffer.from(v.m));
   const prev = A.get(c);
   const oldMon = prev ? decodeMono(Buffer.from(prev.m)) : null;
