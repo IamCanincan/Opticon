@@ -60,8 +60,8 @@ class RenderCache {
  *  · 前景层：原图按可见区铺满（图层 bounds 往里收 1/6）—— 图案与图标槽 1:1；
  *  · 尺寸：**原图原尺寸**放进去，不放大、不裁切（主人 2026-11-13：「有的图标压根没必要缩」
  *    与「过度裁切」两次点名）；透明的地方一律由下面的边角延伸补满 —— **快捷方式除外**：
- *    它们不铺边，有底盘的保持原样、没底盘的按字形明暗补一块白/黑盘（主人 2026-11-14，
- *    理由与判据见 [BareForeground.renderShortcut]）；
+ *    它们**只画自己的图**：不铺边、不补盘、不缩放，透明处就是壁纸（主人 2026-11-14 三轮收敛，
+ *    见 [BareForeground.renderShortcut]）；
  *  · 形状：**桌面说了算**（主人 2026-11-13：「我桌面图标的形状是可以改的」）。
  *    Launcher3 的 `drawFullBleed=true` 分支会把背景层 + 前景层直接画进图标位图、
  *    再按桌面自己的 `IconShape`（「图标形状」设置）裁；`false` 才会套框架那份
@@ -84,7 +84,7 @@ class CircleIconDrawable(
   /** 这张是**快捷方式**：单色那支的几何判据（`MonochromeSynth.forIcon`）。只认 LauncherApps 通道。 */
   private val isShortcut: Boolean = false,
   /**
-   * 前景按**快捷方式的外观**画：不铺边，有底原样 / 没底补对比盘（见 [BareForeground.renderShortcut]）。
+   * 前景按**快捷方式的外观**画：只画自己的图，不铺边、不补盘、不缩放（见 [BareForeground.renderShortcut]）。
    * 默认跟随 [isShortcut]；走 Resources 通道出来的那批快捷方式只置这一位（[ShortcutLoad]），
    * 单色几何仍按应用图标算 —— 那一支是逐张调过的，不跟着通道猜测改口径。
    */
@@ -433,69 +433,22 @@ private class BareForeground(
   }
 
   /**
-   * 快捷方式那一档：**不按边缘颜色往外铺**（2026-11-14 主人：「快捷方式那肯定不用这种方法了」）。
+   * 快捷方式那一档：**只画它自己的图**（2026-11-14 三轮收敛后的定案）。
    *
-   * 判据与动作（主人同日：「有底的去掉系统加的白底盘，没底盘的看情况加上白色或黑色的底盘」）：
-   *  · **有底盘**（自己的底占了 ≥ [SHORTCUT_BASE_COVER]）：原样交回。之前按边缘色铺边，把
-   *    浅色圆盘图标铺成一整块白方块 —— 那圈白就是主人点名的那块"白底盘"；
-   *  · **没底盘**（只有字形浮在透明上）：铺一块**对比盘**，字形暗配白盘、字形亮配黑盘，
-   *    否则字形会被铺成和盘同色（Translate 相机：蓝底蓝字，字整个没了）。
+   *   · 不按边缘色铺边（主人：「快捷方式那肯定不用这种方法了」）；
+   *   · **不补任何盘**（主人：「我的意思就是只去除系统自带的那圈白盘」「不能按桌面那套每个图标
+   *     都包白圈的一刀切」）。补盘会把同一个应用下的快捷方式分成两半 —— 滴滴「从这里出发」
+   *     是白盘、「回家」是橙圆，Outlook「新邮件」白盘、「查看日历」又是别的底，屏上不像一套；
+   *   · **不缩放、不裁切**（主人：「有的图标压根没必要缩」「你为什么还要特地量大小」）。
    *
-   * 盘只铺在**前景位图**里、铺满整个可见方格，形状照旧交给桌面的「图标形状」裁。
-   * 取色前先做一次 [bleedEdgeColor]：快捷方式源图透明处的 RGB 也常是黑色，放大后的 AA 边
-   * 直接叠在浅色盘上就是一圈黑边。
+   * 透明的地方就交给壁纸。唯一保留的是 [bleedEdgeColor]：源图透明区常是黑色 RGB，放大后的
+   * AA 边直接画出来就是一圈黑边 —— 那一步只改半透明格的 RGB、不动 alpha，也不改形状。
    */
   private fun renderShortcut(bitmap: Bitmap, w: Int, h: Int) {
     val px = IntArray(w * h)
     bitmap.getPixels(px, 0, w, 0, 0, w, h)
     bleedEdgeColor(px, w, h)
-    val plate = shortcutPlate(px)
-    if (plate != 0) composeOverColor(px, plate)
     bitmap.setPixels(px, 0, w, 0, 0, w, h)
-  }
-
-  /**
-   * 快捷方式要不要垫盘、垫什么颜色。返回 0 = 不垫（有底盘），否则是要垫的 ARGB。
-   *
-   * **有底/没底**按"可见格（alpha > [ALPHA_MIN]）占整格的比例"分：本机快捷方式语料 46 张，
-   * 有底盘那一类 59.0%~100%（圆盘 ≈ 78.5%、满幅白/蓝方块 100%），没底盘那一类 7.1%~21.6%
-   * （AutoNavi 7~12、菜鸟 12~22、Translate 16~20）—— 阈值 [SHORTCUT_BASE_COVER] 落在
-   * 22 ↔ 59 那道空档里。用低门槛（>8）而不是"实色"门槛（≥128）：拼多多的底盘是
-   * 12% 左右 alpha 的淡圆，按 ≥128 量会把它读成没底、再垫一块盘，就等于又替它画了个底。
-   *
-   * **盘色**看可见格的平均亮度（Rec.601）：低于 [SHORTCUT_PLATE_LUM] 配白盘，否则配黑盘。
-   * 本机没底那一档最亮是蓝色 #4285F4（亮度 ≈ 126），全部落在白盘那一侧；黑盘那支由
-   * 以后"浅色字形"的快捷方式才会走到。
-   */
-  private fun shortcutPlate(px: IntArray): Int {
-    var visible = 0
-    var lum = 0.0
-    for (p in px) {
-      if ((p ushr 24) <= ALPHA_MIN) continue
-      visible++
-      lum += 0.299 * ((p shr 16) and 0xFF) + 0.587 * ((p shr 8) and 0xFF) + 0.114 * (p and 0xFF)
-    }
-    if (visible.toFloat() >= px.size * SHORTCUT_BASE_COVER) return 0
-    val mean = if (visible == 0) 255.0 else lum / visible
-    return if (mean < SHORTCUT_PLATE_LUM) Color.WHITE else Color.BLACK
-  }
-
-  /** 源 over 一整块纯色盘（快捷方式没底盘那一档用）。 */
-  private fun composeOverColor(px: IntArray, color: Int) {
-    val fr = (color shr 16) and 0xFF
-    val fg = (color shr 8) and 0xFF
-    val fb = color and 0xFF
-    for (i in px.indices) {
-      val a = px[i] ushr 24
-      if (a == 255) continue
-      val sr = (px[i] shr 16) and 0xFF
-      val sg = (px[i] shr 8) and 0xFF
-      val sb = px[i] and 0xFF
-      px[i] = (255 shl 24) or
-        (((sr * a + fr * (255 - a)) / 255) shl 16) or
-        (((sg * a + fg * (255 - a)) / 255) shl 8) or
-        ((sb * a + fb * (255 - a)) / 255)
-    }
   }
 
   /** 源 over 补边（fill 里 0 = 没有补边，保持透明）。 */
@@ -575,20 +528,6 @@ private const val SOLID_ALPHA = 160
 
 /** 取边色时往里让几格：边界那 1~2 格是抗锯齿混出来的浅色，照它铺就是一圈浅接缝。 */
 private const val EDGE_INSET = 1
-
-/**
- * 快捷方式「有底盘」的判据：可见格（alpha > [ALPHA_MIN]）占整格的比例。
- * 本机 46 张快捷方式语料量出来的两堆：有底盘 59.0%~100%，没底盘 7.1%~21.6%；
- * 这个值落在 22 ↔ 59 那道空档里（推的：两堆的边；选的：取空档中点偏下）。
- */
-private const val SHORTCUT_BASE_COVER = 0.5f
-
-/**
- * 没底盘时盘色的明暗分界（可见格平均亮度，Rec.601）：低于它 → 白盘，否则 → 黑盘。
- * 选的：白/黑的亮度中点是 127.5，往上抬到 150 是为了让中亮度字形（蓝 #4285F4 ≈ 126）
- * 也落在白盘那一侧 —— 这类快捷方式原本的设计就是"彩字压白底"，黑底会把对比度吃掉。
- */
-private const val SHORTCUT_PLATE_LUM = 150f
 
 /**
  * 算"边角该填什么颜色"。返回与 [px] 等长的数组：0 = 不填，其余 = 要铺的 ARGB。
