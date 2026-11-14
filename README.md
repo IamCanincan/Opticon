@@ -237,6 +237,20 @@ Mono: 680 layers synthesized  H0: 接手=9 画布拦=32 关系拦=0  同色退=1
 `com.android.contacts/logo_quick_contacts_mail` 差了 1 个点（彩色 50 / 判据 49，正好跨过阈值 50）。
 现在两者**必须相等**，不等由 `_twobook.cjs` 逐包报红。
 
+**几何这一本（2026-11-15 起，`IconGeom` 一份算式）**：老式图标的"填满正方形 / 缩进内切圆 / 铺底"
+两边算的是同一个 `planOf`，各打一行、按名字配成对：
+
+```
+D/Opticon: 自适应几何 host=com.android.launcher3 fill=0.72 scale=0.79 支=铺底 : org.mewx.wenku8/drawable/ic_launcher
+D/Opticon: Mono: 跟彩色 scale=0.79 fill=0.72 支=铺底 edge=384 label=org.mewx.wenku8/drawable/ic_launcher …
+D/Opticon: Mono: 跟彩色(留档) scale=0.79 fill=0.72 支=铺底 edge=384 label=…      ← 命中路径从 geom.tsv 读回来
+```
+
+配表命令 `node _harness/_geompair.cjs <logcat>`（一绿一红自证：`--selftest`，含 `(留档)` 那一路）；
+**配上 0 对 = 台子没吃到数据，不是没问题**。留档那一行是补的洞：真机一趟重启是
+`命中=1200 未命中=0`，只打冷那一路的话这台子每次开机都是瞎的（`MonoCache` 的 `geom.tsv`，
+与 `index.tsv` 同待遇：不参与键、不参与判定、失败静默、`sweep` 不删不计预算）。
+
 **这台子到底有没有在跑**（替代那句已经不存在的 `无判据`）：看两条 ——
 ① `Mono: N layers synthesized` 里那个 N 随图标加载往上涨；② 报一个应用名能 grep 到它的
 `Mono: diag#` 行。**两条都没有 = 钩子没装上**（不崩、不报错、桌面照常显示旧缓存）。

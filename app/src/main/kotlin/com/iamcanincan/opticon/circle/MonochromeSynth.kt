@@ -885,7 +885,8 @@ internal object MonochromeSynth {
       // `pm:包名`（没有 `/`）是 PackageManager 拿的应用图标，与普通非自适应图标同一口径。
       // 单色要跟上彩色那边的几何（2026-11-14）：彩色现在会先把内容缩放到恰好填满正方形，
       // 小占比那一支再缩进内切圆；这里按同样的比例缩一遍，否则主题图标与彩色图标对不上。
-      val fitted = if (adaptive || ringBleed) null else fitLikeColor(raster, alpha, edge, label)
+      val fit = if (adaptive || ringBleed) null else fitLikeColor(raster, alpha, edge, label)
+      val fitted = fit?.first
       val shaped = fitted ?: alpha
       val placed = if (adaptive || ringBleed) alpha else intoVisibleArea(shaped, edge)
       // ⚠ 这一趟多花的钱（判据台 `_harness/CostKt.kt`，62 张真机语料 @edge=384，取七遍最快一趟）：
@@ -901,7 +902,8 @@ internal object MonochromeSynth {
       // 存的是**交出去那一张**（几何与位置都在里面了），不是模型刚算完的那张 ——
       // 命中时返回的必须与屏幕上的是同一个东西，否则「判据吃的那张」与「屏上那张」又分家。
       // `label` 只进归属索引（[MonoCache.noteOwner]），不参与键、不参与判定。
-      MonoCache.store(key, edge, placed, label)
+      // `geom` 同理，进 `geom.tsv`：命中路径靠它把这三个数再打一次（见 [noteCached]）。
+      MonoCache.store(key, edge, placed, label, fit?.second ?: "")
       // 冷合成分段（光栅 / 键 / 准备 / 判据 / 交付）；每 32 次一行，见 [noteColdSplit]。
       noteColdSplit(tRaster - t0, tKey - tRaster, tBuild0 - tKey, tBuildDone - tBuild0,
         System.nanoTime() - tBuildDone)
@@ -994,6 +996,12 @@ internal object MonochromeSynth {
     val n = diagnosed.incrementAndGet()
     val outcome = if (hit.mask == null) "判据不成立（负缓存，未重算）" else "直接交缓存里那张（未重算）"
     Log.d(TAG, "Mono: diag#$n edge=$edge 键=${MonoKey.hex(key)} $label 缓存=${hit.from} → $outcome")
+    // 命中路径也打一行同格式的几何（2026-11-15）：冷那一路真机上一趟重启是
+    // `命中=1200 未命中=0` ⇒ `Mono: 跟彩色` 一条都不打，配表台当场瞎。数随掩码进了
+    // `geom.tsv`（[MonoCache.geomOf]），这里读回来即可，一个像素都不碰。
+    if (geomEchoLeft.decrementAndGet() >= 0) {
+      MonoCache.geomOf(key, edge)?.let { Log.d(TAG, "Mono: 跟彩色(留档) $it edge=$edge label=$label") }
+    }
     // 名额由 [noteDiagnosis] 自己按路判（这里再判一次会把同一个计数器加两遍，冷那条路就被挤掉更多）
     noteDiagnosis(edge, label, input, hit.mask, cache = true)
   }
@@ -1513,25 +1521,32 @@ internal object MonochromeSynth {
    *
    * 倍率与中心都在光栅坐标里，返回 null = 不用动。
    */
-  /** 「Mono: 跟彩色」证据行额度（与彩色那行 `自适应几何` 各 60 张，两边要配成对）。 */
-  private val fitLogLeft = java.util.concurrent.atomic.AtomicInteger(60)
+  /** 「Mono: 跟彩色」证据行额度（与彩色那行 `自适应几何` 各 300 张，两边要配成对）。 */
+  private val fitLogLeft = java.util.concurrent.atomic.AtomicInteger(300)
 
-  private fun fitLikeColor(raster: Bitmap, alpha: Bitmap, edge: Int, label: String): Bitmap? {
+  /** 命中路径那行 `Mono: 跟彩色(留档)` 的额度（一次重启 1200 次命中，全打会淹掉日志）。 */
+  private val geomEchoLeft = java.util.concurrent.atomic.AtomicInteger(300)
+
+  /**
+   * 返回 `Pair(缩放后的掩码 | null 表示不用动, 那一行证据)`。
+   * 第二项**无论用没用到都要**带出去 —— 它进 `geom.tsv`，命中路径靠它配表（见 [noteCached]）。
+   */
+  private fun fitLikeColor(raster: Bitmap, alpha: Bitmap, edge: Int, label: String): Pair<Bitmap?, String>? {
     val px = IntArray(edge * edge)
     raster.getPixels(px, 0, edge, 0, 0, edge, edge)
     val plan = IconGeom.planOf(px, edge, edge) ?: return null
+    val note = "scale=" + ((plan.scale * 100).toInt() / 100f) +
+      " fill=" + ((plan.fill * 100).toInt() / 100f) + " 支=" + (if (plan.plate) "铺底" else "延伸")
     if (fitLogLeft.decrementAndGet() >= 0) {
-      Log.d(TAG, "Mono: 跟彩色 scale=" + ((plan.scale * 100).toInt() / 100f) +
-        " fill=" + ((plan.fill * 100).toInt() / 100f) +
-        " 支=" + (if (plan.plate) "铺底" else "延伸") + " edge=$edge label=$label")
+      Log.d(TAG, "Mono: 跟彩色 $note edge=$edge label=$label")
     }
-    if (!plan.needsRedraw) return null
+    if (!plan.needsRedraw) return Pair(null, note)
     val out = Bitmap.createBitmap(edge, edge, Bitmap.Config.ALPHA_8)
     val m = android.graphics.Matrix()
     m.postScale(plan.scale, plan.scale, plan.cx, plan.cy)
     m.postTranslate(edge / 2f - plan.cx, edge / 2f - plan.cy)
     Canvas(out).drawBitmap(alpha, m, Paint(Paint.FILTER_BITMAP_FLAG))
-    return out
+    return Pair(out, note)
   }
 
   private fun intoVisibleArea(source: Bitmap, edge: Int): Bitmap {

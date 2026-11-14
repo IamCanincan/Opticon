@@ -9,7 +9,9 @@ const fs = require('fs');
 const args = process.argv.slice(2);
 
 const COLOR_RE = /自适应几何 host=(\S+) fill=(-?[\d.]+) scale=(-?[\d.]+) 支=(延伸|铺底) : (\S+)/;
-const MONO_RE = /Mono: 跟彩色 scale=(-?[\d.]+) fill=(-?[\d.]+) 支=(延伸|铺底) edge=(\d+) label=(\S+)/;
+// `(留档)` = 命中路径从 `geom.tsv` 读回来的同一组数（2026-11-15 补：真机一趟重启是 命中=1200 未命中=0，
+//  只打冷那一路的话这台子每次开机都吃不到数据）。
+const MONO_RE = /Mono: 跟彩色(\(留档\))? scale=(-?[\d.]+) fill=(-?[\d.]+) 支=(延伸|铺底) edge=(\d+) label=(\S+)/;
 
 /** `label=` 后面是 describe() 整串（`名字 盘=… intrinsic=…`），第一段才是 IconNames.of(...)。 */
 const firstTok = (s) => (s || '').split(' ')[0];
@@ -20,7 +22,13 @@ function pair(lines, tol) {
     const c = COLOR_RE.exec(l);
     if (c) color.set(c[5], { fill: +c[2], scale: +c[3], branch: c[4], line: l });
     const m = MONO_RE.exec(l);
-    if (m) mono.set(firstTok(m[5]), { fill: +m[2], scale: +m[1], branch: m[3], edge: +m[4], line: l });
+    if (m) {
+      const name = firstTok(m[6]);
+      const e = { fill: +m[3], scale: +m[2], branch: m[4], edge: +m[5], line: l, arch: !!m[1] };
+      const prev = mono.get(name);
+      // 同一张既有冷的也有留档：留冷的（冷那一路就是当下算出来的）
+      if (!prev || (prev.arch && !e.arch)) mono.set(name, e);
+    }
   }
   const rows = [];
   for (const [name, c] of color) {
@@ -55,13 +63,18 @@ function report(tag, res) {
 
 if (args.includes('--selftest')) {
   const good = ['自适应几何 host=L fill=88 scale=1.42 支=延伸 : a.pkg/ic_x',
-    'Mono: 跟彩色 scale=1.42 fill=88 支=延伸 edge=384 label=a.pkg/ic_x 盘=0'];
+    'Mono: 跟彩色 scale=1.42 fill=88 支=延伸 edge=384 label=a.pkg/ic_x 盘=0',
+    '自适应几何 host=L fill=91 scale=1.0 支=延伸 : c.pkg/ic_v',
+    'Mono: 跟彩色(留档) scale=1.0 fill=91 支=延伸 edge=384 label=c.pkg/ic_v 盘=0'];
   const evil = ['自适应几何 host=L fill=61 scale=0.88 支=铺底 : b.pkg/ic_y',
-    'Mono: 跟彩色 scale=1.06 fill=93 支=延伸 edge=384 label=b.pkg/ic_y 盘=0'];
+    'Mono: 跟彩色 scale=1.06 fill=93 支=延伸 edge=384 label=b.pkg/ic_y 盘=0',
+    '自适应几何 host=L fill=42 scale=0.64 支=铺底 : d.pkg/ic_w',
+    'Mono: 跟彩色(留档) scale=1.0 fill=42 支=铺底 edge=384 label=d.pkg/ic_w 盘=0'];
   const g = report('自证·该绿的样本', pair(good, 0.02));
   const e = report('自证·该红的样本', pair(evil, 0.02));
-  const ok = g.bad.length === 0 && e.bad.length === 1;
-  console.log(ok ? '自证通过：这台子配得上对、也判得红' : '自证失败：台子坏了，别信它的读数');
+  // 两条都得是 2 对：`(留档)` 那一路要是解析不上，样本会**静默少配一对**而"全绿"——那正是这台子的死法。
+  const ok = g.all.length === 2 && g.bad.length === 0 && e.all.length === 2 && e.bad.length === 2;
+  console.log(ok ? '自证通过：冷/留档两路都配得上对、也都判得红' : '自证失败：台子坏了，别信它的读数');
   process.exit(ok ? 0 : 1);
 }
 

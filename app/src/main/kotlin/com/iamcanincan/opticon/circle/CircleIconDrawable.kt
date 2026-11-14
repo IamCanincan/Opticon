@@ -921,7 +921,7 @@ private const val ZOOM_LOG_LIMIT = 40
  * 这一行与单色那行 `Mono: 跟彩色 … label=` 是**一对**（同一份 [IconGeom] 的两个消费者），
  * 额度两边要对得上，配表台见 `_harness/_geompair.cjs`。
  */
-private const val GEOM_LOG_LIMIT = 60
+private const val GEOM_LOG_LIMIT = 300
 
 private val geomLogLeft = AtomicInteger(GEOM_LOG_LIMIT)
 

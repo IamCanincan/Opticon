@@ -106,6 +106,19 @@ internal object MonoCache {
   private const val OWNER_INDEX = "index.tsv"
 
   /**
+   * 几何留档：`<键>\t<边长>\t<那三个数>`，同目录、同待遇（[sweep] 不删不计预算）。
+   *
+   * ## 为什么要有它（2026-11-15）
+   * `Mono: 跟彩色 scale=… fill=… 支=…` 只在**冷合成**那一路打。真机一次重启是
+   * `命中=1200 未命中=0`（掩码全从磁盘缓存里拿）⇒ 这一行**一条都不打**，
+   * 配表台 `_geompair.cjs` 就当场上盲（"配上 0 对"那次就是这么来的）。
+   * 掩码本身在缓存里、判断却不在 —— 判断是随掩码一起算出来的，那就随它一起落盘。
+   *
+   * ⚠ 与 [OWNER_INDEX] 一样：**不参与键、不参与判定、失败静默**。它只是留档。
+   */
+  private const val GEOM_INDEX = "geom.tsv"
+
+  /**
    * **源内容快键表**（srcKey → 内容键）的落盘文件名（2026-10-26）。
    *
    * 快键命中一次就跳过 384 光栅化 + 内容键（真机慢路 2.6ms），但表原来只在进程内存里 ——
@@ -119,6 +132,13 @@ internal object MonoCache {
 
   /** 本进程已经记过归属的 (键, 边长)：一次会话里同一张会被 bind 上百次，只记第一遍。 */
   private val seenOwner = HashSet<String>()
+
+  /** 同上，管几何留档 [GEOM_INDEX]（归属标签可能是 `?`，那份留档不能跟着一起没有）。 */
+  private val seenGeom = HashSet<String>()
+
+  /** [GEOM_INDEX] 的内存镜像（`键:边长` → 那三个数）；第一次查的时候整份读进来（几百行）。 */
+  private val geomMap = HashMap<String, String>()
+  private var geomLoaded = false
 
   /** 内容键：见 [MonoKey.keyOf]，那些输入就是掩码的全部输入。 */
   fun keyOf(
@@ -198,16 +218,16 @@ internal object MonoCache {
    * 记下这一张。[mask] 为 null 时只进内存（磁盘只存真掩码，见类文档的负缓存那段）。
    *
    * [label] 只用来写归属索引（见 [OWNER_INDEX]），**不参与键、不参与判定** —— 所以默认空串，
-   * 传不传都不会改变任何一张掩码的像素。
+   * 传不传都不会改变任何一张掩码的像素。[geom] 同理，写进 [GEOM_INDEX]（见那一段的理由）。
    */
   @Synchronized
-  fun store(key: Long, edge: Int, mask: Bitmap?, label: String = "") {
+  fun store(key: Long, edge: Int, mask: Bitmap?, label: String = "", geom: String = "") {
     if (mask == null) {
       put(key, null, "")
       return
     }
     put(key, mask, "")
-    writeDisk(key, edge, mask, label)
+    writeDisk(key, edge, mask, label, geom)
   }
 
   private fun put(key: Long, mask: Bitmap?, from: String) {
@@ -300,7 +320,7 @@ internal object MonoCache {
     return mask
   }
 
-  private fun writeDisk(key: Long, edge: Int, mask: Bitmap, label: String) {
+  private fun writeDisk(key: Long, edge: Int, mask: Bitmap, label: String, geom: String = "") {
     val d = dir() ?: return
     val to = File(d, name(key, edge))
     if (to.exists()) return
@@ -313,7 +333,10 @@ internal object MonoCache {
     // 同目录 rename 是原子的，于是 [readDisk] 要么看见完整的、要么根本看不见。
     val tmp = File(d, to.name + ".tmp")
     val ok = runCatching { tmp.writeBytes(bytes); tmp.renameTo(to) }.getOrDefault(false)
-    if (ok) noteOwner(d, key, edge, label) else {
+    if (ok) {
+      noteOwner(d, key, edge, label)
+      noteGeom(d, key, edge, geom)
+    } else {
       runCatching { tmp.delete() }
       // ⚠ 忘掉这个目录，下一张重新解析：`cacheDir` 会被系统或用户清掉，而抓住一个已经不存在的
       //   路径不放 = 这个进程余下每一次写都抛 → **每个图标一行警告**。清缓存不是故障，是常态。
@@ -349,6 +372,35 @@ internal object MonoCache {
     runCatching { File(d, OWNER_INDEX).appendText("${MonoKey.hex(key)}\t$edge\t$label\n") }
   }
 
+  /** 几何留档：与 [noteOwner] 同一条约束（不参与键与判定、每进程每键一次、失败静默）。 */
+  private fun noteGeom(d: File, key: Long, edge: Int, geom: String) {
+    if (geom.isEmpty()) return
+    if (!seenGeom.add("$key:$edge")) return
+    runCatching { File(d, GEOM_INDEX).appendText("${MonoKey.hex(key)}\t$edge\t$geom\n") }
+  }
+
+  /**
+   * 这张缓存掩码当年算出来的那三个数（`scale=… fill=… 支=…`），没有就 null。
+   *
+   * 命中路径本来一次像素都不碰，这里只让它多查一张内存表：文件第一次读时整份进 [geomMap]
+   * （几百行、每行几十字节），之后是 O(1)。读失败 = 当没留档，一行日志都不打。
+   */
+  fun geomOf(key: Long, edge: Int): String? {
+    if (!geomLoaded) {
+      val d = dir()
+      // 目录还没就绪（attach 早期常这样）就别把这份表永久标成"读过"—— 下次再来
+      if (d != null) {
+        geomLoaded = true
+        val text = runCatching { File(d, GEOM_INDEX).readText() }.getOrNull()
+        if (text != null) for (line in text.lineSequence()) {
+          val f = line.split('\t')
+          if (f.size == 3) geomMap["${f[0]}:${f[1]}"] = f[2]
+        }
+      }
+    }
+    return geomMap["${MonoKey.hex(key)}:$edge"]
+  }
+
   /** 按最旧删到上限以下。删失败（别的进程正拿着）就当没发生，下一轮再试。 */
   private fun sweep(d: File) {
     val kids = runCatching { d.listFiles() }.getOrNull() ?: return
@@ -360,6 +412,8 @@ internal object MonoCache {
       // ⚠ 归属索引**不删也不计进体积**：它不是掩码，被按最旧删掉就等于把"这张是谁的"又扔回
       //   那个会滚的 logcat 窗口；而它一行才几十字节，计进预算只会挤掉真掩码。
       if (k.name == OWNER_INDEX) continue
+      // 几何留档同理：几百行、几 KB，挤掉的却是真掩码
+      if (k.name == GEOM_INDEX) continue
       // 源内容快键表同理：它是"跳过光栅化"的桥，删了只慢不坏；也别让它占掩码的预算
       // （这几 KB 会把真掩码挤出去，正好反了）。
       if (k.name == SRC_MAP_NAME) continue
