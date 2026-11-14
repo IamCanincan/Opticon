@@ -41,8 +41,13 @@ function decodeMono(buf) {
   return { w: side, h: side, raw: buf };
 }
 const fam = (r, g, b) => ((r / 24) | 0) * 625 + ((g / 24) | 0) * 25 + ((b / 24) | 0);
-// 彩色那栏：先取边框主色（那族就是盘/背景），墨 = 与它不同族的格
-function colorExtent(img) {
+// ⚠ **两边都排除外圈 RING 那一圈**（默认 8%）。为什么要排：库里的彩色 blob 是**桌面自己裁过形状**的成品，
+//   圆周上有一圈抗锯齿/预乘的边缘 —— 它不是图案，却会被"非边框主色"这条规则当成墨，
+//   于是外接框被顶到整张（米家现量"去底图案幅 1.000"就是这么来的：四角那圈白边冒充了墨）。
+//   单色那栏同样排除，**两栏同一条规则**，否则就是拿两个定义比。
+const RING = (() => { const a = process.argv.find((x) => x.startsWith('--ring=')); return a ? +a.slice(7) : 0.08; })();
+const inRing = (x, y, w, h) => x < w * RING || y < h * RING || x >= w * (1 - RING) || y >= h * (1 - RING);
+const colorExtent = (img) => {
   const { w, h, chans, out } = img, cnt = new Map();
   const at = (x, y) => { const i = (y * w + x) * chans; return [out[i], out[i + 1], out[i + 2]]; };
   for (let x = 0; x < w; x++) for (const y of [0, 1, h - 2, h - 1]) { const k = fam(...at(x, y)); cnt.set(k, (cnt.get(k) || 0) + 1); }
@@ -51,15 +56,17 @@ function colorExtent(img) {
   for (const [k, c] of cnt) if (c > best) { best = c; bg = k; }
   let l = w, t = h, r = -1, b = -1, ink = 0;
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    if (inRing(x, y, w, h)) continue;
     if (fam(...at(x, y)) === bg) continue;
     ink++; if (x < l) l = x; if (x > r) r = x; if (y < t) t = y; if (y > b) b = y;
   }
   return r < 0 ? { share: 0, ext: 0 } : { share: ink / (w * h), ext: Math.max(r - l + 1, b - t + 1) / w };
-}
+};
 function monoExtent(img) {
   if (img.raw) {
     const n = img.w; let l = n, t = n, r = -1, b = -1, ink = 0;
     for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+      if (inRing(x, y, n, n)) continue;
       if (img.raw[y * n + x] <= 8) continue;
       ink++; if (x < l) l = x; if (x > r) r = x; if (y < t) t = y; if (y > b) b = y;
     }
@@ -68,7 +75,7 @@ function monoExtent(img) {
   const { w, h, chans, out } = img; let l = w, t = h, r = -1, b = -1, ink = 0;
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const a = out[(y * w + x) * chans + chans - 1];
-    if (a <= 8) continue;
+    if (a <= 8 || inRing(x, y, w, h)) continue;
     ink++; if (x < l) l = x; if (x > r) r = x; if (y < t) t = y; if (y > b) b = y;
   }
   return r < 0 ? { share: 0, ext: 0 } : { share: ink / (w * h), ext: Math.max(r - l + 1, b - t + 1) / w };
@@ -77,7 +84,7 @@ const q = (a, p) => { const s = a.slice().sort((x, y) => x - y); return s.length
 
 const args = process.argv.slice(2);
 const dbp = args.shift(), idxp = args.shift();
-const needles = args;
+const needles = args.filter((a) => !a.startsWith('--'));
 // index.tsv：col1=pkg，col6=cls，col9=mono（有 = 应用自带单色层，我们一个像素没碰）
 const cls = new Map(), ownMono = new Set();
 for (const l of fs.readFileSync(idxp, 'utf8').replace(/\r/g, '').split('\n').slice(1)) {
@@ -88,7 +95,20 @@ for (const l of fs.readFileSync(idxp, 'utf8').replace(/\r/g, '').split('\n').sli
 }
 const d = new DatabaseSync(dbp, { readOnly: true });
 const rows = d.prepare('SELECT componentName c, icon i, mono_icon m FROM icons').all();
-const groups = { 透传: [], 我们合成: [], 老式: [] };
+// 分组**只认证据表**（`_unadapted.cjs --dump=` 出的那份）：
+//   透传 = 应用自带单色层（主人明确说别管）；合成 = 自适应但没有单色层；老式 = 非自适应；
+//   待查 = 台账与装机日志都没覆盖到 ⇒ **单独一栏，不塞进"老式"**（上一版就是拿默认值猜，
+//   结果把 6 张带外全说成老式，而米家其实是自适应没有单色层）。
+const clsArg = process.argv.find((a) => a.startsWith('--cls='));
+let ev = new Map();
+if (clsArg) for (const r of JSON.parse(fs.readFileSync(clsArg.slice(6), 'utf8'))) ev.set(r.pkg, r);
+const groupOf = (pkg) => {
+  const e = ev.get(pkg);
+  if (e) return e.mono === '有' ? '透传' : e.cls.includes('Adaptive') ? '合成' : e.cls === '要拆 APK' ? '待查' : '老式';
+  if (ownMono.has(pkg)) return '透传';
+  return (cls.get(pkg) || '').includes('Adaptive') ? '合成' : '待查';
+};
+const groups = { 透传: [], 合成: [], 老式: [], 待查: [] };
 const named = [];
 // ⚠ **一个包在库里有很多行**（启动图标 + 快捷方式 + 桌面组件），blob 常常同一张，但组件名不同。
 //   按"包"随机取行会把快捷方式那行冒充成启动图标 —— 现量：闲鱼随机行 0.466，
@@ -110,7 +130,7 @@ for (const [pkg, { r }] of pick) {
   const ce = colorExtent(ci), me = monoExtent(mi);
   if (!ce.ext || !me.ext) { skipped++; continue; }
   const ratio = me.ext / ce.ext;
-  const g = ownMono.has(pkg) ? '透传' : (cls.get(pkg) || '').includes('Adaptive') ? '我们合成' : '老式';
+  const g = groupOf(pkg);
   groups[g].push([r.c, ratio, ce, me]);
   if (needles.some((n) => r.c.includes(n))) named.push([r.c, g, ratio]);
 }
