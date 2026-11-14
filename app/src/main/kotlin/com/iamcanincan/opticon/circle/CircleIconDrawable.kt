@@ -59,9 +59,9 @@ class RenderCache {
  *  · 背景层：**空的**（主人 2026-11-13：「不要有底盘」）；
  *  · 前景层：原图按可见区铺满（图层 bounds 往里收 1/6）—— 图案与图标槽 1:1；
  *  · 尺寸：**原图原尺寸**放进去，不放大、不裁切（主人 2026-11-13：「有的图标压根没必要缩」
- *    与「过度裁切」两次点名）；透明的地方一律由下面的边角延伸补满 —— **快捷方式除外**：
- *    它们**只画自己的图**：不铺边、不补盘、不缩放，透明处就是壁纸（主人 2026-11-14 三轮收敛，
- *    见 [BareForeground.renderShortcut]）；
+ *    与「过度裁切」两次点名）；透明的地方一律由下面的边角延伸补满；
+ *    ⚠ **快捷方式整个不进这里**（主人 2026-11-14：「算了，你快捷方式别管了」）—— 原样放行，
+ *    由桌面自己画；
  *  · 形状：**桌面说了算**（主人 2026-11-13：「我桌面图标的形状是可以改的」）。
  *    Launcher3 的 `drawFullBleed=true` 分支会把背景层 + 前景层直接画进图标位图、
  *    再按桌面自己的 `IconShape`（「图标形状」设置）裁；`false` 才会套框架那份
@@ -81,14 +81,6 @@ class RenderCache {
  */
 class CircleIconDrawable(
   icon: Drawable,
-  /** 这张是**快捷方式**：单色那支的几何判据（`MonochromeSynth.forIcon`）。只认 LauncherApps 通道。 */
-  private val isShortcut: Boolean = false,
-  /**
-   * 前景按**快捷方式的外观**画：只画自己的图，不铺边、不补盘、不缩放（见 [BareForeground.renderShortcut]）。
-   * 默认跟随 [isShortcut]；走 Resources 通道出来的那批快捷方式只置这一位（[ShortcutLoad]），
-   * 单色几何仍按应用图标算 —— 那一支是逐张调过的，不跟着通道猜测改口径。
-   */
-  private val shortcutLook: Boolean = isShortcut,
   /** 所有副本共享的渲染缓存（[getConstantState] 的副本会拿到同一个）。 */
   private val sharedCache: RenderCache = RenderCache(),
 ) : AdaptiveIconDrawable(
@@ -96,7 +88,7 @@ class CircleIconDrawable(
   // 用透明 ColorDrawable 而不是 null：有的宿主会直接读 `getBackground()`，空着比给个会抛的更安全。
   ColorDrawable(Color.TRANSPARENT),
   // 前景：内容补满可见区，形状由桌面裁；所有副本共享同一份渲染缓存
-  BareForeground(icon, shortcutLook, sharedCache),
+  BareForeground(icon, sharedCache),
 ) {
 
   /** 原图标留一份引用，只为了 [getConstantState] 能重建出副本。 */
@@ -127,7 +119,7 @@ class CircleIconDrawable(
   override fun getMonochrome(): Drawable? {
     sourceMonochrome?.let { return it }
     if (!ModuleRuntime.options().monoInvert) return null
-    return MonochromeSynth.forIcon(sourceIcon, shortcut = isShortcut)
+    return MonochromeSynth.forIcon(sourceIcon)
   }
 
   /**
@@ -139,7 +131,7 @@ class CircleIconDrawable(
     val src = sourceState
     return sharedState ?: object : ConstantState() {
       override fun newDrawable(): Drawable =
-        CircleIconDrawable(src?.newDrawable() ?: sourceIcon, isShortcut, shortcutLook, sharedCache)
+        CircleIconDrawable(src?.newDrawable() ?: sourceIcon, sharedCache)
 
       override fun getChangingConfigurations(): Int = changingConfigurations
     }.also { sharedState = it }
@@ -173,8 +165,6 @@ private val failStackLogged = java.util.concurrent.atomic.AtomicBoolean(false)
 
 private class BareForeground(
   private val inner: Drawable,
-  /** 快捷方式：不铺边，有底保持原样 / 没底补白或黑盘（见 [renderShortcut]）。 */
-  private val shortcut: Boolean,
   /** 共享渲染缓存（同一张图标的所有副本一份）。 */
   private val shared: RenderCache = RenderCache(),
 ) : Drawable(), Drawable.Callback {
@@ -304,17 +294,13 @@ private class BareForeground(
     return ((size + renderStep - 1) / renderStep) * renderStep
   }
 
-  /** 画两遍：先量出填充色，再把填充垫在底下、图标叠上去。快捷方式走 [renderShortcut]。 */
+  /** 画两遍：先量出填充色，再把填充垫在底下、图标叠上去。 */
   private fun renderInto(bitmap: Bitmap, layer: Canvas, w: Int, h: Int, view: Rect) {
     var stage = "r0"
     rendering = true
     try {
       stage = "r1"; bitmap.eraseColor(Color.TRANSPARENT)
       stage = "r2"; drawIcon(layer, w, h, view)
-      if (shortcut) {
-        stage = "r3s"; renderShortcut(bitmap, w, h)
-        return
-      }
       stage = "r3"
       val px = IntArray(w * h)
       bitmap.getPixels(px, 0, w, 0, 0, w, h)
@@ -432,25 +418,6 @@ private class BareForeground(
     }
   }
 
-  /**
-   * 快捷方式那一档：**只画它自己的图**（2026-11-14 三轮收敛后的定案）。
-   *
-   *   · 不按边缘色铺边（主人：「快捷方式那肯定不用这种方法了」）；
-   *   · **不补任何盘**（主人：「我的意思就是只去除系统自带的那圈白盘」「不能按桌面那套每个图标
-   *     都包白圈的一刀切」）。补盘会把同一个应用下的快捷方式分成两半 —— 滴滴「从这里出发」
-   *     是白盘、「回家」是橙圆，Outlook「新邮件」白盘、「查看日历」又是别的底，屏上不像一套；
-   *   · **不缩放、不裁切**（主人：「有的图标压根没必要缩」「你为什么还要特地量大小」）。
-   *
-   * 透明的地方就交给壁纸。唯一保留的是 [bleedEdgeColor]：源图透明区常是黑色 RGB，放大后的
-   * AA 边直接画出来就是一圈黑边 —— 那一步只改半透明格的 RGB、不动 alpha，也不改形状。
-   */
-  private fun renderShortcut(bitmap: Bitmap, w: Int, h: Int) {
-    val px = IntArray(w * h)
-    bitmap.getPixels(px, 0, w, 0, 0, w, h)
-    bleedEdgeColor(px, w, h)
-    bitmap.setPixels(px, 0, w, 0, 0, w, h)
-  }
-
   /** 源 over 补边（fill 里 0 = 没有补边，保持透明）。 */
   private fun composeOver(px: IntArray, fill: IntArray) {
     for (i in px.indices) {
@@ -513,7 +480,7 @@ private class BareForeground(
   override fun getConstantState(): ConstantState? =
     inner.constantState?.let { src ->
       object : ConstantState() {
-        override fun newDrawable(): Drawable = BareForeground(src.newDrawable(), shortcut)
+        override fun newDrawable(): Drawable = BareForeground(src.newDrawable())
 
         override fun getChangingConfigurations(): Int = src.changingConfigurations
       }
@@ -924,23 +891,23 @@ private fun wrapInner(icon: Drawable, from: String, shortcutHint: Boolean): Draw
   // 已经包过的、以及**自适应图标**：都不动。自适应图标自带背景 + 前景，形状由系统 mask 定。
   if (icon is CircleIconDrawable || icon is AdaptiveIconDrawable) return icon
 
-  noteWrap(from)
-  // 快捷方式身份有三条来源：通道名（LauncherApps.getShortcutIconDrawable）、桌面正在加载时
-  // 的计数（[ShortcutLoad]，实测兜不住的兜底）、以及**这张 drawable 的资源 id 被登记为
-  // 某条快捷方式的 iconResource**（[ShortcutIconResources]，Resources 通道实际靠这条）。
+  // 快捷方式：**整个放行**（主人 2026-11-14：「算了，你快捷方式别管了」）。
+  // 桌面会按它自己那套画（老式图标 / 白底 / 形状都由它决定），我们一个像素不碰。
+  // 身份来源三条：① 通道名 LauncherApps.getShortcutIconDrawable；② 桌面正在载快捷方式时
+  // 的计数（[ShortcutLoad]）；③ 参数里的 iconResource 登记（[ShortcutIconResources]）。
   val byChannel = from.contains("Shortcut")
   val byLoader = !byChannel && ShortcutLoad.inFlight
   val byResource = !byChannel && !byLoader && shortcutHint
-  // 单色那一位只认通道（那一支是逐张调过的，不跟着通道猜测改口径）；外观三条都认。
-  val look = byChannel || byLoader || byResource
-  if ((byLoader || byResource) && shortcutMarkLogLeft.decrementAndGet() >= 0) {
-    Log.d(TAG, "快捷标记(" + (if (byLoader) "桌面在载快捷方式" else "资源表") + ") host=$clipHost from=$from : " +
-      IconNames.of(icon))
+  if (byChannel || byLoader || byResource) {
+    if (shortcutMarkLogLeft.decrementAndGet() >= 0) {
+      Log.d(TAG, "快捷方式放行(" + (if (byChannel) "通道" else if (byLoader) "桌面在载" else "资源表") +
+        ") host=$clipHost from=$from : " + IconNames.of(icon))
+    }
+    return icon
   }
   if (wrapLogLeft.decrementAndGet() >= 0) {
     Log.d(TAG, "自适应 from=$from host=$clipHost : " + IconNames.of(icon) + " " +
-      "${icon.intrinsicWidth}x${icon.intrinsicHeight} " +
-      if (look) "快捷方式 不铺边(有底原样/没底补盘)" else "无底盘 原尺寸+延伸")
+      "${icon.intrinsicWidth}x${icon.intrinsicHeight} 无底盘 原尺寸+延伸")
   }
-  return CircleIconDrawable(icon, byChannel, look)
+  return CircleIconDrawable(icon)
 }
