@@ -35,7 +35,16 @@ fun main(args: Array<String>) {
   val pool = fld.get(MonochromeMask) as ThreadLocal<Any>
   val files = args.filter { !it.startsWith("--") }.flatMap { a ->
     val f = File(a)
-    if (f.isDirectory) f.listFiles()!!.filter { it.extension == "png" && !it.name.contains("preview") }.sortedBy { it.name } else listOf(f)
+    // ⚠ **`*_modelbg.png` 不是图标**：那是 `MonochromeSynth` 喂给模型的**那块盘**（背景层的满幅一张）。
+    //   它自己走一遍单色，交出来的必然是一块平色 ⇒ 在「中调被压」这类账上**天生欠中间调**，
+    //   数进去就是把一个屏幕上不存在的东西记成债。`ReframeCorpusKt` 从一开始就滤它（那文件 29 行），
+    //   这里以前只滤 `preview` —— 2026-11-15 查第 12 闸 6→8 时抓到：涨的两条是
+    //   `com.taptap___… _modelbg` 与 `com.valvesoftware.steamlink_…_modelbg`，
+    //   而这两张图标**本体的交付掩码逐格相同**（`_maskdiff.cjs`）。
+    //   ⚠ 这是一次**分母变更**：滤掉之后所有绝对数都要重数一遍，旧 pin 里的张数不可比。
+    if (f.isDirectory) f.listFiles()!!.filter {
+      it.extension == "png" && !it.name.contains("preview") && !it.name.endsWith("_modelbg.png")
+    }.sortedBy { it.name } else listOf(f)
   }
   var sat = 0; var tot = 0
   val rows = ArrayList<String>()
