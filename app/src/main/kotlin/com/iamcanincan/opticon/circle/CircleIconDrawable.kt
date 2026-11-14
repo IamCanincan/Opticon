@@ -674,14 +674,14 @@ private const val RIM_DELTA = 40
  * 可见占比 >= 它的图标（贴边实心那种）走正常延伸；小于它的缩进内切圆 + 垫对比底
  * （主人 2026-11-14：「大于那个占比，还是正常延伸」）。
  */
-private const val INSCRIBED_SHARE = 0.785f
+internal const val INSCRIBED_SHARE = 0.785f
 
 /**
  * 小占比那一支缩进内切圆之后，内容最大半径占圆半径的多少（= 圆边留多少余量）。
  * 0.98 是"刚好贴住圆"；主人 2026-11-14「再稍微缩一点」→ 0.92 →「再缩一点点」→ 0.88（圆边留 12%）。
  * 想再紧/再松只改这一个数。
  */
-private const val CIRCLE_FIT = 0.88f
+internal const val CIRCLE_FIT = 0.88f
 
 /**
  * 算"边角该填什么颜色"。返回与 [px] 等长的数组：0 = 不填，其余 = 要铺的 ARGB。

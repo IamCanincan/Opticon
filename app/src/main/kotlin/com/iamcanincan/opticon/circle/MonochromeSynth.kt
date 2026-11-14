@@ -883,7 +883,11 @@ internal object MonochromeSynth {
       //    高德/菜鸟/淘宝/微信这些就大了 1.5 倍（主人：「有的快捷图标放大过头了」）。
       // 自适应**不收**：它的 `reframe` 目标本来就是可见区（[visibleInset]），再收也是两遍。
       // `pm:包名`（没有 `/`）是 PackageManager 拿的应用图标，与普通非自适应图标同一口径。
-      val placed = if (adaptive || ringBleed) alpha else intoVisibleArea(alpha, edge)
+      // 单色要跟上彩色那边的几何（2026-11-14）：彩色现在会先把内容缩放到恰好填满正方形，
+      // 小占比那一支再缩进内切圆；这里按同样的比例缩一遍，否则主题图标与彩色图标对不上。
+      val fitted = if (adaptive || ringBleed) null else fitLikeColor(raster, alpha, edge)
+      val shaped = fitted ?: alpha
+      val placed = if (adaptive || ringBleed) alpha else intoVisibleArea(shaped, edge)
       // ⚠ 这一趟多花的钱（判据台 `_harness/CostKt.kt`，62 张真机语料 @edge=384，取七遍最快一趟）：
       //   `of` 中位 **0.54 ms**（**每张都跑**，因为它内部先降到 128 才扫，与画布多大无关 —— 与真机
       //   彩色那行 `量一张` 的 0.60 ms 同一档）；`reframe` 中位 **2.24 ms**，只有开了窗口的 **13/62**
@@ -892,7 +896,8 @@ internal object MonochromeSynth {
       //   所以这条只当**比值**用，别拿 0.54 ms 当真机读数。
       noteDiagnosis(edge, label, raster, placed)
       raster.recycle()
-      if (placed !== alpha) alpha.recycle()
+      if (placed !== shaped) shaped.recycle()
+      if (shaped !== alpha) alpha.recycle()
       // 存的是**交出去那一张**（几何与位置都在里面了），不是模型刚算完的那张 ——
       // 命中时返回的必须与屏幕上的是同一个东西，否则「判据吃的那张」与「屏上那张」又分家。
       // `label` 只进归属索引（[MonoCache.noteOwner]），不参与键、不参与判定。
@@ -1495,6 +1500,80 @@ internal object MonochromeSynth {
    * ⚠ 只能在掩码**算完之后**调用，不能提前到光栅化那一步 —— 为什么，见 [rasterize]。
    * 缩放用双线性：掩码现在是一条连续斜坡，混它只会更平滑。
    */
+  /**
+   * 让单色掩码跟上彩色那边的几何（2026-11-14）。
+   *
+   * 彩色（CircleIconDrawable.renderInto）现在会：① 先把内容缩放到恰好填满正方形；
+   * ② 填满后可见占比 < [INSCRIBED_SHARE] 的，再缩到内切圆里（留 [CIRCLE_FIT] 余量）。
+   * 单色掩码是从**原始 drawable** 独立合成的，不套同一个倍率就和彩色对不上 ——
+   * 语料 229 张里 84 张源图有留白（最大差 1.6×）。
+   *
+   * ⚠ 判定必须量在**彩色 raster** 上，不能量单色掩码：掩码里只有墨，没有"图标自己的底"，
+   * 拿它算"可见占比"会恒小于 78.5%、把每个图标都当成小占比去缩。
+   *
+   * 倍率全是比例、与分辨率无关；量完再把同一个变换套到掩码上。返回 null = 不用动。
+   */
+  /** 「Mono: 跟彩色」证据行额度。 */
+  private val fitLogLeft = java.util.concurrent.atomic.AtomicInteger(30)
+
+  private fun fitLikeColor(raster: Bitmap, alpha: Bitmap, edge: Int): Bitmap? {
+
+    // ── 判定：颜色图上量（与彩色那边同一口径：可见格 alpha > 8） ──
+    var l = edge
+    var t = edge
+    var r = -1
+    var b = -1
+    var vis = 0
+    val px = IntArray(edge * edge)
+    raster.getPixels(px, 0, edge, 0, 0, edge, edge)
+    for (y in 0 until edge) {
+      val row = y * edge
+      for (x in 0 until edge) {
+        if ((px[row + x] ushr 24) <= 8) continue
+        vis++
+        if (x < l) l = x
+        if (x > r) r = x
+        if (y < t) t = y
+        if (y > b) b = y
+      }
+    }
+    if (r < 0) return null
+    val bw = (r - l + 1).toFloat()
+    val bh = (b - t + 1).toFloat()
+    val cx = (l + r + 1) / 2f
+    val cy = (t + b + 1) / 2f
+    val fill = vis.toFloat() / (bw * bh)
+    val scale = if (fill >= INSCRIBED_SHARE) {
+      minOf(edge / bw, edge / bh)
+    } else {
+      var maxR2 = 0f
+      for (y in t..b) {
+        val dy = y + 0.5f - cy
+        val row = y * edge
+        for (x in l..r) {
+          if ((px[row + x] ushr 24) <= 8) continue
+          val dx = x + 0.5f - cx
+          val d2 = dx * dx + dy * dy
+          if (d2 > maxR2) maxR2 = d2
+        }
+      }
+      val maxR = kotlin.math.sqrt(maxR2)
+      if (maxR <= 0f) return null
+      (edge / 2f * CIRCLE_FIT) / maxR
+    }
+    if (fitLogLeft.decrementAndGet() >= 0) {
+      Log.d(TAG, "Mono: 跟彩色 scale=" + ((scale * 100).toInt() / 100f) +
+        " fill=" + ((fill * 100).toInt() / 100f) + " edge=$edge")
+    }
+    if (kotlin.math.abs(scale - 1f) < 0.01f) return null
+    val out = Bitmap.createBitmap(edge, edge, Bitmap.Config.ALPHA_8)
+    val m = android.graphics.Matrix()
+    m.postScale(scale, scale, cx, cy)
+    m.postTranslate(edge / 2f - cx, edge / 2f - cy)
+    Canvas(out).drawBitmap(alpha, m, Paint(Paint.FILTER_BITMAP_FLAG))
+    return out
+  }
+
   private fun intoVisibleArea(source: Bitmap, edge: Int): Bitmap {
     val inset = visibleInset(edge)
     val out = Bitmap.createBitmap(edge, edge, Bitmap.Config.ALPHA_8)
