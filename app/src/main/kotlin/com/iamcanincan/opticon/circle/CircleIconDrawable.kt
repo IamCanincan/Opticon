@@ -637,14 +637,13 @@ private fun computeFill(px: IntArray, w: Int, h: Int): IntArray {
     }
   }
 
-  // 4) 极角：从最近的已给色格 BFS 拓过去
+  // 4) 极角：从最近的已给色格 BFS 拓过去。
+  //    起点只认第 3 步按行/列边色算好的格 —— 不能把图标自己的像素算进来：
+  //    它们多半是抗锯齿边/软阴影（实测 (243,243,243,a175)），BFS 会把那一格的颜色摊满整个角，
+  //    屏幕上就是一块"不是图标边色"的方块（2026-11-14 皎月连：1131 格）。
   var head = 0
   var tail = 0
   for (i in 0 until n) {
-    if ((px[i] ushr 24) > ALPHA_MIN) {
-      color[i] = px[i]
-      filled[i] = 1
-    }
     if (filled[i] == 1.toByte()) work[tail++] = i
   }
   while (head < tail) {
