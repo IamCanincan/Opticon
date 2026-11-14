@@ -294,7 +294,10 @@ private class BareForeground(
     return ((size + renderStep - 1) / renderStep) * renderStep
   }
 
-  /** 画两遍：先量出填充色，再把填充垫在底下、图标叠上去。 */
+  /**
+   * 最多画三遍：① 原图 → 量外接框，缩放到恰好填满正方形；② 填满后占比 < 78.5% 的，
+   * 再缩到内切圆里（留 [CIRCLE_FIT] 余量）并铺白底；③ 其余按边缘色延伸补角。
+   */
   private fun renderInto(bitmap: Bitmap, layer: Canvas, w: Int, h: Int, view: Rect) {
     var stage = "r0"
     rendering = true
