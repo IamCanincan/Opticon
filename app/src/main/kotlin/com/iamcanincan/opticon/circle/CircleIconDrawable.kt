@@ -295,8 +295,11 @@ private class BareForeground(
   }
 
   /**
-   * 最多画三遍：① 原图 → 量外接框，缩放到恰好填满正方形；② 填满后占比 < 78.5% 的，
-   * 再缩到内切圆里（留 [CIRCLE_FIT] 余量）并铺白底；③ 其余按边缘色延伸补角。
+   * ① 原图 → 交 [IconGeom] 算出几何（填满正方形 / 缩进内切圆），按倍率**重画一遍**；
+   * ② 小占比那一支铺白底；③ 其余按边缘色延伸补角。
+   *
+   * 尺寸与分档的判断**不在这里**（在 [IconGeom]，单色那边调的是同一份）——
+   * 这里只负责"把彩色要画的那一刀画出来"。
    */
   private fun renderInto(bitmap: Bitmap, layer: Canvas, w: Int, h: Int, view: Rect) {
     var stage = "r0"
@@ -311,34 +314,27 @@ private class BareForeground(
       //    再拿填满之后的可见占比去分界（主人 2026-11-14：「不应该先将应用图标缩放到恰好
       //    不被正方形裁切时的占比吗」）。有留白的图标（PH 的圆角方形）缩满后占比就上去了。
       stage = "r3a"
-      val norm = fillSquare(px, w, h)
-      if (norm != null) {
+      val plan = IconGeom.planOf(px, w, h)
+      if (plan != null && plan.needsRedraw) {
+        val nb = plan.bounds(w, h)
         bitmap.eraseColor(Color.TRANSPARENT)
-        inner.setBounds(
-          Math.round(norm[0]), Math.round(norm[1]), Math.round(norm[2]), Math.round(norm[3]),
-        )
+        inner.setBounds(Math.round(nb[0]), Math.round(nb[1]), Math.round(nb[2]), Math.round(nb[3]))
         inner.draw(layer)
         inner.setBounds(view)
         bitmap.getPixels(px, 0, w, 0, 0, w, h)
       }
-      // 分界：>= 内切圆占正方形的面积比（[INSCRIBED_SHARE]）走正常延伸；
-      // 小于它的（线条/稀疏图案填满后仍不足）缩到"内切圆不裁掉任何一个有色像素"再铺白底。
+      // 分界（同一个 [IconGeom] 算的，单色那边读的是同一份）：可见占比 >= 内切圆占正方形的
+      // 面积比（[INSCRIBED_SHARE]）走正常延伸；小于它的缩进内切圆 + **铺白底**（主人 2026-11-14：「铺上白底」）。
       stage = "r3b"
-      val smallShare = coverage(px) < INSCRIBED_SHARE
-      if (smallShare) {
-        val fit = fitInsideCircle(px, w, h)
-        if (fit != null) {
-          bitmap.eraseColor(Color.TRANSPARENT)
-          inner.setBounds(
-            Math.round(fit[0]), Math.round(fit[1]), Math.round(fit[2]), Math.round(fit[3]),
-          )
-          inner.draw(layer)
-          inner.setBounds(view)
-          bitmap.getPixels(px, 0, w, 0, 0, w, h)
+      if (plan?.plate ?: true) {
+        if (plan != null && plan.shrunk && zoomLogLeft.decrementAndGet() >= 0) {
+          Log.d(TAG, "圆内缩 host=$clipHost r=" + plan.radius.toInt() +
+            " half=" + (minOf(w, h) / 2f).toInt() +
+            " scale=" + ((plan.scale * 100).toInt() / 100f) + " : " + IconNames.of(inner))
         }
         // ① 抗锯齿边色渗透：源 PNG 的透明处常是"黑色带 alpha"，直接叠在底盘上就是一圈黑边。
         stage = "r4s"; bleedEdgeColor(px, w, h)
-        // ② 铺**白底**（主人 2026-11-14：「铺上白底」）。**不延伸** —— 透明处一律由底承担。
+        // ② 铺**白底**。不延伸 —— 透明处一律由底承担。
         stage = "r5s"; composeOverColor(px, Color.WHITE)
         stage = "r6s"
         bitmap.setPixels(px, 0, w, 0, 0, w, h)
@@ -498,99 +494,6 @@ private class BareForeground(
     }
   }
 
-  /**
-   * **把内容缩放到恰好填满正方形**（内容外接框贴住四边：多一寸会被方块裁、少一寸就是留白）。
-   *
-   * 缩放比取 min(w/框宽, h/框高)，以内容框中心为原点、再把中心对到图标中心。
-   * 已经贴边（倍率 1±1%）就不动，返回 null。
-   *
-   * 为什么要在分档之前做这一步（主人 2026-11-14）：「不应该先将应用图标缩放到恰好不被正方形
-   * 裁切时的占比吗」。带留白的图标（PH 的圆角方形这类设计稿）如果直接量占比，会被当成
-   * "图案很小"从而缩进圆里 —— 其实它只是画布有边距。
-   */
-  private fun fillSquare(px: IntArray, w: Int, h: Int): FloatArray? {
-    var l = w
-    var t = h
-    var r = -1
-    var b = -1
-    for (y in 0 until h) {
-      val row = y * w
-      for (x in 0 until w) {
-        if ((px[row + x] ushr 24) <= ALPHA_MIN) continue
-        if (x < l) l = x
-        if (x > r) r = x
-        if (y < t) t = y
-        if (y > b) b = y
-      }
-    }
-    if (r < 0) return null
-    val bw = (r - l + 1).toFloat()
-    val bh = (b - t + 1).toFloat()
-    val scale = minOf(w / bw, h / bh)
-    if (kotlin.math.abs(scale - 1f) < 0.01f) return null
-    val cx = (l + r + 1) / 2f
-    val cy = (t + b + 1) / 2f
-    val left = w / 2f - cx * scale
-    val top = h / 2f - cy * scale
-    return floatArrayOf(left, top, left + w * scale, top + h * scale)
-  }
-
-  /** 可见格（alpha > [ALPHA_MIN]）占整格的比例。 */
-  private fun coverage(px: IntArray): Float {
-    var n = 0
-    for (p in px) if ((p ushr 24) > ALPHA_MIN) n++
-    return n.toFloat() / px.size
-  }
-
-  /**
-   * **缩小到恰好不被内切圆裁掉任何一个有色像素**（主人 2026-11-14 原话），不用缩返回 null。
-   *
-   * 以内容外接框中心为圆心量可见格的最大半径 r，按 半边长/r × [CIRCLE_FIT] 缩并把中心对到
-   * 图标中心 —— 缩完每个有色格都在圆内，且离圆边留一圈余量（主人 2026-11-14：「再稍微缩一点」）。
-   * 只在小占比那一支调用：那条路上"圆角方形"早已在第一步填满正方形时回到正常档，不会到这里。
-   */
-  private fun fitInsideCircle(px: IntArray, w: Int, h: Int): FloatArray? {
-    var l = w
-    var t = h
-    var r = -1
-    var b = -1
-    for (y in 0 until h) {
-      val row = y * w
-      for (x in 0 until w) {
-        if ((px[row + x] ushr 24) <= ALPHA_MIN) continue
-        if (x < l) l = x
-        if (x > r) r = x
-        if (y < t) t = y
-        if (y > b) b = y
-      }
-    }
-    if (r < 0) return null
-    val cx = (l + r + 1) / 2f
-    val cy = (t + b + 1) / 2f
-    var maxR2 = 0f
-    for (y in t..b) {
-      val dy = y + 0.5f - cy
-      val row = y * w
-      for (x in l..r) {
-        if ((px[row + x] ushr 24) <= ALPHA_MIN) continue
-        val dx = x + 0.5f - cx
-        val d2 = dx * dx + dy * dy
-        if (d2 > maxR2) maxR2 = d2
-      }
-    }
-    val maxR = kotlin.math.sqrt(maxR2)
-    val half = minOf(w, h) / 2f
-    if (maxR <= half * CIRCLE_FIT) return null
-    val scale = half * CIRCLE_FIT / maxR
-    if (zoomLogLeft.decrementAndGet() >= 0) {
-      Log.d(TAG, "圆内缩 host=$clipHost r=" + maxR.toInt() + " half=" + half.toInt() +
-        " scale=" + ((scale * 100).toInt() / 100f) + " : " + IconNames.of(inner))
-    }
-    val left = w / 2f - cx * scale
-    val top = h / 2f - cy * scale
-    return floatArrayOf(left, top, left + w * scale, top + h * scale)
-  }
-
   /** 源 over 一整块纯色盘（透明处都由它承担）。 */
   private fun composeOverColor(px: IntArray, color: Int) {
     val fr = (color shr 16) and 0xFF
@@ -654,8 +557,11 @@ private class BareForeground(
     }
 }
 
-/** 判"看得见"的 alpha 门槛。 */
-private const val ALPHA_MIN = 8
+/**
+ * 判"看得见"的 alpha 门槛。
+ * ⚠ [IconGeom] 也吃它（几何那一步两边必须数同一批格子）—— 所以不是 private。
+ */
+internal const val ALPHA_MIN = 8
 
 /** 取边色时优先用"够实"的格：抗锯齿边色被拉出去就是一道浅色接缝。 */
 private const val SOLID_ALPHA = 160

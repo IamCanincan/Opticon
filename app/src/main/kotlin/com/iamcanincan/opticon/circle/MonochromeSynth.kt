@@ -1501,75 +1501,35 @@ internal object MonochromeSynth {
    * 缩放用双线性：掩码现在是一条连续斜坡，混它只会更平滑。
    */
   /**
-   * 让单色掩码跟上彩色那边的几何（2026-11-14）。
+   * 让单色掩码跟上彩色那边的几何（2026-11-14；2026-11-15 起与彩色**共用同一份**算式）。
    *
-   * 彩色（CircleIconDrawable.renderInto）现在会：① 先把内容缩放到恰好填满正方形；
-   * ② 填满后可见占比 < [INSCRIBED_SHARE] 的，再缩到内切圆里（留 [CIRCLE_FIT] 余量）。
-   * 单色掩码是从**原始 drawable** 独立合成的，不套同一个倍率就和彩色对不上 ——
-   * 语料 229 张里 84 张源图有留白（最大差 1.6×）。
+   * 判断全在 [IconGeom.planOf]：彩色拿它算出的倍率重画 drawable，这里拿**同一个**倍率缩放
+   * 自己那张掩码。原先这一边把彩色那三步重抄了一份，抄本的分档口径还与彩色不同（按内容
+   * 外接框归一 vs 按整张光栅归一）—— 非方形内容的图标两边会各给一个答案，正是主人那句
+   * 「单色图标和彩色图标不符」。**别再在这里写第二份算式。**
    *
    * ⚠ 判定必须量在**彩色 raster** 上，不能量单色掩码：掩码里只有墨，没有"图标自己的底"，
    * 拿它算"可见占比"会恒小于 78.5%、把每个图标都当成小占比去缩。
    *
-   * 倍率全是比例、与分辨率无关；量完再把同一个变换套到掩码上。返回 null = 不用动。
+   * 倍率与中心都在光栅坐标里，返回 null = 不用动。
    */
   /** 「Mono: 跟彩色」证据行额度。 */
   private val fitLogLeft = java.util.concurrent.atomic.AtomicInteger(30)
 
   private fun fitLikeColor(raster: Bitmap, alpha: Bitmap, edge: Int): Bitmap? {
-
-    // ── 判定：颜色图上量（与彩色那边同一口径：可见格 alpha > 8） ──
-    var l = edge
-    var t = edge
-    var r = -1
-    var b = -1
-    var vis = 0
     val px = IntArray(edge * edge)
     raster.getPixels(px, 0, edge, 0, 0, edge, edge)
-    for (y in 0 until edge) {
-      val row = y * edge
-      for (x in 0 until edge) {
-        if ((px[row + x] ushr 24) <= 8) continue
-        vis++
-        if (x < l) l = x
-        if (x > r) r = x
-        if (y < t) t = y
-        if (y > b) b = y
-      }
-    }
-    if (r < 0) return null
-    val bw = (r - l + 1).toFloat()
-    val bh = (b - t + 1).toFloat()
-    val cx = (l + r + 1) / 2f
-    val cy = (t + b + 1) / 2f
-    val fill = vis.toFloat() / (bw * bh)
-    val scale = if (fill >= INSCRIBED_SHARE) {
-      minOf(edge / bw, edge / bh)
-    } else {
-      var maxR2 = 0f
-      for (y in t..b) {
-        val dy = y + 0.5f - cy
-        val row = y * edge
-        for (x in l..r) {
-          if ((px[row + x] ushr 24) <= 8) continue
-          val dx = x + 0.5f - cx
-          val d2 = dx * dx + dy * dy
-          if (d2 > maxR2) maxR2 = d2
-        }
-      }
-      val maxR = kotlin.math.sqrt(maxR2)
-      if (maxR <= 0f) return null
-      (edge / 2f * CIRCLE_FIT) / maxR
-    }
+    val plan = IconGeom.planOf(px, edge, edge) ?: return null
     if (fitLogLeft.decrementAndGet() >= 0) {
-      Log.d(TAG, "Mono: 跟彩色 scale=" + ((scale * 100).toInt() / 100f) +
-        " fill=" + ((fill * 100).toInt() / 100f) + " edge=$edge")
+      Log.d(TAG, "Mono: 跟彩色 scale=" + ((plan.scale * 100).toInt() / 100f) +
+        " fill=" + ((plan.fill * 100).toInt() / 100f) +
+        " 支=" + (if (plan.plate) "铺底" else "延伸") + " edge=$edge")
     }
-    if (kotlin.math.abs(scale - 1f) < 0.01f) return null
+    if (!plan.needsRedraw) return null
     val out = Bitmap.createBitmap(edge, edge, Bitmap.Config.ALPHA_8)
     val m = android.graphics.Matrix()
-    m.postScale(scale, scale, cx, cy)
-    m.postTranslate(edge / 2f - cx, edge / 2f - cy)
+    m.postScale(plan.scale, plan.scale, plan.cx, plan.cy)
+    m.postTranslate(edge / 2f - plan.cx, edge / 2f - plan.cy)
     Canvas(out).drawBitmap(alpha, m, Paint(Paint.FILTER_BITMAP_FLAG))
     return out
   }
