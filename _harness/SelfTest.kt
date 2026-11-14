@@ -47,6 +47,35 @@ private fun meanAlpha(mask: IntArray?, size: Int, x0: Int, y0: Int, x1: Int, y1:
 private var failed = 0
 private var asserted = 0        // 由最后一行自己印出来：`regress.sh` 头上那句"性质 N 条"以前是手抄的，抄到 48 就停了
 
+/**
+ * 交出去的**浓度分布**：每种至少占 0.5% 格子的档，按浓度降序列出（`176(31.2%)`）。
+ *
+ * 为什么要单独印这一行：这一族以前只看"种数"（`tones()` ≥25），而 11-10 主人把整幅插画改成
+ * **三档浓淡**之后，"种数多"不再是这一支的承诺 —— 承诺变成"**三档都在、中间那档真占了地方**"。
+ * 光看种数改不成断言（3 种可能是"黑/白/黑"这种假三档），所以要看见是哪几档、各占几成。
+ */
+private fun toneLevels(mask: IntArray?, size: Int): String {
+  if (mask == null) return "无掩码"
+  val n = size * size
+  val h = IntArray(256)
+  for (i in 0 until n) h[(mask[i] ushr 24) and 0xff]++
+  val keep = (0 until 256).filter { h[it] * 200 >= n }
+  if (keep.isEmpty()) return "没有一档占到 0.5%"
+  return keep.joinToString(" ") { "$it(${"%.1f".format(h[it] * 100.0 / n)}%)" }
+}
+
+/**
+ * 交付掩码里**落在某一段浓度**的格子占比。用来钉"中间那档真占了地方"，
+ * 而不是只看"有几档"（3 档可以是 `0/1/255` 那种假三档）。
+ */
+private fun levelShare(mask: IntArray?, size: Int, lo: Int, hi: Int): Double {
+  if (mask == null) return -1.0
+  val n = size * size
+  var c = 0
+  for (i in 0 until n) { val a = (mask[i] ushr 24) and 0xff; if (a in lo..hi) c++ }
+  return c.toDouble() / n
+}
+
 private fun check(what: String, ok: Boolean, detail: String) {
   println("  ${if (ok) "PASS" else "FAIL"}  $what  [$detail]")
   asserted++
@@ -379,12 +408,19 @@ fun main() {
         ((20 + (seed shr 11) % 210) * t).toInt())
     }
     val r = MonochromeMask.build(p, S, S)
-    println("- 多色插画（无底可摘）  ${r.report}")
+    println("- 多色插画（无底可摘）  ${r.report}  交出的档位=${toneLevels(r.mask, S)}")
     check("仍然交出合成结果，不退回桌面", r.mask != null, if (r.mask == null) "null" else "有掩码")
     check("结果不是全空也不是全满", r.boxFill > 0.02f && r.boxFill < 0.98f, "框内=${r.boxFill}")
     check("框内与淡互斥（两个数加起来不能大于 1）", r.boxFill + r.soft <= 1.0001f,
       "框内+淡=${"%.3f".format(r.boxFill + r.soft)}")
-    check("层次搬出来了：中间浓度还在（不是二值切）", r.soft > 0.05f, "淡=${r.soft}")
+    // 🔴 **这条问的是"上一个设计"**（2026-11-15 改）：原断言是 `淡 > 0.05`，钉的是"整幅插画交一条连续调斜坡"。
+    //   主人 11-10 定的是「插画剪影改成三档浓淡」（判据行里那个 `剪影=3档`），交出来是
+    //   `0 / 128 / 255` 三档（现量：这一张 31.4% / 32.9% / 35.7%）—— 中间档是 128，**按定义不算"淡"**，
+    //   所以 `淡` 恒 0：红的是断言，不是算法。承诺换成同一件事的新写法：**三档都在、中间那档真占了地方**。
+    //   下限 **10% 是我选的**（现量 32.9%，塌成二值切时中间档=0，当场响；再往下要挪得先有样本）。
+    val midIll = levelShare(r.mask, S, 64, 191)
+    check("三档浓淡：中间那档（64..191）真占了地方", midIll >= 0.10,
+      "中档=${"%.3f".format(midIll)} 淡=${r.soft} 档位=${toneLevels(r.mask, S)}")
   }
 
   // ── 12. 三段距离必须按远近排出三个分得开的浓度 ──
@@ -549,9 +585,24 @@ fun main() {
     }
     val r = MonochromeMask.build(photo(S), S, S)
     val tc = MonochromeMask.tonalClass(photo(S), S, S, android.graphics.Rect(0, 0, S, S))
-    println("- 满幅连续调  判据=${tc?.tex}/${tc?.flat}/${tc?.span} 走=${r.report.contains("调=1")} 浓度种数=${tones(r.mask, S)}")
+    println("- 满幅连续调  判据=${tc?.tex}/${tc?.flat}/${tc?.span} 走=${r.report.contains("调=1")} 浓度种数=${tones(r.mask, S)} 交出的档位=${toneLevels(r.mask, S)}")
     check("满幅连续调 → 走这一支", r.report.contains("调=1"), "判据=${tc?.tex}/${tc?.flat}/${tc?.span}")
-    check("交出的浓度是连续的（≥25 种）", tones(r.mask, S) >= 25, "种=${tones(r.mask, S)}")
+    // 🔴 同上一条：`≥25 种` 问的是"连续调斜坡"，而这一支 11-10 起交**三档**（`剪影=3档`，
+    //   现量 `0(29.8%) 128(34.8%) 255(35.4%)`）。换成问新承诺：**空 / 中 / 实三档各占至少一成**——
+    //   这比"种数 ≥3"严（`0/1/255` 那种假三档过不了），也比旧的那条松（旧的一条三档恒红）。
+    //   三条线 **10% 都是我选的**：现量最薄的一档 29.8%，退到二值切（中间=0）或整张涂满（空=0）都会响。
+    val sh0 = levelShare(r.mask, S, 0, 8)
+    val shM = levelShare(r.mask, S, 64, 191)
+    val shF = levelShare(r.mask, S, 240, 255)
+    check("满幅连续调 → 交空/中/实三档，各占 ≥10%", sh0 >= 0.10 && shM >= 0.10 && shF >= 0.10,
+      "空=${"%.3f".format(sh0)} 中=${"%.3f".format(shM)} 实=${"%.3f".format(shF)} 种=${tones(r.mask, S)}")
+    // ⚠ **阴性对照**（本仓那一族：通过率高的判据要先证明它读得出"没有"）：手搓一张只有 0/255 的掩码
+    //   喂同一把尺，中间档必须读成 0 —— 否则上面那三条 10% 的线是恒绿的，红不起来的闸不算闸。
+    val binOnly = IntArray(S * S) { if ((it / S) % 2 == 0) 0 else (255 shl 24) }
+    check("阴性对照：levelShare 读得出「没有中间档」",
+      levelShare(binOnly, S, 64, 191) == 0.0 && levelShare(binOnly, S, 0, 8) > 0.4 &&
+        levelShare(binOnly, S, 240, 255) > 0.4,
+      "中=${"%.3f".format(levelShare(binOnly, S, 64, 191))} 空=${"%.3f".format(levelShare(binOnly, S, 0, 8))} 实=${"%.3f".format(levelShare(binOnly, S, 240, 255))}")
     val q = new()
     rect(q, S, 0, 0, S, S, px(255, 211, 47, 47))
     rect(q, S, S / 3, S / 4, S * 2 / 3, S / 2, px(255, 255, 255, 255))
