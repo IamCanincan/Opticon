@@ -241,15 +241,27 @@ Mono: 680 layers synthesized  H0: 接手=9 画布拦=32 关系拦=0  同色退=1
 两边算的是同一个 `planOf`，各打一行、按名字配成对：
 
 ```
-D/Opticon: 自适应几何 host=com.android.launcher3 fill=0.72 scale=0.79 支=铺底 : org.mewx.wenku8/drawable/ic_launcher
-D/Opticon: Mono: 跟彩色 scale=0.79 fill=0.72 支=铺底 edge=384 label=org.mewx.wenku8/drawable/ic_launcher …
-D/Opticon: Mono: 跟彩色(留档) scale=0.79 fill=0.72 支=铺底 edge=384 label=…      ← 命中路径从 geom.tsv 读回来
+D/Opticon: 自适应几何 host=com.android.launcher3 fill=0.37 scale=0.64 支=铺底 : com.kkrainbow.easytier/drawable/ic_launcher
+D/Opticon: Mono: 跟彩色 scale=0.64 fill=0.37 支=铺底 窗=0.57 交=1.12 edge=384 label=… 盘=1 …
+D/Opticon: Mono: 跟彩色(留档) scale=0.64 fill=0.37 支=铺底 窗=0.57 交=1.12 edge=384 label=…   ← 命中路径从 geom.tsv 读回来
 ```
 
-配表命令 `node _harness/_geompair.cjs <logcat>`（一绿一红自证：`--selftest`，含 `(留档)` 那一路）；
+`窗=` 是**裁圆那一路自己已经乘过的那道缩量**（`IconCropWindow` 的 zoom，缩进侧才有；放大侧/没搬 = 1.0），
+`交=` 才是真乘到掩码上的数 = `scale ÷ 窗`。为什么非要这两个数：`plan.scale` 是**相对原始内容**的倍数，
+而单色掩码喂进模型之前已经被窗口搬过一遍，照 `scale` 再乘就是**同一道缩量乘两遍**。装机对账
+（`_pairshot.cjs` 逐张量屏上幅面比 = 单色外接框 ÷ 彩色外接框）：easytier `0.574` vs 账上 `窗=0.570`、
+wenku8 `0.713` vs `0.702`、kodi `0.838` vs `0.833` —— 三张各自对到**自己的窗**，不是同一个常数，
+所以这一刀是逐张除回去，不是再拍一个倍数。**只在缩进侧补**：放大侧溢出的墨被画布切掉，屏上外接框由
+内容而不是窗决定（同批 zoom>1 的真机读数散在 0.56~1.14），拿它去除只会把对的改成错的。
+
+配表命令 `node _harness/_geompair.cjs <logcat>`（绿/红自证：`--selftest`，三条红各红在一条律上 ——
+分支、`fill`、`窗×交≠scale`；含 `(留档)` 与**不带窗交的历史留档行**两路负对照）；
 **配上 0 对 = 台子没吃到数据，不是没问题**。留档那一行是补的洞：真机一趟重启是
 `命中=1200 未命中=0`，只打冷那一路的话这台子每次开机都是瞎的（`MonoCache` 的 `geom.tsv`，
 与 `index.tsv` 同待遇：不参与键、不参与判定、失败静默、`sweep` 不删不计预算）。
+屏上那一对的量法：`node _harness/_pairshot.cjs <app_icons.db> --zoom=<_manifest.tsv> --expect=1`
+（`_manifest.tsv` 由 `harness.ReframeCorpusKtKt <语料目录> <输出目录>` 产，就是装机上那条 `measure()`）；
+**候选 0 张也报红**。
 
 **这台子到底有没有在跑**（替代那句已经不存在的 `无判据`）：看两条 ——
 ① `Mono: N layers synthesized` 里那个 N 随图标加载往上涨；② 报一个应用名能 grep 到它的

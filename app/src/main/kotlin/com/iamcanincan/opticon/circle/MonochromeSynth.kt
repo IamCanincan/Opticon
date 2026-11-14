@@ -885,7 +885,18 @@ internal object MonochromeSynth {
       // `pm:包名`（没有 `/`）是 PackageManager 拿的应用图标，与普通非自适应图标同一口径。
       // 单色要跟上彩色那边的几何（2026-11-14）：彩色现在会先把内容缩放到恰好填满正方形，
       // 小占比那一支再缩进内切圆；这里按同样的比例缩一遍，否则主题图标与彩色图标对不上。
-      val fit = if (adaptive || ringBleed) null else fitLikeColor(raster, alpha, edge, label)
+      //
+      // ⚠ **`win.zoom < 1` 时要把裁圆那一刀除回去**（2026-11-15 量出来的）：`pxIn` 已经被窗口缩过
+      //   一遍，掩码天生带着它；再乘彩色那份 `scale` 就是**同一道缩量乘两次**。装机对账（幅面比 =
+      //   单色/彩色，屏上逐张量）：easytier 0.574 / 账上 `缩0.570×`、wenku8 0.713 / `0.702`、
+      //   kodi 0.838 / `0.833` —— **三张各自对到自己的 zoom，而不是同一个常数**。
+      //   只在 zoom<1 这一侧补，是因为**放大那一侧这个因子看不见**：窗口 cover 到溢出画布之后，
+      //   外扩的墨被画布切掉，交付出去的外接框由内容而不是由 zoom 决定（同批 zoom>1 的真机读数
+      //   散在 0.56~1.14：termux `1.677`→0.559、smartglass `1.541`→0.738、tieba `1.455`→1.000），
+      //   拿它去除只会把对的改成错的。那一侧是另一个问题，不在这一刀的射程里。
+      //   台子：`node _harness/_pairshot.cjs <app_icons.db>`（屏上幅面比）+ `_zoomcmp.cjs`（与账上 zoom 对表）。
+      val baked = if (winLocal != null && winLocal.zoom < 1f) winLocal.zoom else 1f
+      val fit = if (adaptive || ringBleed) null else fitLikeColor(raster, alpha, edge, label, baked)
       val fitted = fit?.first
       val shaped = fitted ?: alpha
       val placed = if (adaptive || ringBleed) alpha else intoVisibleArea(shaped, edge)
@@ -1530,20 +1541,29 @@ internal object MonochromeSynth {
   /**
    * 返回 `Pair(缩放后的掩码 | null 表示不用动, 那一行证据)`。
    * 第二项**无论用没用到都要**带出去 —— 它进 `geom.tsv`，命中路径靠它配表（见 [noteCached]）。
+   *
+   * @param baked 这份掩码**已经**带着的那道窗口缩量（`win.zoom`，缩进那一侧才有；其余为 1）。
+   *   真正要乘到掩码上的是 `plan.scale / baked`：`plan.scale` 是彩色相对**原始内容**的倍数，
+   *   而掩码相对原始内容已经在 `baked` 上了。`scale=` 那一格照旧印彩色的原值（配表吃它），
+   *   `窗=` / `交=` 把另外两个数一起带进留档，三方乘不乘得回去在日志里就能验。
    */
-  private fun fitLikeColor(raster: Bitmap, alpha: Bitmap, edge: Int, label: String): Pair<Bitmap?, String>? {
+  private fun fitLikeColor(
+    raster: Bitmap, alpha: Bitmap, edge: Int, label: String, baked: Float,
+  ): Pair<Bitmap?, String>? {
     val px = IntArray(edge * edge)
     raster.getPixels(px, 0, edge, 0, 0, edge, edge)
     val plan = IconGeom.planOf(px, edge, edge) ?: return null
+    val applied = plan.scale / baked
     val note = "scale=" + ((plan.scale * 100).toInt() / 100f) +
-      " fill=" + ((plan.fill * 100).toInt() / 100f) + " 支=" + (if (plan.plate) "铺底" else "延伸")
+      " fill=" + ((plan.fill * 100).toInt() / 100f) + " 支=" + (if (plan.plate) "铺底" else "延伸") +
+      " 窗=" + ((baked * 100).toInt() / 100f) + " 交=" + ((applied * 100).toInt() / 100f)
     if (fitLogLeft.decrementAndGet() >= 0) {
       Log.d(TAG, "Mono: 跟彩色 $note edge=$edge label=$label")
     }
-    if (!plan.needsRedraw) return Pair(null, note)
+    if (applied in 0.99f..1.01f) return Pair(null, note)
     val out = Bitmap.createBitmap(edge, edge, Bitmap.Config.ALPHA_8)
     val m = android.graphics.Matrix()
-    m.postScale(plan.scale, plan.scale, plan.cx, plan.cy)
+    m.postScale(applied, applied, plan.cx, plan.cy)
     m.postTranslate(edge / 2f - plan.cx, edge / 2f - plan.cy)
     Canvas(out).drawBitmap(alpha, m, Paint(Paint.FILTER_BITMAP_FLAG))
     return Pair(out, note)
