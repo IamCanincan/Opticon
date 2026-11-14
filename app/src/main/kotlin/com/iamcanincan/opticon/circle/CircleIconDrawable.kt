@@ -304,17 +304,141 @@ private class BareForeground(
       stage = "r3"
       val px = IntArray(w * h)
       bitmap.getPixels(px, 0, w, 0, 0, w, h)
-      stage = "r4"
+      // ① 抗锯齿边色渗透：源 PNG 的透明处常是"黑色带 alpha"，直接叠在补边上就是一条黑线。
+      stage = "r4"; bleedEdgeColor(px, w, h); deFringe(px, w, h)
+      stage = "r5"
       val fill = computeFill(px, w, h)
-      stage = "r5"; bitmap.eraseColor(Color.TRANSPARENT)
-      stage = "r6"; bitmap.setPixels(fill, 0, w, 0, 0, w, h)
-      stage = "r7"; drawIcon(layer, w, h, view)
+      // ② 软件合成（源 over 补边）：不再画第二遍 —— 第二遍会把黑 AA 又画回来。
+      stage = "r6"; composeOver(px, fill)
+      stage = "r7"
+      bitmap.setPixels(px, 0, w, 0, 0, w, h)
       stage = "r8"
     } catch (t: Throwable) {
       Log.w(TAG, "渲染阶段: " + stage, t)
       throw t
     } finally {
       rendering = false
+    }
+  }
+
+  /**
+   * 抗锯齿边的**颜色渗透**：0 < alpha < 255 的格，RGB 换成附近不透明格的颜色（保留 alpha）。
+   *
+   * 为什么要：源 PNG 的透明区常是黑色（RGB=0、alpha 从 0 到 255），边缘 AA 因此是「往黑里混」的 ——
+   * 直接叠在补边上就是一条黑线（2026-11-13 真机：contacts 快捷方式）。渗透几趟之后，
+   * AA 边带的就是图形自己的颜色，叠上去只剩透明度变化，没有线。
+   */
+  private fun bleedEdgeColor(px: IntArray, w: Int, h: Int) {
+    val n = w * h
+    val snapshot = IntArray(n)
+    repeat(3) {
+      System.arraycopy(px, 0, snapshot, 0, n)
+      for (i in 0 until n) {
+        val a = px[i] ushr 24
+        if (a == 0 || a == 255) continue
+        val x = i % w
+        val y = i / w
+        var sr = 0
+        var sg = 0
+        var sb = 0
+        var cnt = 0
+        var best = -1
+        // 取四邻里 **alpha 最大** 的那个的颜色（并列取平均）：沿着 AA 斜坡把最纯的颜色往外带，
+        // 混所有邻居会把外圈的黑色又平均回来。
+        fun take(j: Int) {
+          val al = snapshot[j] ushr 24
+          if (al <= 8) return
+          if (al > best) {
+            best = al
+            sr = (snapshot[j] shr 16) and 0xFF
+            sg = (snapshot[j] shr 8) and 0xFF
+            sb = snapshot[j] and 0xFF
+            cnt = 1
+          } else if (al == best) {
+            sr += (snapshot[j] shr 16) and 0xFF
+            sg += (snapshot[j] shr 8) and 0xFF
+            sb += snapshot[j] and 0xFF
+            cnt++
+          }
+        }
+        if (x > 0) take(i - 1)
+        if (x + 1 < w) take(i + 1)
+        if (y > 0) take(i - w)
+        if (y + 1 < h) take(i + w)
+        if (cnt > 0) px[i] = (a shl 24) or ((sr / cnt) shl 16) or ((sg / cnt) shl 8) or (sb / cnt)
+      }
+    }
+  }
+
+  /**
+   * 轮廓去边：每一行/列最外 2 个不透明格的颜色，换成往里第 3 格的颜色。
+   *
+   * 老式 PNG 的透明区常是黑色（RGB=0、alpha 有值），位图被放大（如 176→256）时，
+   * 抗锯齿和黑色混出**不透明的深色边**（实测 (2,21,29,a255)）—— 半透明的那些
+   * [bleedEdgeColor] 能修，被放大成不透明的只能在这里修掉，否则叠在补边上就是一条线。
+   */
+  /**
+   * 轮廓去边（**直接删最外 2 格**）：每一行/列最外 2 个可见格清成透明，交给补边长进去。
+   *
+   * 为什么是"删"而不是"换色"：源 PNG 的透明区是黑色，放大时抗锯齿会混出**不透明的深色边**
+   * （实测 (2,21,29,a255)）——换色要知道"里面那格"是什么，而这条边可能比取样深度还宽；
+   * 直接删掉后，computeFill 会从新的边（往里第 3 格）取色并补进来，边界就是补边的颜色，没有线。
+   */
+  private fun deFringe(px: IntArray, w: Int, h: Int) {
+    val src = px.copyOf()
+    fun visible(i: Int) = (src[i] ushr 24) > 8
+    for (y in 0 until h) {
+      val row = y * w
+      var x0 = 0
+      while (x0 < w && !visible(row + x0)) x0++
+      if (x0 < w) for (k in 0 until 2) {
+        val x = x0 + k
+        if (x < w && visible(row + x)) px[row + x] = 0
+      }
+      var x1 = w - 1
+      while (x1 >= 0 && !visible(row + x1)) x1--
+      if (x1 >= 0) for (k in 0 until 2) {
+        val x = x1 - k
+        if (x >= 0 && visible(row + x)) px[row + x] = 0
+      }
+    }
+    for (x in 0 until w) {
+      var y0 = 0
+      while (y0 < h && !visible(y0 * w + x)) y0++
+      if (y0 < h) for (k in 0 until 2) {
+        val y = y0 + k
+        if (y < h && visible(y * w + x)) px[y * w + x] = 0
+      }
+      var y1 = h - 1
+      while (y1 >= 0 && !visible(y1 * w + x)) y1--
+      if (y1 >= 0) for (k in 0 until 2) {
+        val y = y1 - k
+        if (y >= 0 && visible(y * w + x)) px[y * w + x] = 0
+      }
+    }
+  }
+
+  /** 源 over 补边（fill 里 0 = 没有补边，保持透明）。 */
+  private fun composeOver(px: IntArray, fill: IntArray) {
+    for (i in px.indices) {
+      val a = px[i] ushr 24
+      if (a == 255) continue
+      val f = fill[i]
+      if (a == 0) {
+        if (f != 0) px[i] = f
+        continue
+      }
+      if (f == 0) continue
+      val fr = (f shr 16) and 0xFF
+      val fg = (f shr 8) and 0xFF
+      val fb = f and 0xFF
+      val sr = (px[i] shr 16) and 0xFF
+      val sg = (px[i] shr 8) and 0xFF
+      val sb = px[i] and 0xFF
+      px[i] = (255 shl 24) or
+        (((sr * a + fr * (255 - a)) / 255) shl 16) or
+        (((sg * a + fg * (255 - a)) / 255) shl 8) or
+        ((sb * a + fb * (255 - a)) / 255)
     }
   }
 
