@@ -74,6 +74,15 @@ if (bdir) {
   for (const r of rowsAll) { const p = r.c.split('/')[0]; if (!monoOf.has(p)) monoOf.set(p, Buffer.from(r.m)); }
   const files = fs.readdirSync(bdir).filter((f) => f.endsWith('.png') && !f.includes('modelbg') && !f.endsWith('_model.png'));
   const out = [];
+  const evArg = (process.argv.find((a) => a.startsWith('--cls=')) || '').slice(6);
+  const ev = new Map();
+  if (evArg) for (const r of JSON.parse(fs.readFileSync(evArg, 'utf8'))) ev.set(r.pkg, r);
+  const groupOf = (pkg) => {
+    const e = ev.get(pkg);
+    if (!e) return '待查';
+    if (e.mono === '有') return '透传';
+    return e.cls.includes('Adaptive') ? '合成' : e.cls === '要拆 APK' ? '待查' : '老式';
+  };
   for (const f of files) {
     const pkg = f.split('_')[0];
     const mb = monoOf.get(pkg);
@@ -85,20 +94,25 @@ if (bdir) {
     const art = extent(img, (r, g, b, a) => a >= 64 && fam(r, g, b) !== bg);
     const mono = extent({ w: side, h: side, rgba: mb }, (r) => r > 8);
     if (!art.ext || !mono.ext) continue;
-    out.push([pkg, mono.ext / art.ext, art.ext, mono.ext, art.share]);
+    out.push([pkg, mono.ext / art.ext, art.ext, mono.ext, art.share, groupOf(pkg)]);
   }
-  out.sort((x, y) => x[1] - y[1]);
-  const v = out.map((x) => x[1]);
-  const qq = (p) => v.length ? v[Math.min(v.length - 1, Math.round(p * (v.length - 1)))] : NaN;
+  const byGroup = {};
+  for (const x of out) (byGroup[x[5]] = byGroup[x[5]] || []).push(x);
+  const qq = (v, p) => v.length ? v.slice().sort((a, b) => a - b)[Math.min(v.length - 1, Math.round(p * (v.length - 1)))] : NaN;
   console.log(`源图分母批量：${out.length} 张（分母 = 源图去掉边框主色后的图案幅，两边同一条 α≥64 / >8）`);
-  console.log(`  p05 ${qq(0.05).toFixed(3)}  p10 ${qq(0.1).toFixed(3)}  中位 ${qq(0.5).toFixed(3)}  p90 ${qq(0.9).toFixed(3)}  p95 ${qq(0.95).toFixed(3)}`);
-  console.log(`  最小的 8 张：`);
-  for (const [pkg, r, ae, me, share] of out.slice(0, 8)) {
-    console.log(`    ${r.toFixed(3)}  ${pkg.padEnd(32)} 图案幅 ${ae.toFixed(3)}（占 ${(share * 100).toFixed(1)}%） 剪影幅 ${me.toFixed(3)}`);
+  for (const [g, a] of Object.entries(byGroup)) {
+    const v = a.map((x) => x[1]);
+    console.log(`  ${g.padEnd(4)} ${String(v.length).padStart(3)} 张  p05 ${qq(v, 0.05).toFixed(3)}  p10 ${qq(v, 0.1).toFixed(3)}  中位 ${qq(v, 0.5).toFixed(3)}  p90 ${qq(v, 0.9).toFixed(3)}  最狠 ${Math.min(...v).toFixed(3)}~${Math.max(...v).toFixed(3)}`);
   }
-  console.log(`  最大的 5 张：`);
-  for (const [pkg, r, ae, me, share] of out.slice(-5)) {
-    console.log(`    ${r.toFixed(3)}  ${pkg.padEnd(32)} 图案幅 ${ae.toFixed(3)}（占 ${(share * 100).toFixed(1)}%） 剪影幅 ${me.toFixed(3)}`);
+  // **界取透传那组的 p10**（主人明确：有单色层的那批别管，它们就是平台给的答案）
+  const nat = (byGroup['透传'] || []).map((x) => x[1]).sort((a, b) => a - b);
+  const lo = nat.length ? qq(nat, 0.1) : NaN, hi = 1.10;
+  console.log(`\n界 = 透传组 p10 ${lo.toFixed(3)} ~ ${hi.toFixed(3)}；未适配（合成 + 老式）里带外的：`);
+  const bad = (byGroup['合成'] || []).concat(byGroup['老式'] || []).filter((x) => x[1] < lo || x[1] > hi).sort((x, y) => x[1] - y[1]);
+  if (!bad.length) console.log('    （0 张）');
+  for (const [pkg, r, ae, me, share] of bad) {
+    console.log(`    ${r.toFixed(3)}  ${pkg.padEnd(32)} 图案幅 ${ae.toFixed(3)}（占 ${(share * 100).toFixed(1)}%） 剪影幅 ${me.toFixed(3)}` +
+      (share < 0.15 ? '   ⚠ 图案占画幅太小，这行比值不可信' : ''));
   }
   process.exit(0);
 }
