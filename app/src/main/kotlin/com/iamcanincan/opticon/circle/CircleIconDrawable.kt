@@ -319,7 +319,7 @@ private class BareForeground(
         bitmap.getPixels(px, 0, w, 0, 0, w, h)
       }
       // 分界：>= 内切圆占正方形的面积比（[INSCRIBED_SHARE]）走正常延伸；
-      // 小于它的（线条/稀疏图案填满后仍不足）缩进内切圆 + 垫白/黑对比底，不延伸。
+      // 小于它的（线条/稀疏图案填满后仍不足）缩到"内切圆不裁掉任何一个有色像素"再铺白底。
       stage = "r3b"
       val smallShare = coverage(px) < INSCRIBED_SHARE
       if (smallShare) {
@@ -335,8 +335,8 @@ private class BareForeground(
         }
         // ① 抗锯齿边色渗透：源 PNG 的透明处常是"黑色带 alpha"，直接叠在底盘上就是一圈黑边。
         stage = "r4s"; bleedEdgeColor(px, w, h)
-        // ② 垫对比盘：图标暗配白盘、图标亮配黑盘。**不延伸** —— 透明处一律由盘承担。
-        stage = "r5s"; composeOverColor(px, plateColor(px))
+        // ② 铺**白底**（主人 2026-11-14：「铺上白底」）。**不延伸** —— 透明处一律由底承担。
+        stage = "r5s"; composeOverColor(px, Color.WHITE)
         stage = "r6s"
         bitmap.setPixels(px, 0, w, 0, 0, w, h)
         return
@@ -524,36 +524,13 @@ private class BareForeground(
   }
 
   /**
-   * 内切圆**外面**（四角那块）还剩多少墨；`[0,1]`。圆角方形约为 0.1~0.2，尖角方块约 1。
-   */
-  private fun luneInk(px: IntArray, w: Int, h: Int): Float {
-    val cx = w / 2f
-    val cy = h / 2f
-    val r = minOf(w, h) / 2f
-    var n = 0
-    var ink = 0
-    for (y in 0 until h) {
-      val dy = y + 0.5f - cy
-      val row = y * w
-      for (x in 0 until w) {
-        val dx = x + 0.5f - cx
-        if (dx * dx + dy * dy <= r * r) continue
-        n++
-        if ((px[row + x] ushr 24) > ALPHA_MIN) ink++
-      }
-    }
-    return if (n == 0) 0f else ink.toFloat() / n
-  }
-
-  /**
-   * 内容**尖角**伸到内切圆外时，算出"缩进来还要居中"的新 bounds；不用缩返回 null。
+   * **缩小到恰好不被内切圆裁掉任何一个有色像素**（主人 2026-11-14 原话），不用缩返回 null。
    *
-   * 判据不是"最大半径超没超圆"（那样圆角方形也会被判进来 —— 真机 PH 就是这么被误缩的），
-   * 而是**圆外四角还剩多少墨** [luneInk]：圆角/圆形 ≈ 0~0.2，基本不缩；尖角方块接近 1，才缩。
-   * 缩的时候以内容外接框中心为圆心，按 半边长/最大半径 缩（留 2% 余量）并居中。
+   * 以内容外接框中心为圆心量可见格的最大半径 r，按 半边长/r × [CIRCLE_FIT] 缩并把中心对到
+   * 图标中心 —— 缩完每个有色格都在圆内，且离圆边留一圈余量（主人 2026-11-14：「再稍微缩一点」）。
+   * 只在小占比那一支调用：那条路上"圆角方形"早已在第一步填满正方形时回到正常档，不会到这里。
    */
   private fun fitInsideCircle(px: IntArray, w: Int, h: Int): FloatArray? {
-    if (luneInk(px, w, h) < LUNE_SHRINK_AT) return null
     var l = w
     var t = h
     var r = -1
@@ -584,8 +561,8 @@ private class BareForeground(
     }
     val maxR = kotlin.math.sqrt(maxR2)
     val half = minOf(w, h) / 2f
-    if (maxR <= half * 0.995f) return null
-    val scale = half * 0.98f / maxR
+    if (maxR <= half * CIRCLE_FIT) return null
+    val scale = half * CIRCLE_FIT / maxR
     if (zoomLogLeft.decrementAndGet() >= 0) {
       Log.d(TAG, "圆内缩 host=$clipHost r=" + maxR.toInt() + " half=" + half.toInt() +
         " scale=" + ((scale * 100).toInt() / 100f) + " : " + IconNames.of(inner))
@@ -593,22 +570,6 @@ private class BareForeground(
     val left = w / 2f - cx * scale
     val top = h / 2f - cy * scale
     return floatArrayOf(left, top, left + w * scale, top + h * scale)
-  }
-
-  /**
-   * 垫盘色：可见部分的平均亮度（Rec.601）低于 [PLATE_LUM] → 白盘，否则黑盘。
-   * 主人 2026-11-14：「加上白色底盘或黑色底盘」—— 跟图标自己的明暗反着来，图案才看得见。
-   */
-  private fun plateColor(px: IntArray): Int {
-    var visible = 0
-    var lum = 0.0
-    for (p in px) {
-      if ((p ushr 24) <= ALPHA_MIN) continue
-      visible++
-      lum += 0.299 * ((p shr 16) and 0xFF) + 0.587 * ((p shr 8) and 0xFF) + 0.114 * (p and 0xFF)
-    }
-    val mean = if (visible == 0) 255.0 else lum / visible
-    return if (mean < PLATE_LUM) Color.WHITE else Color.BLACK
   }
 
   /** 源 over 一整块纯色盘（透明处都由它承担）。 */
@@ -677,6 +638,12 @@ private class BareForeground(
 /** 判"看得见"的 alpha 门槛。 */
 private const val ALPHA_MIN = 8
 
+/** 取边色时优先用"够实"的格：抗锯齿边色被拉出去就是一道浅色接缝。 */
+private const val SOLID_ALPHA = 160
+
+/** 取边色时往里让几格：边界那 1~2 格是抗锯齿混出来的浅色，照它铺就是一圈浅接缝。 */
+private const val EDGE_INSET = 1
+
 /**
  * 内切圆占正方形的**面积比**：π/4 ≈ 0.785。
  * 可见占比 >= 它的图标（贴边实心那种）走正常延伸；小于它的缩进内切圆 + 垫对比底
@@ -685,22 +652,11 @@ private const val ALPHA_MIN = 8
 private const val INSCRIBED_SHARE = 0.785f
 
 /**
- * 圆外四角还剩多少墨才值得缩：圆角方形量出来 0.1~0.2，尖角方块接近 1。
- * 阈值取 0.25（推的：这两堆之间；选的：往下压，宁可少缩 —— 主人：「PH 不是圆角方形吗」）。
+ * 小占比那一支缩进内切圆之后，内容最大半径占圆半径的多少（= 圆边留多少余量）。
+ * 0.98 是"刚好贴住圆"；主人 2026-11-14「再稍微缩一点」→ 0.92 →「再缩一点点」→ 0.88（圆边留 12%）。
+ * 想再紧/再松只改这一个数。
  */
-private const val LUNE_SHRINK_AT = 0.25f
-
-/**
- * 垫盘明暗分界（可见部分平均亮度，Rec.601）：低于它 → 白盘，否则 → 黑盘。
- * 选的：白/黑亮度中点 127.5 往上抬到 150，让中亮度图案（蓝 #4285F4 ≈ 126）也落在白盘侧。
- */
-private const val PLATE_LUM = 150f
-
-/** 取边色时优先用"够实"的格：抗锯齿边色被拉出去就是一道浅色接缝。 */
-private const val SOLID_ALPHA = 160
-
-/** 取边色时往里让几格：边界那 1~2 格是抗锯齿混出来的浅色，照它铺就是一圈浅接缝。 */
-private const val EDGE_INSET = 1
+private const val CIRCLE_FIT = 0.88f
 
 /**
  * 算"边角该填什么颜色"。返回与 [px] 等长的数组：0 = 不填，其余 = 要铺的 ARGB。
