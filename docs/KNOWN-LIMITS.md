@@ -43,13 +43,16 @@
   有底 59.0%~100%、没底 7.1%~21.6%，阈值落在 22 ↔ 59 的空档里；盘色门槛 150 是**选的**（白/黑
   亮度中点 127.5 往上抬），本机没底那一档最亮 128 ⇒ **黑盘分支在这批上一次都没走**，未装机验证。
   代价：有底盘的快捷方式（圆盘图标）四个透明角保持透明，不再是满幅方块。
-  **只认 `LauncherApps.getShortcutIconDrawable` 这条通道**：desktop 快捷方式里另有一批走
-  `Resources.getDrawableForDensity·标记id` 出来的（`com.android.contacts/drawable/logo_quick_contacts_*`、
-  Poweramp 的 `app_shortcut_playlist`、Google 的 `voice_static_shortcut`），它们拿不到快捷方式身份，
-  仍走边角延伸。装机实测（2026-11-14）：这批**全部自带白/黑整块底**，延伸与"原样"逐像素相同
-  （133 张快捷方式里变动的是 LauncherApps 那批），所以现在看不出差别；**换到"透明底"的这类
-  快捷方式上会重新出现方块**，那时要先补一个 launcher 侧的快捷方式标记（`IconCache.getShortcutIcon`
-  的四个重载在真机 dex 里已核），别凭资源名猜。
+  **身份怎么认**（2026-11-14 补齐）：三条来源 —— ① 通道名 `LauncherApps.getShortcutIconDrawable`；
+  ② 桌面正在载快捷方式时的计数（`ShortcutLoad`），挂在 `IconCache.getShortcutIcon`（4 个重载）/
+  `CacheableShortcutCachingLogic.loadIcon` / **`ShortcutConfigActivityInfo(VO).getFullResIcon`** 上；
+  ③ 参数里的 `ShortcutInfo.iconResource`（反射取，Android 17 的公开 API 已删）。
+  ②③ 是为 `Resources.getDrawableForDensity` 通道补的：通讯录「直接拨号 / 发短信」、Poweramp 播放列表、
+  Google 歌曲搜索这些钉在桌面上的**快捷方式活动**，真机栈是
+  `ShortcutConfigActivityInfoVO.getFullResIcon ← CachedObjectCachingLogic.loadIcon ← IconLoadRequest.evaluate`，
+  前两条钩子一个都不在这条链上（前面那轮装过、0 命中，别再把它们当兜底）。
+  装机实测（2026-11-14 重装后按 componentName 对表）：815 行 804 行逐字节不变，变的 6 行**全是**
+  快捷方式活动（通讯录 3、网易云 2、Google 1）；应用图标含自适应 0 变动。
 
 - **快捷方式里的「透明底 + 图案」自成一类**（2026-10-25 主人确认「拼多多快捷方式没问题了」；
   2026-10-26 再定「不应该和别的不规则图标同个道理吗」）：

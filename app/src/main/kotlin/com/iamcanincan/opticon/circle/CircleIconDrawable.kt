@@ -81,8 +81,14 @@ class RenderCache {
  */
 class CircleIconDrawable(
   icon: Drawable,
-  /** 这张是**快捷方式**：单色那支的几何判据（`MonochromeSynth.forIcon`），以及前景的"不铺边、只补盘"。 */
+  /** 这张是**快捷方式**：单色那支的几何判据（`MonochromeSynth.forIcon`）。只认 LauncherApps 通道。 */
   private val isShortcut: Boolean = false,
+  /**
+   * 前景按**快捷方式的外观**画：不铺边，有底原样 / 没底补对比盘（见 [BareForeground.renderShortcut]）。
+   * 默认跟随 [isShortcut]；走 Resources 通道出来的那批快捷方式只置这一位（[ShortcutLoad]），
+   * 单色几何仍按应用图标算 —— 那一支是逐张调过的，不跟着通道猜测改口径。
+   */
+  private val shortcutLook: Boolean = isShortcut,
   /** 所有副本共享的渲染缓存（[getConstantState] 的副本会拿到同一个）。 */
   private val sharedCache: RenderCache = RenderCache(),
 ) : AdaptiveIconDrawable(
@@ -90,7 +96,7 @@ class CircleIconDrawable(
   // 用透明 ColorDrawable 而不是 null：有的宿主会直接读 `getBackground()`，空着比给个会抛的更安全。
   ColorDrawable(Color.TRANSPARENT),
   // 前景：内容补满可见区，形状由桌面裁；所有副本共享同一份渲染缓存
-  BareForeground(icon, isShortcut, sharedCache),
+  BareForeground(icon, shortcutLook, sharedCache),
 ) {
 
   /** 原图标留一份引用，只为了 [getConstantState] 能重建出副本。 */
@@ -133,7 +139,7 @@ class CircleIconDrawable(
     val src = sourceState
     return sharedState ?: object : ConstantState() {
       override fun newDrawable(): Drawable =
-        CircleIconDrawable(src?.newDrawable() ?: sourceIcon, isShortcut, sharedCache)
+        CircleIconDrawable(src?.newDrawable() ?: sourceIcon, isShortcut, shortcutLook, sharedCache)
 
       override fun getChangingConfigurations(): Int = changingConfigurations
     }.also { sharedState = it }
@@ -894,19 +900,81 @@ private const val WRAP_LOG_LIMIT = 200
 private val wrapLogLeft = AtomicInteger(WRAP_LOG_LIMIT)
 
 /**
+ * "桌面在载快捷方式"这条判据的**证据行**：前 [SHORTCUT_MARK_LOG_LIMIT] 张打一条，
+ * 带环境（host / from）与资源名 —— 它同时是误伤的报警器（打在一个应用图标上就是串号了）。
+ */
+private const val SHORTCUT_MARK_LOG_LIMIT = 40
+
+private val shortcutMarkLogLeft = AtomicInteger(SHORTCUT_MARK_LOG_LIMIT)
+
+/**
+ * 桌面**正在加载快捷方式图标**的计数（[IconHooks.hookShortcutIconCache] 在这几条上加减）：
+ * `IconCache.getShortcutIcon`（4 个重载）、`CacheableShortcutCachingLogic.loadIcon`、
+ * `ShortcutConfigActivityInfo(…VO).getFullResIcon`。
+ *
+ * 为什么不是 ThreadLocal：这几条链上不保证与调用方同线程；桌面是单 worker 载图标，窗口很窄。
+ * 真有串号，`"快捷标记(桌面在载快捷方式)"` 那行会把应用图标的资源名打出来。
+ *
+ * 2026-11-14 装机取证：桌面钉着的「快捷方式活动」（联系人「直接拨号 / 发短信」）图标走的是
+ * `ShortcutConfigActivityInfoVO.getFullResIcon → IconLoadRequest.getIcon → IconProvider →
+ * Resources.getDrawableForDensity`，前面那两条都**不在**这条链上 —— 只有 `getFullResIcon` 是。
+ */
+internal object ShortcutLoad {
+  private val depth = AtomicInteger(0)
+
+  fun enter() {
+    depth.incrementAndGet()
+  }
+
+  fun exit() {
+    depth.decrementAndGet()
+  }
+
+  val inFlight: Boolean get() = depth.get() > 0
+}
+
+/**
+ * 快捷方式**声明过的图标资源**（`包名/资源id`）—— Resources 通道认出快捷方式的依据。
+ *
+ * 为什么需要：桌面的一部分快捷方式图标是从 `Resources.getDrawableForDensity` 出来的
+ * （`com.android.contacts/drawable/logo_quick_contacts_*`、Poweramp 的 `app_shortcut_playlist`…），
+ * 那条通道的名字里没有 "Shortcut"，光看调用方认不出来。
+ *
+ * 登记点：凡是拿到 `ShortcutInfo` 的钩子（`LauncherApps.getShortcutIconDrawable` 的参数、
+ * 桌面 `IconCache.getShortcutIcon` 的参数）都把 `iconResource` 记下来 —— 与"什么时候真的去画"
+ * 无关，所以不怕异步。Resources 钩子把请求还原成真实 id 后查这张表。
+ *
+ * 键是"包名/id"而不是 id 本身：资源 id 只在包内唯一。
+ * 上限 [MAX] 条，超了整体清空（快捷方式数量有限，正常一年也到不了）。
+ */
+internal object ShortcutIconResources {
+  private const val MAX = 4096
+  private val keys = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+  fun remember(pkg: String?, resId: Int) {
+    if (pkg.isNullOrEmpty() || resId == 0) return
+    if (keys.size > MAX) keys.clear()
+    keys["$pkg/$resId"] = true
+  }
+
+  fun has(pkg: String?, resId: Int): Boolean =
+    pkg != null && keys.containsKey("$pkg/$resId")
+}
+
+/**
  * 包装成自适应图标；**这一层本身绝不抛**。
  *
  * ⚠ 它被挂在宿主的取图热路径上，抛出去就是宿主崩：任何一步失败都原样放行。
  */
-fun wrapLegacyIcon(icon: Drawable, from: String): Drawable =
-  runCatching { wrapInner(icon, from) }.getOrElse {
+fun wrapLegacyIcon(icon: Drawable, from: String, shortcutHint: Boolean = false): Drawable =
+  runCatching { wrapInner(icon, from, shortcutHint) }.getOrElse {
     if (clipFailLogged.compareAndSet(false, true)) {
       Log.w(TAG, "自适应：包装抛了，原样放行（${it.javaClass.simpleName}: ${it.message}）")
     }
     icon
   }
 
-private fun wrapInner(icon: Drawable, from: String): Drawable {
+private fun wrapInner(icon: Drawable, from: String, shortcutHint: Boolean): Drawable {
   // 配置按 TTL 重读，所以界面里关掉开关后很快生效，不用重启进程。
   if (!ModuleRuntime.options().circleEnabled) return icon
   // 射程（2026-10-21 起）：**默认全包，唯一的排除是快速设置那一路**（调用方分得开）。
@@ -918,11 +986,22 @@ private fun wrapInner(icon: Drawable, from: String): Drawable {
   if (icon is CircleIconDrawable || icon is AdaptiveIconDrawable) return icon
 
   noteWrap(from)
-  val shortcut = from.contains("Shortcut")
+  // 快捷方式身份有三条来源：通道名（LauncherApps.getShortcutIconDrawable）、桌面正在加载时
+  // 的计数（[ShortcutLoad]，实测兜不住的兜底）、以及**这张 drawable 的资源 id 被登记为
+  // 某条快捷方式的 iconResource**（[ShortcutIconResources]，Resources 通道实际靠这条）。
+  val byChannel = from.contains("Shortcut")
+  val byLoader = !byChannel && ShortcutLoad.inFlight
+  val byResource = !byChannel && !byLoader && shortcutHint
+  // 单色那一位只认通道（那一支是逐张调过的，不跟着通道猜测改口径）；外观三条都认。
+  val look = byChannel || byLoader || byResource
+  if ((byLoader || byResource) && shortcutMarkLogLeft.decrementAndGet() >= 0) {
+    Log.d(TAG, "快捷标记(" + (if (byLoader) "桌面在载快捷方式" else "资源表") + ") host=$clipHost from=$from : " +
+      IconNames.of(icon))
+  }
   if (wrapLogLeft.decrementAndGet() >= 0) {
     Log.d(TAG, "自适应 from=$from host=$clipHost : " + IconNames.of(icon) + " " +
       "${icon.intrinsicWidth}x${icon.intrinsicHeight} " +
-      if (shortcut) "快捷方式 不铺边(有底原样/没底补盘)" else "无底盘 原尺寸+延伸")
+      if (look) "快捷方式 不铺边(有底原样/没底补盘)" else "无底盘 原尺寸+延伸")
   }
-  return CircleIconDrawable(icon, shortcut)
+  return CircleIconDrawable(icon, byChannel, look)
 }

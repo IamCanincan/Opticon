@@ -275,6 +275,7 @@ private fun installHooks(xposed: XposedInterface, classLoader: ClassLoader, pack
   ) {
     hookPixelLauncher(xposed, classLoader)
     hookTaskIcons(xposed, classLoader)
+    hookShortcutIconCache(xposed, classLoader)
     // 纯合成：未适配图标的单色层由我们出，桌面因此不会进它自己的 Factory。
     // 下面那条不是兜底、是**漏接计数** —— 它非零就说明上面那条没接住，屏幕上会是反的。
     hookSynthesizedMonochrome(xposed)
@@ -720,7 +721,12 @@ private fun hookIconLoader(xposed: XposedInterface, method: Method): Boolean =
           //   （`pm:包名`）；两类出口都取不到才真不登记。
           val named = resourceName(chain.thisObject as? Resources, restored[index] as Int)
           IconNames.remember(icon, named.ifEmpty { packageFromArgs(args) })
-          wrapLegacyIcon(icon, "Resources.${method.name}·标记id")
+          // 快捷方式那一批（通讯录快捷联系人 / Poweramp 播放列表…）只从这里认：这张 drawable 的
+          // 资源 id 被登记成了某条快捷方式的 `iconResource`（见 [ShortcutIconResources]）。
+          val res = chain.thisObject as? Resources
+          val realId = restored[index] as Int
+          val resPkg = res?.let { runCatching { it.getResourcePackageName(realId) }.getOrNull() }
+          wrapLegacyIcon(icon, "Resources.${method.name}·标记id", ShortcutIconResources.has(resPkg, realId))
         } finally {
           replacingIcon.set(false)
         }
@@ -1285,6 +1291,7 @@ private fun hookShortcutIcons(xposed: XposedInterface) {
   for (method in declaredMethods(LauncherApps::class.java, "getShortcutIconDrawable")) {
     runCatching {
       xposed.hook(method).intercept { chain ->
+        rememberShortcutIconResource(chain.args)
         val icon = chain.proceed() as? Drawable ?: return@intercept null
         // 日志用的名字（见 packageFromArgs）：这条路上桌面根本不经过 Resources.getDrawable*，
         // 不在这里登记，`Mono: diag` 行就永远是 `?`。
@@ -1303,6 +1310,76 @@ private fun hookShortcutIcons(xposed: XposedInterface) {
     }
   }
   spoken("Shortcut", hooked)
+}
+
+/**
+ * 桌面侧"这次是在载**快捷方式**图标"的标记（2026-11-14 补的缺口）。
+ *
+ * 为什么需要：桌面的快捷方式不全走 [hookShortcutIcons] 那条通道 —— 通讯录的
+ * `logo_quick_contacts_*`、Poweramp 的 `app_shortcut_playlist`、Google 的歌曲搜索
+ * 都是从 `Resources.getDrawableForDensity` 出来的（真机日志），通道名里没有 "Shortcut"，
+ * 包装时认不出来，于是仍走边角延伸。
+ *
+ * 真机栈取证（2026-11-14，`wrap栈` 探针）钉在桌面上的「快捷方式活动」走的是
+ * `ShortcutConfigActivityInfoVO.getFullResIcon(IconLoadRequest)` → `IconLoadRequest.getIcon`
+ * → `IconProvider` → `Resources.getDrawableForDensity`，**同步**。这条链上
+ * `IconCache.getShortcutIcon` 与 `CacheableShortcutCachingLogic.loadIcon` 一次都不出现
+ * （前一版只挂这两条，装机 0 命中）—— 所以真正兜住的是 `getFullResIcon`。
+ *
+ * 做法：在这几条外面抬 [ShortcutLoad] 计数，`wrapLegacyIcon` 读到它就把这张按快捷方式画。
+ * ⚠ 用进程内计数而不是 ThreadLocal：加载链不保证与调用方同线程，桌面又是单 worker 载图标，
+ * 非零窗口很窄；真串了，`快捷标记(桌面在载快捷方式)` 那行会把应用图标的资源名打出来。
+ */
+private fun hookShortcutIconCache(xposed: XposedInterface, classLoader: ClassLoader) {
+  val iconCache = classOf("com.android.launcher3.icons.IconCache", classLoader)
+  val logic = classOf("com.android.launcher3.icons.CacheableShortcutCachingLogic", classLoader)
+  // 真机量到的实际路径（2026-11-14）：钉在桌面上的「快捷方式活动」（联系人「直接拨号 /
+  // 发短信」这类 shortcut-config activity）只从这里下来 —— 栈见函数头注释。
+  val configActivity = classOf("com.android.launcher3.pm.ShortcutConfigActivityInfo", classLoader)
+  val configActivityVo = classOf("com.android.launcher3.pm.ShortcutConfigActivityInfo\$ShortcutConfigActivityInfoVO", classLoader)
+  if (iconCache == null && logic == null && configActivityVo == null) {
+    missing("ShortcutCache", "IconCache / CacheableShortcutCachingLogic / ShortcutConfigActivityInfo")
+    return
+  }
+  val targets = listOfNotNull(
+    iconCache?.let { declaredMethods(it, "getShortcutIcon") },
+    logic?.let { declaredMethods(it, "loadIcon") },
+    configActivity?.let { declaredMethods(it, "getFullResIcon") },
+    configActivityVo?.let { declaredMethods(it, "getFullResIcon") },
+  ).flatten()
+  var hooked = 0
+  for (method in targets) {
+    runCatching {
+      xposed.hook(method).intercept { chain ->
+        rememberShortcutIconResource(chain.args)
+        ShortcutLoad.enter()
+        try {
+          chain.proceed()
+        } finally {
+          ShortcutLoad.exit()
+        }
+      }
+      hooked++
+    }
+  }
+  spoken("ShortcutCache", hooked)
+}
+
+/**
+ * 把参数里的 `ShortcutInfo.iconResource` 登记进 [ShortcutIconResources]（Resources 通道的判据）。
+ *
+ * 桌面的快捷方式图标不一定经过"通道名带 Shortcut"的那条路，但凡是拿 `ShortcutInfo` 来取图标的，
+ * 参数里一定有它 —— 登记的是**声明**，与"什么时候真去画"无关，所以不怕异步。
+ */
+private fun rememberShortcutIconResource(args: List<Any?>) {
+  val found: Any? = args.firstOrNull { it is ShortcutInfo }
+  val info: ShortcutInfo = found as? ShortcutInfo ?: return
+  // `ShortcutInfo.getIconResource()` 在 Android 17 的公开 API 里已经没有了（SDK 37 的 stub
+  // 只剩 getPackage），老系统上还在 —— 反射取，取不到就是 0（这条判据自然失效）。
+  val resId: Int = runCatching {
+    info.javaClass.getMethod("getIconResource").invoke(info) as Int
+  }.getOrDefault(0)
+  if (resId != 0) ShortcutIconResources.remember(info.`package`, resId)
 }
 
 /**
