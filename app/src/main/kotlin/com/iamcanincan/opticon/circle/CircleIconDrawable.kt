@@ -310,11 +310,11 @@ private class BareForeground(
     rendering = true
     try {
       stage = "r1"; bitmap.eraseColor(Color.TRANSPARENT)
-      stage = "r2"; drawIcon(layer, w, h, view)
       if (shortcut) {
-        stage = "r3s"; renderShortcut(bitmap, w, h)
+        stage = "r2s"; renderShortcut(bitmap, layer, w, h, view)
         return
       }
+      stage = "r2"; drawIcon(layer, w, h, view)
       stage = "r3"
       val px = IntArray(w * h)
       bitmap.getPixels(px, 0, w, 0, 0, w, h)
@@ -439,19 +439,72 @@ private class BareForeground(
    *  · **有底盘**（自己的底占了 ≥ [SHORTCUT_BASE_COVER]）：原样交回。之前按边缘色铺边，把
    *    浅色圆盘图标铺成一整块白方块 —— 那圈白就是主人点名的那块"白底盘"；
    *  · **没底盘**（只有字形浮在透明上）：铺一块**对比盘**，字形暗配白盘、字形亮配黑盘，
-   *    否则字形会被铺成和盘同色（Translate 相机：蓝底蓝字，字整个没了）。
+   *    否则字形会被铺成和盘同色（Translate 相机：蓝底蓝字，字整个没了）。内容超过
+   *    [SHORTCUT_CONTENT_MAX] 的（录音机「我的录音」那种 24dp 矢量）等比缩到那个比例并居中 ——
+   *    补盘是我们自己在构图，尺寸按桌面上正常图标的内容比例（63%~70%）来。
    *
    * 盘只铺在**前景位图**里、铺满整个可见方格，形状照旧交给桌面的「图标形状」裁。
    * 取色前先做一次 [bleedEdgeColor]：快捷方式源图透明处的 RGB 也常是黑色，放大后的 AA 边
    * 直接叠在浅色盘上就是一圈黑边。
    */
-  private fun renderShortcut(bitmap: Bitmap, w: Int, h: Int) {
+  private fun renderShortcut(bitmap: Bitmap, layer: Canvas, w: Int, h: Int, view: Rect) {
+    drawIcon(layer, w, h, view)
     val px = IntArray(w * h)
     bitmap.getPixels(px, 0, w, 0, 0, w, h)
     bleedEdgeColor(px, w, h)
     val plate = shortcutPlate(px)
-    if (plate != 0) composeOverColor(px, plate)
-    bitmap.setPixels(px, 0, w, 0, 0, w, h)
+    if (plate == 0) {
+      bitmap.setPixels(px, 0, w, 0, 0, w, h)
+      return
+    }
+    // 补盘这一支是我们自己在构图：源图内容别超过普通图标的内容比例（见 [SHORTCUT_CONTENT_MAX]）。
+    val box = contentBox(px, w, h)
+    val ratio = if (box == null) 0f else maxOf(
+      (box[2] - box[0] + 1).toFloat() / w,
+      (box[3] - box[1] + 1).toFloat() / h,
+    )
+    val scale = if (ratio > SHORTCUT_CONTENT_MAX) SHORTCUT_CONTENT_MAX / ratio else 1f
+    if (scale >= 1f || box == null) {
+      composeOverColor(px, plate)
+      bitmap.setPixels(px, 0, w, 0, 0, w, h)
+      return
+    }
+    // 重画：先铺盘，再把源以**内容框中心**为原点缩小并居中 —— AA 边直接和盘混，不留缝。
+    bitmap.eraseColor(plate)
+    val cx = (box[0] + box[2] + 1) / 2f
+    val cy = (box[1] + box[3] + 1) / 2f
+    val left = w / 2f - cx * scale
+    val top = h / 2f - cy * scale
+    inner.setBounds(
+      Math.round(left), Math.round(top),
+      Math.round(left + w * scale), Math.round(top + h * scale),
+    )
+    inner.draw(layer)
+    inner.setBounds(view)
+  }
+
+  /**
+   * 可见格（alpha > [SOLID_ALPHA]）的外接框 `[l, t, r, b]`；一格都没有返回 null。
+   *
+   * 用"够实"的门槛而不是 alpha > 8：快捷方式源图常带一圈很淡的软边/阴影，
+   * 按低门槛量出来会比肉眼看到的大一圈，缩的时候就缩过头。
+   */
+  private fun contentBox(px: IntArray, w: Int, h: Int): IntArray? {
+    var l = w
+    var t = h
+    var r = -1
+    var b = -1
+    for (y in 0 until h) {
+      val row = y * w
+      for (x in 0 until w) {
+        if ((px[row + x] ushr 24) <= SOLID_ALPHA) continue
+        if (x < l) l = x
+        if (x > r) r = x
+        if (y < t) t = y
+        if (y > b) b = y
+      }
+    }
+    return if (r < 0) null else intArrayOf(l, t, r, b)
   }
 
   /**
@@ -589,6 +642,17 @@ private const val SHORTCUT_BASE_COVER = 0.5f
  * 也落在白盘那一侧 —— 这类快捷方式原本的设计就是"彩字压白底"，黑底会把对比度吃掉。
  */
 private const val SHORTCUT_PLATE_LUM = 150f
+
+/**
+ * 补盘那一支里，源图内容**最多占图标槽的多少**（超过就等比缩小、居中）。
+ *
+ * 为什么要有：源是 24dp 矢量的快捷方式（录音机「我的录音」的 `ic_library_music`）图案本来就铺满
+ * 自己的画布，整张铺进 72dp 的可见区就成了占框 84% —— 而桌面上正常图标（设置 / Google / 通讯录）
+ * 内容只占 63%~70%（2026-11-14 从 `app_icons.db` 逐张量的），屏上就"放大过度"了。
+ * 这个值取那批正常图标的上沿（推的：63~70 的右端；选的：70）。
+ * **只作用在"补盘"这一支**：有底盘的快捷方式原样交回，不替它改尺寸（主人要的是"去掉白底盘"）。
+ */
+private const val SHORTCUT_CONTENT_MAX = 0.70f
 
 /**
  * 算"边角该填什么颜色"。返回与 [px] 等长的数组：0 = 不填，其余 = 要铺的 ARGB。
