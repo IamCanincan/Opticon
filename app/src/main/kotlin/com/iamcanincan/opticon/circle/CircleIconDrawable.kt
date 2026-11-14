@@ -89,7 +89,7 @@ class CircleIconDrawable(
   ColorDrawable(Color.TRANSPARENT),
   // 前景：内容补满可见区，形状由桌面裁；所有副本共享同一份渲染缓存
   BareForeground(icon, sharedCache),
-) {
+), IconSourceCarrier {
 
   /** 原图标留一份引用，只为了 [getConstantState] 能重建出副本。 */
   private val sourceIcon: Drawable = icon
@@ -97,8 +97,8 @@ class CircleIconDrawable(
   /** [getConstantState] 只建一次：每次 bind 都新建一个 state 的话，副本之间就共享不到缓存了。 */
   private var sharedState: ConstantState? = null
 
-  /** 给**要未包装原图**的消费方（通知兜底 / 通知图标解码）。 */
-  internal val source: Drawable get() = sourceIcon
+  /** 给**要未包装原图**的消费方（通知兜底 / 通知图标解码），口径见 [IconSourceCarrier]。 */
+  override val source: Drawable get() = sourceIcon
 
   private val sourceState: ConstantState? = icon.constantState
 
@@ -817,16 +817,6 @@ private fun spread(
 
 /** 「包装自身抛了」只报一次（每张图标一行会把日志刷满）。 */
 private val clipFailLogged = AtomicBoolean(false)
-
-/**
- * 取回**没包装过**的原图（不是 [CircleIconDrawable] 就原样返回）。
- *
- * 给通知那两条消费方用：SystemUI 里 `PackageManager.getApplicationIcon` 与
- * `Resources.getDrawable*` 也会被这套钩子包起来，而通知的剪影必须从**原图**的 alpha 取 ——
- * 拿"按形状裁过一刀"的那份去压，剪影会缺角。
- */
-internal fun unwrappedIcon(d: Drawable): Drawable =
-  if (d is CircleIconDrawable) d.source else d
 
 /** 宿主包名，装配时置一次；只为日志服务。 */
 @Volatile

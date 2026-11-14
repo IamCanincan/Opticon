@@ -24,6 +24,20 @@ java -cp out;stubs_out;<stdlib> harness.ReplayKt ../_dump.txt captured   # 重�
   还躺着昨天的 class。七个脚本（`build/ab/ab_pair/abrun/cand/prun/regress`）现在一律
   `. jdk.sh` 自己钉住 JDK 17+（`JAVA_HOME` → 本机已知的 JDK 目录 → 找不到就**硬失败，并写明
   "这一轮一张都没测"**），不再指望 PATH 上那个 `java`（这台机器上它是 1.8）。
+  ⚠ **"台子编不过"第三种死法：生产源码里冒出一个台子编不动的依赖（2026-11-15）**。
+  `d1ec3e5`（11-13 15:10，去遮罩改做成自适应）让 `notify/IconBitmap.kt` 调上了
+  `unwrappedIcon`，而那个函数当时住在 `circle/CircleIconDrawable.kt` 里 —— 那个类要 `BuildConfig` /
+  `ModuleRuntime` / 一整套绘图 API，**判据台的清单编不动它**。后果不是"这一项没测"，是
+  `build.sh` 从那一刻起**整台编不过**：`regress.sh` 第 1 段 `sh build.sh > /dev/null 2>&1` 在
+  `set -e` 下当场退出，日志里只留下一行"shell 雷 0 处 ✓"，**后面六段一次都没跑过两天**。
+  修法是**把依赖收窄**，不是给台子抄一份：`unwrappedIcon` 搬进只吃 `Drawable` 的
+  `circle/IconUnwrap.kt`（接口 `IconSourceCarrier`，目前只有 `CircleIconDrawable` 实现），
+  这个文件加进 `build.sh` 的 `SRC` —— 生产与台子编的是同一份函数体。
+  ⚠ 今后凡是**新往台子编得动的文件里调**一个住在 Android-heavy 文件里的符号，要么把那个符号
+  搬到清单内的纯文件，要么别调；`precommit.sh` 只管"改了 Android-heavy 有没有重编"，**管不到这一条**。
+  ⚠ 这一段还加了一个**明说的**容红开关 `SELFTEST_TOLERATE=1`（`selftestgate.sh`）：新增红照样印出来，
+  退码放开，但会写进 `bench/reg/skipped.txt`，所以它不冒充"性质台过了"。它只为"让 3~9 段跑完"存在，
+  容红的轮次**不许**当提交态全绿引用。
   ⚠ **`框内随边长漂移` 那一栏现在会写"未测"**：只跑 384 一档时没有一张图被量过两次，`driftN`
   恒为 0，而 0 在判定表里长得和"一格都没漂"一模一样，基线却是全扫记的 14 —— 于是它每轮都以
   "持平/更好"放行（**基线里那个 0 就是这么被写进去过一次的**）。未测就印未测：不计退步、

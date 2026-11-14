@@ -21,6 +21,15 @@ selftest_gate() {
   if [ -n "$NEW" ]; then
     echo "!! 性质台有**新增**的红（不在底线名单里）："
     echo "$NEW"
+    # `SELFTEST_TOLERATE=1`：**只**为了不让这一段把 3~7 段挡在门外（本仓记过"一句 exit 1
+    #   把六段闸四天没跑"的那种形态）。红照样印出来、退码放开，但**写进本轮跳过账**，
+    #   所以判定行与 `bench/reg/skipped.txt` 都留着痕——它不是"这一段过了"。
+    #   ⚠ 别拿它当日常开关：容红的轮次不许拿去当"提交态全绿"的证据。
+    if [ -n "$SELFTEST_TOLERATE" ]; then
+      echo "   ⚠ SELFTEST_TOLERATE：上面 $(printf '%s\n' "$NEW" | grep -c .) 条**认作已知、不当通过**（为的是让 3~7 段跑完）"
+      echo "2 性质台容红 $(printf '%s\n' "$NEW" | grep -c .) 条（SELFTEST_TOLERATE）" >> bench/reg/skipped.txt
+      return 0
+    fi
     return 1
   fi
   if [ ! -s "bench/reg/selftest_red${SUF}.txt" ]; then
