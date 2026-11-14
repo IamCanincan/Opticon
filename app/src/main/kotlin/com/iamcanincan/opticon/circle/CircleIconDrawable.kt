@@ -315,6 +315,13 @@ private class BareForeground(
       //    不被正方形裁切时的占比吗」）。有留白的图标（PH 的圆角方形）缩满后占比就上去了。
       stage = "r3a"
       val plan = IconGeom.planOf(px, w, h)
+      if (plan != null && geomLogLeft.decrementAndGet() >= 0) {
+        // 与单色那行 `Mono: 跟彩色 … label=` **逐张配对**（同一份 [IconGeom] 出来的三个数）：
+        // 对不上就是"单色与彩色不符"，别再靠肉眼看桌面。配对台 `node _harness/_geompair.cjs <logcat>`。
+        Log.d(TAG, "自适应几何 host=$clipHost fill=" + ((plan.fill * 100).toInt() / 100f) +
+          " scale=" + ((plan.scale * 100).toInt() / 100f) +
+          " 支=" + (if (plan.plate) "铺底" else "延伸") + " : " + IconNames.of(inner))
+      }
       if (plan != null && plan.needsRedraw) {
         val nb = plan.bounds(w, h)
         bitmap.eraseColor(Color.TRANSPARENT)
@@ -908,6 +915,15 @@ private val shortcutMarkLogLeft = AtomicInteger(SHORTCUT_MARK_LOG_LIMIT)
 
 /** 「圆内缩」证据行额度（前 [ZOOM_LOG_LIMIT] 张，带半径与倍率）。 */
 private const val ZOOM_LOG_LIMIT = 40
+
+/**
+ * 「自适应几何」证据行额度（前 [GEOM_LOG_LIMIT] 张）。
+ * 这一行与单色那行 `Mono: 跟彩色 … label=` 是**一对**（同一份 [IconGeom] 的两个消费者），
+ * 额度两边要对得上，配表台见 `_harness/_geompair.cjs`。
+ */
+private const val GEOM_LOG_LIMIT = 60
+
+private val geomLogLeft = AtomicInteger(GEOM_LOG_LIMIT)
 
 private val zoomLogLeft = AtomicInteger(ZOOM_LOG_LIMIT)
 

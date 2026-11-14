@@ -885,7 +885,7 @@ internal object MonochromeSynth {
       // `pm:包名`（没有 `/`）是 PackageManager 拿的应用图标，与普通非自适应图标同一口径。
       // 单色要跟上彩色那边的几何（2026-11-14）：彩色现在会先把内容缩放到恰好填满正方形，
       // 小占比那一支再缩进内切圆；这里按同样的比例缩一遍，否则主题图标与彩色图标对不上。
-      val fitted = if (adaptive || ringBleed) null else fitLikeColor(raster, alpha, edge)
+      val fitted = if (adaptive || ringBleed) null else fitLikeColor(raster, alpha, edge, label)
       val shaped = fitted ?: alpha
       val placed = if (adaptive || ringBleed) alpha else intoVisibleArea(shaped, edge)
       // ⚠ 这一趟多花的钱（判据台 `_harness/CostKt.kt`，62 张真机语料 @edge=384，取七遍最快一趟）：
@@ -1513,17 +1513,17 @@ internal object MonochromeSynth {
    *
    * 倍率与中心都在光栅坐标里，返回 null = 不用动。
    */
-  /** 「Mono: 跟彩色」证据行额度。 */
-  private val fitLogLeft = java.util.concurrent.atomic.AtomicInteger(30)
+  /** 「Mono: 跟彩色」证据行额度（与彩色那行 `自适应几何` 各 60 张，两边要配成对）。 */
+  private val fitLogLeft = java.util.concurrent.atomic.AtomicInteger(60)
 
-  private fun fitLikeColor(raster: Bitmap, alpha: Bitmap, edge: Int): Bitmap? {
+  private fun fitLikeColor(raster: Bitmap, alpha: Bitmap, edge: Int, label: String): Bitmap? {
     val px = IntArray(edge * edge)
     raster.getPixels(px, 0, edge, 0, 0, edge, edge)
     val plan = IconGeom.planOf(px, edge, edge) ?: return null
     if (fitLogLeft.decrementAndGet() >= 0) {
       Log.d(TAG, "Mono: 跟彩色 scale=" + ((plan.scale * 100).toInt() / 100f) +
         " fill=" + ((plan.fill * 100).toInt() / 100f) +
-        " 支=" + (if (plan.plate) "铺底" else "延伸") + " edge=$edge")
+        " 支=" + (if (plan.plate) "铺底" else "延伸") + " edge=$edge label=$label")
     }
     if (!plan.needsRedraw) return null
     val out = Bitmap.createBitmap(edge, edge, Bitmap.Config.ALPHA_8)
