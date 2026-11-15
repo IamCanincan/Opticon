@@ -53,15 +53,19 @@ function extent(img, pred) {
   }
   return { ext: r < 0 ? 0 : Math.max(r - l + 1, b - t + 1) / w, share: ink / (w * h) };
 }
-// 边框主色族（=盘/背景）：只从**内部**取边框（离边 12%，避开裁形 AA 那一圈）
+// 边框主色族（=盘/背景）：只从**内部**取边框（离边 12%，避开裁形 AA 那一圈）。
+// ⚠ **而且只数接近不透明的格**（α≥250）：透明像素的 RGB 是 (0,0,0)，上一版没这一条，
+//   于是"边框主色族"常常被判成黑色族，把**黑色字形当背景剥掉** —— 前景层的幅面被剥没，
+//   比值整体虚高（透传那组中位 1.377 就是这么来的，不是平台真画那么大）。
+//   边框上没有近不透明的格（前景层本来就带透明底）⇒ 返回 null = **什么都不剥**。
 function borderFam(img) {
   const { w, h, rgba } = img, m = Math.max(1, (w * 0.12) | 0), cnt = new Map();
-  const bump = (x, y) => { const i = (y * w + x) * 4; const k = fam(rgba[i], rgba[i + 1], rgba[i + 2]); cnt.set(k, (cnt.get(k) || 0) + 1); };
+  const bump = (x, y) => { const i = (y * w + x) * 4; if (rgba[i + 3] < 250) return; const k = fam(rgba[i], rgba[i + 1], rgba[i + 2]); cnt.set(k, (cnt.get(k) || 0) + 1); };
   for (let x = m; x < w - m; x++) { bump(x, m); bump(x, m + 1); bump(x, h - m - 1); bump(x, h - m - 2); }
   for (let y = m; y < h - m; y++) { bump(m, y); bump(m + 1, y); bump(w - m - 1, y); bump(w - m - 2, y); }
   let best = null, bc = -1;
   for (const [k, c] of cnt) if (c > bc) { bc = c; best = k; }
-  return best;
+  return bc > 0 ? best : null;
 }
 // —— 批量模式：`--batch=<源图目录> --db=<库>`，把上面那**同一份**定义跑遍所有源图 ——
 //   为什么不给"批量"另写一遍：两份实现会漂（本仓第十五/十六闸同一课）。
