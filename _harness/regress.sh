@@ -72,7 +72,10 @@ if command -v node >/dev/null 2>&1; then
 else
   echo "   ⚠ 这台没有 node —— shell 雷这一项**没查**（不是查过且干净）"
 fi
-sh build.sh > /dev/null 2>&1
+# ⚠ 这一句以前是 `> /dev/null 2>&1`：`set -e` 撞上它 = **build.sh 一失败整台静默掐死**，
+#   日志停在"shell 雷 ✓"后面一个字都没有（2026-11-15 一天撞上两次，第一次我还把"没输出"读成了"跑过了"）。
+#   现在把它的输出留在 `bench/reg/build.txt`，失败就在结论里点名"是编译段没跑成"。
+sh build.sh > bench/reg/build.txt 2>&1 || { echo "!! 编译段本身失败（不是判据红）—— 它自己最后 8 行："; tail -8 bench/reg/build.txt; exit 1; }
 E=$(grep -cE "error:" _kt.log || true)
 [ "$E" != "0" ] && { echo "!! 编译有 $E 个 error，先修它"; exit 1; }
 echo "   0 error"
