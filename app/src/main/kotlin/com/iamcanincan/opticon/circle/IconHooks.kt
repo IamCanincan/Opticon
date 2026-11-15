@@ -656,10 +656,25 @@ private fun watchThemedIconsToggle(context: Context, packageName: String) {
   }.apply { isDaemon = true; name = "opticon-themed-watch" }.start()
 }
 
+/**
+ * 监听器的强引用持有处 —— **别删，删了整套监听就静默失效**。
+ *
+ * `SharedPreferencesImpl.mListeners` 是 `WeakHashMap`（framework 源码 android-37.0
+ * `SharedPreferencesImpl.java:113`），`registerOnSharedPreferenceChangeListener` 只是
+ * `put(listener, CONTENT)`，自己不留强引用。2026-11-16 第一版直接把 lambda 传进去，
+ * 真机日志「已登记 13 个 prefs 实例」之后主人切了开关，**一条回调都没有** ——
+ * 登记完那个 lambda 就没人引用，下一次 GC 就收走了。
+ *
+ * `ContentObserver` 不需要这么伺候：它的 `Transport` 虽是 static 类，却用一个强引用字段
+ * 指着 ContentObserver，而 Transport 本身被 binder 的全局引用钉着。
+ */
+private val themedListeners = ArrayList<SharedPreferences.OnSharedPreferenceChangeListener>()
+
 private fun watchThemedPrefs(context: Context, packageName: String) {
-  val instances = ArrayList<SharedPreferences>()
-  fun add(p: SharedPreferences?) {
-    if (p != null && instances.none { it === p }) instances.add(p)
+  // 键是 prefs 文件名：只印 `#i` 的话，13 个实例在日志里分不出谁是谁。
+  val instances = LinkedHashMap<String, SharedPreferences>()
+  fun add(name: String, p: SharedPreferences?) {
+    if (p != null && instances.values.none { it === p }) instances[name] = p
   }
   // 桌面自己用的那个实例（`Utilities.getPrefs`）优先：它一定是开关所在的那一份。
   // 用宿主的 classLoader 而不是 Class.forName：后者按调用方（模块）的 loader 找，
@@ -668,14 +683,14 @@ private fun watchThemedPrefs(context: Context, packageName: String) {
     val m = context.classLoader.loadClass("com.android.launcher3.Utilities")
       .getDeclaredMethod("getPrefs", Context::class.java)
     m.isAccessible = true
-    add(m.invoke(null, context) as? SharedPreferences)
+    add("Utilities.getPrefs", m.invoke(null, context) as? SharedPreferences)
   }.onFailure { Log.d(TAG, "ThemedWatch: Utilities.getPrefs 取不到（${it.javaClass.simpleName}），改按文件名枚举") }
   // 其余 prefs 文件一并登记：开关未必在主文件里。`getSharedPreferences` 按名字在进程内
   // 缓存同一个实例，所以文件此刻还不存在也登记得上 —— 桌面之后写进去，这边照样收得到。
   runCatching {
     File(context.applicationInfo.dataDir, "shared_prefs").list()?.sorted()?.forEach { f ->
       if (f.endsWith(".xml")) {
-        runCatching { add(context.getSharedPreferences(f.removeSuffix(".xml"), Context.MODE_PRIVATE)) }
+        runCatching { add(f, context.getSharedPreferences(f.removeSuffix(".xml"), Context.MODE_PRIVATE)) }
       }
     }
   }
@@ -686,31 +701,38 @@ private fun watchThemedPrefs(context: Context, packageName: String) {
 
   // 回调都在主线程派发（SharedPreferencesImpl 用主线程 Handler），所以这张表不用加锁。
   val seen = HashMap<String, String>()
-  instances.forEachIndexed { i, p ->
+  instances.forEach { (prefName, p) ->
     runCatching {
       val all = p.all
-      Log.i(TAG, "ThemedWatch: prefs#$i 现有键 ${all.keys.sorted().joinToString(" ")}")
+      Log.i(TAG, "ThemedWatch: prefs[$prefName] 现有键 ${all.keys.sorted().joinToString(" ")}")
       for ((k, v) in all) if (k.contains("themed", ignoreCase = true)) seen[k] = v?.toString() ?: ""
     }
-    p.registerOnSharedPreferenceChangeListener { sp, changed ->
+    val listener = SharedPreferences.OnSharedPreferenceChangeListener { sp, changed ->
       // SDK 37 的 `onChanged` 把 key 标成 @Nullable；null 时 removeAll 之类，没有键可认。
-      val key = changed ?: return@registerOnSharedPreferenceChangeListener
+      val key = changed ?: return@OnSharedPreferenceChangeListener
       val now = runCatching { sp.all[key]?.toString() ?: "" }.getOrDefault("")
       if (!key.contains("themed", ignoreCase = true)) {
-        Log.i(TAG, "ThemedWatch: prefs#$i 变更 $key=$now（名字里没有 themed，不动）")
-        return@registerOnSharedPreferenceChangeListener
+        Log.i(TAG, "ThemedWatch: prefs[$prefName] 变更 $key=$now（名字里没有 themed，不动）")
+        return@OnSharedPreferenceChangeListener
       }
       val was = seen[key]
       seen[key] = now
-      Log.i(TAG, "ThemedWatch: 主题图标键 $key：$was → $now")
-      if (was == now) return@registerOnSharedPreferenceChangeListener
+      Log.i(TAG, "ThemedWatch: 主题图标键 $key：$was → $now（prefs[$prefName]）")
+      if (was == now) return@OnSharedPreferenceChangeListener
       // 回调在主线程：删缓存是文件 IO、请应用代发是 Binder，都不该压在桌面的主线程上。
       Thread {
         clearAndRestartLauncher(context, packageName, "桌面主题图标开关 $key=$now", alsoUi = true)
       }.apply { isDaemon = true; name = "opticon-themed-clear" }.start()
     }
+    themedListeners.add(listener)
+    p.registerOnSharedPreferenceChangeListener(listener)
   }
-  Log.i(TAG, "ThemedWatch: 已登记 ${instances.size} 个 prefs 实例（$packageName）")
+  // 两个数必须相等：实例登记上了而强引用没留住，就是 2026-11-16 那次「已登记 13 个、零回调」。
+  Log.i(
+    TAG,
+    "ThemedWatch: 已登记 ${instances.size} 个 prefs 实例、持有 ${themedListeners.size} 个监听器强引用" +
+      "（$packageName）：${instances.keys.joinToString(" ")}"
+  )
 }
 
 private fun watchThemedSecure(context: Context, packageName: String) {
