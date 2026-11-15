@@ -77,7 +77,7 @@
     <string name="features_all_hint">三个功能一起开 / 关；排查时先全关最省事。</string>
     <string name="features_note_group">开关什么时候生效</string>
     <string name="features_effect_title">约一秒内生效</string>
-    <string name="features_effect_body">开关写入后模块每秒重读一次配置：新画的图标、新收到的通知立刻按新设置处理。切开关时：自适应 / 动态取色会清桌面缓存并重启桌面，桌面图标随之重画；单色通知会重启系统界面，通知随之重建。设置、分享面板这些进程要等它们自己重新加载。万一仍没变化，到「设置 → 运维操作」手动按一次。</string>
+    <string name="features_effect_body">开关写入后模块每秒重读一次配置：新画的图标、新收到的通知立刻按新设置处理。三个开关里任意一个动了，都会清一次桌面缓存并重启桌面、系统界面与设置等进程，图标和通知随之重画（桌面会闪一下）。另外，桌面自己的「主题图标」开关一变，模块也会自动做这一套，不用再手动按。万一仍没变化，到「设置 → 运维操作」手动按一次。</string>
     <string name="settings_scope_sub">会画应用图标的进程清单（在框架管理器中勾选）</string>
     <string name="settings_setup_title">启用与验证</string>
     <string name="settings_setup_sub">四步启用、一条 adb 命令验证</string>
@@ -174,9 +174,7 @@
     <string name="action_restart_systemui">重启系统界面</string>
     <string name="action_restart_others">重启设置等进程</string>
     <string name="cache_sent">请求已发送：桌面进程将重启，并按当前设置重建图标。</string>
-    <string name="switch_applied_cache">已应用：正在清桌面缓存并重启桌面</string>
-    <string name="switch_applied_systemui">已应用：正在重启系统界面，通知会按新设置重画</string>
-    <string name="switch_applied_all">已应用：正在清桌面缓存并重启系统界面</string>
+    <string name="switch_applied">已应用：正在清桌面缓存并重启桌面、系统界面与设置等进程</string>
     <string name="restart_sent">请求已发送：目标进程将重启。</string>
     <string name="tools_hint">通常仅在图标未随设置更新时使用。若无响应，表示该进程未注入模块；请到「作用域」页核对清单并重启设备。</string>
 

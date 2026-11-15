@@ -35,6 +35,7 @@ import com.iamcanincan.opticon.ui.IconTile
 import com.iamcanincan.opticon.ui.MenuRow
 import com.iamcanincan.opticon.ui.OpticonCard
 import com.iamcanincan.opticon.ui.clearIconCache
+import com.iamcanincan.opticon.ui.restartOtherProcesses
 import com.iamcanincan.opticon.ui.restartSystemUi
 import com.iamcanincan.opticon.ui.PageRole
 import com.iamcanincan.opticon.ui.ScreenList
@@ -65,21 +66,29 @@ internal fun FeaturesScreen(onNotify: (String) -> Unit) {
     mutableStateOf(prefs.getBoolean(ModulePrefs.KEY_NOTIFY_ENABLED, ModulePrefs.DEFAULT_NOTIFY_ENABLED))
   }
   val allOn = crop && mono && notify
-  val appliedCache = stringResource(R.string.switch_applied_cache)
-  val appliedSystemUi = stringResource(R.string.switch_applied_systemui)
-  val appliedAll = stringResource(R.string.switch_applied_all)
+  val applied = stringResource(R.string.switch_applied)
 
   fun write(key: String, value: Boolean) = prefs.edit().putBoolean(key, value).apply()
 
-  /** 开关之后立刻把后续动作做完（2026-11-08 主人：「开关后自动清缓存等一系列操作」）。 */
-  fun apply(page: SubPage) {
-    if (page == SubPage.NOTIFY) {
-      restartSystemUi(context)
-      onNotify(appliedSystemUi)
-    } else {
-      clearIconCache(context)
-      onNotify(appliedCache)
-    }
+  /**
+   * 开关之后立刻把后续动作做完（2026-11-08 主人：「开关后自动清缓存等一系列操作」）。
+   *
+   * **一刀切：三个开关里任意一个动了，三条运维操作全做**（2026-11-16 主人定的）。
+   *
+   * 为什么不再按功能分档：我按"谁真的会读这个开关"分过一次，判动态取色与系统界面无关
+   * （`monoInvert` 全仓只有 `CircleIconDrawable.getMonochrome()` 与只装在桌面里的
+   * `hookSynthesizedMonochrome` 两个读取点，通知那路读的是 `notifyEnabled`）——
+   * **真机当场推翻**：开着时只重启桌面没问题，关掉时图标变不回来，必须重启系统界面。
+   * 代码里读不到那个开关，不等于那个进程手上没有按旧设置画好的结果。
+   *
+   * 代价是切单色通知时也会删一次桌面图标缓存、桌面闪一下并重画全部图标（掩码缓存冷的时候
+   * 这一趟约 45 秒）。主人认了这个代价，换"不会再漏掉某个进程"。
+   */
+  fun apply() {
+    clearIconCache(context)
+    restartSystemUi(context)
+    restartOtherProcesses(context)
+    onNotify(applied)
   }
 
   ScreenList {
@@ -114,7 +123,7 @@ internal fun FeaturesScreen(onNotify: (String) -> Unit) {
                   write(ModulePrefs.KEY_NOTIFY_ENABLED, value)
                 }
               }
-              apply(row.page)
+              apply()
             },
           )
         }
@@ -136,9 +145,7 @@ internal fun FeaturesScreen(onNotify: (String) -> Unit) {
           write(ModulePrefs.KEY_CIRCLE_ENABLED, target)
           write(ModulePrefs.KEY_MONO_INVERT, target)
           write(ModulePrefs.KEY_NOTIFY_ENABLED, target)
-          clearIconCache(context)
-          restartSystemUi(context)
-          onNotify(appliedAll)
+          apply()
         },
         // 中性底：上面三个开关"开着"就是主色方块，这个按钮再上主色会被读成第四个开着的东西。
         tile = true,

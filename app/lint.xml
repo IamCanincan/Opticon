@@ -65,8 +65,8 @@
     <!--
         ConfigProvider 必须 exported —— 它本来就是给被注入进程读配置用的
         （Hook 跑在 launcher / SystemUI / settings 等多个 uid 下，必须跨进程访问）。
-        包名白名单（ConfigProvider.isTrustedCaller）决定谁能读，不是 manifest export。
-        没有运行时 grantUriPermission 这种敞口。
+        包名白名单（ConfigProvider.isTrustedCaller）决定谁能读、谁能请它代发重启广播，
+        不是 manifest export。没有运行时 grantUriPermission 这种敞口。
     -->
     <issue id="ExportedContentProvider" severity="ignore" />
 

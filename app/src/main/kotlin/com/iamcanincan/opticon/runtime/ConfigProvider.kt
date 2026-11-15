@@ -6,8 +6,12 @@ import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
 import android.os.Binder
+import android.os.Bundle
 import android.os.Process
+import android.util.Log
 import com.iamcanincan.opticon.debug.CorpusCapture
+import com.iamcanincan.opticon.ui.restartOtherProcesses
+import com.iamcanincan.opticon.ui.restartSystemUi
 
 /**
  * 把界面里选的配置暴露给模块。
@@ -19,9 +23,12 @@ import com.iamcanincan.opticon.debug.CorpusCapture
  * 不依赖任何框架实现，各框架上都能用。
  *
  * 安全：
- * - 只读，能查出来的内容仅是「三个开关」这类非敏感配置；
+ * - 配置只读，能查出来的内容仅是「三个开关」这类非敏感配置（`insert/delete/update` 一律抛）；
+ * - 唯一的**动作**是 [call] 的 `restartUiProcesses`：请本应用去重启系统界面与设置等进程。
+ *   桌面进程自己发不动那条广播（接收侧要本 APK 的签名权限），所以由持有权限的应用代发；
  * - **唯一的入口闸是按调用方包名认自家人**（见 [isTrustedCaller]），名单与
- *   `META-INF/xposed/scope.list` 逐条对齐；不在名单里的应用查它，拿到的是一张开游标。
+ *   `META-INF/xposed/scope.list` 逐条对齐；不在名单里的应用查它，拿到的是一张开游标，
+ *   请它代发动作则直接被拒。
  *
  * ⚠ 清单里**刻意不加** `android:readPermission`。原本加的是
  * `android.permission.STATUS_BAR`（系统签名级），理由写的是「只有系统组件持有，
@@ -89,6 +96,35 @@ class ConfigProvider : ContentProvider() {
         return packages.any { it in TRUSTED_PACKAGES }
     }
 
+    /**
+     * 让**被注入的桌面进程**请本应用去重启系统界面 / 设置等进程。
+     *
+     * 为什么要绕这一圈：那两条重启广播（`ACTION_RESTART_SELF`）在**接收侧**要求发送方持有
+     * 本 APK 的签名权限 `PROCESS_CONTROL`，而桌面进程不持有它 —— 桌面自己发会被直接挡掉。
+     * 本应用持有，所以由它代发（走的还是 `ui/Actions.kt` 那一个出口，不另抄一份广播）。
+     *
+     * 为什么不用导出广播：[com.iamcanincan.opticon.runtime.CacheAckReceiver] 免鉴权是刻意的，
+     * 代价是"任何应用都能伪造那一响"，而它只弹一句话。把"重启系统界面"挂到免鉴权通道上，
+     * 等于让任何应用都能反复重启别人的系统进程。provider 这条不一样：
+     * [Binder.getCallingUid] 是内核给的真实调用方，复用 [isTrustedCaller] 那一道闸，
+     * 只有作用域清单里的进程请得动。
+     *
+     * 用在哪：桌面自己的「主题图标」开关一变，桌面进程要清自己的图标缓存并重启，
+     * 同时还得让系统界面那几家也重启（见 `IconHooks.watchThemedIconsToggle`）。
+     */
+    override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
+        if (method != CALL_RESTART_UI) return null
+        val ctx = context ?: return null
+        if (!isTrustedCaller()) {
+            Log.w("Opticon", "ConfigProvider: 非作用域进程请求重启界面进程，已拒绝")
+            return null
+        }
+        Log.i("Opticon", "ConfigProvider: 桌面请求重启系统界面与设置等进程")
+        restartSystemUi(ctx)
+        restartOtherProcesses(ctx)
+        return Bundle().apply { putBoolean("ok", true) }
+    }
+
     override fun getType(uri: Uri): String? = null
 
     override fun insert(uri: Uri, values: ContentValues?): Uri? = throw UnsupportedOperationException(READ_ONLY)
@@ -129,6 +165,9 @@ class ConfigProvider : ContentProvider() {
         )
 
         private const val READ_ONLY = "Opticon 的配置通道是只读的"
+
+        /** [call] 认的唯一一个方法名：请本应用重启系统界面与设置等进程（桌面进程自己发不动那条广播）。 */
+        const val CALL_RESTART_UI = "restartUiProcesses"
 
         /** 列名与 [ModulePrefs.COLUMN_*] 一一对应，顺序也要一致 */
         val COLUMNS = arrayOf(

@@ -8,6 +8,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.SharedPreferences
 import android.content.pm.ActivityInfo
 import android.content.pm.ApplicationInfo
 import android.content.pm.ComponentInfo
@@ -19,19 +20,24 @@ import android.content.pm.ResolveInfo
 import android.content.pm.ServiceInfo
 import android.content.pm.ShortcutInfo
 import android.content.res.Resources
+import android.database.ContentObserver
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Rect
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.Drawable
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.Parcel
 import android.os.Process
+import android.provider.Settings
 import android.util.Log
 import com.iamcanincan.opticon.BuildConfig
+import com.iamcanincan.opticon.runtime.ConfigProvider
 import com.iamcanincan.opticon.runtime.MemberLookup
+import com.iamcanincan.opticon.runtime.ModulePrefs
 import com.iamcanincan.opticon.runtime.ModuleRuntime
 import com.iamcanincan.opticon.runtime.TAG
 import io.github.libxposed.api.XposedInterface
@@ -551,16 +557,7 @@ private fun registerProcessControlReceiver(context: Context, packageName: String
               Log.w(TAG, "ProcessControl: clear request ignored in $packageName")
               return
             }
-            val deleted = deleteIconCache(packageName)
-            Log.d(TAG, "CacheClear: manual request, db deleted=$deleted, restarting launcher")
-            // **回报给模块应用**：这个按钮以前只发出去、没人证它到了（2026-11-07 真机抓到
-            // 广播被冻结的桌面吞掉，用户点了等于没点，屏幕上却什么都不说）。
-            // ⚠ 接收方免鉴权（导出、无权限）：桌面进程不持有我们的签名权限，只收得进这种。
-            //   代价是别的应用也能伪造这一响 —— 它只会让界面弹一句"已重建"，不做任何动作。
-            runCatching {
-                ctx.sendBroadcast(Intent(ACTION_CACHE_DONE).setPackage(BuildConfig.APPLICATION_ID))
-            }
-            Process.killProcess(Process.myPid())
+            clearAndRestartLauncher(ctx, packageName, "manual request")
           }
           ACTION_RESTART_SELF -> {
             Log.d(TAG, "Restart: manual request, restarting $packageName")
@@ -583,6 +580,159 @@ private fun registerProcessControlReceiver(context: Context, packageName: String
     context.registerReceiver(receiver, filter, PERMISSION_PROCESS_CONTROL, null)
   }
   Log.d(TAG, "ProcessControl: receiver registered in $packageName")
+  watchThemedIconsToggle(context, packageName)
+}
+
+/**
+ * 清桌面图标缓存 → 回报应用 → 重启桌面。**手动按钮与自动触发共用这一条出口**，
+ * 两边做的事必须一模一样，否则"自动那下不管用"会变成另一桩悬案。
+ *
+ * 回报那一条（[ACTION_CACHE_DONE]）：这个按钮以前只发出去、没人证它到了（2026-11-07 真机
+ * 抓到广播被冻结的桌面吞掉，用户点了等于没点，屏幕上却什么都不说）。
+ * ⚠ 接收方免鉴权（导出、无权限）：桌面进程不持有我们的签名权限，只收得进这种。
+ *   代价是别的应用也能伪造这一响 —— 它只会让界面弹一句"已重建"，不做任何动作。
+ */
+private fun clearAndRestartLauncher(
+  context: Context,
+  packageName: String,
+  why: String,
+  alsoUi: Boolean = false,
+) {
+  if (alsoUi) {
+    // 桌面进程不持有 PROCESS_CONTROL 签名权限，发不动"重启系统界面 / 设置等进程"那条广播
+    // —— 请本应用代发（provider 的 call 按 Binder 真实调用方鉴权，见 ConfigProvider.call）。
+    // ⚠ 本应用可能正被系统冻结，Binder 调用会阻塞：放另一条线程上并**最多等 1.5 秒**，
+    //   等不到也照样删缓存重启桌面 —— 正事不能被一个代发请求拖住。
+    val relay = Thread {
+      runCatching {
+        val uri = Uri.parse("content://${BuildConfig.APPLICATION_ID}${ModulePrefs.AUTHORITY_SUFFIX}/config")
+        context.contentResolver.call(uri, ConfigProvider.CALL_RESTART_UI, null, null)
+      }.onFailure { Log.w(TAG, "CacheClear: 请应用重启界面进程失败", it) }
+    }.apply { isDaemon = true; name = "opticon-ui-relay" }
+    relay.start()
+    runCatching { relay.join(1500) }
+  }
+  val deleted = deleteIconCache(packageName)
+  Log.i(TAG, "CacheClear: $why, db deleted=$deleted, restarting launcher")
+  runCatching {
+    context.sendBroadcast(Intent(ACTION_CACHE_DONE).setPackage(BuildConfig.APPLICATION_ID))
+  }
+  Process.killProcess(Process.myPid())
+}
+
+/**
+ * 桌面自己的「主题图标」开关一变，就替他把「清缓存重启」那一下按了 —— 而且按的是
+ * **界面里那一刀切的同一套**：清桌面缓存 + 重启桌面 + 重启系统界面与设置等进程。
+ * 后两条桌面自己发不动（接收侧要本 APK 的签名权限），走 [ConfigProvider.call] 请应用代发。
+ *
+ * **补的是哪个缺口**（2026-11-16 主人）：Opticon 的动态取色开着、桌面的主题图标关着时，
+ * 桌面缓存进 `app_icons.db` 的是**彩色**那一批位图；之后他再打开桌面的主题图标，桌面并不
+ * 因此丢掉那批缓存，屏幕上还是彩色 —— 他得再来手动按一次运维操作。
+ *
+ * ⚠ 他提的办法是「动态取色开的时候就提前加载好单色图标」，但**提前合成解决不了这件事**：
+ *   挡路的是桌面自己数据库里那批已经画好的位图，我们的掩码缓存再热，桌面不问就用不上。
+ *   真正等价于"手动按那一下"的动作只有删缓存 + 重启桌面，所以这里做的是**监听那个开关**。
+ *
+ * **开关存在哪儿**（本机实测，Android 17 / AOSP Launcher3）：
+ * `settings get secure themed_icons_enabled` → null，system / global 里也没有对应的键
+ * ⇒ 它写在桌面自己的 SharedPreferences 里。两条都监听：桌面 prefs（本机走这条）+
+ * 那个 Secure 键（AOSP 别的版本走这条，监听一个还没写过的键是合法的）。
+ *
+ * **认键用名字里带 `themed`**：桌面的键名没有公开常量可引（本机 framework 源码里没有这个
+ * 符号），所以每一次 prefs 变更都打一行日志（哪个实例 + 键名 + 新值）。万一它不叫这个名字，
+ * 日志会直接把真名说出来，下一轮按真名钉死 —— 而不是继续猜。
+ *
+ * **只在值真的变了才动手**：桌面每次启动都可能把同一个值再写一遍，而
+ * `OnSharedPreferenceChangeListener` 对"值没变的提交"照样回调。不比上一次的值就会变成
+ * 开机 → 清缓存 → 重启 → 开机 的死循环。
+ */
+private fun watchThemedIconsToggle(context: Context, packageName: String) {
+  if (!isLauncher(packageName)) return
+  Thread {
+    runCatching { watchThemedPrefs(context, packageName) }
+      .onFailure { Log.w(TAG, "ThemedWatch: prefs 监听没装上", it) }
+    runCatching { watchThemedSecure(context, packageName) }
+      .onFailure { Log.w(TAG, "ThemedWatch: Secure 监听没装上", it) }
+  }.apply { isDaemon = true; name = "opticon-themed-watch" }.start()
+}
+
+private fun watchThemedPrefs(context: Context, packageName: String) {
+  val instances = ArrayList<SharedPreferences>()
+  fun add(p: SharedPreferences?) {
+    if (p != null && instances.none { it === p }) instances.add(p)
+  }
+  // 桌面自己用的那个实例（`Utilities.getPrefs`）优先：它一定是开关所在的那一份。
+  // 用宿主的 classLoader 而不是 Class.forName：后者按调用方（模块）的 loader 找，
+  // 注入环境下不一定看得见宿主自己的类。
+  runCatching {
+    val m = context.classLoader.loadClass("com.android.launcher3.Utilities")
+      .getDeclaredMethod("getPrefs", Context::class.java)
+    m.isAccessible = true
+    add(m.invoke(null, context) as? SharedPreferences)
+  }.onFailure { Log.d(TAG, "ThemedWatch: Utilities.getPrefs 取不到（${it.javaClass.simpleName}），改按文件名枚举") }
+  // 其余 prefs 文件一并登记：开关未必在主文件里。`getSharedPreferences` 按名字在进程内
+  // 缓存同一个实例，所以文件此刻还不存在也登记得上 —— 桌面之后写进去，这边照样收得到。
+  runCatching {
+    File(context.applicationInfo.dataDir, "shared_prefs").list()?.sorted()?.forEach { f ->
+      if (f.endsWith(".xml")) {
+        runCatching { add(context.getSharedPreferences(f.removeSuffix(".xml"), Context.MODE_PRIVATE)) }
+      }
+    }
+  }
+  if (instances.isEmpty()) {
+    Log.w(TAG, "ThemedWatch: $packageName 一个 prefs 实例都没拿到，主题图标开关监听不到")
+    return
+  }
+
+  // 回调都在主线程派发（SharedPreferencesImpl 用主线程 Handler），所以这张表不用加锁。
+  val seen = HashMap<String, String>()
+  instances.forEachIndexed { i, p ->
+    runCatching {
+      val all = p.all
+      Log.i(TAG, "ThemedWatch: prefs#$i 现有键 ${all.keys.sorted().joinToString(" ")}")
+      for ((k, v) in all) if (k.contains("themed", ignoreCase = true)) seen[k] = v?.toString() ?: ""
+    }
+    p.registerOnSharedPreferenceChangeListener { sp, changed ->
+      // SDK 37 的 `onChanged` 把 key 标成 @Nullable；null 时 removeAll 之类，没有键可认。
+      val key = changed ?: return@registerOnSharedPreferenceChangeListener
+      val now = runCatching { sp.all[key]?.toString() ?: "" }.getOrDefault("")
+      if (!key.contains("themed", ignoreCase = true)) {
+        Log.i(TAG, "ThemedWatch: prefs#$i 变更 $key=$now（名字里没有 themed，不动）")
+        return@registerOnSharedPreferenceChangeListener
+      }
+      val was = seen[key]
+      seen[key] = now
+      Log.i(TAG, "ThemedWatch: 主题图标键 $key：$was → $now")
+      if (was == now) return@registerOnSharedPreferenceChangeListener
+      // 回调在主线程：删缓存是文件 IO、请应用代发是 Binder，都不该压在桌面的主线程上。
+      Thread {
+        clearAndRestartLauncher(context, packageName, "桌面主题图标开关 $key=$now", alsoUi = true)
+      }.apply { isDaemon = true; name = "opticon-themed-clear" }.start()
+    }
+  }
+  Log.i(TAG, "ThemedWatch: 已登记 ${instances.size} 个 prefs 实例（$packageName）")
+}
+
+private fun watchThemedSecure(context: Context, packageName: String) {
+  val key = "themed_icons_enabled"
+  var seen: Int? = runCatching {
+    if (Settings.Secure.getString(context.contentResolver, key) == null) null
+    else Settings.Secure.getInt(context.contentResolver, key, 0)
+  }.getOrNull()
+  Log.i(TAG, "ThemedWatch: Secure.$key 当前=${seen ?: "未写过"}")
+  val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+    override fun onChange(selfChange: Boolean) {
+      val now = runCatching { Settings.Secure.getInt(context.contentResolver, key, 0) }.getOrDefault(0)
+      val was = seen
+      seen = now
+      Log.i(TAG, "ThemedWatch: Secure.$key：$was → $now")
+      if (was == now) return
+      Thread {
+        clearAndRestartLauncher(context, packageName, "Secure.$key=$now", alsoUi = true)
+      }.apply { isDaemon = true; name = "opticon-themed-clear" }.start()
+    }
+  }
+  context.contentResolver.registerContentObserver(Settings.Secure.getUriFor(key), false, observer)
 }
 
 /**
