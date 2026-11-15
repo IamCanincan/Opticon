@@ -3,6 +3,7 @@ package com.iamcanincan.opticon.circle
 import android.Manifest
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.app.Application
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -28,6 +29,7 @@ import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.Parcel
@@ -650,9 +652,12 @@ private fun clearAndRestartLauncher(
 private fun watchThemedIconsToggle(context: Context, packageName: String) {
   if (!isLauncher(packageName)) return
   Thread {
-    runCatching { watchThemedPrefs(context, packageName) }
+    // 两条监听共用一个调度器：无论开关从哪条路被发现，动手的时机判据只有一份。
+    val scheduler = ThemedClearScheduler(context.applicationContext as Application, packageName)
+    scheduler.start()
+    runCatching { watchThemedPrefs(context, packageName, scheduler) }
       .onFailure { Log.w(TAG, "ThemedWatch: prefs 监听没装上", it) }
-    runCatching { watchThemedSecure(context, packageName) }
+    runCatching { watchThemedSecure(context, packageName, scheduler) }
       .onFailure { Log.w(TAG, "ThemedWatch: Secure 监听没装上", it) }
   }.apply { isDaemon = true; name = "opticon-themed-watch" }.start()
 }
@@ -702,7 +707,102 @@ private fun isThemedKey(key: String) =
 private fun themedBaselineFile(packageName: String) =
   File("${launcherDataDir(packageName)}/cache", "opticon-themed-baseline")
 
-private fun watchThemedPrefs(context: Context, packageName: String) {
+/** 切换之后先等这么久，让桌面把这次事务走完（见 [ThemedClearScheduler]）。 */
+private const val THEMED_SETTLE_MS = 3000L
+
+/**
+ * 「什么时候才动手」—— **等样式面板收起、回到桌面，再等 [THEMED_SETTLE_MS]。**
+ *
+ * 2026-11-16 主人：「我每次都要重复操作两次才行，第一次切的时候系统界面重启，
+ * 但是开关回到了我第一次切之前」。真机日志把机制说全了：切开关那个界面是
+ * `com.android.wallpaper` 的 `CustomizationPickerActivity`，它靠桌面的
+ * `GridCustomizationsProvider` 供数，而我们在 prefs 回调后 **13 毫秒**就 SIGKILL 了桌面：
+ *
+ * ```
+ * 02:52:23.632  /icon_themed isMonoThemeEnabled=true    ← 切之前
+ * 02:52:26.845  /icon_themed isMonoThemeEnabled=false   ← 切了，面板读到新值
+ * 02:52:26.858  CacheClear → Sending signal SIG: 9      ← 我们杀桌面
+ * 02:52:43.167  /icon_themed isMonoThemeEnabled=true    ← 面板读回旧值 = 他看到的"弹回去"
+ * 02:52:46.922  /icon_themed isMonoThemeEnabled=false   ← 桌面自己 settle 完才对
+ * ```
+ *
+ * 同一窗口还有 `PreviewUtils.cleanUp` 的 binder `error -32` 与 `ImageWallpaper` 服务被打死 ——
+ * 面板的实时预览就是这么断的。所以立刻动手不是"快"，是把用户正在读的那份数据源掀了。
+ *
+ * 两道闸缺一不可：**前台闸**挡的是"面板还开着"（桌面 Activity 被盖住 ⇒ paused），
+ * **静置闸**挡的是"刚回到桌面、桌面自己还没 settle"。少了前者，延迟多久都会再断一次预览。
+ */
+private class ThemedClearScheduler(
+  private val app: Application,
+  private val packageName: String,
+) : Application.ActivityLifecycleCallbacks {
+
+  @Volatile private var foreground = false
+
+  /** 待办的那次清缓存；null = 没有。跨线程读，所以 volatile。 */
+  @Volatile private var pending: String? = null
+
+  /** 只在主线程读写（prefs 回调与生命周期回调都在主线程）。 */
+  private var worker: Thread? = null
+
+  fun start() {
+    app.registerActivityLifecycleCallbacks(this)
+  }
+
+  fun request(reason: String) {
+    pending = reason
+    if (!foreground) {
+      Log.i(TAG, "ThemedWatch: 样式面板还盖在桌面上，等回到桌面再清缓存")
+      return
+    }
+    arm()
+  }
+
+  private fun arm() {
+    val reason = pending ?: return
+    worker?.interrupt()
+    worker =
+      Thread {
+        // 被新的切换打断 ⇒ 这一趟不作数，合并到最后一次。
+        if (!runCatching { Thread.sleep(THEMED_SETTLE_MS) }.isSuccess) return@Thread
+        if (!foreground) {
+          Log.i(TAG, "ThemedWatch: 静置期间面板又盖上了，继续等（待办还在）")
+          return@Thread
+        }
+        pending = null
+        clearAndRestartLauncher(app, packageName, reason, alsoUi = true)
+      }.apply { isDaemon = true; name = "opticon-themed-clear" }
+    worker?.start()
+  }
+
+  override fun onActivityResumed(activity: Activity) {
+    foreground = true
+    if (pending != null) {
+      Log.i(TAG, "ThemedWatch: 回到桌面了，补做那次清缓存")
+      arm()
+    }
+  }
+
+  override fun onActivityPaused(activity: Activity) {
+    foreground = false
+  }
+
+  override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
+
+  override fun onActivityStarted(activity: Activity) = Unit
+
+  override fun onActivityStopped(activity: Activity) = Unit
+
+  override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+
+  override fun onActivityDestroyed(activity: Activity) = Unit
+}
+
+private fun watchThemedPrefs(
+  context: Context,
+  packageName: String,
+  scheduler: ThemedClearScheduler,
+) {
   // 键是 prefs 文件名：只印 `#i` 的话，13 个实例在日志里分不出谁是谁。
   val instances = LinkedHashMap<String, SharedPreferences>()
   fun add(name: String, p: SharedPreferences?) {
@@ -764,10 +864,8 @@ private fun watchThemedPrefs(context: Context, packageName: String) {
       }.onFailure { Log.w(TAG, "ThemedWatch: 基准写不下去，下一趟可能多清一次", it) }
       // 第一次见到这个键只立基准：桌面每次启动都会把它重写一遍（见 [themedBaselineFile]）。
       if (was == null) return@OnSharedPreferenceChangeListener
-      // 回调在主线程：删缓存是文件 IO、请应用代发是 Binder，都不该压在桌面的主线程上。
-      Thread {
-        clearAndRestartLauncher(context, packageName, "桌面主题图标开关 $key=$now", alsoUi = true)
-      }.apply { isDaemon = true; name = "opticon-themed-clear" }.start()
+      // ⚠ 别在这儿直接杀桌面：面板正读着它供的数，13ms 就动手会把开关弹回去。
+      scheduler.request("桌面主题图标开关 $key=$now")
     }
     themedListeners.add(listener)
     p.registerOnSharedPreferenceChangeListener(listener)
@@ -780,7 +878,11 @@ private fun watchThemedPrefs(context: Context, packageName: String) {
   )
 }
 
-private fun watchThemedSecure(context: Context, packageName: String) {
+private fun watchThemedSecure(
+  context: Context,
+  packageName: String,
+  scheduler: ThemedClearScheduler,
+) {
   val key = "themed_icons_enabled"
   var seen: Int? = runCatching {
     if (Settings.Secure.getString(context.contentResolver, key) == null) null
@@ -794,9 +896,7 @@ private fun watchThemedSecure(context: Context, packageName: String) {
       seen = now
       Log.i(TAG, "ThemedWatch: Secure.$key：$was → $now")
       if (was == now) return
-      Thread {
-        clearAndRestartLauncher(context, packageName, "Secure.$key=$now", alsoUi = true)
-      }.apply { isDaemon = true; name = "opticon-themed-clear" }.start()
+      scheduler.request("Secure.$key=$now")
     }
   }
   context.contentResolver.registerContentObserver(Settings.Secure.getUriFor(key), false, observer)

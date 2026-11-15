@@ -77,7 +77,7 @@
     <string name="features_all_hint">三个功能一起开 / 关；排查时先全关最省事。</string>
     <string name="features_note_group">开关什么时候生效</string>
     <string name="features_effect_title">约一秒内生效</string>
-    <string name="features_effect_body">开关写入后模块每秒重读一次配置：新画的图标、新收到的通知立刻按新设置处理。三个开关里任意一个动了，都会清一次桌面缓存并重启桌面、系统界面与设置等进程，图标和通知随之重画（桌面会闪一下）。另外，桌面自己的「主题图标」开关一变，模块也会自动做这一套，不用再手动按。万一仍没变化，到「设置 → 运维操作」手动按一次。</string>
+    <string name="features_effect_body">开关写入后模块每秒重读一次配置：新画的图标、新收到的通知立刻按新设置处理。三个开关里任意一个动了，都会清一次桌面缓存并重启桌面、系统界面与设置等进程，图标和通知随之重画（桌面会闪一下）。另外，桌面自己的「主题图标」开关一变，模块也会自动做这一套，不用再手动按 —— 但要等你退出样式面板、回到桌面之后才动手，否则会把面板正在读的预览打断、开关看起来弹回原样。万一仍没变化，到「设置 → 运维操作」手动按一次。</string>
     <string name="settings_scope_sub">会画应用图标的进程清单（在框架管理器中勾选）</string>
     <string name="settings_setup_title">启用与验证</string>
     <string name="settings_setup_sub">四步启用、一条 adb 命令验证</string>

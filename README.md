@@ -101,6 +101,12 @@
   代价是切单色通知时桌面也会闪一下并重画全部图标，主人认了这个代价。
   另外，**桌面自己的「主题图标」开关一变，模块会自动做同一套**
   （`IconHooks.watchThemedIconsToggle`）—— 以前这一步得手动按运维操作。
+  真键是 `icon_theme_id`（本机实测，名字里没有 themed），基准落盘在桌面 cache 目录，
+  否则桌面启动时那次重写会被当成用户切开关，自己触发自己。
+  **动手时机有两道闸**：等样式面板收起、回到桌面，再静置 3 秒
+  （`ThemedClearScheduler`）—— 切开关那个界面是 `com.android.wallpaper` 的
+  `CustomizationPickerActivity`，靠桌面的 `GridCustomizationsProvider` 供数；
+  在 prefs 回调后 13 毫秒就杀桌面，面板会读回旧值、开关看着弹回原样，主人得切两次。
   桌面进程发不动那两条重启广播（接收侧要本 APK 的签名权限），所以它走
   `ConfigProvider.call("restartUiProcesses")` 请应用代发，鉴权复用作用域白名单。
 - **每个功能只有一个开关、一条进详情的路**（2026-11-12）：开关只在「功能」页那一行；
