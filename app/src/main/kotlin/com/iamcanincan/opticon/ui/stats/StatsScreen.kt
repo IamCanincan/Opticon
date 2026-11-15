@@ -338,6 +338,9 @@ private fun LegendRow(slice: Slice, grand: Int) {
       color = scheme.onSurface,
       modifier = Modifier.weight(1f),
     )
+    // 同一条规则：weight(1f) 的文字列后面留 10dp。这里标签是短功能名，平时看不出来，
+    // 字号放到最大时才靠这道缝不贴上百分比。
+    Spacer(modifier = Modifier.width(10.dp))
     Text(
       text = stringResource(R.string.stats_percent, pct),
       style = MaterialTheme.typography.labelMedium,
@@ -395,6 +398,7 @@ private fun FeatureChart(
         color = scheme.onSurface,
         modifier = Modifier.weight(1f),
       )
+      Spacer(modifier = Modifier.width(10.dp))
       Text(
         text = "${total}",
         style = MaterialTheme.typography.headlineSmall,

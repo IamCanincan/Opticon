@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Circle
@@ -107,6 +108,8 @@ internal fun HomeScreen(onOpen: (SubPage) -> Unit) {
                 (if (fresh) scheme.onPrimaryContainer else scheme.onSurfaceVariant).copy(alpha = 0.8f),
             )
           }
+          // weight(1f) 的文字列不会自己留缝：状态那句会折行，不留这道 10dp 就顶到胶囊上。
+          Spacer(modifier = Modifier.width(10.dp))
           Box(
             modifier = Modifier
               .background(scheme.primary, RoundedCornerShape(50))

@@ -191,6 +191,8 @@ internal fun MenuRow(
         trailing()
       }
       if (showChevron) {
+        // weight(1f) 的文字列不会自己留缝：长说明会顶到箭头上（主页那行的「N 次」也走这里）。
+        Spacer(modifier = Modifier.width(10.dp))
         Icon(
           imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
           contentDescription = null,
