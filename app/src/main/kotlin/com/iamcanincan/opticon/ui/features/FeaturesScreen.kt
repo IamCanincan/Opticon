@@ -211,6 +211,8 @@ private fun SwitchRow(
       }
       // ⚠ 2026-11-08 主人「应只有开关按钮部分点击才能开关，不然太灵敏了」——
       //   整行不是 toggleable，点在文字上不会把开关翻过去。
+      // 文字列是 weight(1f)，不留这道缝就会顶到开关上（自适应那行说明会折行，最明显）。
+      Spacer(modifier = Modifier.width(10.dp))
       Switch(checked = entry.on, onCheckedChange = onToggle)
     }
   }
