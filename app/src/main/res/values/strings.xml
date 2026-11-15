@@ -10,13 +10,13 @@
         老式写法（xposeddescription meta-data / module.prop 里的 description=）已经不用，
         那是给 API <= 93 的旧框架用的，留着反而让模块变成「兼容模式」。
 
-        长度约定：中文 <= 26 字，太长在模块列表里会占好几行。**现在 21 字**（含两个顿号；
+        长度约定：中文 <= 26 字，太长在模块列表里会占好几行。**现在 13 字**（含两个顿号；
         主人定的：压回约定内，不钉死版本号那类信息也不放进来）。曾经到过 35 字，注释里的字数
         也落后过一次（写着 21 字、实际不是）。**改这一行时必须重新数字**，别相信旁边那句话。
         备选（20 字）：「老式图标转自适应、单色剪影、通知小图标」。
         三路功能都要提到 —— 用户在 LSPosed 列表里只看得到这一行。
     -->
-    <string name="xposed_description">老式图标自适应化、单色剪影、通知小图标修复</string>
+    <string name="xposed_description">自适应、动态取色、单色通知</string>
 
     <!--
         自有权限 PROCESS_CONTROL 的名字与说明（出现在系统「设置 → 应用」里）。
@@ -30,8 +30,8 @@
         三个功能不占底栏 —— 开关在「功能」页那一行，说明与效果是二级页（从主页那行进）。
     -->
     <string name="tab_crop">自适应</string>
-    <string name="tab_mono">单色</string>
-    <string name="tab_notify">通知</string>
+    <string name="tab_mono">动态取色</string>
+    <string name="tab_notify">单色通知</string>
     <string name="tab_about">关于</string>
     <string name="tab_home">主页</string>
     <string name="tab_features">功能</string>
@@ -51,9 +51,9 @@
     <string name="stats_percent">%1$d%%</string>
     <string name="stats_times">次</string>
     <string name="stats_share">占 %1$d%%</string>
-    <string name="home_sub">图标自适应 · 单色极性 · 通知小图标，三项都可以单独开关。下面一眼看全当前状态。</string>
+    <string name="home_sub">自适应 · 动态取色 · 单色通知，三项都可以单独开关。下面一眼看全当前状态。</string>
     <string name="home_features">功能状态</string>
-    <string name="home_sub_crop">应用图标统一裁成圆形</string>
+    <string name="home_sub_crop">老式图标做成自适应图标，形状交给系统</string>
     <string name="home_sub_mono">未适配图标的黑白极性修正</string>
     <string name="home_sub_notify">通知小图标改成黑白剪影</string>
     <string name="home_role">当前状态</string>
@@ -77,7 +77,7 @@
     <string name="features_all_hint">三个功能一起开 / 关；排查时先全关最省事。</string>
     <string name="features_note_group">开关什么时候生效</string>
     <string name="features_effect_title">约一秒内生效</string>
-    <string name="features_effect_body">开关写入后模块每秒重读一次配置：新画的图标、新收到的通知立刻按新设置处理。切开关时：自适应 / 单色会清桌面缓存并重启桌面，桌面图标随之重画；通知会重启系统界面，通知随之重建。设置、分享面板这些进程要等它们自己重新加载。万一仍没变化，到「设置 → 运维操作」手动按一次。</string>
+    <string name="features_effect_body">开关写入后模块每秒重读一次配置：新画的图标、新收到的通知立刻按新设置处理。切开关时：自适应 / 动态取色会清桌面缓存并重启桌面，桌面图标随之重画；单色通知会重启系统界面，通知随之重建。设置、分享面板这些进程要等它们自己重新加载。万一仍没变化，到「设置 → 运维操作」手动按一次。</string>
     <string name="settings_scope_sub">会画应用图标的进程清单（在框架管理器中勾选）</string>
     <string name="settings_setup_title">启用与验证</string>
     <string name="settings_setup_sub">四步启用、一条 adb 命令验证</string>
@@ -86,13 +86,13 @@
     <string name="action_back">返回</string>
     <string name="stats_role">总览占比，按功能列出来源</string>
     <string name="settings_role">作用域、启用验证、运维与关于</string>
-    <string name="stats_note">这些数字在说什么：自适应 = 把多少个非自适应（老式）图标做成了自适应图标（桌面 / 状态栏 / 最近任务都算）；单色 = 我们替应用生成单色层的张数；通知 · 被补 = 我们把彩色通知图标改成黑白的次数；通知 · 已适配 = 应用本来就给黑白的次数（我们没动）。</string>
+    <string name="stats_note">这些数字在说什么：自适应 = 把多少个非自适应（老式）图标做成了自适应图标（桌面 / 状态栏 / 最近任务都算）；动态取色 = 我们替应用生成单色层的张数；单色通知 · 被补 = 我们把彩色通知图标改成黑白的次数；单色通知 · 已适配 = 应用本来就给黑白的次数（我们没动）。</string>
 
     <!-- ============ 「自适应」页 ============ -->
 
 
     <!-- 自适应的说明卡（开关在「功能」页那一行） -->
-    <string name="circle_switch_title">老式图标自适应化</string>
+    <string name="circle_switch_title">自适应</string>
     <string name="circle_switch_body">非自适应（老式）图标直接做成自适应图标：原图按原尺寸放进去、不放大也不裁切，先缩到恰好填满正方形，占比够的按边缘颜色延伸补满；占比小的缩到内切圆里并铺白底，形状交给系统（桌面的「图标形状」设成什么就是什么）。快捷方式不处理，原样交给桌面。自适应图标保持原样。</string>
     <!-- 开关切换后的 Snackbar：桌面有预渲染缓存，需说明清除缓存后才会生效 -->
 
@@ -196,7 +196,7 @@
         单色遮罩极性修正。这条和自适应是**两个独立开关**：它管的是 Android 16 强制取色下
         桌面替「未适配」应用现场生成的那张单色遮罩，和形状无关。2026-10-26 起单色独立成页。
     -->
-    <string name="mono_switch_title">未适配图标的单色层</string>
+    <string name="mono_switch_title">动态取色</string>
     <string name="mono_switch_body">在 Android 16 强制动态取色下，为未提供单色层的应用生成极性正确的单色剪影。在「功能」页关闭后由桌面自身算法处理，该类图标的明暗关系可能反转。</string>
     <!-- 单色页的示意卡：左=原图标（浅底深形），右=剪影（深形为墨，洞交给桌面主题盘） -->
     <string name="mono_effect_title">单色层示意</string>
@@ -221,8 +221,8 @@
     <!-- 关于页：功能范围（覆盖什么、有意排除什么） -->
     <string name="section_range">功能范围</string>
     <string name="range_crop">自适应：所有已注入进程中的非自适应应用图标；快速设置磁贴除外。</string>
-    <string name="range_mono">单色：未提供单色层的自适应图标；已提供者原样透传。</string>
-    <string name="range_notify">通知：新通知、通知行与状态栏重建；已适配应用跳过，大图与头像不处理。</string>
+    <string name="range_mono">动态取色：未提供单色层的自适应图标；已提供者原样透传。</string>
+    <string name="range_notify">单色通知：新通知、通知行与状态栏重建；已适配应用跳过，大图与头像不处理。</string>
     <string name="range_scope">作用域由框架管理器决定；未注入的进程不受影响。</string>
 
     <!-- 更新卡片 -->
@@ -256,11 +256,11 @@
     <!-- 关于（分区标题直接复用底栏的 tab_about，免得两处文案不一致被判重复）-->
     <string name="about_version">版本 %1$s · MIT 许可</string>
     <!-- Opti = 优化，con = icon。**三件事**都落在"图标"上（形状、强制取色的剪影、通知里的小图），别写成互不相干的几块功能 -->
-    <string name="about_body">源码与文档见 GitHub。Opticon 关注图标显示的三类问题：非自适应图标的自适应化、强制动态取色下未适配应用的单色剪影，以及通知栏小图标。</string>
+    <string name="about_body">源码与文档见 GitHub。Opticon 的三个功能：自适应（老式图标做成自适应图标）、动态取色（强制取色下未适配应用的单色剪影）、单色通知（通知栏小图标）。</string>
 
-    <!-- ============ 「通知」页 ============ -->
+    <!-- ============ 「单色通知」页 ============ -->
 
-    <string name="notify_switch_title">通知小图标修复</string>
+    <string name="notify_switch_title">单色通知</string>
     <string name="notify_switch_body">在「功能」页关闭后不再处理任何通知。设置即时生效；切开关会自动重启系统界面，已显示的通知也会重建。</string>
     <!-- 通知页示意卡：左=灰白色块，右=修复后的可辨识图标 -->
     <string name="notify_effect_title">通知小图标示意</string>
@@ -269,7 +269,7 @@
     <string name="notify_sample_after_title">修复后</string>
     <string name="notify_sample_after_detail">可辨识图标</string>
 
-    <string name="notify_scope_title">通知仅需系统界面</string>
+    <string name="notify_scope_title">单色通知仅需系统界面</string>
     <string name="notify_scope_body">通知图标由系统界面（com.android.systemui）绘制，因此该功能仅需注入该进程；为其他进程配置作用域不影响此项。若未生效，请在框架的模块详情页重新应用作用域并重启设备。</string>
 
     <string name="notify_verify_title">验证方法</string>

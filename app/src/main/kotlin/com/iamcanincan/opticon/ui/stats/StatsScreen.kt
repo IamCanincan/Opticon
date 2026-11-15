@@ -465,8 +465,15 @@ private fun groupByFeature(snapshot: String?): List<Pair<String, List<Pair<Strin
     byFeature.getOrPut(feature) { ArrayList() }.add(label to n)
   }
   return byFeature.entries
-    .map { it.key to it.value.sortedByDescending { p -> p.second } }
+    .map { featureLabel(it.key) to it.value.sortedByDescending { p -> p.second } }
     .sortedByDescending { e -> e.second.sumOf { p -> p.second } }
+}
+
+// 盘上计数键仍是旧名（首页 splitCounts 按它解析、历史计数也认它），只在显示层换成统一功能名。
+private fun featureLabel(key: String): String = when (key) {
+  "单色" -> "动态取色"
+  "通知" -> "单色通知"
+  else -> key
 }
 
 private fun friendlyProcess(proc: String): String = when (proc) {
@@ -478,17 +485,17 @@ private fun friendlyProcess(proc: String): String = when (proc) {
 
 /**
  * `mono:34000000/2;monoCold:…/…` →
- * 第一行 `耗时 单色 23.2ms（780 次）`
- * 第二行 `单色构成 快键 0.1ms×624 · 缓存 4.9ms×156 · 冷合成 108ms×… · 等锁 1.0ms · 实例命中 0.3ms×…`
+ * 第一行 `耗时 动态取色 23.2ms（780 次）`
+ * 第二行 `动态取色构成 快键 0.1ms×624 · 缓存 4.9ms×156 · 冷合成 108ms×… · 等锁 1.0ms · 实例命中 0.3ms×…`
  *
- * 为什么要第二行：一个「单色 23.2ms」的均值把**等锁、快键命中（亚毫秒）、
+ * 为什么要第二行：一个「动态取色 23.2ms」的均值把**等锁、快键命中（亚毫秒）、
  * 内容缓存命中（几毫秒）、真冷合成（上百毫秒）** 四档混在一起，看到 23ms 没法判断
  * 下一刀该砍哪里。分档也只有配上**张数**才读得懂（平均值会被少数慢图拉走）。
  */
 private fun perfLines(perf: String?): List<String> {
   if (perf.isNullOrBlank()) return emptyList()
   val names = mapOf(
-    "mono" to "单色",
+    "mono" to "动态取色",
     "monoFast" to "快键", "monoCache" to "缓存", "monoCold" to "冷合成",
     "monoWait" to "等锁", "monoInst" to "实例命中",
   )
@@ -513,7 +520,7 @@ private fun perfLines(perf: String?): List<String> {
   )
   return listOfNotNull(
     head.takeIf { it.isNotEmpty() }?.joinToString(" · ", prefix = "耗时 "),
-    split.takeIf { it.isNotEmpty() }?.joinToString(" · ", prefix = "单色构成 "),
+    split.takeIf { it.isNotEmpty() }?.joinToString(" · ", prefix = "动态取色构成 "),
   )
 }
 
