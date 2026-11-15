@@ -28,6 +28,7 @@ function encode(w, h, rgba) {
 }
 const S = 236, GAP = 8;                             // 与 _shotcmp 同一套排版
 const NP = +(process.env.NP || 3);                 // 大表每行几栏（_shotcmp 两联时传 2）
+const COLS = (process.env.COLS || '彩色,单色').split(',');   // 每栏底下那行小字，长度 = NP
 const rows = JSON.parse(fs.readFileSync(rowsP, 'utf8'));
 const cell = (k, i, j) => {                          // k=第几行, i=第几栏（0=彩色 1=单色）, j=第几格像素
   const ox = GAP + i * (S + GAP), oy = GAP + k * (S + GAP);
@@ -36,13 +37,14 @@ const cell = (k, i, j) => {                          // k=第几行, i=第几栏
 const b64 = (w, h, rgba) => 'data:image/png;base64,' + encode(w, h, rgba).toString('base64');
 const cells = [];
 for (let k = 0; k < rows.length; k++) {
-  const a = Buffer.alloc(S * S * 4), b = Buffer.alloc(S * S * 4);
-  const ox = GAP, oy = GAP + k * (S + GAP);
-  for (let y = 0; y < S; y++) {
-    px.copy(a, y * S * 4, ((oy + y) * W + ox) * 4, ((oy + y) * W + ox) * 4 + S * 4);
-    px.copy(b, y * S * 4, ((oy + y) * W + ox + S + GAP) * 4, ((oy + y) * W + ox + S + GAP) * 4 + S * 4);
+  const oy = GAP + k * (S + GAP);
+  const one = [];
+  for (let i = 0; i < NP; i++) {                       // 三联 = 彩色 / 旧单色 / 新单色；两联 = 彩色 / 单色
+    const buf = Buffer.alloc(S * S * 4), ox = GAP + i * (S + GAP);
+    for (let y = 0; y < S; y++) px.copy(buf, y * S * 4, ((oy + y) * W + ox) * 4, ((oy + y) * W + ox) * 4 + S * 4);
+    one.push(b64(S, S, buf));
   }
-  cells.push([b64(S, S, a), b64(S, S, b)]);
+  cells.push(one);
 }
 const html = `<div style="font:14px/1.5 system-ui,'Microsoft YaHei',sans-serif;color:#eaeaea;background:#111;padding:14px;border-radius:12px">
 <h3 style="margin:0 0 4px">${title}</h3>
@@ -53,8 +55,10 @@ ${rows.map((r, k) => `<div style="display:flex;gap:10px;align-items:center;paddi
     <div style="color:${r.warn ? '#ff9a6a' : '#8fd08f'}">比值 ${r.ratio}${r.plate ? ` （图案占画幅 ${r.plate}%）` : ''}</div>
     <div style="color:#9aa;font-size:12.5px">${r.note}</div>
   </div>
-  <img src="${cells[k][0]}" width="150" height="150" style="border:1px solid #333;border-radius:8px;image-rendering:auto">
-  <img src="${cells[k][1]}" width="150" height="150" style="border:1px solid #333;border-radius:8px;image-rendering:auto">
+  ${cells[k].map((src, i) => `<div style="text-align:center">
+    <img src="${src}" width="150" height="150" style="border:1px solid #333;border-radius:8px;image-rendering:auto">
+    <div style="color:#9aa;font-size:12px;margin-top:3px">${COLS[i] || ''}</div>
+  </div>`).join('\n  ')}
 </div>`).join('\n')}
 </div>`;
 fs.writeFileSync(outP, html);

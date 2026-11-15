@@ -72,6 +72,17 @@ for (const r of d.prepare('SELECT componentName c, icon i, mono_icon m FROM icon
   if (!picked.has(pkg)) picked.set(pkg, r);
 }
 const rows = [];
+// 库里那张单色**是谁画的**：`--log=<logcat>` 才分得开。透传的那张是平台自己画的矢量，
+// 拿它跟我们的几何对表 = 把别人的行算进我们的分母（2026-11-15 装机的"偏小尾巴 6 张"全是透传，
+// 就是这么被误读成几何故障的）。只认两条明确的证据：`透传 … 是谁=包/…` 与 `Mono: 跟彩色 … label=包/…`。
+const PASS = new Set(), OURS = new Set();
+for (const f of (process.env.LOG || '').split(',').filter(Boolean)) {
+  const txt = fs.readFileSync(f, 'utf8');
+  for (const m of txt.matchAll(/透传 #\d+ 是谁=([\w.]+)\//g)) PASS.add(m[1]);
+  for (const m of txt.matchAll(/Mono: 跟彩色(?:\(留档\))?[^\n]*?label=([\w.]+)\//g)) OURS.add(m[1]);
+  for (const m of txt.matchAll(/Mono: diag#\d+[^\n]*?键=\w+ ([\w.]+)\//g)) OURS.add(m[1]);
+}
+const cls = (pkg) => (OURS.has(pkg) && PASS.has(pkg) ? '混合' : OURS.has(pkg) ? '我们' : PASS.has(pkg) ? '透传' : OURS.size + PASS.size ? '未知' : '没给log');
 for (const [pkg, r] of picked) {
   const ci = decode(Buffer.from(r.i)); if (!ci) continue;
   const seen = floodBg(ci);
@@ -80,14 +91,23 @@ for (const [pkg, r] of picked) {
   if (n * n !== mb.length) continue;
   const mo = bbox(n * n, n, (x, y) => mb[y * n + x] > 8);
   if (!subj.ext || !mo.ext) continue;
-  rows.push([pkg, mo.ext / subj.ext, subj.ext, subj.share, mo.ext]);
+  rows.push([pkg, mo.ext / subj.ext, subj.ext, subj.share, mo.ext, r.c, cls(pkg)]);
 }
 rows.sort((a, b) => a[1] - b[1]);
+if (process.env.DUMP) fs.writeFileSync(process.env.DUMP, rows.map((x) => `${x[0]}\t${x[1].toFixed(4)}\t${x[2].toFixed(4)}\t${x[3].toFixed(4)}\t${x[4].toFixed(4)}\t${x[5]}\t${x[6]}`).join('\n') + '\n');
 const q = (v, p) => v.length ? v.slice().sort((x, y) => x - y)[Math.min(v.length - 1, Math.round(p * (v.length - 1)))] : NaN;
-console.log(`同一个主体比（单色主体幅 ÷ 彩色洪泛掉底之后的主体幅；容差 T=${T}）：${rows.length} 个包`);
-const v = rows.map((x) => x[1]);
-console.log(`  p10 ${q(v, 0.1).toFixed(3)}  中位 ${q(v, 0.5).toFixed(3)}  p90 ${q(v, 0.9).toFixed(3)}`);
-console.log(`  最小的 6 个（单色比彩色里的同一个主体小）：`);
-for (const [pkg, r, se, ss, me] of rows.slice(0, 6)) console.log(`    ${r.toFixed(3)}  ${pkg.padEnd(32)} 彩色主体 ${se.toFixed(3)}（洪泛掉底后占 ${(ss * 100).toFixed(1)}%）  单色 ${me.toFixed(3)}`);
-console.log(`  最大的 6 个（单色比彩色里的同一个主体大）：`);
-for (const [pkg, r, se, ss, me] of rows.slice(-6).reverse()) console.log(`    ${r.toFixed(3)}  ${pkg.padEnd(32)} 彩色主体 ${se.toFixed(3)}（洪泛掉底后占 ${(ss * 100).toFixed(1)}%）  单色 ${me.toFixed(3)}`);
+const say = (tag, rs) => {
+  const v = rs.map((x) => x[1]);
+  console.log(`  【${tag}】${rs.length} 个包  p10 ${q(v, 0.1).toFixed(3)}  中位 ${q(v, 0.5).toFixed(3)}  p90 ${q(v, 0.9).toFixed(3)}`);
+  if (tag !== '透传' && tag !== '没给log') {
+    console.log(`    最小的 4 个（单色比彩色里的同一个主体小）：`);
+    for (const [pkg, r, , ss, me, , w] of rs.slice(0, 4)) console.log(`      ${r.toFixed(3)}  ${pkg.padEnd(30)} 洪泛后底占 ${(ss * 100).toFixed(1)}%  单色 ${me.toFixed(3)}  ${w}`);
+    console.log(`    最大的 4 个（单色比彩色里的同一个主体大）：`);
+    for (const [pkg, r, , ss, me, , w] of rs.slice(-4).reverse()) console.log(`      ${r.toFixed(3)}  ${pkg.padEnd(30)} 洪泛后底占 ${(ss * 100).toFixed(1)}%  单色 ${me.toFixed(3)}  ${w}`);
+  }
+};
+console.log(`同一个主体比（单色主体幅 ÷ 彩色洪泛掉底之后的主体幅；容差 T=${T}）：${rows.length} 个包${process.env.LOG ? '' : '（没给 LOG= ⇒ 分不出谁画的，全部混在一起读）'}`);
+for (const tag of ['我们', '透传', '混合', '未知', '没给log']) {
+  const rs = rows.filter((x) => x[6].startsWith(tag));
+  if (rs.length) say(tag, rs);
+}
