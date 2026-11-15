@@ -1195,6 +1195,25 @@
   ⚠ 这与 10-12 那条记录同型（`TerrKt` 台阶尺："眼睛说改后更匀、尺子说更坏"）⇒ **这一族的红绿灯不许只靠这把尺**；
   现在它钉的是**当前设计下的现量**（24/35207/7），往后**再涨**才响。
   ⚠ 也别把它读成"三档没有代价"：代价就是脸上只剩三条深浅，那是看图认下来的，不是看数认下来的。
+- **appui（`com.example.appui`，皎月连）地球网格外弧缺口：归「底 / 身体」墙，认账不修（2026-11-15，这堵墙第十三次）**。
+  现象：设备单色版外圈细弧被蚀成碎片（设备侧实量墨 16400、bbox [92,88,287,293]），彩色版完整。
+  机制链每一步都有读数，钉死：
+  ① 单色通道收到的是**桌面自 wrap** 的 `AdaptiveIconDrawable`：bg=白 `ColorDrawable`、fg=应用位图缩进安全区（S=236/384、pad 74）；
+  ② `MonochromeSynth.plateLayer`（MonochromeSynth.kt:676）= `adaptive && !flatten && fgPlatePct < 35`，而 `fgPlatePct`（:1438，**分母是实心格 α≥128**、/24 量化）appui 量出 **54**（整张与缩小两版都 54）≥35 ⇒ `plateLayer=false`（"fg 自带盘"）；
+  ③ false ⇒ 参照支（H=2），角走穿过透明 padding 落在蓝外弧上 ⇒ 角族=蓝（族=1）⇒ groundPass 把整片蓝网格洪泛成底（`底占=0.71`）⇒ 外弧 dep≈0 ⇒ 缺口。
+  离线忠实臂 F（缩小 S=236 + index bg=BitmapDrawable ⇒ plateLayer=false + under 白）：墨 14541、底占 0.71 H=2 族=1 框内 0.27 cc=15 top=0.27 分档 2/4(155,233,249,254)，与设备同形；
+  对照臂 E（plateLayer=true）：盘实 0/34400 底占 0.27 H=3 族=0 框内 0.34 cc=7 top=0.95 分档 4/4(0,35,225,255) 盘刀 20235，外弧完整。
+  对照图 `D:/tmp/appui_closure_cmp.png`（左=F 现状、右=E）。⚠ 台子的 `plateLayer` 是按 index 取的代理（bg=ColorDrawable⇒true，Inputs.kt:32），不是生产的 fgPlatePct 算式 —— F 臂之所以忠实，是代理值与生产实量恰好同值（false）。
+  **排除项（别再查）**：`cutPlate`（MonochromeMask.kt:2371）只在满幅支（tonal≠null）开火，F 是 H=2，nocut 开关 diff=0 ⇒ 不在路上（推翻早先"cutPlate 是真凶"的诊断）；thinInk 保护关掉只 +39px；plateEdgeAa 守卫开不了火（被蚀格 n=3022 avgA 221.8、RGB 距白 min 15 > tol 8、nearWhite 0）。
+  **两条新轴都死，分布无空档（本轮主工作量，`FgPlateKt` 新增不透明度列已入库）**：
+  · 层不透明度（实心/画布）：appui **25%** 落在单色 logo 簇里（termux 5 / xhs 10 / grok 11 / chatgpt 13 / github 20 / localsend 21 / integritycheck 22 / discord 24），真盘 tieba 100 / kazumi 100 / spotify 38 —— appui 在簇中间；
+  · 最大族填框：appui **43** ≈ kazumi 真盘 **44**，tieba 59 / spotify 63 / discord logo 70 —— 形状也分不开。
+  35% 线当年按 34 张校准（MonochromeSynth.kt:669-672 注释：中位 13、p90 28、≥35 仅 4 张）—— ⚠ 那组数是**旧画布分母**；换实心分母后单色 logo 几乎全 ≥35（语料 31 张开火，discord 100 / spotify 99），闸在"线稿即内容"上的误伤面比当年那 4 张大得多。
+  任何救 appui 的闸（阈值抬过 54、或加不透明度/填框条件）都会同时翻 tieba/kazumi 或 20+ 张单色 logo ⇒ **不靶向**。特例化已被主人否过："单单挑这个特例没有用的"（2026-11-06）。
+  ⇒ 按这一族既定交付：**归墙 + 认账 + 写重开条件**，不再铸尺；生产一行没动（负对照 NEGCTRL_OK：F 臂与实验前逐字节相同）。
+  🔴 **撤回**：`b459e1f` / `3390488` 两笔提交标题里"appui 外弧缺口的真因 = thinInk 削笔画 / 盘外 AA 守卫削笔画"的宣称**撤回** —— 真因是上面的路由旗标；两道守卫本身仍是有效硬化（易班 +9 / 菜鸟弧 382→0，回归全绿），但它们不修 appui，别引用成 appui 的修复证据。
+  **重开条件**：一个不循环的"fg 里含盘"定义，能把"空气上的单色线稿"与"画进 fg 的盘"分开（墙的结论是这种尺子目前不存在，见「底 / 身体」各条）；或输入通道变化（桌面不再自 wrap、交原始 drawable）。在此之前 35% 线不动、appui 特例不加。
+  尸体：`D:/tmp/appui_shrink.cjs`（缩小复现）、`D:/tmp/appui_fgplate2.cjs`（实心分母 fgPlatePct 复刻；旧版 `appui_fgplate.cjs` 用画布分母得 36/13，作废）、`D:/tmp/appui_fillbox.cjs`（填框/不透明度）、`D:/tmp/appui_layerE/F`（两臂语料）、`D:/tmp/repF.txt`/`repE.txt`（判据行原文）。
 - **`顶平% 中位` 47.3 → 48.3 认账了（2026-11-15，`bench/baseline.json` 只动这一个字段 / 共 25 个）。**
   控制实验与前两笔同源：`60e531a`（11-10 22:10 之前）现量 **47.3**（=旧基线一字不差），
   `e30288e`「插画剪影改成三档浓淡」= **48.3**，与 HEAD 相同。方向也解释得通：三档把亮部整片交在

@@ -25,6 +25,7 @@ fun main(args: Array<String>) {
   val ix = File(dir, "index.tsv")
   if (!ix.isFile) { println("没有 index.tsv，分不出哪张走的是「只取前景」那条路"); return }
   val rows = ArrayList<Triple<String, Int, Int>>()
+  val ops = ArrayList<Triple<String, Int, Int>>()
   var cd = 0; var other = 0
   for (l in ix.readText().trim().split('\n').drop(1)) {
     val c = l.split('\t')
@@ -36,7 +37,9 @@ fun main(args: Array<String>) {
     if (!fg.isFile) continue
     val img = runCatching { ImageIO.read(fg) }.getOrNull() ?: continue
     val (canvas, solid, fill) = shares(img)
+    val op = opacity(img)
     rows.add(Triple(c[0], canvas, fill))
+    ops.add(Triple(c[0], op, solid))
   }
   println("自适应里 bg=ColorDrawable（装机只取前景层的那条路）$cd 张；bg 是真 drawable 的 $other 张")
   println("  包名 · 前景主色占画布% · 该色块填满自己外接框%（方块≈100、圆≈79）")
@@ -50,6 +53,18 @@ fun main(args: Array<String>) {
   val v = rows.map { it.second }.sorted()
   println("  占画布%：中位 ${v[v.size / 2]}  p90 ${v[minOf(v.size - 1, (v.size * 0.9).toInt())]}  " +
     "最大 ${v.last()}  ≥35% 的 ${rows.count { it.second >= 35 }} 张")
+  println("  层不透明度（实心格/画布%）· 占实心% —— 盘在层里 ⇒ 层几乎全不透明；线稿在空气上 ⇒ 低")
+  for ((p, op, so) in ops.sortedByDescending { it.second })
+    println("     %-42s 不透 %3d%%   占实心 %3d%%%s".format(p.take(42), op, so, if (so >= 35) "   ←fgPlatePct≥35" else ""))
+}
+
+/** 实心格（α≥128）占整张画布%。与 fgPlatePct 的分子同口径。 */
+private fun opacity(img: BufferedImage): Int {
+  val w = img.width; val h = img.height
+  var solid = 0
+  for (y in 0 until h) for (x in 0 until w)
+    if (((img.getRGB(x, y) ushr 24) and 0xff) >= 128) solid++
+  return solid * 100 / (w * h)
 }
 
 /**
