@@ -3,6 +3,7 @@ package com.iamcanincan.opticon.circle
 import android.graphics.Color
 import android.graphics.Rect
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.sqrt
 
 /**
@@ -2353,6 +2354,16 @@ internal object MonochromeMask {
         // `thinInk` 把它写成 0；于是 `td = CURVE[钳到 0] = 0`，明暗项又乘 `pa`。
         // 两支都得到 a=0（cutPlate 那一支对 plate 也是 `continue`、同样不写 out），所以整段可跳。
         if (pa == 0) continue
+        // 盘自己那圈外抗锯齿（半透明、色就是盘色）不许出墨。菜鸟圆角四弧的病灶：α∈[128,250)
+        //   那一环在 dep 基的 pass 里被判成墨侧（plate=0、dep 47..143），满幅支按 `ta×源α/255`
+        //   给它上了盘自己档位的墨（实测 ta≈127 × α/255 = 弧上 13..120）；参照支的 [touchesInk]
+        //   只守 plate=1 的格，也守不到它。**在交付侧守，不去改 pass/plate** —— 容差那一路会
+        //   反馈进参照色场（2026-09-28 翻译那次）。内容贴盘的边全是 α=255 的实混色，`pa<255`
+        //   把它们排除在外（250 那道旧门槛漏掉源 α250..254 的最内环 = 弧上最显眼的半墨 18 格）；
+        //   射线 inward 要同色实盘格、反方向 outward 要走到空气 = 只认承载面自己的外沿。
+        if (pa < 255 && s.plate[i] == 0.toByte() &&
+          plateEdgeAa(pixels, s, w, box, x, y, pa, (minOf(box.width(), box.height()) / 28).coerceIn(2, 32))
+        ) continue
         // 满幅支**不需要**下面这一整套：cDep 在 `tonal != null` 时压根不建（查表只会空转），
         // `td`/`tl` 只服务参照支的混合式，`hollow` 在满幅支恒为 0。直接在这里交付并 `continue`，
         // 一个死值都不算 —— 原来这一支每像素白付一次 HashMap 查找 + 两次表查找 + 明暗加权。
@@ -6688,6 +6699,51 @@ internal object MonochromeMask {
       nx >= box.left && nx < box.right && ny >= box.top && ny < box.bottom &&
         plate[ny * w + nx] == 0.toByte() && Color.alpha(pixels[ny * w + nx]) >= A_SOLID
     return ink(x - 1, y) || ink(x + 1, y) || ink(x, y - 1) || ink(x, y + 1)
+  }
+
+  /** 交付侧：这一格是不是**盘自己的外抗锯齿**。两条同时成立才算：
+   *  ① 某一向 inward 在 r 内摸到**同色实盘格**（α=255、plate≠0、RGB 逐通道差 ≤8 ——
+   *    源是非预乘的，盘自己的 AA 环 RGB 恒等于盘色，只有 α 在变；内容贴盘的混色边 RGB
+   *    是两色的混合，差得远。不另立全局容差，渐变盘与摸到的那一格现比）；
+   *  ② **反方向** outward 在 r 内走到空气（α=0；出内容框也算空气），中途撞到更实的或任何
+   *    α=255 的格子就放弃 —— 内容软边的外侧还是内容，走不到空气（相等且 <255 不算撞：
+   *    放大档的 AA 环成对重复）。
+   *  第一版只问"inward 有同色实盘、任意方向有更淡 α"，A/B 里误删了 audiofx/etar/jd_buy
+   *  的内容软边（plateKey 的 /24 量化把混色认成同色、内容边缘天然有更淡邻格）。
+   *  半径随边长走：384 档菜鸟 AA 带 9 格宽（≈edge/43），角上 45° 处沿轴穿带 ×√2 ≈
+   *  edge/30，取 edge/28 留一点余量；固定格数的窗在 768 档会够不着带中心（尺寸依赖）。 */
+  private fun plateEdgeAa(
+    pixels: IntArray, s: Scratch, w: Int, box: Rect, x: Int, y: Int, pa: Int, r: Int,
+  ): Boolean {
+    val c = pixels[y * w + x]
+    val cr = (c ushr 16) and 0xff; val cg = (c ushr 8) and 0xff; val cb = c and 0xff
+    for (d in 0 until 4) {
+      val dx = if (d == 0) 1 else if (d == 1) -1 else 0
+      val dy = if (d == 2) 1 else if (d == 3) -1 else 0
+      var solid = false
+      for (k in 1..r) {
+        val nx = x + dx * k; val ny = y + dy * k
+        if (nx < box.left || nx >= box.right || ny < box.top || ny >= box.bottom) break
+        val j = ny * w + nx
+        val p = pixels[j]
+        if (((p ushr 24) and 0xff) != 255 || s.plate[j] == 0.toByte()) continue
+        val dr = ((p ushr 16) and 0xff) - cr; val dg = ((p ushr 8) and 0xff) - cg; val db = (p and 0xff) - cb
+        if (maxOf(maxOf(abs(dr), abs(dg)), abs(db)) <= 8) { solid = true; break }
+      }
+      if (!solid) continue
+      for (k in 1..r) {
+        val nx = x - dx * k; val ny = y - dy * k
+        if (nx < box.left || nx >= box.right || ny < box.top || ny >= box.bottom) return true
+        val aj = (pixels[ny * w + nx] ushr 24) and 0xff
+        if (aj == 0) return true
+        // 撞到更实的、或任何 α=255 就放弃：内容软边外侧还是内容，走不到空气。
+        //   相等且 <255 不算撞 —— 台子把 384 源最近邻放大到 768 时 AA 环成对重复
+        //   （相邻行 α 相等），`>=` 会在第一格撞停、半圈弧漏网（768 档实测 1350/2074）；
+        //   而 pa=255 的实边若也容忍相等，就能横穿整块盘走到外沿的空气、误删硬内容边。
+        if (aj > pa || aj == 255) break
+      }
+    }
+    return false
   }
 
   /**
