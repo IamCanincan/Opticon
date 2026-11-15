@@ -23,6 +23,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.iamcanincan.opticon.R
@@ -38,7 +39,8 @@ import com.iamcanincan.opticon.ui.ScreenList
  *
  * 2026-10-26 三个功能分页：单色与通知各自独立成页；作用域 / 步骤 / 验证 / 运维在「模块」页。
  * 2026-11-13 换口径：原来这一页讲"裁成正圆"，主人定了「图标裁圆应该去掉，转为将非自适应图标
- * 优化为自适应图标」—— 现在讲的是包装（底盘 + 安全区内缩放 + 系统 mask）。
+ * 优化为自适应图标」—— 现在讲的是包装（填满正方形 + 边缘延伸 / 稀疏铺白底 + 系统 mask）。
+ * 2026-11-14 起快捷方式整个放行，效果卡第四格与「原样」同款画法。
  *
  * 顶栏与底部导航让出的空间由外壳扣掉（`OpticonApp` 里的 `Modifier.padding(inner)`），
  * 这里只管列表自己的边距 —— 各页共用同一份脚手架，见 [ScreenList]。
@@ -74,7 +76,7 @@ fun CropScreen() {
 
 
 /**
- * 「效果」卡：一块四格样品板 —— 原样 / 自适应 / 本来就是圆的 / 快捷方式，下面一句结论。
+ * 「效果」卡：一块四格样品板 —— 原样 / 自适应 / 透明底图标 / 快捷方式，下面一句结论。
  *
  * 补这张卡是因为图标页原本只有「开关 + 说明」两块，首屏下半截全是空的；
  * 而且「改完之后到底变成什么样」光靠文字不好讲 —— 画出来一目了然。
@@ -84,7 +86,8 @@ fun CropScreen() {
  * 才像一条规则。白盘在浅色卡上也要有边界，所以用真白 + `outlineVariant` 描边。
  *
  * ⚠ 样本只是**示意图**，不是真实图标渲染：原样那块用中性圆角方表示老式图标（一张方图）；
- * 其余三格用主色示意「不留底盘、原图铺满、系统裁形」之后的样子。
+ * 自适应那格用主色圆示意「铺满图层、系统裁形」；透明底那格用白盘示意「缩进内切圆 + 铺白底」；
+ * 快捷方式那格与「原样」同款 —— 那一路整个放行，我们一个像素不碰。
  */
 @Composable
 private fun EffectCard() {
@@ -159,7 +162,7 @@ private fun EffectTile(
   SampleTile(modifier = modifier, title = title, detail = detail) {
     when (style) {
       // 用可识别的图形（相机 / 全景 / 闪电）代替抽象色块：一眼能看出"这是一张图"，
-      // 也把原样与自适应后的关系说清楚（同一个相机，缩进底盘里）。
+      // 也把原样与自适应后的关系说清楚（同一个相机，铺满图层后由系统裁形）。
       EffectStyle.ORIGINAL ->
         Box(
           modifier =
@@ -189,23 +192,34 @@ private fun EffectTile(
             modifier = Modifier.size(22.dp),
           )
         }
-      // 透明底图标：没有底盘可选，做成自适应图标之后屏幕上只剩图案本身。
+      // 透明底图标（稀疏内容那一支）：缩进内切圆 + 铺白底。白盘是烘进前景的、不是背景层，
+      // 所以画真白 + 描边；图案比满幅那格小一档，示意"缩进"。
       EffectStyle.TRANSPARENT ->
-        Icon(
-          imageVector = Icons.Default.Panorama,
-          contentDescription = null,
-          tint = scheme.primary,
-          modifier = Modifier.size(30.dp),
-        )
+        Box(
+          modifier = Modifier.size(40.dp).clip(CircleShape).background(Color.White)
+            .border(1.dp, scheme.outlineVariant, CircleShape),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.Panorama,
+            contentDescription = null,
+            tint = scheme.primary,
+            modifier = Modifier.size(20.dp),
+          )
+        }
+      // 快捷方式：整个放行（2026-11-14），与「原样」同一款画法，只换图形。
       EffectStyle.SHORTCUT ->
         Box(
-          modifier = Modifier.size(40.dp).clip(CircleShape).background(scheme.primary),
+          modifier = Modifier.size(40.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(scheme.surfaceVariant)
+            .border(1.dp, scheme.outline, RoundedCornerShape(14.dp)),
           contentAlignment = Alignment.Center,
         ) {
           Icon(
             imageVector = Icons.Default.Bolt,
             contentDescription = null,
-            tint = scheme.onPrimary,
+            tint = scheme.onSurfaceVariant,
             modifier = Modifier.size(22.dp),
           )
         }

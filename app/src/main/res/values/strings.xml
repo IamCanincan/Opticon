@@ -93,7 +93,7 @@
 
     <!-- 自适应的说明卡（开关在「功能」页那一行） -->
     <string name="circle_switch_title">自适应</string>
-    <string name="circle_switch_body">非自适应（老式）图标直接做成自适应图标：原图按原尺寸放进去、不放大也不裁切，先缩到恰好填满正方形，占比够的按边缘颜色延伸补满；占比小的缩到内切圆里并铺白底，形状交给系统（桌面的「图标形状」设成什么就是什么）。快捷方式不处理，原样交给桌面。自适应图标保持原样。</string>
+    <string name="circle_switch_body">非自适应（老式）图标直接做成自适应图标：先把图案缩放到恰好填满正方形（不裁掉任何有色像素），占比够的按边缘颜色延伸补满、不另加底盘；占比小的缩到内切圆里并铺白底。形状交给系统（桌面的「图标形状」设成什么就是什么）。快捷方式不处理，原样交给桌面。自适应图标保持原样。</string>
     <!-- 开关切换后的 Snackbar：桌面有预渲染缓存，需说明清除缓存后才会生效 -->
 
     <!-- 状态卡 -->
@@ -183,14 +183,14 @@
     <!-- 效果示意（形状对比图）-->
     <string name="section_effect">效果</string>
     <string name="effect_title">老式图标 → 自适应图标</string>
-    <string name="effect_body">非自适应图标直接做成自适应图标：原图按原尺寸放进去（不放大、不裁切），透明和边角的地方用最近的边缘颜色延伸填满，不另加底盘，再由系统按桌面的「图标形状」裁切。满幅的图标一个像素不动；自适应图标本身也原样放行。</string>
-    <!-- 效果示意四格：标题一行 + 细节一行；原样/自适应是主对照，本来成圆/快捷方式是两档说明 -->
+    <string name="effect_body">非自适应图标直接做成自适应图标：先把图案缩放到恰好填满正方形（不裁掉任何有色像素）；占比够的按边缘颜色延伸补满、不另加底盘，占比小的缩进内切圆并铺一块白底。形状交给系统按桌面的「图标形状」裁切。满幅的图标一个像素不动；自适应图标与快捷方式都原样放行。</string>
+    <!-- 效果示意四格：标题一行 + 细节一行；原样/自适应是主对照，透明底/快捷方式是两档说明 -->
     <string name="effect_sample_original_detail">非自适应</string>
     <string name="effect_sample_cropped_detail">满幅 · 系统裁形</string>
     <string name="effect_sample_shrink_title">透明底图标</string>
-    <string name="effect_caption_shrink">只剩图案</string>
+    <string name="effect_caption_shrink">缩进圆内 · 铺白底</string>
     <string name="effect_sample_shortcut_title">快捷方式</string>
-    <string name="effect_caption_shortcut">同样走这套</string>
+    <string name="effect_caption_shortcut">原样交给桌面</string>
 
     <!--
         单色遮罩极性修正。这条和自适应是**两个独立开关**：它管的是 Android 16 强制取色下
@@ -215,12 +215,12 @@
     <string name="note_tiles">快速设置磁贴不参与这一路。</string>
     <string name="note_mono_scope">已提供单色层的应用，那张单色层将原样透传，模块不改它的像素。</string>
     <string name="note_mono_cache">剪影按图标内容缓存于宿主应用的缓存目录（上限 48 MB，系统存储不足时可能被清除）。模块版本或图标内容变更后缓存自动失效；升级后的首次重启加载会较慢。</string>
-    <string name="note_launcher3">Android 16 及以上不再让桌面给我们的图标补白板；老式图标做成自适应图标后不带底盘，图标透明的地方由桌面 / 壁纸透出来。</string>
+    <string name="note_launcher3">Android 16 及以上不再让桌面给我们的图标补白板；老式图标做成自适应图标后背景层是空的，图案的透明处由模块自己补满（边缘色或白底），不另垫一块颜色。</string>
     <string name="note_themed_icon">本应用图标包含 monochrome 层；在 Android 13 及以上启动器启用“主题图标”时，将按壁纸取色渲染。</string>
 
     <!-- 关于页：功能范围（覆盖什么、有意排除什么） -->
     <string name="section_range">功能范围</string>
-    <string name="range_crop">自适应：所有已注入进程中的非自适应应用图标；快速设置磁贴除外。</string>
+    <string name="range_crop">自适应：所有已注入进程中的非自适应应用图标；快速设置磁贴与快捷方式除外（快捷方式原样交给桌面）。</string>
     <string name="range_mono">动态取色：未提供单色层的自适应图标；已提供者原样透传。</string>
     <string name="range_notify">单色通知：新通知、通知行与状态栏重建；已适配应用跳过，大图与头像不处理。</string>
     <string name="range_scope">作用域由框架管理器决定；未注入的进程不受影响。</string>

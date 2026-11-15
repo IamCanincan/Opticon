@@ -777,9 +777,12 @@
 - **SplashScreen 启动图标：本机 ROM 把钩子类削成空壳，属已知边界（2026-10-26）**。
   SystemUI 的 `SplashscreenContentDrawer$ColorCache$IconColor` 在 Sony / Android 16 上被 R8
   削成无构造器的空壳（真机日志 `ctors=0 hooked=0`），`hookSplashScreenIcon` 是登记过的空操作；
-  `CircleIconDrawable` 的背景层是**不透明主题盘色**（`ColorDrawable(themedPlateColor())`），
-  启动画面走图标自带背景，不依赖那条“透明底 → 强制复杂背景”的分支。**不是裁圆/单色的缺陷，
+  当时 `CircleIconDrawable` 的背景层是**不透明主题盘色**（`ColorDrawable(themedPlateColor())`），
+  启动画面走图标自带背景，不依赖那条“透明底 → 强制复杂背景”的分支。**不是自适应/动态取色的缺陷，
   在这台 ROM 上也无法再挂**；参考项目同机同表现。
+  ⚠ **2026-11-13 起背景层那一句只对旧裁圆成立**：「不要有底盘」之后背景层是
+  `ColorDrawable(Color.TRANSPARENT)`，`themedPlateColor()` 已不存在；稀疏那一支的白底是
+  **烘进前景**的（`composeOverColor(px, Color.WHITE)`），不在背景层上。ROM 削空壳这条边界不变。
 
 - **「平色饼 A 型」不是可直接落规则的质量尺（2026-10-26，人眼复核负结果）**。
   `ObjKt` 的 flat 账在 `rec_model` 6 张 / `corpus_runtime` 5 张；A 型（源 ≥4 档、交付 Neff≤2.5、
