@@ -642,9 +642,10 @@ private fun clearAndRestartLauncher(
  * 符号），所以每一次 prefs 变更都打一行日志（哪个文件 + 键名 + 新值）。2026-11-16 真名就是
  * 这么抓到的 —— 那条"名字里没有 themed，不动"的日志把 `icon_theme_id` 当场说了出来。
  *
- * **只在值真的变了才动手**：桌面每次启动都可能把同一个值再写一遍，而
- * `OnSharedPreferenceChangeListener` 对"值没变的提交"照样回调。不比上一次的值就会变成
- * 开机 → 清缓存 → 重启 → 开机 的死循环。
+ * **只在值真的变了才动手，而且基准要落盘**：桌面每次启动都会把同一个键重写一遍，而
+ * `OnSharedPreferenceChangeListener` 对"值没变的提交"照样回调。基准只放在内存里会变成
+ * 开机 → 清缓存 → 重启 → 开机 的死循环（2026-11-16 真机实测每 ~20 秒一轮）——
+ * 详见 [themedBaselineFile]。
  */
 private fun watchThemedIconsToggle(context: Context, packageName: String) {
   if (!isLauncher(packageName)) return
@@ -682,6 +683,25 @@ private val themedListeners = ArrayList<SharedPreferences.OnSharedPreferenceChan
 private fun isThemedKey(key: String) =
   key == "icon_theme_id" || key.contains("themed", ignoreCase = true)
 
+/**
+ * 「主题图标开关上一份值」的落盘处 —— **基准必须活过我们自己造成的那次重启**。
+ *
+ * 2026-11-16 真机死循环的教训：只把基准放在进程内存里、开档时从 `prefs.all` 播种，
+ * 看着是对的，实测**每 ~20 秒杀一次桌面**，四次读数的旧值全是空 ——
+ * 桌面每次启动都会把 `icon_theme_id` 从空值重写成 `mono-icons:with-theme`，
+ * 于是「值变了」这条判据把自己触发的重启当成了用户切开关：
+ * 清缓存 → 重启 → 又重写一遍 → 再清。日志签名是 `主题图标键 …： → mono-icons:with-theme`
+ * 反复出现且箭头左边永远为空。
+ *
+ * 落成文件之后：启动时那一次重写与文件里的值相同 ⇒ 不动手；只有用户真的切了才不同。
+ * 文件还没有（刚装上）时，第一次见到的值只用来立基准、不动手 —— 否则刚装完就白清一次。
+ *
+ * 放在桌面自己的 cache 目录里，与 [cacheStamp] 同级：[deleteIconCache] 只删
+ * `databases/app_icons.db*`，不碰这里，所以清缓存不会把基准一起清掉。
+ */
+private fun themedBaselineFile(packageName: String) =
+  File("${launcherDataDir(packageName)}/cache", "opticon-themed-baseline")
+
 private fun watchThemedPrefs(context: Context, packageName: String) {
   // 键是 prefs 文件名：只印 `#i` 的话，13 个实例在日志里分不出谁是谁。
   val instances = LinkedHashMap<String, SharedPreferences>()
@@ -712,12 +732,18 @@ private fun watchThemedPrefs(context: Context, packageName: String) {
   }
 
   // 回调都在主线程派发（SharedPreferencesImpl 用主线程 Handler），所以这张表不用加锁。
+  // ⚠ 基准从**磁盘**读，不从 `p.all` 播种 —— 理由见 [themedBaselineFile]。
   val seen = HashMap<String, String>()
+  val baseline = themedBaselineFile(packageName)
+  runCatching {
+    baseline.readLines().forEach { line ->
+      if (line.contains('=')) seen[line.substringBefore('=')] = line.substringAfter('=')
+    }
+  }
+  Log.i(TAG, "ThemedWatch: 主题图标基准 ${if (seen.isEmpty()) "（还没有，先立基准不动手）" else seen.toString()}")
   instances.forEach { (prefName, p) ->
     runCatching {
-      val all = p.all
-      Log.i(TAG, "ThemedWatch: prefs[$prefName] 现有键 ${all.keys.sorted().joinToString(" ")}")
-      for ((k, v) in all) if (isThemedKey(k)) seen[k] = v?.toString() ?: ""
+      Log.i(TAG, "ThemedWatch: prefs[$prefName] 现有键 ${p.all.keys.sorted().joinToString(" ")}")
     }
     val listener = SharedPreferences.OnSharedPreferenceChangeListener { sp, changed ->
       // SDK 37 的 `onChanged` 把 key 标成 @Nullable；null 时 removeAll 之类，没有键可认。
@@ -729,8 +755,15 @@ private fun watchThemedPrefs(context: Context, packageName: String) {
       }
       val was = seen[key]
       seen[key] = now
-      Log.i(TAG, "ThemedWatch: 主题图标键 $key：$was → $now（prefs[$prefName]）")
+      Log.i(TAG, "ThemedWatch: 主题图标键 $key：${was ?: "（首次见到）"} → $now（prefs[$prefName]）")
       if (was == now) return@OnSharedPreferenceChangeListener
+      // ⚠ 必须在 killProcess **之前**落盘，且同步写：下一趟进程要靠它认出"这不是用户切的"。
+      runCatching {
+        baseline.parentFile?.mkdirs()
+        baseline.writeText(seen.entries.joinToString("\n") { "${it.key}=${it.value}" })
+      }.onFailure { Log.w(TAG, "ThemedWatch: 基准写不下去，下一趟可能多清一次", it) }
+      // 第一次见到这个键只立基准：桌面每次启动都会把它重写一遍（见 [themedBaselineFile]）。
+      if (was == null) return@OnSharedPreferenceChangeListener
       // 回调在主线程：删缓存是文件 IO、请应用代发是 Binder，都不该压在桌面的主线程上。
       Thread {
         clearAndRestartLauncher(context, packageName, "桌面主题图标开关 $key=$now", alsoUi = true)
