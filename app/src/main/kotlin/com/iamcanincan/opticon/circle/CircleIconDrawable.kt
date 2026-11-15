@@ -154,8 +154,8 @@ class CircleIconDrawable(
  * 只有透明的地方交给下面的边角延伸补满 —— 所以图案保持应用自己设计的比例。
  *
  * **边角延伸**（同日第二句：「边角透明的地方给它延伸完全」）：把图标光栅化到图标槽大小，
- * 从**画布边界**找出与外面连通的透明区域（内部镂空不动），**行向 + 列向各取一条边色再平均**
- * 铺进去（极角上两个方向都没有的小三角，用 BFS 从最近的已给色格拓）—— 圆角/圆盘图标那
+ * 从**画布边界**找出与外面连通的透明区域（内部镂空不动），从真实轮廓边界做多源 BFS、
+ * 每个边界点带自己的颜色往外拓（等距波前平均）—— 圆角/圆盘图标那
  * 四个透明角从此是它自己的边缘色，不再是壁纸。铺完还往图标里垫 2 格，第二遍把图标叠在
  * 底色上画，抗锯齿边与底色混合，不会留下一条半透明的浅缝。
  * 每一张老式图标都过这一步（渲染结果按尺寸档位缓存，不会每帧重算）。
@@ -573,9 +573,6 @@ internal const val ALPHA_MIN = 8
 /** 取边色时优先用"够实"的格：抗锯齿边色被拉出去就是一道浅色接缝。 */
 private const val SOLID_ALPHA = 160
 
-/** 取边色时往里让几格：边界那 1~2 格是抗锯齿混出来的浅色，照它铺就是一圈浅接缝。 */
-private const val EDGE_INSET = 1
-
 /** 判"深色毛边"的亮度上限：源图透明区是黑 RGB 时，放大出来的边实测 (2,21,29) ≈ 15。 */
 private const val RIM_LUM = 60
 
@@ -599,9 +596,14 @@ internal const val CIRCLE_FIT = 0.88f
 /**
  * 算"边角该填什么颜色"。返回与 [px] 等长的数组：0 = 不填，其余 = 要铺的 ARGB。
  *
- * 颜色取**行向 + 列向各一条边线**的平均（渐变底两个方向都保得住）；边线取的是
- * 往里让 [EDGE_INSET] 格的颜色 —— 边界那一两格是抗锯齿混出来的浅色，照它铺就是一圈浅接缝。
- * 极角上既没有行也没有列的小三角，用 BFS 从最近的已给色格拓过去。
+ * 颜色取**最近的轮廓边界点**：从八邻里有 outside 格的实色格（α≥[SOLID_ALPHA]）做多源 BFS，
+ * 每个边界点带自己的颜色往外拓；等距波前相遇按种子数加权平均（角上不再是谁先到谁赢的硬缝）。
+ *
+ * ⚠ 旧版取"行向 + 列向各一条边线的平均"，2026-11-16 量出两种接缝（主人：「交界处还是不够平滑」）：
+ *   补边色与局部边色不符（云闪付红补边贴白色横条，接缝色差 p90=113、24% 的接缝 >30），
+ *   以及行/列采样把边色拖成轴向条纹（王者荣耀两张 / wisdomgame）。换边界 BFS 后真机 32 张
+ *   p90 全部 ≤18、>30 占比 ≤1%（离线复现台 `_harness/_extfill.cjs`，`--mode=rowcol` 臂是负对照）。
+ *   渐变底同样保得住：每个边界点带自己的颜色，渐变沿轮廓往外延。
  */
 private fun computeFill(px: IntArray, w: Int, h: Int): IntArray {
   val n = w * h
@@ -636,137 +638,76 @@ private fun computeFill(px: IntArray, w: Int, h: Int): IntArray {
     if (y + 1 < h) mark(i + w)
   }
 
-  // 2) 行/列的实色界（优先"够实"的格；取色时往里让 EDGE_INSET 格）
-  val rowLx = IntArray(h) { -1 }
-  val rowRx = IntArray(h) { -1 }
-  val rowLc = IntArray(h)
-  val rowRc = IntArray(h)
-  for (y in 0 until h) {
-    var lx = -1
-    var rx = -1
-    for (x in 0 until w) {
-      if ((px[y * w + x] ushr 24) >= SOLID_ALPHA) {
-        if (lx < 0) lx = x
-        rx = x
-      }
-    }
-    if (lx < 0) {
-      for (x in 0 until w) {
-        if ((px[y * w + x] ushr 24) > ALPHA_MIN) {
-          if (lx < 0) lx = x
-          rx = x
-        }
-      }
-    }
-    if (lx >= 0) {
-      rowLx[y] = lx
-      rowRx[y] = rx
-      rowLc[y] = px[y * w + minOf(lx + EDGE_INSET, rx)]
-      rowRc[y] = px[y * w + maxOf(rx - EDGE_INSET, lx)]
-    }
-  }
-  val colTy = IntArray(w) { -1 }
-  val colBy = IntArray(w) { -1 }
-  val colTc = IntArray(w)
-  val colBc = IntArray(w)
-  for (x in 0 until w) {
-    var ty = -1
-    var by = -1
-    for (y in 0 until h) {
-      if ((px[y * w + x] ushr 24) >= SOLID_ALPHA) {
-        if (ty < 0) ty = y
-        by = y
-      }
-    }
-    if (ty < 0) {
-      for (y in 0 until h) {
-        if ((px[y * w + x] ushr 24) > ALPHA_MIN) {
-          if (ty < 0) ty = y
-          by = y
-        }
-      }
-    }
-    if (ty >= 0) {
-      colTy[x] = ty
-      colBy[x] = by
-      colTc[x] = px[minOf(ty + EDGE_INSET, by) * w + x]
-      colBc[x] = px[maxOf(by - EDGE_INSET, ty) * w + x]
-    }
-  }
-
-  // 3) 行向 + 列向取平均
-  val filled = ByteArray(n)
-  val color = IntArray(n)
-  for (i in 0 until n) {
-    if (outside[i] == 0.toByte()) continue
-    val x = i % w
-    val y = i / w
-    var sumR = 0
-    var sumG = 0
-    var sumB = 0
-    var cnt = 0
-    if (rowLx[y] >= 0) {
-      val c = when {
-        x <= rowLx[y] -> rowLc[y]
-        x >= rowRx[y] -> rowRc[y]
-        else -> 0
-      }
-      if (c != 0) {
-        sumR += (c shr 16) and 0xFF
-        sumG += (c shr 8) and 0xFF
-        sumB += c and 0xFF
-        cnt++
-      }
-    }
-    if (colTy[x] >= 0) {
-      val c = when {
-        y <= colTy[x] -> colTc[x]
-        y >= colBy[x] -> colBc[x]
-        else -> 0
-      }
-      if (c != 0) {
-        sumR += (c shr 16) and 0xFF
-        sumG += (c shr 8) and 0xFF
-        sumB += c and 0xFF
-        cnt++
-      }
-    }
-    if (cnt > 0) {
-      color[i] = (0xFF shl 24) or ((sumR / cnt) shl 16) or ((sumG / cnt) shl 8) or (sumB / cnt)
-      filled[i] = 1
-    }
-  }
-
-  // 4) 极角：从最近的已给色格 BFS 拓过去。
-  //    起点只认第 3 步按行/列边色算好的格 —— 不能把图标自己的像素算进来：
-  //    它们多半是抗锯齿边/软阴影（实测 (243,243,243,a175)），BFS 会把那一格的颜色摊满整个角，
-  //    屏幕上就是一块"不是图标边色"的方块（2026-11-14 皎月连：1131 格）。
+  // 2) 种子：八邻里有 outside 格的实色格 —— 真实轮廓边界，不是行/列极值
+  val dist = IntArray(n) { -1 }
+  val sumR = IntArray(n)
+  val sumG = IntArray(n)
+  val sumB = IntArray(n)
+  val cnt = IntArray(n)
   var head = 0
   var tail = 0
   for (i in 0 until n) {
-    if (filled[i] == 1.toByte()) work[tail++] = i
-  }
-  while (head < tail) {
-    val i = work[head++]
-    val c = color[i]
+    if ((px[i] ushr 24) < SOLID_ALPHA) continue
     val x = i % w
     val y = i / w
-    if (x > 0) tail = spread(i - 1, c, outside, filled, color, work, tail)
-    if (x + 1 < w) tail = spread(i + 1, c, outside, filled, color, work, tail)
-    if (y > 0) tail = spread(i - w, c, outside, filled, color, work, tail)
-    if (y + 1 < h) tail = spread(i + w, c, outside, filled, color, work, tail)
-    if (x > 0 && y > 0) tail = spread(i - w - 1, c, outside, filled, color, work, tail)
-    if (x + 1 < w && y > 0) tail = spread(i - w + 1, c, outside, filled, color, work, tail)
-    if (x > 0 && y + 1 < h) tail = spread(i + w - 1, c, outside, filled, color, work, tail)
-    if (x + 1 < w && y + 1 < h) tail = spread(i + w + 1, c, outside, filled, color, work, tail)
+    var seed = false
+    for (dy in -1..1) for (dx in -1..1) {
+      if (dx == 0 && dy == 0) continue
+      val nx = x + dx
+      val ny = y + dy
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+      if (outside[ny * w + nx] == 1.toByte()) seed = true
+    }
+    if (!seed) continue
+    dist[i] = 0
+    cnt[i] = 1
+    sumR[i] = (px[i] shr 16) and 0xFF
+    sumG[i] = (px[i] shr 8) and 0xFF
+    sumB[i] = px[i] and 0xFF
+    work[tail++] = i
   }
 
-  // 5) 只交"外面"的格
+  // 3) BFS 往外拓（八邻）。等距波前相遇按种子数累加、最后平均 ——
+  //    "谁先到谁赢"会在两色边界的角上留一条硬缝。
+  while (head < tail) {
+    val i = work[head++]
+    val x = i % w
+    val y = i / w
+    val d = dist[i] + 1
+    for (dy in -1..1) for (dx in -1..1) {
+      if (dx == 0 && dy == 0) continue
+      val nx = x + dx
+      val ny = y + dy
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+      val j = ny * w + nx
+      if (outside[j] != 1.toByte()) continue
+      if (dist[j] < 0) {
+        dist[j] = d
+        cnt[j] = cnt[i]
+        sumR[j] = sumR[i]
+        sumG[j] = sumG[i]
+        sumB[j] = sumB[i]
+        work[tail++] = j
+      } else if (dist[j] == d) {
+        cnt[j] += cnt[i]
+        sumR[j] += sumR[i]
+        sumG[j] += sumG[i]
+        sumB[j] += sumB[i]
+      }
+    }
+  }
+
+  // 4) 只交"外面"的格
   for (i in 0 until n) {
-    if (outside[i] == 1.toByte() && filled[i] == 1.toByte()) fill[i] = color[i]
+    if (outside[i] == 1.toByte() && dist[i] >= 0) {
+      fill[i] = (0xFF shl 24) or
+        (((sumR[i] + cnt[i] / 2) / cnt[i]) shl 16) or
+        (((sumG[i] + cnt[i] / 2) / cnt[i]) shl 8) or
+        ((sumB[i] + cnt[i] / 2) / cnt[i])
+    }
   }
 
-  // 6) 再往图标里垫 2 格：盖住图标自己那圈抗锯齿边（alpha 1..254）。
+  // 5) 再往图标里垫 2 格：盖住图标自己那圈抗锯齿边（alpha 1..254）。
   //    不垫的话，第二遍把图标叠上去时那圈半透明像素露出的是宿主底色 —— 屏幕上就是一条浅缝。
   val snapshot = IntArray(n)
   repeat(2) {
@@ -779,40 +720,23 @@ private fun computeFill(px: IntArray, w: Int, h: Int): IntArray {
       var sr = 0
       var sg = 0
       var sb = 0
-      var cnt = 0
+      var cnt2 = 0
       fun near(j: Int) {
         val c = snapshot[j]
         if (c == 0) return
         sr += (c shr 16) and 0xFF
         sg += (c shr 8) and 0xFF
         sb += c and 0xFF
-        cnt++
+        cnt2++
       }
       if (x > 0) near(i - 1)
       if (x + 1 < w) near(i + 1)
       if (y > 0) near(i - w)
       if (y + 1 < h) near(i + w)
-      if (cnt > 0) fill[i] = (0xFF shl 24) or ((sr / cnt) shl 16) or ((sg / cnt) shl 8) or (sb / cnt)
+      if (cnt2 > 0) fill[i] = (0xFF shl 24) or ((sr / cnt2) shl 16) or ((sg / cnt2) shl 8) or (sb / cnt2)
     }
   }
   return fill
-}
-
-/** BFS 入队：只吃"外面且还没给色"的格。 */
-private fun spread(
-  j: Int,
-  c: Int,
-  outside: ByteArray,
-  filled: ByteArray,
-  color: IntArray,
-  work: IntArray,
-  tail: Int,
-): Int {
-  if (outside[j] != 1.toByte() || filled[j] != 0.toByte()) return tail
-  filled[j] = 1
-  color[j] = c
-  work[tail] = j
-  return tail + 1
 }
 
 /** 「包装自身抛了」只报一次（每张图标一行会把日志刷满）。 */
