@@ -21,6 +21,12 @@ for (const r of d.prepare('SELECT componentName c FROM icons').all()) pkgs.add(r
 
 const rows = [];
 for (const p of pkgs) {
+  // ⚠ **生产自己那句"自带单色层，透传"是最强的身份证据**，优先于台账：
+  //   `Mono: 自带单色层，透传 #56 是谁=com.termux.x11/mipmap/lorie_ic_launcher mono=BitmapDrawable 尺寸=432x432`
+  //   —— 装机上真的走了透传，就是"我们一个像素没碰"，比任何离线推断都硬。
+  //   （`com.termux.x11` 0.551 那一条就是被"没有身份 ⇒ 默认我们合成"冤枉成带外的。）
+  const passthrough = new RegExp('自带单色层，透传 [^\\n]*是谁=' + p.replace(/[.$]/g, '\\$&') + '/', '');
+  if (passthrough.test(log)) { rows.push([p, '日志(透传行)', '自带单色层', '有']); continue; }
   if (idx.has(p)) { rows.push([p, '台账', idx.get(p).cls, idx.get(p).mono]); continue; }
   const re = new RegExp('Mono: diag#[^\\n]*' + p.replace(/[.$]/g, '\\$&') + '[^\\n]*', 'g');
   const m = log.match(re);

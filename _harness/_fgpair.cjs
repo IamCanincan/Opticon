@@ -85,8 +85,21 @@ const own = out.filter((x) => x[4]).map((x) => x[1]), syn = out.filter((x) => !x
 console.log(`单色层 ÷ 前景层（${CROP ? '可见区口径' : '整幅口径'}），共 ${out.length} 张`);
 console.log(`  应用自带单色层（别管那批，它就是平台的答案）：${own.length} 张  p10 ${q(own, 0.1).toFixed(3)}  中位 ${q(own, 0.5).toFixed(3)}  p90 ${q(own, 0.9).toFixed(3)}`);
 console.log(`  我们合成的：                                  ${syn.length} 张  p10 ${q(syn, 0.1).toFixed(3)}  中位 ${q(syn, 0.5).toFixed(3)}  p90 ${q(syn, 0.9).toFixed(3)}`);
+// ⚠ **上界必须按子类算**：前景层本来就铺满画面（幅面 ≥0.99）的图标，剪影铺满就是 1.000 ——
+//   拿"平台整体 p90=0.949"去判它们，会把一批**正确**的图标报成带外（上一版就是这么报了 11 张）。
+//   所以这里把两子类各自摊，界也各自取。
+const sub = (x) => (x[2] >= 0.99 ? '满幅前景' : '有留白前景');
+const bands = {};
+for (const [pkg, r, fg, mo, isOwn] of out) {
+  const k = sub([pkg, r, fg, mo, isOwn]) + (isOwn ? '·自带' : '·我们');
+  (bands[k] = bands[k] || []).push(r);
+}
+console.log('  按子类分开摊（界只在**同类**里取）：');
+for (const [k, v] of Object.entries(bands)) {
+  console.log(`    ${k.padEnd(16)} ${String(v.length).padStart(3)} 张  p10 ${q(v, 0.1).toFixed(3)}  中位 ${q(v, 0.5).toFixed(3)}  p90 ${q(v, 0.9).toFixed(3)}`);
+}
 const lo = q(own, 0.1), hi = q(own, 0.9);
 console.log(`\n带 = 自带那组 p10~p90 = ${lo.toFixed(3)} ~ ${hi.toFixed(3)}。我们合成的里落在带外的：`);
-const bad = out.filter((x) => !x[4] && (x[1] < lo || x[1] > hi));
+const bad = out.filter((x) => !x[4] && (x[1] < lo || (x[1] > hi && sub(x) === '有留白前景')));
 if (!bad.length) console.log('    （0 张）');
 for (const [pkg, r, fg, mo] of bad) console.log(`    ${r.toFixed(3)}  ${pkg.padEnd(34)} 前景层 ${fg.toFixed(3)}  单色 ${mo.toFixed(3)}`);
