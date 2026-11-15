@@ -4868,7 +4868,7 @@ internal object MonochromeMask {
         //   `nInk` 被抽空（那张图的墨**全是**这种细结构）而 `p.solid` 退成 `p.zero`、
         //   整张掩码归零（`框内 0.53→0.00`、`字均净 242→-1`）。标定要的是"这张图本来有多浓"，
         //   与"最后写不写出去"是两件事。
-        if (thinInk(s.plate, w, box, x, y)) { s.dist[i] = 0; s.distT[i] = 0 }
+        if (thinInk(pixels, s, w, box, x, y)) { s.dist[i] = 0; s.distT[i] = 0 }
         s.hist2[d.coerceAtMost(DBUCKETS - 1)]++
         covSum += s.beta[i].toInt() and 0xffff
         nInk++
@@ -6780,18 +6780,37 @@ internal object MonochromeMask {
     return false
   }
 
-  private fun thinInk(plate: ByteArray, w: Int, box: Rect, x: Int, y: Int): Boolean {
+  private fun thinInk(pixels: IntArray, s: Scratch, w: Int, box: Rect, x: Int, y: Int): Boolean {
     if (x <= box.left || x >= box.right - 1 || y <= box.top || y >= box.bottom - 1) return false
     val i = y * w + x
+    val plate = s.plate
     var n = 0
+    var sl = 0L; var sa = 0L; var sb = 0L
     for (dy in -1..1) {
       val row = i + dy * w
       for (dx in -1..1) {
         if (dx == 0 && dy == 0) continue
-        if (plate[row + dx] != 0.toByte()) n++
+        val j = row + dx
+        if (plate[j] != 0.toByte()) {
+          n++
+          sl += s.labL[j].toInt() and 0xffff; sa += s.labA[j].toInt() and 0xffff
+          sb += s.labB[j].toInt() and 0xffff
+        }
       }
     }
-    return n >= 5
+    if (n < 5) return false
+    // 实心(α=255)且颜色离盘远的细笔画是**内容自己的收尾/外弧**（appui 地球网格的蓝尾，
+    //   ΔE≈60），不是盘的边，不许削；只收"贴着盘色"的描边（translate ΔE≈12）与一切半透明
+    //   AA 边。只认实心是为了不把半透明蓝边也护下来（那会凭空加墨、翻别的图的支）。
+    //   交付侧只决定写不写出去，不碰 plate/β/tol；拼底中缝已由 [absorbSeams] 提前归底、
+    //   盘外 AA 环已由 [plateEdgeAa] 处理，都不经过这里。
+    if (Color.alpha(pixels[i]) == 255) {
+      val ml = (sl / n).toInt(); val ma = (sa / n).toInt(); val mb = (sb / n).toInt()
+      val t = THIN_TINT_DE * 64 + 1
+      if (de2(s.labL[i].toInt() and 0xffff, s.labA[i].toInt() and 0xffff, s.labB[i].toInt() and 0xffff,
+          ml, ma, mb) >= t.toLong() * t) return false
+    }
+    return true
   }
 
   /**
@@ -6898,6 +6917,10 @@ internal object MonochromeMask {
 
   /** 一条缝最多占框这么多。超过就不是缝，是色块，不许吞。 */
   private const val SEAM_MAX_SHARE = 0.02f
+
+  /** [thinInk] 只收"颜色贴着盘"的细描边：像素与邻域盘均色的 ΔE76 上限。
+   *  取值落在实测空档里：translate 描边≈12（要收）↔ appui 蓝内容≈60（要留）。 */
+  private const val THIN_TINT_DE = 25
 
 
 
