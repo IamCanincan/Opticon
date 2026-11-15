@@ -32,6 +32,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.Parcel
 import android.os.Process
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import com.iamcanincan.opticon.BuildConfig
@@ -46,8 +47,11 @@ import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.Volatile
 
 // 把图标 id 挪到一个不会有真实资源的 package，它到达 Resources 时就能被认出来；
@@ -687,10 +691,21 @@ private fun themedBaselineFile(packageName: String) =
   File("${launcherDataDir(packageName)}/cache", "opticon-themed-baseline")
 
 /**
- * 切换之后先等这么久：让桌面自己那次 `[theme-changed]` 重载先跑完，也把连点合并成一次。
- * 真机量到它自己在 prefs 变更后 ~600ms 内跑完（见 [refreshLauncherIconsInProcess]）。
+ * 切换之后先等这么久，也把连点合并成一次。
+ *
+ * ⚠ 别把它说成「等桌面自己那次 `[theme-changed]` 重载跑完」—— 真机量到切换后 **9.8s**
+ *   那次重载还在跑，是我们随后那次 forceReload 把它停掉的
+ *   （`LoaderTask: stopLocked: Loader [theme-changed] stopping be caller: opticon-themed`）。
+ *   这 1.2s 只是让 prefs 与 ContentObserver 两路都送达、把连点并成一次的静置，
+ *   不是等它跑完的预算；等不完也不影响 —— 我们那次重载会把它顶掉。
  */
 private const val THEMED_SETTLE_MS = 1200L
+
+/**
+ * 清内存那一步排在桌面工作线程后面，最多等这么久。超时就大声报、返回 false，
+ * 不假装清掉了 —— 工作线程正忙着冷加载时排在它后面是**对的**，但不能无限等。
+ */
+private const val THEMED_WORKER_WAIT_MS = 8000L
 
 /**
  * 重载原因串。会原样出现在桌面自己的日志里：
@@ -735,6 +750,7 @@ private const val THEMED_RELOAD_REASON = "opticon-themed"
  */
 private fun refreshLauncherIconsInProcess(context: Context, packageName: String, why: String): Boolean {
   val loader = context.classLoader
+  val t0 = SystemClock.elapsedRealtime()
   val state = runCatching {
     val cls = loader.loadClass("com.android.launcher3.LauncherAppState")
     val get = cls.getDeclaredMethod("getInstance", Context::class.java)
@@ -745,31 +761,71 @@ private fun refreshLauncherIconsInProcess(context: Context, packageName: String,
     Log.w(TAG, "ThemedRefresh: 拿不到 LauncherAppState（$why）")
     return false
   }
+  val tState = SystemClock.elapsedRealtime()
 
-  val memory = runCatching {
-    val cache = state.javaClass.getMethod("getIconCache").invoke(state)
-    cache.javaClass.getMethod("clearMemoryCache").invoke(cache)
-  }.isSuccess
-
-  val rows = runCatching {
-    val db = File("${launcherDataDir(packageName)}/databases", "app_icons.db")
-    if (!db.exists()) return@runCatching 0
-    val table =
-      loader.loadClass("com.android.launcher3.icons.cache.BaseIconCache")
-        .getDeclaredField("TABLE_NAME").apply { isAccessible = true }.get(null) as String
-    SQLiteDatabase.openDatabase(db.path, null, SQLiteDatabase.OPEN_READWRITE).use {
-      it.delete(table, null, null)
+  // ⚠ clearMemoryCache() 第一句是 assertWorkerThread()，它拿 Looper.myLooper() 与
+  //   BaseIconCache.bgLooper 比，不是那条线程就抛。第一版在自己的守护线程上直接调，
+  //   真机报「内存清除=false」—— 缓存根本没清掉。所以这一步必须派到桌面自己的图标
+  //   工作线程上。它是 synchronized 的，但派过去之后不会与我们交叉持锁（我们没拿锁）。
+  //   ⚠ getUpdateHandler() 返回的是 IconCacheUpdateHandler，不是 Handler，别拿它当派发口。
+  val memResult = AtomicReference("没派出去")
+  runCatching {
+    val cache = state.javaClass.getMethod("getIconCache").invoke(state) ?: error("getIconCache()=null")
+    val looper = fieldOf(cache.javaClass, "bgLooper")?.get(cache) as? Looper
+      ?: error("拿不到 bgLooper")
+    val done = CountDownLatch(1)
+    Handler(looper).post {
+      memResult.set(
+        runCatching { cache.javaClass.getMethod("clearMemoryCache").invoke(cache) }
+          .fold({ "ok" }, { describe(it) })
+      )
+      done.countDown()
     }
-  }.getOrDefault(-1)
+    // 工作线程可能正忙着冷加载，排在它后面是**对的**（要等它写完再清），但要有上限。
+    if (!done.await(THEMED_WORKER_WAIT_MS, TimeUnit.MILLISECONDS)) {
+      memResult.set("工作线程 ${THEMED_WORKER_WAIT_MS}ms 内没排到（可能正在冷加载）")
+    }
+  }.onFailure { memResult.set(describe(it)) }
+  val memNote = memResult.get()
+  val memory = memNote == "ok"
+  if (!memory) Log.w(TAG, "ThemedRefresh: 清内存缓存失败（$memNote）")
+  val tMem = SystemClock.elapsedRealtime()
 
-  val reload = runCatching {
-    val model = state.javaClass.getMethod("getModel").invoke(state)
+  // ⚠ 「文件不存在」与「表本来就是空的」必须分开报：两者都返回 0 的话，
+  //   下一次仍然读不出坏在哪一层（2026-11-16 第一版就是这么栽的）。
+  val dbFile = File("${launcherDataDir(packageName)}/databases", "app_icons.db")
+  var rows = -1
+  var dbNote = "文件不存在 ${dbFile.path}"
+  if (!dbFile.exists()) {
+    rows = 0
+    Log.w(TAG, "ThemedRefresh: 图标库不存在 ${dbFile.path}")
+  } else {
+    dbNote = "文件${dbFile.length()}B"
+    runCatching {
+      val table =
+        loader.loadClass("com.android.launcher3.icons.cache.BaseIconCache")
+          .getDeclaredField("TABLE_NAME").apply { isAccessible = true }.get(null) as String
+      dbNote = "表=$table 文件${dbFile.length()}B"
+      SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READWRITE).use {
+        rows = it.delete(table, null, null)
+      }
+    }.onFailure { Log.w(TAG, "ThemedRefresh: 删数据库行失败（$dbNote；${describe(it)}）") }
+  }
+  val tDb = SystemClock.elapsedRealtime()
+
+  var reload = false
+  runCatching {
+    val model = state.javaClass.getMethod("getModel").invoke(state) ?: error("getModel()=null")
     model.javaClass.getMethod("forceReload", String::class.java).invoke(model, THEMED_RELOAD_REASON)
-  }.isSuccess
+    reload = true
+  }.onFailure { Log.w(TAG, "ThemedRefresh: 请桌面重载失败（${describe(it)}）") }
+  val tReload = SystemClock.elapsedRealtime()
 
   Log.i(
     TAG,
-    "ThemedRefresh: $why → 内存清除=$memory 数据库删行=$rows 重载=$reload（不杀桌面、不重启系统界面）"
+    "ThemedRefresh: $why → 内存清除=$memory[$memNote] 数据库删行=$rows($dbNote) 重载=$reload" +
+      "（不杀桌面、不重启系统界面）耗时ms 句柄=${tState - t0} 内存=${tMem - tState} " +
+      "库=${tDb - tMem} 重载=${tReload - tDb}"
   )
   // 行删掉了，下一批图标就是当前这一版管线画的 —— 戳记跟着走，否则 [warnStaleIconCache] 误报。
   if (rows >= 0) runCatching {
@@ -778,6 +834,12 @@ private fun refreshLauncherIconsInProcess(context: Context, packageName: String,
     stamp.writeText(algoId())
   }
   return memory && rows >= 0 && reload
+}
+
+/** 反射抛的是 InvocationTargetException，真正的原因在 cause 里 —— 只报外层等于没报。 */
+private fun describe(t: Throwable): String {
+  val real = if (t is java.lang.reflect.InvocationTargetException) t.targetException ?: t else t
+  return "${t.javaClass.simpleName} → ${real.javaClass.simpleName}: ${real.message}"
 }
 
 /**
@@ -797,6 +859,9 @@ private class ThemedRefreshScheduler(private val context: Context, private val p
     worker =
       Thread {
         if (!runCatching { Thread.sleep(THEMED_SETTLE_MS) }.isSuccess) return@Thread
+        // 这一行把「静置/线程调度」与「刷新本身」分开：上一版两者混在一起，
+        // 回调到动手之间 9.8 秒（说好 1.2 秒）归不了因。
+        Log.i(TAG, "ThemedRefresh: 静置结束，开始刷新（$reason）")
         if (!refreshLauncherIconsInProcess(context, packageName, reason)) {
           Log.w(TAG, "ThemedRefresh: 进程内刷新没做成，图标可能还是旧的 —— 去按界面「清缓存重启」那一下")
         }
