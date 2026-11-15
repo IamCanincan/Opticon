@@ -14,7 +14,9 @@ for (const l of fs.readFileSync(idxp, 'utf8').replace(/\r/g, '').split('\n').sli
   if (c.length < 9) continue;
   idx.set(c[0], { cls: c[5], mono: c[8] });
 }
-const log = fs.readFileSync(logp, 'utf8');
+const log = (logp && fs.existsSync(logp)) ? fs.readFileSync(logp, 'utf8') : '';
+if (!log) console.log('⚠ 没有装机日志（' + logp + '）—— 身份只剩台账一条腿：透传行与 diag 类名都读不到，' +
+  '没进台账的包会被标成"要拆 APK"。**带外名单在这种轮次里不可引用。**');
 const d = new DatabaseSync(dbp, { readOnly: true });
 const pkgs = new Set();
 for (const r of d.prepare('SELECT componentName c FROM icons').all()) pkgs.add(r.c.split('/')[0]);

@@ -103,3 +103,43 @@ console.log(`\n带 = 自带那组 p10~p90 = ${lo.toFixed(3)} ~ ${hi.toFixed(3)}�
 const bad = out.filter((x) => !x[4] && (x[1] < lo || (x[1] > hi && sub(x) === '有留白前景')));
 if (!bad.length) console.log('    （0 张）');
 for (const [pkg, r, fg, mo] of bad) console.log(`    ${r.toFixed(3)}  ${pkg.padEnd(34)} 前景层 ${fg.toFixed(3)}  单色 ${mo.toFixed(3)}`);
+
+// ── 闸模式（`--pin=<文件>`）：钉**三件事**，任何一件退步就非零退出 ──
+//   ① 覆盖：配上对的张数（分母缩了就是台子坏了，不是"没问题"）
+//   ② 我们每一子类的**中位**：主人那句验收线是"越接近 1.000 越好" ⇒ **只许往 1.0 走，不许退**
+//   ③ 带外张数：只许降不许涨
+//   界本身不钉死数（它是从"自带那组"现算的），钉的是"我们相对它的位置"。
+const PIN = (process.argv.find((a) => a.startsWith('--pin=')) || '').slice(6);
+if (PIN) {
+  const now = [
+    `covered=${out.length}`,
+    ...Object.entries(bands).filter(([, v]) => v.length >= 3)
+      .map(([k, v]) => `med_${k.replace(/[·]/g, '_')}=${q(v, 0.5).toFixed(3)}`),
+    `outband=${bad.length}`,
+  ].join('\t');
+  if (process.argv.includes('--pinwrite')) {
+    fs.writeFileSync(PIN, now + '\n');
+    console.log(`\n   已认账：${PIN} = ${now}`);
+    process.exit(0);
+  }
+  if (!fs.existsSync(PIN)) { console.log(`\n!! 没有 ${PIN} —— 这道闸没基线，不算过（先 --pinwrite 认一次）`); process.exit(2); }
+  const base = new Map(fs.readFileSync(PIN, 'utf8').replace(/\r/g, '').trim().split('\t').map((kv) => kv.split('=')));
+  const worse = [];
+  const num = (k) => (base.has(k) ? +base.get(k) : NaN);
+  if (out.length < num('covered')) worse.push(`覆盖 ${num('covered')} → ${out.length} 张（分母被动过 ⇒ 后面的比对都不成立）`);
+  if (bad.length > num('outband')) worse.push(`带外 ${num('outband')} → ${bad.length} 张`);
+  for (const [k, v] of Object.entries(bands)) {
+    if (v.length < 3) continue;
+    // ⚠ **只判"我们"那几子类**：`自带` 那两组是用来算界的，不是我们的成绩 ——
+    //   把它们也当判据，抓取目录换一代就会假红（本仓那一族：闸红了但红的原因与代码无关）。
+    if (!/·我们$/.test(k)) continue;
+    const key = `med_${k.replace(/[·]/g, '_')}`, b = num(key);
+    if (Number.isFinite(b)) {
+      const cur = q(v, 0.5);
+      // 主人那句验收线是"越接近 1.000 越好" ⇒ 退步 = 中位变小
+      if (cur < b - 1e-9) worse.push(`${k} 中位 ${b.toFixed(3)} → ${cur.toFixed(3)}（离 1.000 更远）`);
+    } else worse.push(`${k} 在基线里没有（新增子类，先 --pinwrite 认账）`);
+  }
+  if (worse.length) { console.log(`\n!! 剪影幅面账退步（${worse.length} 项）：`); for (const w of worse) console.log('   ' + w); process.exit(1); }
+  console.log(`\nSIL-GATE OK —— 覆盖 ${out.length}、带外 ${bad.length}、各子类中位不退（基线 ${fs.readFileSync(PIN, 'utf8').trim()}）`);
+}
