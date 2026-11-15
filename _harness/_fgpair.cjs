@@ -38,7 +38,7 @@ function decode(buf) {
     const j = i * chans;
     A[i] = color === 6 ? out[j + 3] : color === 4 ? out[j + 1] : color === 3 ? (trns ? trns[out[j]] : 255) : 255;
   }
-  return { w, h, A };
+  return { w, h, A, out, chans };
 }
 function extent(A, w, x0, y0, x1, y1, thr) {
   let l = w, t = y1, r = -1, b = y0 - 1;
@@ -104,6 +104,57 @@ const bad = out.filter((x) => !x[4] && (x[1] < lo || (x[1] > hi && sub(x) === '�
 if (!bad.length) console.log('    （0 张）');
 for (const [pkg, r, fg, mo] of bad) console.log(`    ${r.toFixed(3)}  ${pkg.padEnd(34)} 前景层 ${fg.toFixed(3)}  单色 ${mo.toFixed(3)}`);
 
+// ── **第二条腿：老式图标**（整张位图就是图案，没有前景层可比）──
+//   这一族没有 `_fg.png` ⇒ 上面那条尺**一个都看不到**（现量：库里老式·我们合成 37 个包，有前景层的 0 个），
+//   而今晚那一刀（`交 = scale ÷ 窗`）恰恰全落在这一族 —— 一条看不见已修之事的闸不算闸。
+//   这一族的分母就是**它自己的彩色**：屏上那张彩色 blob 的墨外接框（`min(R,G,B)<235`，与 `_pairshot` 同一条），
+//   验收线是 1.000（主人那句"一样的几何结构"在这一族里字面成立：整张位图 = 图案 = 剪影该覆盖的东西）。
+const LEG_TOL = 0.05;
+const legacy = [];
+{
+  const rowsAll = new DatabaseSync(dbp, { readOnly: true }).prepare('SELECT componentName c, icon i, mono_icon m FROM icons').all();
+  const picked = new Map();
+  for (const r of rowsAll) { const p = r.c.split('/')[0]; if (r.i && r.m && !picked.has(p)) picked.set(p, r); }
+  for (const [pkg, r] of picked) {
+    const e = ev.get(pkg);
+    if (!e || e.mono === '有' || e.cls.includes('Adaptive')) continue;      // 只看"老式·我们合成"
+    const ci = decode(Buffer.from(r.i));
+    if (!ci) continue;
+    const { w, h, chans, out } = ci;
+    // ⚠ 库里的彩色 blob **不保证是 3 通道**（灰度 PNG 的 colorType=0/4，chans=1/2）——
+    //   上一版直接读 `out[i+2]`，越界拿到 undefined，`Math.min(...)` 变 NaN，整条腿当场崩。
+    const mn = (i) => chans === 1 ? out[i] : chans === 2 ? out[i] : chans === 4 ? out[i]
+      : Math.min(out[i], out[i + 1], out[i + 2]);
+    let l = w, t = h, rr = -1, bb = -1;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * chans;
+      if (mn(i) >= 235) continue;
+      if (x < l) l = x; if (x > rr) rr = x; if (y < t) t = y; if (y > bb) bb = y;
+    }
+    if (rr < 0) continue;
+    const cw = Math.max(rr - l + 1, bb - t + 1) / w;
+    const mb = Buffer.from(r.m), n = Math.round(Math.sqrt(mb.length));
+    if (n * n !== mb.length || !cw) continue;
+    let ml = n, mt = n, mr = -1, mbb = -1;
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+      if (mb[y * n + x] <= 8) continue;
+      if (x < ml) ml = x; if (x > mr) mr = x; if (y < mt) mt = y; if (y > mbb) mbb = y;
+    }
+    if (mr < 0) continue;
+    const mw = Math.max(mr - ml + 1, mbb - mt + 1) / n;
+    legacy.push([pkg, mw / cw, cw, mw]);
+  }
+  legacy.sort((a, b) => a[1] - b[1]);
+  const v = legacy.map((x) => x[1]);
+  console.log(`\n第二条腿（老式：单色 ÷ 它自己的彩色，验收线 1.000±${LEG_TOL}）：${legacy.length} 个包`);
+  if (legacy.length) {
+    console.log(`  p10 ${q(v, 0.1).toFixed(3)}  中位 ${q(v, 0.5).toFixed(3)}  p90 ${q(v, 0.9).toFixed(3)}`);
+    const off = legacy.filter((x) => Math.abs(x[1] - 1) > LEG_TOL);
+    console.log(`  不一样大的 ${off.length} 个：`);
+    for (const [pkg, r, cw, mw] of off) console.log(`    ${r.toFixed(3)}  ${pkg.padEnd(32)} 彩色 ${cw.toFixed(3)}  单色 ${mw.toFixed(3)}`);
+  } else console.log('  （0 个包 —— 这一腿没吃到数据，不能读成"老式全对"）');
+}
+
 // ── 闸模式（`--pin=<文件>`）：钉**三件事**，任何一件退步就非零退出 ──
 //   ① 覆盖：配上对的张数（分母缩了就是台子坏了，不是"没问题"）
 //   ② 我们每一子类的**中位**：主人那句验收线是"越接近 1.000 越好" ⇒ **只许往 1.0 走，不许退**
@@ -116,6 +167,9 @@ if (PIN) {
     ...Object.entries(bands).filter(([, v]) => v.length >= 3)
       .map(([k, v]) => `med_${k.replace(/[·]/g, '_')}=${q(v, 0.5).toFixed(3)}`),
     `outband=${bad.length}`,
+    `leg_covered=${legacy.length}`,
+    `leg_med=${legacy.length ? q(legacy.map((x) => x[1]), 0.5).toFixed(3) : 'NaN'}`,
+    `leg_off=${legacy.filter((x) => Math.abs(x[1] - 1) > LEG_TOL).length}`,
   ].join('\t');
   if (process.argv.includes('--pinwrite')) {
     fs.writeFileSync(PIN, now + '\n');
@@ -128,6 +182,16 @@ if (PIN) {
   const num = (k) => (base.has(k) ? +base.get(k) : NaN);
   if (out.length < num('covered')) worse.push(`覆盖 ${num('covered')} → ${out.length} 张（分母被动过 ⇒ 后面的比对都不成立）`);
   if (bad.length > num('outband')) worse.push(`带外 ${num('outband')} → ${bad.length} 张`);
+  // **第二条腿的判法**：这一族的验收线就是 1.000，所以"退步"= 离 1.000 更远（用 |中位−1| 比），
+  //   而不是"变小"——它可能偏大也可能偏小，两个方向都算离开验收线。
+  if (legacy.length < num('leg_covered')) worse.push(`老式覆盖 ${num('leg_covered')} → ${legacy.length} 个包（这一族的腿断了，今晚那一刀就没人看着）`);
+  const legOff = legacy.filter((x) => Math.abs(x[1] - 1) > LEG_TOL).length;
+  if (legOff > num('leg_off')) worse.push(`老式不一样大 ${num('leg_off')} → ${legOff} 个`);
+  const lm = legacy.length ? q(legacy.map((x) => x[1]), 0.5) : NaN;
+  const lb = num('leg_med');
+  if (Number.isFinite(lm) && Number.isFinite(lb) && Math.abs(lm - 1) > Math.abs(lb - 1) + 1e-9) {
+    worse.push(`老式中位 |离 1.000| ${Math.abs(lb - 1).toFixed(3)} → ${Math.abs(lm - 1).toFixed(3)}（${lb.toFixed(3)} → ${lm.toFixed(3)}）`);
+  }
   for (const [k, v] of Object.entries(bands)) {
     if (v.length < 3) continue;
     // ⚠ **只判"我们"那几子类**：`自带` 那两组是用来算界的，不是我们的成绩 ——
