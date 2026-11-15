@@ -702,8 +702,10 @@ private fun themedBaselineFile(packageName: String) =
 private const val THEMED_SETTLE_MS = 1200L
 
 /**
- * 清内存那一步排在桌面工作线程后面，最多等这么久。超时就大声报、返回 false，
- * 不假装清掉了 —— 工作线程正忙着冷加载时排在它后面是**对的**，但不能无限等。
+ * 派到桌面工作线程那一步最多等这么久。超时就大声报、返回 false，不假装清掉了。
+ *
+ * ⚠ 别把超时当成「工作线程忙、多等等就好」：真机第一次超时是因为**顺序错了** ——
+ *   在等一条被自己即将取消的重载占死的线程。现在 forceReload 排在等之前，正常应当很快。
  */
 private const val THEMED_WORKER_WAIT_MS = 8000L
 
@@ -763,55 +765,58 @@ private fun refreshLauncherIconsInProcess(context: Context, packageName: String,
   }
   val tState = SystemClock.elapsedRealtime()
 
-  // ⚠ clearMemoryCache() 第一句是 assertWorkerThread()，它拿 Looper.myLooper() 与
-  //   BaseIconCache.bgLooper 比，不是那条线程就抛。第一版在自己的守护线程上直接调，
-  //   真机报「内存清除=false」—— 缓存根本没清掉。所以这一步必须派到桌面自己的图标
-  //   工作线程上。它是 synchronized 的，但派过去之后不会与我们交叉持锁（我们没拿锁）。
+  // ⚠ 顺序是承重的，别调换：**先派活、再 forceReload、最后才等**。
+  //   bgLooper 就是 Executors.MODEL_EXECUTOR 的 looper（IconCache.<init> 取它存进
+  //   BaseIconCache.bgLooper），而桌面自己那次 [theme-changed] 重载**也跑在这条线程上**。
+  //   上一版是「派活 → 等 8s → 才 forceReload」，等于在等一条被自己即将取消的任务占死的
+  //   线程：真机 03:48:07.858 派活、03:48:15.859 超时，stopLocked 那行出现在超时之后。
+  //   forceReload 会 stopLocked 掉占路的那次重载，工作线程随即空出来跑我们派的活。
+  //
+  // ⚠ clearMemoryCache() 第一句是 assertWorkerThread()，比 Looper.myLooper() 与 bgLooper，
+  //   不是那条线程就抛 —— 所以清内存与删行都放进派过去的 runnable 里。删行也放上去是因为
+  //   工作线程单线程：这样它一定排在旧任务**完全退出之后**，不会被旧任务的收尾写回覆盖。
   //   ⚠ getUpdateHandler() 返回的是 IconCacheUpdateHandler，不是 Handler，别拿它当派发口。
-  val memResult = AtomicReference("没派出去")
+  //   桌面自己的同形写法见 LauncherIconProviderImpl$onPluginLoaded$2.run：
+  //   clearMemoryCache() → LauncherModel.reloadIfActive("LauncherIconPlugin-load")，
+  //   由 LooperExecutor.execute 派发；全桌面只有这一处调用 clearMemoryCache。
+  val dbFile = File("${launcherDataDir(packageName)}/databases", "app_icons.db")
+  val table = runCatching {
+    loader.loadClass("com.android.launcher3.icons.cache.BaseIconCache")
+      .getDeclaredField("TABLE_NAME").apply { isAccessible = true }.get(null) as String
+  }.getOrNull()
+
+  val rows = AtomicInteger(-1)
+  val note = AtomicReference("没派出去")
+  val done = CountDownLatch(1)
+  var posted = false
   runCatching {
     val cache = state.javaClass.getMethod("getIconCache").invoke(state) ?: error("getIconCache()=null")
     val looper = fieldOf(cache.javaClass, "bgLooper")?.get(cache) as? Looper
       ?: error("拿不到 bgLooper")
-    val done = CountDownLatch(1)
-    Handler(looper).post {
-      memResult.set(
-        runCatching { cache.javaClass.getMethod("clearMemoryCache").invoke(cache) }
-          .fold({ "ok" }, { describe(it) })
+    posted = Handler(looper).post {
+      val mem = runCatching { cache.javaClass.getMethod("clearMemoryCache").invoke(cache) }
+      // ⚠ 「文件不存在」「拿不到表名」「表本来就是空的」要分开报：都返回 0 的话，
+      //   下一次仍然读不出坏在哪一层（2026-11-16 前两版就是这么栽的）。
+      val db = runCatching {
+        when {
+          !dbFile.exists() -> "文件不存在 ${dbFile.path}"
+          table == null -> "拿不到 TABLE_NAME"
+          else -> SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READWRITE).use {
+            rows.set(it.delete(table, null, null))
+            "表=$table 文件${dbFile.length()}B"
+          }
+        }
+      }
+      note.set(
+        "内存=${mem.fold({ "ok" }, { describe(it) })} 库=${db.fold({ it }, { describe(it) })}"
       )
       done.countDown()
     }
-    // 工作线程可能正忙着冷加载，排在它后面是**对的**（要等它写完再清），但要有上限。
-    if (!done.await(THEMED_WORKER_WAIT_MS, TimeUnit.MILLISECONDS)) {
-      memResult.set("工作线程 ${THEMED_WORKER_WAIT_MS}ms 内没排到（可能正在冷加载）")
-    }
-  }.onFailure { memResult.set(describe(it)) }
-  val memNote = memResult.get()
-  val memory = memNote == "ok"
-  if (!memory) Log.w(TAG, "ThemedRefresh: 清内存缓存失败（$memNote）")
-  val tMem = SystemClock.elapsedRealtime()
-
-  // ⚠ 「文件不存在」与「表本来就是空的」必须分开报：两者都返回 0 的话，
-  //   下一次仍然读不出坏在哪一层（2026-11-16 第一版就是这么栽的）。
-  val dbFile = File("${launcherDataDir(packageName)}/databases", "app_icons.db")
-  var rows = -1
-  var dbNote = "文件不存在 ${dbFile.path}"
-  if (!dbFile.exists()) {
-    rows = 0
-    Log.w(TAG, "ThemedRefresh: 图标库不存在 ${dbFile.path}")
-  } else {
-    dbNote = "文件${dbFile.length()}B"
-    runCatching {
-      val table =
-        loader.loadClass("com.android.launcher3.icons.cache.BaseIconCache")
-          .getDeclaredField("TABLE_NAME").apply { isAccessible = true }.get(null) as String
-      dbNote = "表=$table 文件${dbFile.length()}B"
-      SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READWRITE).use {
-        rows = it.delete(table, null, null)
-      }
-    }.onFailure { Log.w(TAG, "ThemedRefresh: 删数据库行失败（$dbNote；${describe(it)}）") }
+  }.onFailure {
+    note.set(describe(it))
+    done.countDown()
   }
-  val tDb = SystemClock.elapsedRealtime()
+  val tPost = SystemClock.elapsedRealtime()
 
   var reload = false
   runCatching {
@@ -821,19 +826,26 @@ private fun refreshLauncherIconsInProcess(context: Context, packageName: String,
   }.onFailure { Log.w(TAG, "ThemedRefresh: 请桌面重载失败（${describe(it)}）") }
   val tReload = SystemClock.elapsedRealtime()
 
+  val queued = posted && runCatching { done.await(THEMED_WORKER_WAIT_MS, TimeUnit.MILLISECONDS) }
+    .getOrDefault(false)
+  val tWait = SystemClock.elapsedRealtime()
+  val detail = note.get()
+  val memory = detail.startsWith("内存=ok")
+  if (!queued) Log.w(TAG, "ThemedRefresh: 工作线程 ${THEMED_WORKER_WAIT_MS}ms 内没排到")
+
   Log.i(
     TAG,
-    "ThemedRefresh: $why → 内存清除=$memory[$memNote] 数据库删行=$rows($dbNote) 重载=$reload" +
-      "（不杀桌面、不重启系统界面）耗时ms 句柄=${tState - t0} 内存=${tMem - tState} " +
-      "库=${tDb - tMem} 重载=${tReload - tDb}"
+    "ThemedRefresh: $why → $detail 删行=${rows.get()} 重载=$reload 排到=$queued" +
+      "（不杀桌面、不重启系统界面）耗时ms 句柄=${tState - t0} 派发=${tPost - tState} " +
+      "重载=${tReload - tPost} 等=${tWait - tReload}"
   )
   // 行删掉了，下一批图标就是当前这一版管线画的 —— 戳记跟着走，否则 [warnStaleIconCache] 误报。
-  if (rows >= 0) runCatching {
+  if (rows.get() >= 0) runCatching {
     val stamp = cacheStamp(packageName)
     stamp.parentFile?.mkdirs()
     stamp.writeText(algoId())
   }
-  return memory && rows >= 0 && reload
+  return memory && rows.get() >= 0 && reload
 }
 
 /** 反射抛的是 InvocationTargetException，真正的原因在 cause 里 —— 只报外层等于没报。 */
