@@ -79,8 +79,8 @@ class ConfigProvider : ContentProvider() {
      * 不能用 uid 硬判 —— SystemUI 在这台设备上跑在 10154 而不是 1000，
      * 所以按「调用方 uid 归属哪个包」来判断。
      *
-     * 名单与 `META-INF/xposed/scope.list` 对齐：裁圆要在 launcher / settings /
-     * system_server 这些进程里读开关，通知要在 SystemUI 里读，缺一个就有一路拿不到配置。
+     * 名单与 `META-INF/xposed/scope.list` 对齐：自适应要在 launcher / settings /
+     * system_server 这些进程里读开关，单色通知要在 SystemUI 里读，缺一个就有一路拿不到配置。
      */
     private fun isTrustedCaller(): Boolean {
         val uid = Binder.getCallingUid()

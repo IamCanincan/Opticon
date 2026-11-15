@@ -244,15 +244,15 @@ internal object MonochromeSynth {
   /**
    * 累计交出去多少张单色层。**两条入口都经过 [forIcon]，所以一个计数器就够**。
    *
-   * 为什么非要有这个埋点：默认配置（裁圆开着）下桌面拿到的图标几乎都是 [CircleIconDrawable]，
+   * 为什么非要有这个埋点：默认配置（自适应开着）下桌面拿到的图标几乎都是 [CircleIconDrawable]，
    * 那条路走的是它自己的 `getMonochrome()` override、**不经过**
    * `IconHooks.hookSynthesizedMonochrome` 里那个计数器 —— 也就是说主路径原先一条日志都没有。
    * 而这个项目已经吃过「hook 的提前 return 静默返回、最难查」的亏，所以补上：看到
    * `Mono: N layers synthesized` 就说明合成真的在跑，而不是悄悄返回 null 让桌面走了老路。
    */
   private fun noteSynthesized() {
-    // 统计页的「单色」：**交出一张单色层就记一次**，两条入口（新合成 / 命中缓存）都算 ——
-    // 口径与「裁圆」一致（那张图被我们处理过），而只记新合成的话，本机磁盘缓存在手，
+    // 统计页的「动态取色」：**交出一张单色层就记一次**，两条入口（新合成 / 命中缓存）都算 ——
+    // 口径与「自适应」一致（那张图被我们处理过），而只记新合成的话，本机磁盘缓存在手，
     // 界面会长期显示 0，看着像没工作。
     com.iamcanincan.opticon.runtime.Stats.bump("单色")
     val total = synthesized.incrementAndGet()
@@ -1831,7 +1831,7 @@ private class MonochromeLayer(
       loggedBounds = true
       val total = boundsLogged.incrementAndGet()
       if (total <= BOUNDS_LOG_FIRST) {
-        // `label=` 是 2026-10-25 核几何时补的（与彩色那行 `裁圆绘制:` 按名字对比例）。
+        // `label=` 是 2026-10-25 核几何时补的（与彩色那行 `自适应几何` 按名字对比例）。
         Log.d(TAG, "Mono: layer bounds=${bounds.width()}x${bounds.height()} mask=${mask.width} " +
           "edge=$edge alpha=${paint.alpha} filter=${paint.colorFilter?.javaClass?.simpleName ?: "none"}" +
           " label=${IconNames.of(source)}")

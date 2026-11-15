@@ -14,13 +14,13 @@ import java.util.concurrent.atomic.AtomicLong
  * 不起定时器（宿主里起定时器是长期开销），也不落盘（写成本比这里高两个数量级）。
  *
  * ⚠ 计数是**每个进程各一份**：桌面与系统界面各数各的，键里带进程名区分 ——
- *   混在一起会让"裁圆次数"被两个进程各加一遍。
+ *   混在一起会让"自适应次数"被两个进程各加一遍。
  */
 /** 统计快照的广播动作（应用侧 `StatsReceiver` 收）。 */
 const val ACTION_STATS = "com.iamcanincan.opticon.STATS"
 
 internal object Stats {
-  /** 「每这么多次 bump 广播一次」——通知一天几十条、裁圆一次重启上千次，20 是折中。 */
+  /** 「每这么多次 bump 广播一次」——单色通知一天几十条、自适应一次重启上千次，20 是折中。 */
   private const val FLUSH_EVERY = 20L
 
   /** 待发的事件行上限：一次全量重画就是 685 行，攒到这么多就先发一批。 */
@@ -29,7 +29,7 @@ internal object Stats {
   /** 已记过的图标键上限（每进程一份）：`sig|edge`，避免同一张图被反复记。 */
   private const val EVENT_SEEN_MAX = 4096
 
-  /** 耗时账：`crop` / `mono` 各自的累计纳秒与张数（真机上的"每张多少 ms"靠它）。 */
+  /** 耗时账：`mono*` 各档的累计纳秒与张数（真机上的"每张多少 ms"靠它）。 */
   private val perfNs = ConcurrentHashMap<String, AtomicLong>()
   private val perfN = ConcurrentHashMap<String, AtomicLong>()
 
@@ -68,7 +68,7 @@ internal object Stats {
     }
   }
 
-  /** `裁圆:累计ns/张数;单色:…` —— 随统计广播一起回去。 */
+  /** `mono:累计ns/张数;monoCold:…` —— 随统计广播一起回去。 */
   private fun perfSnapshot(): String =
     perfNs.entries.joinToString(";") { (k, v) -> k + ":" + v.get() + "/" + (perfN[k]?.get() ?: 0L) }
 

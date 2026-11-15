@@ -1,7 +1,7 @@
 package com.iamcanincan.opticon.runtime
 
 /**
- * 模块的行为开关，三个功能共用一份（裁圆 / 单色合成 / 通知）。
+ * 模块的行为开关，三个功能共用一份（自适应 / 动态取色 / 单色通知）。
  *
  * 默认值 = 没有配置时的兜底行为，**必须等价于「三个功能都开」** ——
  * 否则配置通道全挂时（provider / 直接读文件 / 远程配置全失败）模块会按别的组合跑，
@@ -19,7 +19,7 @@ package com.iamcanincan.opticon.runtime
  */
 data class ModuleOptions(
 
-    /** 裁圆图标的总开关：关掉后所有进程都拿原图标，不再套圆形遮罩 */
+    /** 自适应的总开关：关掉后所有进程都拿原图标，不再包装 */
     val circleEnabled: Boolean = true,
 
     /**
@@ -40,11 +40,11 @@ data class ModuleOptions(
      *
      * 关掉它 = 什么都不动，桌面完全照它自己那套处理 —— 只有在这个 ROM / 桌面版本上实测
      * **不该动**（厂商已经修过极性，或某个图标包本身就反着出）时才需要关。
-     * 它和 [circleEnabled] 是两个独立开关：裁圆和遮罩极性没有因果关系。
+     * 它和 [circleEnabled] 是两个独立开关：自适应和遮罩极性没有因果关系。
      */
     val monoInvert: Boolean = true,
 
-    /** 通知图标的总开关：关掉后通知小图标保持系统原样 */
+    /** 单色通知的总开关：关掉后通知小图标保持系统原样 */
     val notifyEnabled: Boolean = true,
 
 ) {

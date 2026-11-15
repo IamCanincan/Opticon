@@ -149,7 +149,7 @@ object IconBitmap {
     /** TYPE_RESOURCE 类型的 Icon 需要用正确的 Resources 解码，不能走 Drawable 兜底 */
     fun fromResources(context: Context, resId: Int): Bitmap {
         val drawable = ResourcesCompat.getDrawable(context.resources, resId, null)
-        // SystemUI 里的 Resources 出口也被裁圆钩子挂着：拿裁过的圆去压剪影会变成一块饼。
+        // SystemUI 里的 Resources 出口也被自适应钩子挂着：拿带底盘的包装图去压剪影会变成一块饼。
         return if (drawable != null) rasterize(unwrappedIcon(drawable))
           else Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
     }

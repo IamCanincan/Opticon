@@ -242,8 +242,8 @@ object NotificationIconPatch {
      */
     private fun appIconFallback(context: Context, pkg: String): android.graphics.Bitmap? {
         val app = runCatching { context.packageManager.getApplicationIcon(pkg) }.getOrNull() ?: return null
-        // SystemUI 里这个出口也被裁圆钩子包成圆（`clip from=PM.getApplicationIcon
-        // host=com.android.systemui`）；拿裁过的圆去压剪影，兜底会变成一块实心饼。
+        // SystemUI 里这个出口也被自适应钩子包装（`自适应 from=PM.getApplicationIcon
+        // host=com.android.systemui`）；拿带底盘的包装图去压剪影，兜底会变成一块实心饼。
         val fromApp = IconBitmap.rasterize(unwrappedIcon(app))
         val monoApp = if (ToneCheck.isGrayscale(fromApp)) fromApp else IconBitmap.monochrome(fromApp)
         if (monoApp == null) return null
@@ -380,7 +380,7 @@ object NotificationIconPatch {
      * 累计账：每 [CENSUS_EVERY] 次打一行分布，**第一次也打**（否则"这条日志活着没有"永远没法证）。
      *
      * 为什么需要它：逐条的 `通知尺 …首见` 只回答"这一家我们做了什么"，回答不了"整体里各占多少"——
-     * 而那正是主人问过的那句"通知图标适配得怎么样"。与 `裁圆累计` 同一个形状，换个分母。
+     * 而那正是主人问过的那句"通知图标适配得怎么样"。与 `自适应累计` 同一个形状，换个分母。
      */
     private fun countBranch(kind: String) {
         com.iamcanincan.opticon.runtime.Stats.bump("通知/" + kind)
@@ -405,7 +405,7 @@ object NotificationIconPatch {
         val key = kind + " " + pkg + " " + src.width + "x" + src.height
         if (rulerSeen.putIfAbsent(key, true) != null) return
         val inPct = (IconBitmap.sizeRuler(src) * 100).roundToInt()
-        // 每张通知图标一条记录（与裁圆/单色同一种形状），导出的日志里能按包名和分支分桶。
+        // 每张通知图标一条记录（与自适应/动态取色同一种形状），导出的日志里能按包名和分支分桶。
         com.iamcanincan.opticon.runtime.Stats.event(
             "notify|$pkg|$kind",
             // 通知一次只有几张：立刻发走，别等攒满 200 条。

@@ -15,17 +15,18 @@ import io.github.libxposed.api.XposedModuleInterface
 /**
  * 模块入口，由 `META-INF/xposed/java_init.list` 指向。
  *
- * ## 一个模块、两套挂钩
- * **Opticon = Optimize + Icon** —— 管的是图标，两处：应用图标被系统套上了不想要的形状，
- * 通知小图标被系统染成了认不出的颜色。这两处在**进程**上的落点不同，所以按进程分发：
+ * ## 一个模块、按进程分发
+ * **Opticon = Optimize + Icon** —— 管的是图标，三路：自适应（应用图标被系统套上不想要的形状）、
+ * 动态取色（强制取色下未适配应用的单色剪影被画反）、单色通知（通知小图标被染成认不出的颜色）。
+ * 它们在**进程**上的落点不同，所以按进程分发：
  *
  * | 进程 | 装什么 |
  * |---|---|
- * | `system_server` | 裁圆：在图标信息离开 PMS 之前打标记（[hookSystemServer]） |
- * | launcher / settings / SystemUI / 其它被勾选的应用 | 裁圆：认标记、套圆形遮罩（[hookIcons]） |
- * | `com.android.systemui` | 除裁圆外，再装通知图标那套（[SystemUiHooks]） |
+ * | `system_server` | 自适应：在图标信息离开 PMS 之前打标记（[hookSystemServer]） |
+ * | launcher / settings / SystemUI / 其它被勾选的应用 | 自适应：认标记、包成自适应图标（[hookIcons]） |
+ * | `com.android.systemui` | 除自适应外，再装单色通知那套（[SystemUiHooks]） |
  *
- * 通知是系统界面画出来的，挂别的地方没意义；裁圆则相反 —— 谁解析图标谁就得被注入。
+ * 单色通知是系统界面画出来的，挂别的地方没意义；自适应则相反 —— 谁解析图标谁就得被注入。
  *
  * ## 元数据落在哪（LibXposed / API 102）
  * | 内容 | 位置 |
@@ -91,8 +92,8 @@ class OpticonModule : XposedModule() {
      */
     override fun onSystemServerStarting(param: XposedModuleInterface.SystemServerStartingParam) {
         // system_server 也要读配置：它决定了「给不给图标 id 打标记」。
-        // 不读的话这里永远拿默认值（= 开），关掉裁圆开关时它照样打标记 ——
-        // 虽然客户端那侧 clipToCircle 会兜住（返回原图标），但那是多绕一步，
+        // 不读的话这里永远拿默认值（= 开），关掉自适应开关时它照样打标记 ——
+        // 虽然客户端那侧会兜住（开关关着就返回原图标），但那是多绕一步，
         // 而且未注入的进程会白白经手一遍伪造 id。
         ModuleRuntime.attach(this)
         hookSystemServer(this, param)
@@ -106,7 +107,7 @@ class OpticonModule : XposedModule() {
         // 界面里改了开关立刻生效。
         ModuleRuntime.attach(this)
 
-        // 裁圆：所有被注入的进程都要装（谁解析图标谁就要认得那个标记）。
+        // 自适应：所有被注入的进程都要装（谁解析图标谁就要认得那个标记）。
         hookIcons(this, param)
 
         if (param.packageName == SYSTEM_UI) {

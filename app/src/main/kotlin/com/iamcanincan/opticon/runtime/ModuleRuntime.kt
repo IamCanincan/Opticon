@@ -17,8 +17,8 @@ import java.util.concurrent.Executors
 /**
  * 挂钩运行期的共享状态，活在**被注入的宿主进程**里。
  *
- * 本模块没有自己的进程：裁圆跑在 launcher / settings / system_server / SystemUI 里，
- * 通知跑在 SystemUI 里。每个进程各有自己的一份本对象（进程间不共享内存），
+ * 本模块没有自己的进程：自适应跑在 launcher / settings / system_server / SystemUI 里，
+ * 单色通知跑在 SystemUI 里。每个进程各有自己的一份本对象（进程间不共享内存），
  * 各自独立去读一次配置。
  *
  * 生命周期与宿主进程一致，不存在 Activity 泄漏问题，故抑制 StaticFieldLeak。
@@ -179,7 +179,7 @@ object ModuleRuntime {
      */
     fun options(): ModuleOptions {
         // ⚠ 读配置绝不能把调用方带崩。这个函数在**热路径**上被调：
-        // 每张图标（clipToCircle / 打标记）、每条通知都要过一次。
+        // 每张图标（自适应包装 / 打标记）、每条通知都要过一次。
         // 一旦这里抛出去，轻则那张图标没裁、重则 launcher 抛异常（保护模式虽然会吞，
         // 但那条 hook 就被整体跳过了）。所以异常一律就地吃掉，退回上一次的值 ——
         // 配置读不到时用旧值，比"整个功能失效"好得多。

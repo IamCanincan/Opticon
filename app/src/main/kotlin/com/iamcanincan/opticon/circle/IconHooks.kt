@@ -73,7 +73,7 @@ private const val DEFAULT_APP_ICON = android.R.drawable.sym_def_app_icon
  * 那等于假设**所有应用资源都住在 0x7f**。真机上 `Hook.JiuWu.Xp` 的 APK 5701 个资源
  * 全在 **0x95** 包号下（`aapt2 link --package-id 0x95`）—— 还原回去的 id 指向错的包，
  * 加载要么抛要么解析成别人的资源；更要命的是打标记那道闸原来也只认 0x7f，于是**这类应用
- * 从头到尾没被打过标记**，我们的裁圆路永远碰不到它（桌面与应用信息页因此不一致）。
+ * 从头到尾没被打过标记**，我们的自适应路永远碰不到它（桌面与应用信息页因此不一致）。
  * 现在标记 id 的低 24 位是**槽位号**，真身存在表里：应用的包号是多少都不影响。
  *
  * 进程内就够 —— 打标记发生在**本进程**构造/反序列化 `PackageItemInfo` 时，
@@ -241,10 +241,10 @@ private fun install(xposed: XposedInterface, classLoader: ClassLoader, packageNa
 }
 
 private fun installHooks(xposed: XposedInterface, classLoader: ClassLoader, packageName: String) {
-  // 给 `clip from=… host=…` 那一行用的：本进程是谁。装配时置一次，热路径不查。
+  // 给 `自适应 from=… host=…` 那一行用的：本进程是谁。装配时置一次，热路径不查。
   clipHost = packageName
-  // 射程不再有宿主名单（2026-10-21）：默认全裁，只排快速设置那一路 —— 判据在
-  // `CircleIconDrawable.wrapLegacyIcon`，"谁开始被裁"的账在那边的 `noteCrop`。
+  // 射程不再有宿主名单（2026-10-21）：默认全包，只排快速设置那一路 —— 判据在
+  // `CircleIconDrawable.wrapLegacyIcon`，"谁开始被包"的账在那边的 `noteWrap`。
   if (!hookIconLoaders(xposed, classLoader)) {
     Log.w(TAG, "No icon loader is found, nothing is hooked")
     return
@@ -793,7 +793,7 @@ private fun hookPackageManagerIconGetters(xposed: XposedInterface, classLoader: 
  * `Context.getDrawable(activityInfo.icon)`，拿到 `0x6e…` 连续两次冷启动都崩。
  *
  * 所以写进 Parcel 前必须还原成合法的 `0x7f…`。客户端收到后由 `readTypedList` /
- * `BaseParceledListSlice` / 构造器 hook 重新打标记，已注入进程的裁圆功能不受影响。
+ * `BaseParceledListSlice` / 构造器 hook 重新打标记，已注入进程的自适应功能不受影响。
  */
 private fun hookParcelWriteRestore(xposed: XposedInterface): Int {
   var hooked = 0
@@ -1272,7 +1272,7 @@ private fun hookBatteryIcons(xposed: XposedInterface, classLoader: ClassLoader) 
 }
 
 /**
- * 把 `owner` 里叫 `name` 的 Drawable 字段换成裁圆后的版本。
+ * 把 `owner` 里叫 `name` 的 Drawable 字段换成自适应包装后的版本。
  *
  * 已经是 `AdaptiveIconDrawable` 的不动 —— 自己包出来的 [CircleIconDrawable] 也是 adaptive，
  * 所以这个判断同时避免了对同一个图标反复包。

@@ -35,7 +35,7 @@ private val OTHER_RESTARTABLE =
     "com.google.android.apps.wellbeing",
   )
 
-/** 清掉桌面的图标位图缓存并重启桌面（裁圆 / 单色改完都要这一步）。 */
+/** 清掉桌面的图标位图缓存并重启桌面（自适应 / 动态取色改完都要这一步）。 */
 internal fun clearIconCache(context: Context) {
   runCatching {
     // 动态接收器 + 再显式点两个桌面包名，双保险（重复送达无害）。

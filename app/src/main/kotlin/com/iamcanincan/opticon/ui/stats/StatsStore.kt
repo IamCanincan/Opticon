@@ -100,7 +100,7 @@ internal object StatsStore {
 
   private const val KEY_PERF = "perf"
 
-  /** 宿主报来的耗时账（`crop:累计ns/张数;mono:…`），只用来在统计页显示"每张多少 ms"。 */
+  /** 宿主报来的耗时账（`mono:累计ns/张数;monoCold:…`），只用来在统计页显示"每张多少 ms"。 */
   fun savePerf(context: Context, perf: String) {
     context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_PERF, perf).apply()
   }

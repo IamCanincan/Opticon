@@ -150,7 +150,7 @@
     <string name="step_1">在框架中启用本模块</string>
     <string name="step_1_hint">在框架管理器中启用本模块。</string>
     <string name="step_2">按「作用域」页的清单选择生效进程</string>
-    <string name="step_2_hint">至少选择你系统上在用的桌面（com.android.launcher3 或 com.google.android.apps.nexuslauncher），方可在桌面观察自适应包装与单色层（单色合成只在桌面进程里挂，自适应包装则在每个被注入的进程里各自生效）；通知功能还需 com.android.systemui。</string>
+    <string name="step_2_hint">至少选择你系统上在用的桌面（com.android.launcher3 或 com.google.android.apps.nexuslauncher），方可在桌面观察自适应包装与单色层（单色合成只在桌面进程里挂，自适应包装则在每个被注入的进程里各自生效）；单色通知还需 com.android.systemui。</string>
     <string name="step_3">重启设备</string>
     <string name="step_3_hint">框架不支持模块热加载，需重启设备。</string>
     <string name="step_4">桌面没更新时，清一次图标缓存</string>

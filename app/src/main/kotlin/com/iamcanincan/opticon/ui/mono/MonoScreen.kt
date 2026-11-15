@@ -28,9 +28,9 @@ import com.iamcanincan.opticon.ui.SampleTile
 import com.iamcanincan.opticon.ui.ScreenList
 
 /**
- * 「单色」页：仅涉及 Android 16 强制动态取色下，为未适配应用补一张极性正确的单色剪影。
+ * 「动态取色」页：仅涉及 Android 16 强制动态取色下，为未适配应用补一张极性正确的单色剪影。
  *
- * 2026-10-26 三个功能分页：从原「图标」页拆出。说明卡与裁圆 / 通知共用 [FeatureInfoCard]，
+ * 2026-10-26 三个功能分页：从原「图标」页拆出。说明卡与自适应 / 单色通知共用 [FeatureInfoCard]，
  * 注意事项用共享 [NoteList]。
  *
  * 开关只在「功能」页那一行（2026-11-12 单一入口）；这里只讲这个功能做什么。
@@ -66,7 +66,7 @@ fun MonoScreen() {
 
 /**
  * 单色层示意：左=原图标（浅底深形），右=剪影（深形为墨，浅色区域交给桌面主题盘）。
- * 效果卡用 [EffectShowcaseCard]（与通知页同一套），格子用共享 [SampleTile]（裁圆页也用）。
+ * 效果卡用 [EffectShowcaseCard]（与单色通知页同一套），格子用共享 [SampleTile]（自适应页也用）。
  */
 @Composable
 private fun MonoEffectCard() {
