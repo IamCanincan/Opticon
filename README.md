@@ -99,16 +99,21 @@
   系统界面无关（`monoInvert` 只有桌面那一路读），**真机当场推翻** —— 关掉时图标变不回来，
   必须重启系统界面。代码里读不到那个开关，不等于那个进程手上没有旧结果。
   代价是切单色通知时桌面也会闪一下并重画全部图标，主人认了这个代价。
-  另外，**桌面自己的「主题图标」开关一变，模块会自动做同一套**
+  另外，**桌面自己的「主题图标」开关一变，模块会自动让图标重画**
   （`IconHooks.watchThemedIconsToggle`）—— 以前这一步得手动按运维操作。
   真键是 `icon_theme_id`（本机实测，名字里没有 themed），基准落盘在桌面 cache 目录，
   否则桌面启动时那次重写会被当成用户切开关，自己触发自己。
-  **动手时机有两道闸**：等样式面板收起、回到桌面，再静置 3 秒
-  （`ThemedClearScheduler`）—— 切开关那个界面是 `com.android.wallpaper` 的
-  `CustomizationPickerActivity`，靠桌面的 `GridCustomizationsProvider` 供数；
-  在 prefs 回调后 13 毫秒就杀桌面，面板会读回旧值、开关看着弹回原样，主人得切两次。
-  桌面进程发不动那两条重启广播（接收侧要本 APK 的签名权限），所以它走
-  `ConfigProvider.call("restartUiProcesses")` 请应用代发，鉴权复用作用域白名单。
+  **这条路不杀任何进程**（`refreshLauncherIconsInProcess`）：清桌面内存缓存 →
+  删 `app_icons.db` 里的行 → 请桌面 `LauncherModel.forceReload("opticon-themed")` 自己重载。
+  不能删数据库文件：桌面那条 SQLite 连接还指着旧 inode，删了它照样读得到旧行。
+  原来那套「清缓存 + 重启桌面 + 重启系统界面」会把样式面板掀了 —— 面板
+  （`com.android.wallpaper` 的 `CustomizationPickerActivity`）的桌面实时预览是
+  **桌面进程托管的嵌入 surface**，壁纸预览寄生在 systemui 的 `ImageWallpaper` 里，
+  两个进程一死预览全断，面板还会被回到前台的桌面盖掉、读回旧的开关值，主人得切两次。
+  桌面本来就有整套主题切换机制（`themeChangeListener` + `[theme-changed]` 重载 +
+  图标库里 `mono_icon` 单独一列），挡路的只是那批旧位图，不需要杀进程。
+  静置 1.2 秒合并连点（`ThemedRefreshScheduler`），**面板可以一直开着**。
+  三个反射目标都是桌面私有 API，任一步失败就大声报并提示去按手动按钮，不退回杀进程那条。
 - **每个功能只有一个开关、一条进详情的路**（2026-11-12）：开关只在「功能」页那一行；
   详情（说明与效果）只从「主页」对应的那一行进。二级页里不再放开关。
 - **圆角语言**：一级页每张卡 28dp（`OpticonCard` 的默认 `extraLarge`）；分组列表用

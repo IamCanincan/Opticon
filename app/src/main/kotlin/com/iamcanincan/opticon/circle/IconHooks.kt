@@ -3,7 +3,6 @@ package com.iamcanincan.opticon.circle
 import android.Manifest
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.annotation.SuppressLint
-import android.app.Activity
 import android.app.Application
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -22,14 +21,13 @@ import android.content.pm.ServiceInfo
 import android.content.pm.ShortcutInfo
 import android.content.res.Resources
 import android.database.ContentObserver
+import android.database.sqlite.SQLiteDatabase
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Rect
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.Drawable
-import android.net.Uri
 import android.os.Build
-import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.Parcel
@@ -37,9 +35,7 @@ import android.os.Process
 import android.provider.Settings
 import android.util.Log
 import com.iamcanincan.opticon.BuildConfig
-import com.iamcanincan.opticon.runtime.ConfigProvider
 import com.iamcanincan.opticon.runtime.MemberLookup
-import com.iamcanincan.opticon.runtime.ModulePrefs
 import com.iamcanincan.opticon.runtime.ModuleRuntime
 import com.iamcanincan.opticon.runtime.TAG
 import io.github.libxposed.api.XposedInterface
@@ -586,34 +582,17 @@ private fun registerProcessControlReceiver(context: Context, packageName: String
 }
 
 /**
- * 清桌面图标缓存 → 回报应用 → 重启桌面。**手动按钮与自动触发共用这一条出口**，
- * 两边做的事必须一模一样，否则"自动那下不管用"会变成另一桩悬案。
+ * 清桌面图标缓存 → 回报应用 → 重启桌面。**界面上那几条运维操作走这一条出口。**
+ *
+ * ⚠ 桌面自己的「主题图标」开关**不走这里**：杀桌面会把样式面板正在用的那块嵌入预览一起
+ *   掀掉（证据见 [refreshLauncherIconsInProcess]）。那条路只清缓存、不杀进程。
  *
  * 回报那一条（[ACTION_CACHE_DONE]）：这个按钮以前只发出去、没人证它到了（2026-11-07 真机
  * 抓到广播被冻结的桌面吞掉，用户点了等于没点，屏幕上却什么都不说）。
  * ⚠ 接收方免鉴权（导出、无权限）：桌面进程不持有我们的签名权限，只收得进这种。
  *   代价是别的应用也能伪造这一响 —— 它只会让界面弹一句"已重建"，不做任何动作。
  */
-private fun clearAndRestartLauncher(
-  context: Context,
-  packageName: String,
-  why: String,
-  alsoUi: Boolean = false,
-) {
-  if (alsoUi) {
-    // 桌面进程不持有 PROCESS_CONTROL 签名权限，发不动"重启系统界面 / 设置等进程"那条广播
-    // —— 请本应用代发（provider 的 call 按 Binder 真实调用方鉴权，见 ConfigProvider.call）。
-    // ⚠ 本应用可能正被系统冻结，Binder 调用会阻塞：放另一条线程上并**最多等 1.5 秒**，
-    //   等不到也照样删缓存重启桌面 —— 正事不能被一个代发请求拖住。
-    val relay = Thread {
-      runCatching {
-        val uri = Uri.parse("content://${BuildConfig.APPLICATION_ID}${ModulePrefs.AUTHORITY_SUFFIX}/config")
-        context.contentResolver.call(uri, ConfigProvider.CALL_RESTART_UI, null, null)
-      }.onFailure { Log.w(TAG, "CacheClear: 请应用重启界面进程失败", it) }
-    }.apply { isDaemon = true; name = "opticon-ui-relay" }
-    relay.start()
-    runCatching { relay.join(1500) }
-  }
+private fun clearAndRestartLauncher(context: Context, packageName: String, why: String) {
   val deleted = deleteIconCache(packageName)
   Log.i(TAG, "CacheClear: $why, db deleted=$deleted, restarting launcher")
   runCatching {
@@ -623,9 +602,8 @@ private fun clearAndRestartLauncher(
 }
 
 /**
- * 桌面自己的「主题图标」开关一变，就替他把「清缓存重启」那一下按了 —— 而且按的是
- * **界面里那一刀切的同一套**：清桌面缓存 + 重启桌面 + 重启系统界面与设置等进程。
- * 后两条桌面自己发不动（接收侧要本 APK 的签名权限），走 [ConfigProvider.call] 请应用代发。
+ * 桌面自己的「主题图标」开关一变，就替他把图标重画一次 —— **不杀桌面、不重启系统界面**，
+ * 动作见 [refreshLauncherIconsInProcess]。
  *
  * **补的是哪个缺口**（2026-11-16 主人）：Opticon 的动态取色开着、桌面的主题图标关着时，
  * 桌面缓存进 `app_icons.db` 的是**彩色**那一批位图；之后他再打开桌面的主题图标，桌面并不
@@ -633,7 +611,7 @@ private fun clearAndRestartLauncher(
  *
  * ⚠ 他提的办法是「动态取色开的时候就提前加载好单色图标」，但**提前合成解决不了这件事**：
  *   挡路的是桌面自己数据库里那批已经画好的位图，我们的掩码缓存再热，桌面不问就用不上。
- *   真正等价于"手动按那一下"的动作只有删缓存 + 重启桌面，所以这里做的是**监听那个开关**。
+ *   所以这里做的是**监听那个开关**，然后让桌面把缓存丢掉重问一遍。
  *
  * **开关存在哪儿**（本机实测，Android 17 / AOSP Launcher3）：
  * `settings get secure themed_icons_enabled` → null，system / global 里也没有对应的键
@@ -645,16 +623,15 @@ private fun clearAndRestartLauncher(
  * 这么抓到的 —— 那条"名字里没有 themed，不动"的日志把 `icon_theme_id` 当场说了出来。
  *
  * **只在值真的变了才动手，而且基准要落盘**：桌面每次启动都会把同一个键重写一遍，而
- * `OnSharedPreferenceChangeListener` 对"值没变的提交"照样回调。基准只放在内存里会变成
- * 开机 → 清缓存 → 重启 → 开机 的死循环（2026-11-16 真机实测每 ~20 秒一轮）——
+ * `OnSharedPreferenceChangeListener` 对"值没变的提交"照样回调。基准只放在内存里会把
+ * 开机时那一次重写当成用户切开关（2026-11-16 真机实测每 ~20 秒一轮）——
  * 详见 [themedBaselineFile]。
  */
 private fun watchThemedIconsToggle(context: Context, packageName: String) {
   if (!isLauncher(packageName)) return
   Thread {
     // 两条监听共用一个调度器：无论开关从哪条路被发现，动手的时机判据只有一份。
-    val scheduler = ThemedClearScheduler(context.applicationContext as Application, packageName)
-    scheduler.start()
+    val scheduler = ThemedRefreshScheduler(context.applicationContext, packageName)
     runCatching { watchThemedPrefs(context, packageName, scheduler) }
       .onFailure { Log.w(TAG, "ThemedWatch: prefs 监听没装上", it) }
     runCatching { watchThemedSecure(context, packageName, scheduler) }
@@ -689,14 +666,16 @@ private fun isThemedKey(key: String) =
   key == "icon_theme_id" || key.contains("themed", ignoreCase = true)
 
 /**
- * 「主题图标开关上一份值」的落盘处 —— **基准必须活过我们自己造成的那次重启**。
+ * 「主题图标开关上一份值」的落盘处 —— **基准必须活过桌面的下一次启动**。
  *
- * 2026-11-16 真机死循环的教训：只把基准放在进程内存里、开档时从 `prefs.all` 播种，
- * 看着是对的，实测**每 ~20 秒杀一次桌面**，四次读数的旧值全是空 ——
- * 桌面每次启动都会把 `icon_theme_id` 从空值重写成 `mono-icons:with-theme`，
- * 于是「值变了」这条判据把自己触发的重启当成了用户切开关：
- * 清缓存 → 重启 → 又重写一遍 → 再清。日志签名是 `主题图标键 …： → mono-icons:with-theme`
- * 反复出现且箭头左边永远为空。
+ * 2026-11-16 真机教训：只把基准放在进程内存里、开档时从 `prefs.all` 播种，看着是对的，
+ * 实测**每 ~20 秒杀一次桌面**，四次读数的旧值全是空 —— 桌面每次启动都会把 `icon_theme_id`
+ * 从空值重写成 `mono-icons:with-theme`，于是「值变了」这条判据把自己触发的重启当成了用户
+ * 切开关：清缓存 → 重启 → 又重写一遍 → 再清。日志签名是
+ * `主题图标键 …： → mono-icons:with-theme` 反复出现且箭头左边永远为空。
+ * （那一轮**自己会停**，不是死循环：注册要 ~1 秒、桌面重写要 ~10-20 秒，谁先谁后决定轮数。
+ *  现在主题开关这条路不再杀桌面，这个自触发源已经没了；基准仍然要落盘，因为桌面还会
+ *  因为手动按钮、系统回收等原因重启。）
  *
  * 落成文件之后：启动时那一次重写与文件里的值相同 ⇒ 不动手；只有用户真的切了才不同。
  * 文件还没有（刚装上）时，第一次见到的值只用来立基准、不动手 —— 否则刚装完就白清一次。
@@ -707,101 +686,129 @@ private fun isThemedKey(key: String) =
 private fun themedBaselineFile(packageName: String) =
   File("${launcherDataDir(packageName)}/cache", "opticon-themed-baseline")
 
-/** 切换之后先等这么久，让桌面把这次事务走完（见 [ThemedClearScheduler]）。 */
-private const val THEMED_SETTLE_MS = 3000L
+/**
+ * 切换之后先等这么久：让桌面自己那次 `[theme-changed]` 重载先跑完，也把连点合并成一次。
+ * 真机量到它自己在 prefs 变更后 ~600ms 内跑完（见 [refreshLauncherIconsInProcess]）。
+ */
+private const val THEMED_SETTLE_MS = 1200L
 
 /**
- * 「什么时候才动手」—— **等样式面板收起、回到桌面，再等 [THEMED_SETTLE_MS]。**
- *
- * 2026-11-16 主人：「我每次都要重复操作两次才行，第一次切的时候系统界面重启，
- * 但是开关回到了我第一次切之前」。真机日志把机制说全了：切开关那个界面是
- * `com.android.wallpaper` 的 `CustomizationPickerActivity`，它靠桌面的
- * `GridCustomizationsProvider` 供数，而我们在 prefs 回调后 **13 毫秒**就 SIGKILL 了桌面：
- *
- * ```
- * 02:52:23.632  /icon_themed isMonoThemeEnabled=true    ← 切之前
- * 02:52:26.845  /icon_themed isMonoThemeEnabled=false   ← 切了，面板读到新值
- * 02:52:26.858  CacheClear → Sending signal SIG: 9      ← 我们杀桌面
- * 02:52:43.167  /icon_themed isMonoThemeEnabled=true    ← 面板读回旧值 = 他看到的"弹回去"
- * 02:52:46.922  /icon_themed isMonoThemeEnabled=false   ← 桌面自己 settle 完才对
- * ```
- *
- * 同一窗口还有 `PreviewUtils.cleanUp` 的 binder `error -32` 与 `ImageWallpaper` 服务被打死 ——
- * 面板的实时预览就是这么断的。所以立刻动手不是"快"，是把用户正在读的那份数据源掀了。
- *
- * 两道闸缺一不可：**前台闸**挡的是"面板还开着"（桌面 Activity 被盖住 ⇒ paused），
- * **静置闸**挡的是"刚回到桌面、桌面自己还没 settle"。少了前者，延迟多久都会再断一次预览。
+ * 重载原因串。会原样出现在桌面自己的日志里：
+ * `Launcher.Model: Loader task completed, name: [opticon-themed]` ——
+ * 这是"我们那次重载真跑了"的唯一可核对签名，别改。
  */
-private class ThemedClearScheduler(
-  private val app: Application,
-  private val packageName: String,
-) : Application.ActivityLifecycleCallbacks {
+private const val THEMED_RELOAD_REASON = "opticon-themed"
 
-  @Volatile private var foreground = false
+/**
+ * 桌面「主题图标」开关变了之后，**不杀进程**让图标重画：清内存缓存 → 删图标数据库的行 →
+ * 请桌面自己重载一遍。三步都做成才算成功。
+ *
+ * **为什么不再杀桌面**（2026-11-16 主人：「不能让我呆在那个面板吗，为什么这个也要重启系统界面」）。
+ * 切开关那个界面是 `com.android.wallpaper` 的 `CustomizationPickerActivity`，它有两块预览
+ * 都寄生在别的进程里，我们原来那套「清缓存 + 重启桌面 + 重启系统界面」把它们全掀了：
+ *
+ * ```
+ * 02:52:26.858  CacheClear（prefs 回调后 13ms）
+ * 02:52:26.886  Embedded{-com.android.wallpaper/…CustomizationPickerActivity} 通道不可恢复地断了
+ *               ← 桌面实时预览是**桌面进程托管的嵌入 surface**，杀桌面就等于杀它
+ * 02:52:26.890  WallpaperManagerService: Wallpaper service gone: com.android.systemui/.ImageWallpaper
+ *               ← ImageWallpaper 住在 systemui（pid 24334），重启系统界面把壁纸预览也打死了
+ * 02:52:26.922  Failed to deliver transaction for ProcessRecord{26601:com.android.launcher3}
+ * 02:52:26.950  面板 visibilityChanged true→false（桌面重启后回到前台，把面板盖掉）
+ * 02:52:26.995  PreviewUtils: Fail to clean up the workspace preview / DeadObjectException
+ * 02:52:43.167  新桌面供 /icon_themed = 旧值，直到 02:52:46.922 才对 ← 他看到的"开关弹回去"
+ * ```
+ *
+ * 所以「等面板收起再动手」是在绕，不是在修：只要杀进程，面板开着就一定断。
+ *
+ * **桌面本来就不需要被杀**：它自己有一整套主题切换机制 ——
+ * `ModelInitializer$initializeDisplayEvents$themeChangeListener`、每次切换都跑的
+ * `[theme-changed]` 模型重载、图标库里 `mono_icon` 是单独一列、`FastBitmapDrawable.isCreatedForTheme`。
+ * 挡路的只是库里那批旧位图，把行删掉再请它重载就够了。
+ *
+ * ⚠ **不能删数据库文件**：桌面自己那条 SQLite 连接还指着旧 inode，删了它照样读得到旧行，
+ *   路径上反而多出一个空库。必须连着同一个文件把行删掉（[deleteIconCache] 删文件那套只在
+ *   进程即将被杀时才对）。
+ *
+ * ⚠ 三个反射目标都是桌面私有 API，换 ROM 可能没有。任何一步失败都**大声报**并返回 false，
+ *   由调用方提示去按手动按钮 —— 不静默、也不退回杀进程那条（那会把面板再掀一次）。
+ */
+private fun refreshLauncherIconsInProcess(context: Context, packageName: String, why: String): Boolean {
+  val loader = context.classLoader
+  val state = runCatching {
+    val cls = loader.loadClass("com.android.launcher3.LauncherAppState")
+    val get = cls.getDeclaredMethod("getInstance", Context::class.java)
+    get.isAccessible = true
+    get.invoke(null, context)
+  }.getOrNull()
+  if (state == null) {
+    Log.w(TAG, "ThemedRefresh: 拿不到 LauncherAppState（$why）")
+    return false
+  }
 
-  /** 待办的那次清缓存；null = 没有。跨线程读，所以 volatile。 */
-  @Volatile private var pending: String? = null
+  val memory = runCatching {
+    val cache = state.javaClass.getMethod("getIconCache").invoke(state)
+    cache.javaClass.getMethod("clearMemoryCache").invoke(cache)
+  }.isSuccess
 
-  /** 只在主线程读写（prefs 回调与生命周期回调都在主线程）。 */
+  val rows = runCatching {
+    val db = File("${launcherDataDir(packageName)}/databases", "app_icons.db")
+    if (!db.exists()) return@runCatching 0
+    val table =
+      loader.loadClass("com.android.launcher3.icons.cache.BaseIconCache")
+        .getDeclaredField("TABLE_NAME").apply { isAccessible = true }.get(null) as String
+    SQLiteDatabase.openDatabase(db.path, null, SQLiteDatabase.OPEN_READWRITE).use {
+      it.delete(table, null, null)
+    }
+  }.getOrDefault(-1)
+
+  val reload = runCatching {
+    val model = state.javaClass.getMethod("getModel").invoke(state)
+    model.javaClass.getMethod("forceReload", String::class.java).invoke(model, THEMED_RELOAD_REASON)
+  }.isSuccess
+
+  Log.i(
+    TAG,
+    "ThemedRefresh: $why → 内存清除=$memory 数据库删行=$rows 重载=$reload（不杀桌面、不重启系统界面）"
+  )
+  // 行删掉了，下一批图标就是当前这一版管线画的 —— 戳记跟着走，否则 [warnStaleIconCache] 误报。
+  if (rows >= 0) runCatching {
+    val stamp = cacheStamp(packageName)
+    stamp.parentFile?.mkdirs()
+    stamp.writeText(algoId())
+  }
+  return memory && rows >= 0 && reload
+}
+
+/**
+ * 「什么时候动手」—— 切换后静置 [THEMED_SETTLE_MS]，连点合并到最后一次。
+ *
+ * **不再等"退出样式面板"**：动作已经从杀桌面换成进程内刷新
+ * （[refreshLauncherIconsInProcess]），面板开着也不受影响，所以前台闸整个撤掉了。
+ */
+private class ThemedRefreshScheduler(private val context: Context, private val packageName: String) {
+
+  /** 只在主线程读写（prefs 回调与 ContentObserver 都在主线程派发）。 */
   private var worker: Thread? = null
 
-  fun start() {
-    app.registerActivityLifecycleCallbacks(this)
-  }
-
   fun request(reason: String) {
-    pending = reason
-    if (!foreground) {
-      Log.i(TAG, "ThemedWatch: 样式面板还盖在桌面上，等回到桌面再清缓存")
-      return
-    }
-    arm()
-  }
-
-  private fun arm() {
-    val reason = pending ?: return
+    // 被新的切换打断 ⇒ 这一趟不作数，合并到最后一次。
     worker?.interrupt()
     worker =
       Thread {
-        // 被新的切换打断 ⇒ 这一趟不作数，合并到最后一次。
         if (!runCatching { Thread.sleep(THEMED_SETTLE_MS) }.isSuccess) return@Thread
-        if (!foreground) {
-          Log.i(TAG, "ThemedWatch: 静置期间面板又盖上了，继续等（待办还在）")
-          return@Thread
+        if (!refreshLauncherIconsInProcess(context, packageName, reason)) {
+          Log.w(TAG, "ThemedRefresh: 进程内刷新没做成，图标可能还是旧的 —— 去按界面「清缓存重启」那一下")
         }
-        pending = null
-        clearAndRestartLauncher(app, packageName, reason, alsoUi = true)
-      }.apply { isDaemon = true; name = "opticon-themed-clear" }
+      }.apply { isDaemon = true; name = "opticon-themed-refresh" }
     worker?.start()
   }
-
-  override fun onActivityResumed(activity: Activity) {
-    foreground = true
-    if (pending != null) {
-      Log.i(TAG, "ThemedWatch: 回到桌面了，补做那次清缓存")
-      arm()
-    }
-  }
-
-  override fun onActivityPaused(activity: Activity) {
-    foreground = false
-  }
-
-  override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
-
-  override fun onActivityStarted(activity: Activity) = Unit
-
-  override fun onActivityStopped(activity: Activity) = Unit
-
-  override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
-
-  override fun onActivityDestroyed(activity: Activity) = Unit
 }
 
 private fun watchThemedPrefs(
   context: Context,
   packageName: String,
-  scheduler: ThemedClearScheduler,
+  scheduler: ThemedRefreshScheduler,
 ) {
   // 键是 prefs 文件名：只印 `#i` 的话，13 个实例在日志里分不出谁是谁。
   val instances = LinkedHashMap<String, SharedPreferences>()
@@ -857,14 +864,13 @@ private fun watchThemedPrefs(
       seen[key] = now
       Log.i(TAG, "ThemedWatch: 主题图标键 $key：${was ?: "（首次见到）"} → $now（prefs[$prefName]）")
       if (was == now) return@OnSharedPreferenceChangeListener
-      // ⚠ 必须在 killProcess **之前**落盘，且同步写：下一趟进程要靠它认出"这不是用户切的"。
+      // ⚠ 同步写、且要在动手之前落盘：桌面下次启动要靠它认出"这不是用户切的"。
       runCatching {
         baseline.parentFile?.mkdirs()
         baseline.writeText(seen.entries.joinToString("\n") { "${it.key}=${it.value}" })
       }.onFailure { Log.w(TAG, "ThemedWatch: 基准写不下去，下一趟可能多清一次", it) }
       // 第一次见到这个键只立基准：桌面每次启动都会把它重写一遍（见 [themedBaselineFile]）。
       if (was == null) return@OnSharedPreferenceChangeListener
-      // ⚠ 别在这儿直接杀桌面：面板正读着它供的数，13ms 就动手会把开关弹回去。
       scheduler.request("桌面主题图标开关 $key=$now")
     }
     themedListeners.add(listener)
@@ -881,7 +887,7 @@ private fun watchThemedPrefs(
 private fun watchThemedSecure(
   context: Context,
   packageName: String,
-  scheduler: ThemedClearScheduler,
+  scheduler: ThemedRefreshScheduler,
 ) {
   val key = "themed_icons_enabled"
   var seen: Int? = runCatching {
