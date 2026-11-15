@@ -96,7 +96,11 @@ for (const [c, v] of B) {
   if (!cur || main < cur.main || (main === cur.main && seg.length < cur.seg.length)) firstOf.set(pkg, { c, v, main, seg });
 }
 const picks = [];
-for (const { c, v } of firstOf.values()) if (needles.some((n) => c.includes(n))) picks.push([c, v]);
+// 带 `/` 的子串 = **指定整行**（绕开 firstOf 的选行规则）：尺子（`_fgpair`/`_subj`）取的是
+//   库里第一行，与 firstOf 的"主段优先/最短"不是同一条 ⇒ 不给整行入口，图和数就会判不同的行
+//   （2026-11-15：idlefish 0.867 vs 0.641、autonavi 首行其实是桌面小组件 provider）。
+for (const n of needles) if (n.includes('/') && B.has(n)) picks.push([n, B.get(n)]);
+for (const { c, v } of firstOf.values()) if (needles.some((n) => !n.includes('/') && c.includes(n))) picks.push([c, v]);
 if (!picks.length) { console.log('!! 库里没配上这些子串：' + needles.join(' ')); process.exit(1); }
 const NROWS = Math.min(picks.length, 12);
 const W = (S + GAP) * (three ? 3 : 2) + GAP, H = (S + GAP) * NROWS + GAP;

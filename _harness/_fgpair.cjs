@@ -51,6 +51,37 @@ function extent(A, w, x0, y0, x1, y1, thr) {
   if (r < 0) return 0;
   return Math.max(r - l + 1, b - t + 1) / Math.min(x1 - x0, y1 - y0);
 }
+/** 洪泛掉"从边框每步色差 ≤T 连得过去的那一整片"，剩下主体的外接框（与 `_subj.cjs` 同一条）。
+ *  为什么第二条腿要用它当验收分母：剥边框主色族对**渐变底**（webapk 橙，环主色族只占 38.1%）
+ *  和**半透明投影底**（kodi 灰影）都剥不动 ⇒ 几何正确的图标被冤枉（2026-11-15 看图）。
+ *  洪泛不问"哪个色族是底"，渐变/投影都连得过去，硬边缘挡住 ⇒ 没有阈值可拍。 */
+function floodSubjectExt(img, T) {
+  const { w, h, chans, out } = img;
+  const at = (x, y) => {
+    const i = (y * w + x) * chans;
+    return (chans === 3 || chans === 6) ? [out[i], out[i + 1], out[i + 2]] : [out[i], out[i], out[i]];
+  };
+  const seen = new Uint8Array(w * h), st = [];
+  const seed = (x, y) => { const k = y * w + x; if (!seen[k]) { seen[k] = 1; st.push(k); } };
+  for (let x = 0; x < w; x++) { seed(x, 0); seed(x, 1); seed(x, h - 1); seed(x, h - 2); }
+  for (let y = 2; y < h - 2; y++) { seed(0, y); seed(1, y); seed(w - 1, y); seed(w - 2, y); }
+  const near = (a, b) => Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]), Math.abs(a[2] - b[2])) <= T;
+  while (st.length) {
+    const k = st.pop(), x = k % w, y = (k / w) | 0, c = at(x, y);
+    for (const [nx, ny] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]]) {
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+      const nk = ny * w + nx; if (seen[nk]) continue;
+      if (!near(c, at(nx, ny))) continue;
+      seen[nk] = 1; st.push(nk);
+    }
+  }
+  let l = w, t = h, r = -1, b = -1;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    if (seen[y * w + x]) continue;
+    if (x < l) l = x; if (x > r) r = x; if (y < t) t = y; if (y > b) b = y;
+  }
+  return r < 0 ? 0 : Math.max(r - l + 1, b - t + 1) / w;
+}
 const rows = new DatabaseSync(dbp, { readOnly: true }).prepare('SELECT componentName c, mono_icon m FROM icons').all();
 const monoByPkg = new Map();
 for (const r of rows) { const p = r.c.split('/')[0]; if (r.m && !monoByPkg.has(p)) monoByPkg.set(p, Buffer.from(r.m)); }
@@ -112,7 +143,7 @@ for (const [pkg, r, fg, mo] of bad) console.log(`    ${r.toFixed(3)}  ${pkg.padE
 //   这一族的分母就是**它自己的彩色**：屏上那张彩色 blob 的墨外接框（`min(R,G,B)<235`，与 `_pairshot` 同一条），
 //   验收线是 1.000（主人那句"一样的几何结构"在这一族里字面成立：整张位图 = 图案 = 剪影该覆盖的东西）。
 const LEG_TOL = 0.05;
-const legacy = []; let skippedNonPkg = 0;
+const legacy = []; let skippedNonPkg = 0; let offF = []; let floodN = 0;
 {
   const rowsAll = new DatabaseSync(dbp, { readOnly: true }).prepare('SELECT componentName c, icon i, mono_icon m FROM icons').all();
   const picked = new Map();
@@ -136,17 +167,23 @@ const legacy = []; let skippedNonPkg = 0;
     //   彩色幅 = 1.000，剪影当然只剩 0.4~0.5 —— 那 12 张里 9 张是这么被冤枉的。
     //   改法与第一条腿同源：**去掉那块整片底色**（边框里最常见的**近不透明**色族），剩下的才是图案。
     const m = Math.max(1, (w * 0.12) | 0), cnt = new Map();
+    let ringN = 0;
     const bump = (x, y) => {
       const i = (y * w + x) * chans;
       if ((chans === 4 && out[i + 1] < 250) || (chans === 6 && out[i + 3] < 250)) return;  // 透明格不算底色
+      ringN++;
       const [r, g, b] = rgb(i); const k = fam(r, g, b); cnt.set(k, (cnt.get(k) || 0) + 1);
     };
     for (let x = m; x < w - m; x++) { bump(x, m); bump(x, m + 1); bump(x, h - m - 1); bump(x, h - m - 2); }
     for (let y = m; y < h - m; y++) { bump(m, y); bump(m + 1, y); bump(w - m - 1, y); bump(w - m - 2, y); }
     let bgf = null, bc = -1;
     for (const [k, c] of cnt) if (c > bc) { bc = c; bgf = k; }
-    // 那块"底"要真的占画幅一半以上才算底；否则（白底 logo 那种）不剥，免得把图案剥没
-    const shareBg = bc / (w * h);
+    // 🔴 **分母是"边框环"，不是画幅**（2026-11-15 现量抓的：这一步在 36 行里开火 **0 次**）。
+    //   环只采 4 行 + 4 列 ≈ 画幅的 3%，而旧式子要求 `bc/(w*h) ≥ 0.5` ⇒ **算术上永远不可能成立**，
+    //   实测 36 行的主色族占比最大只有 2.4%。于是"去掉整片底色"那一步从来没跑过，
+    //   彩色幅一路是整块底（webapk 1.000 / nyarin 1.000），再拿 1.000 去要求剪影 = 冤枉。
+    //   现在问的是它本来想问的那句：**边框里最常见的那个色族，占边框一半以上吗**。
+    const shareBg = bc / Math.max(1, ringN);
     const useBg = shareBg >= 0.5 ? bgf : null;
     let l = w, t = h, rr = -1, bb = -1;
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
@@ -158,6 +195,7 @@ const legacy = []; let skippedNonPkg = 0;
     }
     if (rr < 0) continue;
     const cw = Math.max(rr - l + 1, bb - t + 1) / w;
+    if (process.argv.includes('--whybg')) console.log(`  [whybg] ${pkg.padEnd(34)} 边框主色族占 ${(shareBg * 100).toFixed(1)}%  剥=${useBg != null ? '是' : '否'}  彩色幅 ${cw.toFixed(3)}  通道=${chans}`);
     const mb = Buffer.from(r.m), n = Math.round(Math.sqrt(mb.length));
     if (n * n !== mb.length || !cw) continue;
     let ml = n, mt = n, mr = -1, mbb = -1;
@@ -187,9 +225,10 @@ const legacy = []; let skippedNonPkg = 0;
     const tier = full >= 0.70 ? '满幅彩底' : '有透明边';
     // 0.70 不是拍的：桌面把图标裁成圆角方形，面积≈内切圆 = π/4 ≈ **0.785** 画幅；
     //   "一整块底"= 底铺满那个形状 ⇒ 不透明占比 ≥ 0.9×0.785 ≈ 0.706。
-    //   上一版用 0.9，于是圆角方形的底（webapk 橙底、nyarin 绿底）被错分进"有透明边"，
-    //   拿 1.000 去要求它们 —— 那正是我今晚被拽回来两次的同一个错（把剪影该只留标志当成故障）。
-    legacy.push([pkg, mw / cw, cw, mw, tier, full]);
+    //   ⚠ 2026-11-15 现量：这条线**仍漏 webapk**（69.9%，圆角方形比画幅小一圈）⇒ 分档只作诊断报告，
+    //   验收改走下面那根洪泛尺（它不需要"有没有底"这个前提）。
+    const se = floodSubjectExt(ci, 24);
+    legacy.push([pkg, mw / cw, cw, mw, tier, full, se ? mw / se : NaN, se]);
   }
   legacy.sort((a, b) => a[1] - b[1]);
   const v = legacy.map((x) => x[1]);
@@ -198,9 +237,13 @@ const legacy = []; let skippedNonPkg = 0;
   console.log(`\n第二条腿（老式：单色 ÷ 它自己的彩色），按结构分两档：${legacy.length} 个包`);
   console.log(`  （另跳过 ${skippedNonPkg} 行不是应用：包名里没有点号，如 custom-widget 那种小组件占位）`);
   console.log(`  p10 ${q(v, 0.1).toFixed(3)}  中位 ${q(v, 0.5).toFixed(3)}  p90 ${q(v, 0.9).toFixed(3)}`);
-  console.log(`  **有透明边**（彩色那栏就是图案本体，验收线 1.000±${LEG_TOL}）：${edge.length} 个，不达标 ${offEdge.length} 个`);
+  console.log(`  诊断·剥底尺／**有透明边**（渐变底/投影底剥不动 ⇒ 这一栏只作地板，**不作验收**）：${edge.length} 个，离 1.000 超 ${LEG_TOL} 的 ${offEdge.length} 个`);
   for (const [pkg, r, cw, mw] of offEdge) console.log(`      ${r.toFixed(3)}  ${pkg.padEnd(30)} 彩色 ${cw.toFixed(3)}  单色 ${mw.toFixed(3)}`);
-  console.log(`  **满幅彩底**（应用自己画了整块底，剪影只留标志=对的 ⇒ **没有外部答案，只钉地板**）：${tile.length} 个，中位 ${Number.isFinite(offTile) ? offTile.toFixed(3) : '-'}（地板见 pin）`);
+  console.log(`  诊断·剥底尺／**满幅彩底**（应用自己画了整块底 ⇒ 没有外部答案，只钉地板）：${tile.length} 个，中位 ${Number.isFinite(offTile) ? offTile.toFixed(3) : '-'}（地板见 pin）`);
+  offF = legacy.filter((x) => Number.isFinite(x[6]) && Math.abs(x[6] - 1) > LEG_TOL);
+  floodN = legacy.filter((x) => Number.isFinite(x[6])).length;
+  console.log(`  **验收·洪泛尺**（单色 ÷ 从边框每步色差≤24 连得过去的底剥掉后的主体）：覆盖 ${floodN}/${legacy.length}，不达标 ${offF.length} 个`);
+  for (const [pkg, , , mw, , , rf, se] of offF.slice().sort((a, b) => a[6] - b[6])) console.log(`      ${rf.toFixed(3)}  ${pkg.padEnd(30)} 主体 ${se.toFixed(3)}  单色 ${mw.toFixed(3)}`);
   if (process.argv.includes('--tiers')) {
     console.log('  逐张分档依据（不透明占画幅几成 —— 0.70 那条线 = 0.9×π/4，圆角方形铺满底）：');
     for (const [pkg, r, , , tr, fl] of legacy.sort((a, b) => (b[5] || 0) - (a[5] || 0))) {
@@ -209,10 +252,11 @@ const legacy = []; let skippedNonPkg = 0;
   }
 }
 
-// ── 闸模式（`--pin=<文件>`）：钉**三件事**，任何一件退步就非零退出 ──
+// ── 闸模式（`--pin=<文件>`）：钉**四件事**，任何一件退步就非零退出 ──
 //   ① 覆盖：配上对的张数（分母缩了就是台子坏了，不是"没问题"）
 //   ② 我们每一子类的**中位**：主人那句验收线是"越接近 1.000 越好" ⇒ **只许往 1.0 走，不许退**
 //   ③ 带外张数：只许降不许涨
+//   ④ 老式那条腿的**洪泛尺验收**：不达标张数只许降、覆盖只许升（剥底尺那两格只作地板）
 //   界本身不钉死数（它是从"自带那组"现算的），钉的是"我们相对它的位置"。
 const PIN = (process.argv.find((a) => a.startsWith('--pin=')) || '').slice(6);
 if (PIN) {
@@ -224,6 +268,8 @@ if (PIN) {
     `leg_covered=${legacy.length}`,
     `leg_edge_off=${legacy.filter((x) => x[4] === '有透明边' && Math.abs(x[1] - 1) > LEG_TOL).length}`,
     `leg_tile_med=${(() => { const t = legacy.filter((x) => x[4] === '满幅彩底').map((x) => x[1]); return t.length ? q(t, 0.5).toFixed(3) : 'NaN'; })()}`,
+    `leg_flood_off=${offF.length}`,
+    `leg_flood_n=${floodN}`,
   ].join('\t');
   if (process.argv.includes('--pinwrite')) {
     fs.writeFileSync(PIN, now + '\n');
@@ -246,6 +292,14 @@ if (PIN) {
   const tm = tileNow.length ? q(tileNow, 0.5) : NaN, tb = num('leg_tile_med');
   if (Number.isFinite(tm) && Number.isFinite(tb) && tm < tb - 1e-9) {
     worse.push(`满幅彩底那档中位 ${tb.toFixed(3)} → ${tm.toFixed(3)}（地板只许升）`);
+  }
+  // **验收那根尺（洪泛）自己的闸**：不达标张数只许降、覆盖只许升。
+  //   基线缺这两格 = 这道闸没认过账 ⇒ 不算过（与"没有 pin 文件"同一条规矩）。
+  const fb = num('leg_flood_off'), fn = num('leg_flood_n');
+  if (!Number.isFinite(fb) || !Number.isFinite(fn)) worse.push('洪泛尺验收没基线（leg_flood_off / leg_flood_n）—— 先认账那两格');
+  else {
+    if (offF.length > fb) worse.push(`洪泛尺不达标 ${fb} → ${offF.length} 个（验收线 1.000±${LEG_TOL}）`);
+    if (floodN < fn) worse.push(`洪泛尺覆盖 ${fn} → ${floodN}（分母缩了就是台子坏了）`);
   }
   for (const [k, v] of Object.entries(bands)) {
     if (v.length < 3) continue;

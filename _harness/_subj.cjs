@@ -101,9 +101,9 @@ const say = (tag, rs) => {
   console.log(`  【${tag}】${rs.length} 个包  p10 ${q(v, 0.1).toFixed(3)}  中位 ${q(v, 0.5).toFixed(3)}  p90 ${q(v, 0.9).toFixed(3)}`);
   if (tag !== '透传' && tag !== '没给log') {
     console.log(`    最小的 4 个（单色比彩色里的同一个主体小）：`);
-    for (const [pkg, r, , ss, me, , w] of rs.slice(0, 4)) console.log(`      ${r.toFixed(3)}  ${pkg.padEnd(30)} 洪泛后底占 ${(ss * 100).toFixed(1)}%  单色 ${me.toFixed(3)}  ${w}`);
+    for (const [pkg, r, , ss, me, , w] of rs.slice(0, 4)) console.log(`      ${r.toFixed(3)}  ${pkg.padEnd(30)} 洪泛后主体占 ${(ss * 100).toFixed(1)}%  单色 ${me.toFixed(3)}  ${w}`);
     console.log(`    最大的 4 个（单色比彩色里的同一个主体大）：`);
-    for (const [pkg, r, , ss, me, , w] of rs.slice(-4).reverse()) console.log(`      ${r.toFixed(3)}  ${pkg.padEnd(30)} 洪泛后底占 ${(ss * 100).toFixed(1)}%  单色 ${me.toFixed(3)}  ${w}`);
+    for (const [pkg, r, , ss, me, , w] of rs.slice(-4).reverse()) console.log(`      ${r.toFixed(3)}  ${pkg.padEnd(30)} 洪泛后主体占 ${(ss * 100).toFixed(1)}%  单色 ${me.toFixed(3)}  ${w}`);
   }
 };
 console.log(`同一个主体比（单色主体幅 ÷ 彩色洪泛掉底之后的主体幅；容差 T=${T}）：${rows.length} 个包${process.env.LOG ? '' : '（没给 LOG= ⇒ 分不出谁画的，全部混在一起读）'}`);
