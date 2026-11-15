@@ -6721,14 +6721,19 @@ internal object MonochromeMask {
       val dx = if (d == 0) 1 else if (d == 1) -1 else 0
       val dy = if (d == 2) 1 else if (d == 3) -1 else 0
       var solid = false
+      var crossed = false
       for (k in 1..r) {
         val nx = x + dx * k; val ny = y + dy * k
         if (nx < box.left || nx >= box.right || ny < box.top || ny >= box.bottom) break
         val j = ny * w + nx
         val p = pixels[j]
-        if (((p ushr 24) and 0xff) != 255 || s.plate[j] == 0.toByte()) continue
+        val a2 = (p ushr 24) and 0xff
+        // inward 先穿过实心内容笔画（plate=0、α=255）才摸到同色盘 ⇒ 这是内容贴盘的外沿，
+        //   不是盘自己的 AA 环（appui 地球网格外弧被削 20 格的病灶）；盘环 inward 直接进盘、无内容隔挡。
+        if (a2 == 255 && s.plate[j] == 0.toByte()) crossed = true
+        if (a2 != 255 || s.plate[j] == 0.toByte()) continue
         val dr = ((p ushr 16) and 0xff) - cr; val dg = ((p ushr 8) and 0xff) - cg; val db = (p and 0xff) - cb
-        if (maxOf(maxOf(abs(dr), abs(dg)), abs(db)) <= 8) { solid = true; break }
+        if (maxOf(maxOf(abs(dr), abs(dg)), abs(db)) <= 8) { if (!crossed) solid = true; break }
       }
       if (!solid) continue
       for (k in 1..r) {
