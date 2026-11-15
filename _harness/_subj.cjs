@@ -64,12 +64,28 @@ function bbox(n, w, pred) {
   return { ext: r < 0 ? 0 : Math.max(r - l + 1, b - t + 1) / w, share: cnt / n };
 }
 const d = new DatabaseSync(dbp, { readOnly: true });
-const picked = new Map();
+// 行钉死启动图标（与 `_fgpair.cjs` 同一张钉表）：库首行可能是小组件/快捷方式/空段占位行
+//   （2026-11-15 现量 36 个老式包里 14 个首行判错）。没钉表或库里缺那一行 ⇒ 回退首行并报数。
+const ROWS = new Map();
+try {
+  for (const l of fs.readFileSync(require('path').join(__dirname, 'bench/reg/launcher_rows.tsv'), 'utf8').trim().split('\n')) {
+    const [p, c] = l.split('\t'); if (p && c) ROWS.set(p, c);
+  }
+} catch { /* 回退首行 */ }
+const byPkg = new Map();
 for (const r of d.prepare('SELECT componentName c, icon i, mono_icon m FROM icons').all()) {
   const pkg = r.c.split('/')[0];
   if (!r.i || !r.m || !pkg.includes('.')) continue;
   if (needles.length && !needles.some((n) => r.c.includes(n))) continue;
-  if (!picked.has(pkg)) picked.set(pkg, r);
+  if (!byPkg.has(pkg)) byPkg.set(pkg, []);
+  byPkg.get(pkg).push(r);
+}
+const picked = new Map();
+let pinN = 0, fallN = 0;
+for (const [pkg, list] of byPkg) {
+  const want = ROWS.get(pkg);
+  const hit = want && list.find((r) => r.c === want);
+  if (hit) { pinN++; picked.set(pkg, hit); } else { fallN++; picked.set(pkg, list[0]); }
 }
 const rows = [];
 // 库里那张单色**是谁画的**：`--log=<logcat>` 才分得开。透传的那张是平台自己画的矢量，
@@ -106,7 +122,7 @@ const say = (tag, rs) => {
     for (const [pkg, r, , ss, me, , w] of rs.slice(-4).reverse()) console.log(`      ${r.toFixed(3)}  ${pkg.padEnd(30)} 洪泛后主体占 ${(ss * 100).toFixed(1)}%  单色 ${me.toFixed(3)}  ${w}`);
   }
 };
-console.log(`同一个主体比（单色主体幅 ÷ 彩色洪泛掉底之后的主体幅；容差 T=${T}）：${rows.length} 个包${process.env.LOG ? '' : '（没给 LOG= ⇒ 分不出谁画的，全部混在一起读）'}`);
+console.log(`同一个主体比（单色主体幅 ÷ 彩色洪泛掉底之后的主体幅；容差 T=${T}）：${rows.length} 个包（行：钉住 ${pinN} / 回退首行 ${fallN}）${process.env.LOG ? '' : '（没给 LOG= ⇒ 分不出谁画的，全部混在一起读）'}`);
 for (const tag of ['我们', '透传', '混合', '未知', '没给log']) {
   const rs = rows.filter((x) => x[6].startsWith(tag));
   if (rs.length) say(tag, rs);

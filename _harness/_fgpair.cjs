@@ -83,8 +83,6 @@ function floodSubjectExt(img, T) {
   return r < 0 ? 0 : Math.max(r - l + 1, b - t + 1) / w;
 }
 const rows = new DatabaseSync(dbp, { readOnly: true }).prepare('SELECT componentName c, mono_icon m FROM icons').all();
-const monoByPkg = new Map();
-for (const r of rows) { const p = r.c.split('/')[0]; if (r.m && !monoByPkg.has(p)) monoByPkg.set(p, Buffer.from(r.m)); }
 // ⚠ **不要按 `index.tsv` 里的 `fgFile` 文件名去配对**：那份台账描述的是 `corpus_runtime/`，
 //   而 `corpus/` 是**另一代抓取**（现量：index 里 grok 的 sig 是 `a49c285ba9fc`，盘上那张是
 //   `63085cf2d53b`，`corpus/` 里搜 `a49c285ba9fc` = **0 命中**）—— 按文件名配会**静默得到 0 张**，
@@ -93,6 +91,26 @@ for (const r of rows) { const p = r.c.split('/')[0]; if (r.m && !monoByPkg.has(p
 const ev = new Map();
 try { for (const r of JSON.parse(fs.readFileSync(process.argv.find((a) => a.startsWith('--cls='))?.slice(6) || '_harness/../iconclass.json', 'utf8'))) ev.set(r.pkg, r); } catch { /* 没身份表就都算"我们合成"，下面会说明 */ }
 const out = [];
+// 🔴 **按包取行必须钉死启动图标那一行**（2026-11-15 深夜现量：36 个老式包里 **14 个**的库首行
+//   不是启动图标 —— 小组件 provider / `add_contact` / `bill` / 空段占位行都有；autonavi 首行是
+//   桌面小组件、webapk 首行是 SITE_SETTINGS 快捷方式）。拿首行判 = 把快捷方式的几何算进应用的账。
+//   钉表 = `bench/reg/launcher_rows.tsv`（设备上 `cmd package resolve-activity` 现查，相对段已补全）。
+const ROWS = new Map();
+try {
+  for (const l of fs.readFileSync(require('path').join(__dirname, 'bench/reg/launcher_rows.tsv'), 'utf8').trim().split('\n')) {
+    const [p, c] = l.split('\t'); if (p && c) ROWS.set(p, c);
+  }
+} catch { /* 没钉表就回退首行，下面会报回退数 */ }
+const choose = (pkg, list, cnt) => {
+  const want = ROWS.get(pkg);
+  if (want) { const hit = list.find((r) => r.c === want); if (hit) { cnt.pin++; return hit; } }
+  cnt.fall++; return list[0];
+};
+const cnt1 = { pin: 0, fall: 0 }, cnt2 = { pin: 0, fall: 0 };
+const byPkg1 = new Map();
+for (const r of rows) { const p = r.c.split('/')[0]; if (!byPkg1.has(p)) byPkg1.set(p, []); byPkg1.get(p).push(r); }
+const monoByPkg = new Map();
+for (const [p, list] of byPkg1) { const withM = list.filter((x) => x.m); if (withM.length) monoByPkg.set(p, Buffer.from(choose(p, withM, cnt1).m)); }
 for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('_fg.png')).sort()) {
   const pkg = f.split('_')[0];
   const img = decode(fs.readFileSync(`${dir}/${f}`));
@@ -115,7 +133,7 @@ console.log(`盘上 _fg.png ${seenFg} 张 → 配上库里那张单色的 **${ou
 if (!out.length) { console.log('!! 0 张配上 —— 这不是"全都合格"，是**这把尺没吃到数据**（包名对不上？库里没这些包？）'); process.exit(1); }
 const q = (v, p) => v.length ? v.slice().sort((a, b) => a - b)[Math.min(v.length - 1, Math.round(p * (v.length - 1)))] : NaN;
 const own = out.filter((x) => x[4]).map((x) => x[1]), syn = out.filter((x) => !x[4]).map((x) => x[1]);
-console.log(`单色层 ÷ 前景层（${CROP ? '可见区口径' : '整幅口径'}），共 ${out.length} 张`);
+console.log(`单色层 ÷ 前景层（${CROP ? '可见区口径' : '整幅口径'}），共 ${out.length} 张（行：钉住 ${cnt1.pin} / 回退首行 ${cnt1.fall}）`);
 console.log(`  应用自带单色层（别管那批，它就是平台的答案）：${own.length} 张  p10 ${q(own, 0.1).toFixed(3)}  中位 ${q(own, 0.5).toFixed(3)}  p90 ${q(own, 0.9).toFixed(3)}`);
 console.log(`  我们合成的：                                  ${syn.length} 张  p10 ${q(syn, 0.1).toFixed(3)}  中位 ${q(syn, 0.5).toFixed(3)}  p90 ${q(syn, 0.9).toFixed(3)}`);
 // ⚠ **上界必须按子类算**：前景层本来就铺满画面（幅面 ≥0.99）的图标，剪影铺满就是 1.000 ——
@@ -146,8 +164,10 @@ const LEG_TOL = 0.05;
 const legacy = []; let skippedNonPkg = 0; let offF = []; let floodN = 0;
 {
   const rowsAll = new DatabaseSync(dbp, { readOnly: true }).prepare('SELECT componentName c, icon i, mono_icon m FROM icons').all();
+  const byPkg2 = new Map();
+  for (const r of rowsAll) { const p = r.c.split('/')[0]; if (!r.i || !r.m) continue; if (!byPkg2.has(p)) byPkg2.set(p, []); byPkg2.get(p).push(r); }
   const picked = new Map();
-  for (const r of rowsAll) { const p = r.c.split('/')[0]; if (r.i && r.m && !picked.has(p)) picked.set(p, r); }
+  for (const [p, list] of byPkg2) picked.set(p, choose(p, list, cnt2));
   for (const [pkg, r] of picked) {
     // 库里还有一类行不是应用：`custom-widget` 这种**没有点号的假包名**（桌面小组件占位）。
     // 它们会带着自己的 mono_icon 进来，然后被当成"某个应用"判 —— 直接跳过并计数。
@@ -234,7 +254,7 @@ const legacy = []; let skippedNonPkg = 0; let offF = []; let floodN = 0;
   const v = legacy.map((x) => x[1]);
   const edge = legacy.filter((x) => x[4] === '有透明边'), tile = legacy.filter((x) => x[4] === '满幅彩底');
   const offEdge = edge.filter((x) => Math.abs(x[1] - 1) > LEG_TOL), offTile = tile.map((x) => x[1]).length ? q(tile.map((x) => x[1]), 0.5) : NaN;
-  console.log(`\n第二条腿（老式：单色 ÷ 它自己的彩色），按结构分两档：${legacy.length} 个包`);
+  console.log(`\n第二条腿（老式：单色 ÷ 它自己的彩色），按结构分两档：${legacy.length} 个包（行：钉住 ${cnt2.pin} / 回退首行 ${cnt2.fall}）`);
   console.log(`  （另跳过 ${skippedNonPkg} 行不是应用：包名里没有点号，如 custom-widget 那种小组件占位）`);
   console.log(`  p10 ${q(v, 0.1).toFixed(3)}  中位 ${q(v, 0.5).toFixed(3)}  p90 ${q(v, 0.9).toFixed(3)}`);
   console.log(`  诊断·剥底尺／**有透明边**（渐变底/投影底剥不动 ⇒ 这一栏只作地板，**不作验收**）：${edge.length} 个，离 1.000 超 ${LEG_TOL} 的 ${offEdge.length} 个`);

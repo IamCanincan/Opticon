@@ -30,6 +30,14 @@ fi
 # ⚠ 身份表**每次现算**，不许吃上一轮的临时文件（`/d/tmp/iconclass.json` 那种）：
 #   它是"哪些包归我们管"的唯一依据，吃过期一轮就把透传算成我们的、造出假故障（`com.termux.x11` 那次就是）。
 LOG=${LOG:-/d/tmp/geom_fix1.txt}
+# 行钉表与身份表同待遇（设备状态，不入库）：缺了就现查；`--refresh-rows` 强制现查。
+#   库首行可能是小组件/快捷方式/占位行（现量 65/137）⇒ 不钉行，两条腿都判在错的行上。
+ROWS="$SELF/bench/reg/launcher_rows.tsv"
+if [ ! -f "$ROWS" ] || echo "$@" | grep -q -- '--refresh-rows'; then
+  node "$SELF/_rowsresolve.cjs" "$DB" "$ROWS" || { echo "!! 钉表没查出来 —— 行钉不住，这道闸不判（不是没问题）"; exit 1; }
+else
+  echo "   钉表沿用：$ROWS（要现查加 --refresh-rows）"
+fi
 CLS="$SELF/bench/reg/iconclass.json"
 node "$SELF/_unadapted.cjs" "$DB" "$SELF/corpus_runtime/index.tsv" "$LOG" --dump="$CLS" >/dev/null || {
   echo "!! 身份表没算出来 —— 这道闸不判（不是没问题）"; exit 1; }
