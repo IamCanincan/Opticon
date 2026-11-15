@@ -27,6 +27,7 @@ function encode(w, h, rgba) {
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw, { level: 9 })), chunk('IEND', Buffer.alloc(0))]);
 }
 const S = 236, GAP = 8;                             // 与 _shotcmp 同一套排版
+const NP = +(process.env.NP || 3);                 // 大表每行几栏（_shotcmp 两联时传 2）
 const rows = JSON.parse(fs.readFileSync(rowsP, 'utf8'));
 const cell = (k, i, j) => {                          // k=第几行, i=第几栏（0=彩色 1=单色）, j=第几格像素
   const ox = GAP + i * (S + GAP), oy = GAP + k * (S + GAP);
@@ -45,9 +46,7 @@ for (let k = 0; k < rows.length; k++) {
 }
 const html = `<div style="font:14px/1.5 system-ui,'Microsoft YaHei',sans-serif;color:#eaeaea;background:#111;padding:14px;border-radius:12px">
 <h3 style="margin:0 0 4px">${title}</h3>
-<p style="margin:0 0 12px;color:#9aa">左 = 桌面上那张彩色，右 = 我们交出去的单色（都取自 <code>app_icons.db</code>，就是屏上现在的东西）。
-比值 = 剪影幅 ÷ <b>剥掉背景后的图案幅</b>；对岸（应用自己画的单色层）p10 = 0.621、中位 = 1.000。
-括号里那个"图案占画幅"是剥完之后图案还剩几成——<b>它太小的行，比值不可信</b>。</p>
+<p style="margin:0 0 12px;color:#9aa">${process.env.CAP || '左 = 桌面上那张彩色，右 = 我们交出去的单色（都取自 app_icons.db）。'}</p>
 ${rows.map((r, k) => `<div style="display:flex;gap:10px;align-items:center;padding:10px 0;border-top:1px solid #2a2a2e">
   <div style="flex:0 0 250px">
     <div style="font-weight:600">${r.name}</div>

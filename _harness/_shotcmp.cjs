@@ -98,13 +98,13 @@ for (const [c, v] of B) {
 const picks = [];
 for (const { c, v } of firstOf.values()) if (needles.some((n) => c.includes(n))) picks.push([c, v]);
 if (!picks.length) { console.log('!! 库里没配上这些子串：' + needles.join(' ')); process.exit(1); }
-const NROWS = Math.min(picks.length, 7);
+const NROWS = Math.min(picks.length, 12);
 const W = (S + GAP) * (three ? 3 : 2) + GAP, H = (S + GAP) * NROWS + GAP;
 const cv = Buffer.alloc(W * H * 4);
 for (let i = 0; i < W * H; i++) { cv[i * 4] = 20; cv[i * 4 + 1] = 20; cv[i * 4 + 2] = 24; cv[i * 4 + 3] = 255; }
 const put = (x, y, r, g, b) => { if (x < 0 || y < 0 || x >= W || y >= H) return; const i = (y * W + x) * 4; cv[i] = r; cv[i + 1] = g; cv[i + 2] = b; cv[i + 3] = 255; };
 const rows = [];
-picks.slice(0, 7).forEach(([c, v], k) => {
+picks.slice(0, 12).forEach(([c, v], k) => {
   const col = decode(Buffer.from(v.c)), mon = decodeMono(Buffer.from(v.m));
   const prev = A.get(c);
   const oldMon = prev ? decodeMono(Buffer.from(prev.m)) : null;

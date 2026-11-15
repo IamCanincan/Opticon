@@ -8,6 +8,8 @@ const fs = require('fs'), zlib = require('zlib');
 const { DatabaseSync } = require('node:sqlite');
 const [dir, dbp, idxp] = process.argv.slice(2);
 const CROP = !process.argv.includes('--full');        // 默认可见区口径（桌面只留中间 2/3）
+/** 颜色族（与 `ObjKt`/`_srcmeter` 同一档粗度：每通道 /24）—— 用来认"那一整块底" */
+const fam = (r, g, b) => ((r / 24) | 0) * 625 + ((g / 24) | 0) * 25 + ((b / 24) | 0);
 
 function decode(buf) {
   let pos = 8, ihdr = null, plte = null, trns = null; const idat = [];
@@ -110,12 +112,15 @@ for (const [pkg, r, fg, mo] of bad) console.log(`    ${r.toFixed(3)}  ${pkg.padE
 //   这一族的分母就是**它自己的彩色**：屏上那张彩色 blob 的墨外接框（`min(R,G,B)<235`，与 `_pairshot` 同一条），
 //   验收线是 1.000（主人那句"一样的几何结构"在这一族里字面成立：整张位图 = 图案 = 剪影该覆盖的东西）。
 const LEG_TOL = 0.05;
-const legacy = [];
+const legacy = []; let skippedNonPkg = 0;
 {
   const rowsAll = new DatabaseSync(dbp, { readOnly: true }).prepare('SELECT componentName c, icon i, mono_icon m FROM icons').all();
   const picked = new Map();
   for (const r of rowsAll) { const p = r.c.split('/')[0]; if (r.i && r.m && !picked.has(p)) picked.set(p, r); }
   for (const [pkg, r] of picked) {
+    // 库里还有一类行不是应用：`custom-widget` 这种**没有点号的假包名**（桌面小组件占位）。
+    // 它们会带着自己的 mono_icon 进来，然后被当成"某个应用"判 —— 直接跳过并计数。
+    if (!pkg.includes('.')) { skippedNonPkg++; continue; }
     const e = ev.get(pkg);
     if (!e || e.mono === '有' || e.cls.includes('Adaptive')) continue;      // 只看"老式·我们合成"
     const ci = decode(Buffer.from(r.i));
@@ -123,12 +128,32 @@ const legacy = [];
     const { w, h, chans, out } = ci;
     // ⚠ 库里的彩色 blob **不保证是 3 通道**（灰度 PNG 的 colorType=0/4，chans=1/2）——
     //   上一版直接读 `out[i+2]`，越界拿到 undefined，`Math.min(...)` 变 NaN，整条腿当场崩。
-    const mn = (i) => chans === 1 ? out[i] : chans === 2 ? out[i] : chans === 4 ? out[i]
-      : Math.min(out[i], out[i + 1], out[i + 2]);
+    const rgb = (i) => chans === 1 ? [out[i], out[i], out[i]] : chans === 2 ? [out[i], out[i], out[i]]
+      : chans === 4 ? [out[i], out[i], out[i]] : chans === 6 ? [out[i], out[i + 1], out[i + 2]]
+        : [out[i], out[i + 1], out[i + 2]];
+    // 🔴 **分母不能是"非白即墨"**（2026-11-15 看图抓的）：老式图标常常是**一整块有颜色的底 + 浅色图案**
+    //   （米家绿底白 M、工行红底白标、银联红底白字…），"非白"把整块底都算成图案 ⇒
+    //   彩色幅 = 1.000，剪影当然只剩 0.4~0.5 —— 那 12 张里 9 张是这么被冤枉的。
+    //   改法与第一条腿同源：**去掉那块整片底色**（边框里最常见的**近不透明**色族），剩下的才是图案。
+    const m = Math.max(1, (w * 0.12) | 0), cnt = new Map();
+    const bump = (x, y) => {
+      const i = (y * w + x) * chans;
+      if ((chans === 4 && out[i + 1] < 250) || (chans === 6 && out[i + 3] < 250)) return;  // 透明格不算底色
+      const [r, g, b] = rgb(i); const k = fam(r, g, b); cnt.set(k, (cnt.get(k) || 0) + 1);
+    };
+    for (let x = m; x < w - m; x++) { bump(x, m); bump(x, m + 1); bump(x, h - m - 1); bump(x, h - m - 2); }
+    for (let y = m; y < h - m; y++) { bump(m, y); bump(m + 1, y); bump(w - m - 1, y); bump(w - m - 2, y); }
+    let bgf = null, bc = -1;
+    for (const [k, c] of cnt) if (c > bc) { bc = c; bgf = k; }
+    // 那块"底"要真的占画幅一半以上才算底；否则（白底 logo 那种）不剥，免得把图案剥没
+    const shareBg = bc / (w * h);
+    const useBg = shareBg >= 0.5 ? bgf : null;
     let l = w, t = h, rr = -1, bb = -1;
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
       const i = (y * w + x) * chans;
-      if (mn(i) >= 235) continue;
+      if ((chans === 4 && out[i + 1] < 64) || (chans === 6 && out[i + 3] < 64)) continue;   // 透明格不是墨
+      const [r, g, b] = rgb(i);
+      if (useBg != null ? fam(r, g, b) === useBg : Math.min(r, g, b) >= 235) continue;
       if (x < l) l = x; if (x > rr) rr = x; if (y < t) t = y; if (y > bb) bb = y;
     }
     if (rr < 0) continue;
@@ -142,17 +167,46 @@ const legacy = [];
     }
     if (mr < 0) continue;
     const mw = Math.max(mr - ml + 1, mbb - mt + 1) / n;
-    legacy.push([pkg, mw / cw, cw, mw]);
+    // 🔴 **验收线按结构分两档**（2026-11-15 看图 + 剥底失败之后改的）：
+    //   源图**几乎铺满不透明**（≥0.9）的老式图标 = 应用自己画了一整块彩底（米家绿底白 M、工行红底白标、
+    //   银联、交管 12123…），剪影只留标志**是对的** ⇒ 对它没有"该是几"的外部答案，只能钉地板（不许退步）。
+    //   源图带透明边的（白底 logo 那种），彩色那栏就是图案本体 ⇒ 1.000±容差 才是它的验收线。
+    //   为什么不再试"剥掉底色"：那些底是**渐变**的，没有任何色族占得到画幅一半，剥不动；
+    //   硬设一个占比阈值就是把"我猜它是底"写进判据 —— 本仓那一族（自造尺当裁判）。
+    const srcPng = (() => {
+      const cands = fs.readdirSync(dir).filter((x) => x.startsWith(pkg + '_') &&
+        !x.endsWith('_fg.png') && !x.endsWith('_bg.png') && !x.endsWith('_mono.png') &&
+        !x.endsWith('_model.png') && !x.endsWith('_modelbg.png') && !x.includes('preview'));
+      return cands.length ? `${dir}/${cands[0]}` : null;
+    })();
+    let full = NaN;
+    if (srcPng) {
+      const si = decode(fs.readFileSync(srcPng));
+      if (si) { let o = 0; for (let i = 0; i < si.w * si.h; i++) if (si.A[i] >= 250) o++; full = o / (si.w * si.h); }
+    }
+    const tier = full >= 0.70 ? '满幅彩底' : '有透明边';
+    // 0.70 不是拍的：桌面把图标裁成圆角方形，面积≈内切圆 = π/4 ≈ **0.785** 画幅；
+    //   "一整块底"= 底铺满那个形状 ⇒ 不透明占比 ≥ 0.9×0.785 ≈ 0.706。
+    //   上一版用 0.9，于是圆角方形的底（webapk 橙底、nyarin 绿底）被错分进"有透明边"，
+    //   拿 1.000 去要求它们 —— 那正是我今晚被拽回来两次的同一个错（把剪影该只留标志当成故障）。
+    legacy.push([pkg, mw / cw, cw, mw, tier, full]);
   }
   legacy.sort((a, b) => a[1] - b[1]);
   const v = legacy.map((x) => x[1]);
-  console.log(`\n第二条腿（老式：单色 ÷ 它自己的彩色，验收线 1.000±${LEG_TOL}）：${legacy.length} 个包`);
-  if (legacy.length) {
-    console.log(`  p10 ${q(v, 0.1).toFixed(3)}  中位 ${q(v, 0.5).toFixed(3)}  p90 ${q(v, 0.9).toFixed(3)}`);
-    const off = legacy.filter((x) => Math.abs(x[1] - 1) > LEG_TOL);
-    console.log(`  不一样大的 ${off.length} 个：`);
-    for (const [pkg, r, cw, mw] of off) console.log(`    ${r.toFixed(3)}  ${pkg.padEnd(32)} 彩色 ${cw.toFixed(3)}  单色 ${mw.toFixed(3)}`);
-  } else console.log('  （0 个包 —— 这一腿没吃到数据，不能读成"老式全对"）');
+  const edge = legacy.filter((x) => x[4] === '有透明边'), tile = legacy.filter((x) => x[4] === '满幅彩底');
+  const offEdge = edge.filter((x) => Math.abs(x[1] - 1) > LEG_TOL), offTile = tile.map((x) => x[1]).length ? q(tile.map((x) => x[1]), 0.5) : NaN;
+  console.log(`\n第二条腿（老式：单色 ÷ 它自己的彩色），按结构分两档：${legacy.length} 个包`);
+  console.log(`  （另跳过 ${skippedNonPkg} 行不是应用：包名里没有点号，如 custom-widget 那种小组件占位）`);
+  console.log(`  p10 ${q(v, 0.1).toFixed(3)}  中位 ${q(v, 0.5).toFixed(3)}  p90 ${q(v, 0.9).toFixed(3)}`);
+  console.log(`  **有透明边**（彩色那栏就是图案本体，验收线 1.000±${LEG_TOL}）：${edge.length} 个，不达标 ${offEdge.length} 个`);
+  for (const [pkg, r, cw, mw] of offEdge) console.log(`      ${r.toFixed(3)}  ${pkg.padEnd(30)} 彩色 ${cw.toFixed(3)}  单色 ${mw.toFixed(3)}`);
+  console.log(`  **满幅彩底**（应用自己画了整块底，剪影只留标志=对的 ⇒ **没有外部答案，只钉地板**）：${tile.length} 个，中位 ${Number.isFinite(offTile) ? offTile.toFixed(3) : '-'}（地板见 pin）`);
+  if (process.argv.includes('--tiers')) {
+    console.log('  逐张分档依据（不透明占画幅几成 —— 0.70 那条线 = 0.9×π/4，圆角方形铺满底）：');
+    for (const [pkg, r, , , tr, fl] of legacy.sort((a, b) => (b[5] || 0) - (a[5] || 0))) {
+      console.log(`    ${(fl * 100).toFixed(1).padStart(5)}%  ${tr}  ${pkg.padEnd(32)} 比 ${r.toFixed(3)}` + (Number.isNaN(fl) ? '   ⚠ 源图没找到，档位是猜的' : ''));
+    }
+  }
 }
 
 // ── 闸模式（`--pin=<文件>`）：钉**三件事**，任何一件退步就非零退出 ──
@@ -168,8 +222,8 @@ if (PIN) {
       .map(([k, v]) => `med_${k.replace(/[·]/g, '_')}=${q(v, 0.5).toFixed(3)}`),
     `outband=${bad.length}`,
     `leg_covered=${legacy.length}`,
-    `leg_med=${legacy.length ? q(legacy.map((x) => x[1]), 0.5).toFixed(3) : 'NaN'}`,
-    `leg_off=${legacy.filter((x) => Math.abs(x[1] - 1) > LEG_TOL).length}`,
+    `leg_edge_off=${legacy.filter((x) => x[4] === '有透明边' && Math.abs(x[1] - 1) > LEG_TOL).length}`,
+    `leg_tile_med=${(() => { const t = legacy.filter((x) => x[4] === '满幅彩底').map((x) => x[1]); return t.length ? q(t, 0.5).toFixed(3) : 'NaN'; })()}`,
   ].join('\t');
   if (process.argv.includes('--pinwrite')) {
     fs.writeFileSync(PIN, now + '\n');
@@ -182,15 +236,16 @@ if (PIN) {
   const num = (k) => (base.has(k) ? +base.get(k) : NaN);
   if (out.length < num('covered')) worse.push(`覆盖 ${num('covered')} → ${out.length} 张（分母被动过 ⇒ 后面的比对都不成立）`);
   if (bad.length > num('outband')) worse.push(`带外 ${num('outband')} → ${bad.length} 张`);
-  // **第二条腿的判法**：这一族的验收线就是 1.000，所以"退步"= 离 1.000 更远（用 |中位−1| 比），
-  //   而不是"变小"——它可能偏大也可能偏小，两个方向都算离开验收线。
+  // **第二条腿的判法（分档之后）**：
+  //   有透明边那档 —— 验收线就是 1.000，不达标张数**只许降**；
+  //   满幅彩底那档 —— 没有外部答案，只钉地板：中位**不许往下退**（往下退就是今晚那种"剪影只剩一半"）。
   if (legacy.length < num('leg_covered')) worse.push(`老式覆盖 ${num('leg_covered')} → ${legacy.length} 个包（这一族的腿断了，今晚那一刀就没人看着）`);
-  const legOff = legacy.filter((x) => Math.abs(x[1] - 1) > LEG_TOL).length;
-  if (legOff > num('leg_off')) worse.push(`老式不一样大 ${num('leg_off')} → ${legOff} 个`);
-  const lm = legacy.length ? q(legacy.map((x) => x[1]), 0.5) : NaN;
-  const lb = num('leg_med');
-  if (Number.isFinite(lm) && Number.isFinite(lb) && Math.abs(lm - 1) > Math.abs(lb - 1) + 1e-9) {
-    worse.push(`老式中位 |离 1.000| ${Math.abs(lb - 1).toFixed(3)} → ${Math.abs(lm - 1).toFixed(3)}（${lb.toFixed(3)} → ${lm.toFixed(3)}）`);
+  const edgeOffNow = legacy.filter((x) => x[4] === '有透明边' && Math.abs(x[1] - 1) > LEG_TOL).length;
+  if (edgeOffNow > num('leg_edge_off')) worse.push(`有透明边那档不达标 ${num('leg_edge_off')} → ${edgeOffNow} 个（这一档的验收线是 1.000）`);
+  const tileNow = legacy.filter((x) => x[4] === '满幅彩底').map((x) => x[1]);
+  const tm = tileNow.length ? q(tileNow, 0.5) : NaN, tb = num('leg_tile_med');
+  if (Number.isFinite(tm) && Number.isFinite(tb) && tm < tb - 1e-9) {
+    worse.push(`满幅彩底那档中位 ${tb.toFixed(3)} → ${tm.toFixed(3)}（地板只许升）`);
   }
   for (const [k, v] of Object.entries(bands)) {
     if (v.length < 3) continue;
