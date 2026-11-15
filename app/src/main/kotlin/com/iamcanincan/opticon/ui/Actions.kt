@@ -20,8 +20,6 @@ import com.iamcanincan.opticon.circle.ACTION_RESTART_SELF
  * 执行者永远是**目标进程里注入的模块**：这里只是发一条点名广播，所以不需要 root，
  * 也不执行任何 shell 命令。
  */
-private const val LAUNCHER_AOSP = "com.android.launcher3"
-private const val LAUNCHER_PIXEL = "com.google.android.apps.nexuslauncher"
 private const val SYSTEMUI = "com.android.systemui"
 
 /** 「重启其他」覆盖的进程：都是会显示别的应用图标、杀掉后系统会自动拉起的 UI 进程。 */
@@ -35,20 +33,22 @@ private val OTHER_RESTARTABLE =
     "com.google.android.apps.wellbeing",
   )
 
-/** 清掉桌面的图标位图缓存并重启桌面（自适应 / 动态取色改完都要这一步）。 */
+/**
+ * 清掉桌面的图标位图缓存并重启桌面（自适应 / 动态取色改完都要这一步）。
+ *
+ * ⚠ **只发一条，别再加"双保险"**。这里原本还显式点两个桌面包名各发一条，注释写的是
+ * 「重复送达无害」—— 那句话是错的：接收侧每收到一条就删一次 `app_icons.db` 并
+ * `killProcess`，于是按一下按钮桌面被连杀好几次，每次都要重画全部图标。
+ * 2026-11-16 真机日志里 4 条 `CacheClear: manual request` 分属 4 个不同 pid，就是它。
+ *
+ * 留隐式那一条就够了：接收器是模块在各进程里动态注册的，隐式广播照样送达
+ * （同一趟日志里 systemui / permissioncontroller 都打出了 `clear request ignored`），
+ * 而会动手的只有 `IconHooks.isLauncher` 认的那两个桌面包名 —— 覆盖面与显式点名完全相同。
+ */
 internal fun clearIconCache(context: Context) {
   runCatching {
-    // 动态接收器 + 再显式点两个桌面包名，双保险（重复送达无害）。
     context.sendBroadcast(
       Intent(ACTION_CLEAR_ICON_CACHE).addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-    )
-    context.sendBroadcast(
-      Intent(ACTION_CLEAR_ICON_CACHE).setPackage(LAUNCHER_AOSP)
-        .addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-    )
-    context.sendBroadcast(
-      Intent(ACTION_CLEAR_ICON_CACHE).setPackage(LAUNCHER_PIXEL)
-        .addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
     )
   }
 }

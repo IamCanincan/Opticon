@@ -638,9 +638,9 @@ private fun clearAndRestartLauncher(
  * ⇒ 它写在桌面自己的 SharedPreferences 里。两条都监听：桌面 prefs（本机走这条）+
  * 那个 Secure 键（AOSP 别的版本走这条，监听一个还没写过的键是合法的）。
  *
- * **认键用名字里带 `themed`**：桌面的键名没有公开常量可引（本机 framework 源码里没有这个
- * 符号），所以每一次 prefs 变更都打一行日志（哪个实例 + 键名 + 新值）。万一它不叫这个名字，
- * 日志会直接把真名说出来，下一轮按真名钉死 —— 而不是继续猜。
+ * **认键见 [isThemedKey]**：桌面的键名没有公开常量可引（本机 framework 源码里没有这个
+ * 符号），所以每一次 prefs 变更都打一行日志（哪个文件 + 键名 + 新值）。2026-11-16 真名就是
+ * 这么抓到的 —— 那条"名字里没有 themed，不动"的日志把 `icon_theme_id` 当场说了出来。
  *
  * **只在值真的变了才动手**：桌面每次启动都可能把同一个值再写一遍，而
  * `OnSharedPreferenceChangeListener` 对"值没变的提交"照样回调。不比上一次的值就会变成
@@ -669,6 +669,18 @@ private fun watchThemedIconsToggle(context: Context, packageName: String) {
  * 指着 ContentObserver，而 Transport 本身被 binder 的全局引用钉着。
  */
 private val themedListeners = ArrayList<SharedPreferences.OnSharedPreferenceChangeListener>()
+
+/**
+ * 哪些 prefs 键算「桌面的主题图标开关」。
+ *
+ * `icon_theme_id` 是 2026-11-16 真机日志抓到的真名（切开关时值变成 `mono-icons:with-theme`，
+ * 文件 `com.android.launcher3.prefs.xml`）。**名字里没有 themed** —— 上一版按"带 themed"
+ * 认键，监听明明装上了却不动手，就是漏在这里。
+ *
+ * `themed` 那条留着：同一份 prefs 里还有 `pref_allapps_themed_icons`（抽屉那一侧的开关）。
+ */
+private fun isThemedKey(key: String) =
+  key == "icon_theme_id" || key.contains("themed", ignoreCase = true)
 
 private fun watchThemedPrefs(context: Context, packageName: String) {
   // 键是 prefs 文件名：只印 `#i` 的话，13 个实例在日志里分不出谁是谁。
@@ -705,14 +717,14 @@ private fun watchThemedPrefs(context: Context, packageName: String) {
     runCatching {
       val all = p.all
       Log.i(TAG, "ThemedWatch: prefs[$prefName] 现有键 ${all.keys.sorted().joinToString(" ")}")
-      for ((k, v) in all) if (k.contains("themed", ignoreCase = true)) seen[k] = v?.toString() ?: ""
+      for ((k, v) in all) if (isThemedKey(k)) seen[k] = v?.toString() ?: ""
     }
     val listener = SharedPreferences.OnSharedPreferenceChangeListener { sp, changed ->
       // SDK 37 的 `onChanged` 把 key 标成 @Nullable；null 时 removeAll 之类，没有键可认。
       val key = changed ?: return@OnSharedPreferenceChangeListener
       val now = runCatching { sp.all[key]?.toString() ?: "" }.getOrDefault("")
-      if (!key.contains("themed", ignoreCase = true)) {
-        Log.i(TAG, "ThemedWatch: prefs[$prefName] 变更 $key=$now（名字里没有 themed，不动）")
+      if (!isThemedKey(key)) {
+        Log.i(TAG, "ThemedWatch: prefs[$prefName] 变更 $key=$now（不是主题图标键，不动）")
         return@OnSharedPreferenceChangeListener
       }
       val was = seen[key]
