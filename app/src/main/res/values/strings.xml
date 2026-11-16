@@ -58,7 +58,7 @@
     <string name="home_tip_stale_title">改完开关没变化？</string>
     <string name="home_tip_stale_body">现在改完开关会自动清缓存 / 重启对应的界面进程；万一还是没变化，到「设置 → 运维操作」手动按一次。</string>
     <string name="home_tip_count_title">这些数字是什么？</string>
-    <string name="home_tip_count_body">桌面、系统界面等被注入的进程各处理了多少次，每 20 次回报一次；明细在「统计」页。</string>
+    <string name="home_tip_count_body">桌面、系统界面等被注入的进程各处理了多少次，每 20 次回报一次；三个数字都在「统计」页。</string>
     <string name="home_total_none">桌面、系统界面这些进程每处理 20 次回报一次，稍等就有数字。</string>
     <string name="features_role">三个功能的开关；每个功能的说明与效果从主页那一行进去</string>
     <string name="features_group">三个功能</string>

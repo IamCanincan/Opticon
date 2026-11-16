@@ -71,7 +71,7 @@
 |---|---|
 | **主页** | **看**：状态结论（运行中 / 等待上报）+ 三个功能的处理次数；点一行进该功能的二级页 |
 | **功能** | **改**：三个开关（只有开关本身可点）+ 全部开启 / 全部关闭 + 开关何时生效 |
-| **统计** | **查**：按功能分组的处理次数条形图 |
+| **统计** | **查**：三个功能各自的处理次数（哪一格是 0 就说明它没生效） |
 | **设置** | **配**：作用域 / 启用与验证 / 运维操作 / 关于 四个入口 |
 
 二级页共七张：自适应、动态取色、单色通知、作用域、启用与验证、运维操作、关于。顶栏左上角是返回箭头、
@@ -871,7 +871,7 @@ com.iamcanincan.opticon
 │   ├── Common                 各页共用：ScreenList / MenuRow / OpticonCard / HeroCard / FeatureInfoCard / OpticonMark / IconTile / NoteList / CommandRow
 │   ├── home/HomeScreen        「主页」一级页（状态 + 三个功能的次数 + 进它们二级页的入口）
 │   ├── features/FeaturesScreen「功能」一级页（三个开关 + 全部开关 + 生效说明）
-│   ├── stats/StatsScreen      「统计」一级页（分支计数条形图）
+│   ├── stats/StatsScreen      「统计」一级页（三个功能各自的处理次数）
 │   ├── stats/StatsStore       统计快照落盘 + 接宿主广播
 │   ├── crop/CropScreen        二级页「自适应」（说明 / 效果示意 / 注意事项）
 │   ├── mono/MonoScreen        二级页「动态取色」（说明 / 效果示意 / 注意事项）
