@@ -192,11 +192,11 @@
     <string name="mono_switch_body">在 Android 16 强制动态取色下，为未提供单色层的应用生成极性正确的单色剪影。在「功能」页关闭后由桌面自身算法处理，该类图标的明暗关系可能反转。</string>
     <!-- 单色页的示意卡：左=原图标（浅底深形），右=剪影（深形为墨，洞交给桌面主题盘） -->
     <string name="mono_effect_title">单色层示意</string>
-    <string name="mono_effect_body">未提供单色层的应用由模块生成剪影：深色图形保留为墨，浅色区域交由桌面主题盘显示。</string>
+    <string name="mono_effect_body">未提供单色层的应用由模块生成剪影，而且极性按原图定：浅底深形与深底浅形都交出「主体为墨」的一张 —— 主体（字形或图案）留下，其余交给桌面主题盘显示。</string>
     <string name="mono_sample_original_title">原图标</string>
     <string name="mono_sample_original_detail">浅底深形</string>
     <string name="mono_sample_silhouette_title">剪影</string>
-    <string name="mono_sample_silhouette_detail">深形为墨</string>
+    <string name="mono_sample_silhouette_detail">主体为墨</string>
     <!-- 效果示意图两块色块下面那行小字：左=系统原样、右=自适应化之后。用短词，别和 effect_title 重复 -->
     <string name="effect_caption_before">原样</string>
 
@@ -252,7 +252,7 @@
     <!-- ============ 「单色通知」页 ============ -->
 
     <string name="notify_switch_title">@string/tab_notify</string>
-    <string name="notify_switch_body">在「功能」页关闭后不再处理任何通知。设置即时生效；切开关会自动重启系统界面，已显示的通知也会重建。</string>
+    <string name="notify_switch_body">系统会把通知小图标统一着色，没做单色适配的应用会被画成一块认不出是谁的灰白块；这一路按应用图标生成可辨识的剪影换上去。设置即时生效；关掉后不再处理任何通知。</string>
     <!-- 通知页示意卡：左=灰白色块，右=修复后的可辨识图标 -->
     <string name="notify_effect_title">通知小图标示意</string>
     <string name="notify_effect_body">部分通知的小图标在内容区显示为灰白色块；模块按应用图标生成可辨识的剪影。状态栏那排图标与它同源，由系统只取透明度统一着色，所以看不出颜色差别。</string>
