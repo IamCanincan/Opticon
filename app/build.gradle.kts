@@ -186,7 +186,7 @@ extensions.configure<ApplicationExtension> {
     minSdk = 26
     targetSdk = 37
     versionCode = 14
-    versionName = "1.1.10"
+    versionName = "1.2.0"
     // 图标管线指纹（见 IconPipelineHash）：写进 BuildConfig，宿主进程里读它决定
     // 掩码缓存目录与「这批图标是谁画的」戳记。值取的是**源码**的哈希，所以 Gradle
     // 会把它当 BuildConfig 的输入 —— 管线一变，生成任务就重跑。
