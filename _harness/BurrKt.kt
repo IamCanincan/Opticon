@@ -87,7 +87,7 @@ fun main(args: Array<String>) {
   val kept = HashMap<String, IntArray>()                        // 割完之后那张墨，`--feet` 要用
   for (c in rows) {
     if (c.size < 18) continue
-    val modelName = if (c[17] != "-" && c[17] != "err" && c[17].isNotEmpty()) c[17] else c[2]
+    val modelName = if (c[17] == "same" || c[17] == "-" || c[17] == "err" || c[17].isEmpty()) c[2] else c[17]
     val mf = File(dir, modelName); if (!mf.isFile) continue
     val mp = loadSq(mf, side) ?: continue
     val plateLayer = c[5].contains("Adaptive") && c[7] == "ColorDrawable"
