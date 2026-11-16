@@ -688,15 +688,16 @@ private fun themedBaselineFile(packageName: String) =
   File("${launcherDataDir(packageName)}/cache", "opticon-themed-baseline")
 
 /**
- * 切换之后先等这么久，也把连点合并成一次。
+ * 切换之后先等这么久，只干一件事：把连点合并到最后一次。
  *
- * ⚠ 别把它说成「等桌面自己那次 `[theme-changed]` 重载跑完」—— 真机量到切换后 **9.8s**
- *   那次重载还在跑，是我们随后那次 forceReload 把它停掉的
+ * 真机量到 prefs 回调 → 桌面自己那次 `[theme-changed]` 开始重载，两次分别 346ms / 159ms，
+ * 所以 500ms 够让两路（prefs 监听、ContentObserver）都送达、也够它先跑起来。
+ *
+ * ⚠ 别把它写成「等桌面自己那次重载跑完」—— 那次重载**跑不完**：真机切换后 9.8s 它还在跑，
+ *   是我们随后那次 forceReload 把它停掉的
  *   （`LoaderTask: stopLocked: Loader [theme-changed] stopping be caller: opticon-themed`）。
- *   这 1.2s 只是让 prefs 与 ContentObserver 两路都送达、把连点并成一次的静置，
- *   不是等它跑完的预算；等不完也不影响 —— 我们那次重载会把它顶掉。
  */
-private const val THEMED_SETTLE_MS = 1200L
+private const val THEMED_SETTLE_MS = 500L
 
 /**
  * 重载原因串。会原样出现在桌面自己的日志里：
