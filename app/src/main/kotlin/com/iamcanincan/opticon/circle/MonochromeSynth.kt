@@ -785,13 +785,8 @@ internal object MonochromeSynth {
       // 取数口在 [IconCropWindow.polarityOf]（不在这里写式子）：那个文件在台子的编译清单里，
       // 这里没有 —— 写在这里，第 19 闸就退回"量具看不见生产"那一族（第十六闸的同一课）。
       val plateSubject = IconCropWindow.polarityOf(winColour?.win, winMeasured)
-      // 【主形】按包开闸（名单与"为什么不能全局"见 [MonochromeMask.TRIM_PKGS]）。
-      //   `label` 的第一段是 `IconNames.of(source)`，两种形式都要认（`包名/类型/入口名` 与
-      //   `pm:包名`）—— 只配前一种的话，快捷方式那一批永远开不了火，见 [IconNames.matchesPkg]。
-      val trimOn = MonochromeMask.TRIM_PKGS.any { IconNames.matchesPkg(label, it) }
       val tBuild0 = System.nanoTime()
-      var out = MonochromeMask.build(pxIn, edge, edge, plateLayer, underIn, plateSubject,
-        trimSubject = trimOn)
+      var out = MonochromeMask.build(pxIn, edge, edge, plateLayer, underIn, plateSubject)
       // ── 细环满幅快捷方式：淡灰盘不是墨（2026-10-25）──
       // 这一档（拼多多四条）的淡灰盘是**底** —— 彩色那支由桌面自己的主题盘代替，但模型偶尔把它
       // 交成墨：`search_express` 首张掩码占 65% 画布（还会带出一圈点状环），另外三条只有 29–32%
@@ -802,7 +797,7 @@ internal object MonochromeSynth {
         val fill = maskFill(out.mask, edge)
         if (fill >= RING_DISH_FILL) {
           val alt = MonochromeMask.build(chromaClean(pxIn), edge, edge, plateLayer, underIn,
-            plateSubject, trimSubject = trimOn)
+            plateSubject)
           val af = alt.mask?.let { maskFill(it, edge) } ?: -1f
           if (af in 0.1f..RING_DISH_FILL) {
             Log.d(TAG, "Mono: 细环满幅 去淡灰盘 $label 占盘 ${"%.0f".format(fill * 100)}% → " +

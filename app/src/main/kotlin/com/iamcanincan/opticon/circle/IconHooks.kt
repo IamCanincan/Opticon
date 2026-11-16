@@ -1059,9 +1059,9 @@ private fun hookIconLoader(xposed: XposedInterface, method: Method): Boolean =
               val who = if (passed is AdaptiveIconDrawable) null else unmarkedAppIcon(method, args, chain.thisObject)
               if (who != null && !who.isHostSystemResource()) {
                 // ⚠ **名字必须在这里登记**（2026-10-19 深夜补）：上面那一支（`passed is AdaptiveIconDrawable`）
-                //   登记了，这一支原来**只打日志**。于是非自适应的应用图标在合成侧永远是 `?`，
-                //   而按包开闸的【主形】（[MonochromeMask.TRIM_PKGS]）读的就是 `label` 的第一段 ——
-                //   真机上 `me.mugzone.emiria` 开火 **0 次**，屏上仍是 26.72% / 全实 8.04%。
+                //   登记了，这一支原来**只打日志**。于是非自适应的应用图标在合成侧永远是 `?` ——
+                //   日志、缓存归属与所有按 `label` 下判断的判据都读不到它（真机实测过：同一张图标
+                //   在合成侧认不出包名）。
                 //   合成侧收到的是本函数返回的那个 `CircleIconDrawable` 的 `sourceIcon`，
                 //   而它就是这里的 `passed`（副本则共享同一份 `ConstantState`，[IconNames] 两条都记）。
                 IconNames.remember(passed, who)

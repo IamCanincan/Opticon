@@ -132,18 +132,12 @@ fun main(args: Array<String>) {
     // 与生产同一判据：纯色盘 **且** 前景自己用到了盘色（`SolidBg.bgMarks`）才铺底。
     val bgOn = solidBg[f.name]?.takeIf { over && bgMarks(srcRaw, it) > 0 }
     val src = if (bgOn != null) overBg(srcRaw, bgOn) else srcRaw
-    // `--trim`：把【主形】按生产的口径开一遍 —— 不带 `=all` 时只开名单里那张（与 MonochromeSynth
-    //   同一个判法），带 `=all` 则每张都开（用来看那批对照）。**不开这旗时判据台与改动前逐字同口径。**
-    val trimArg = args.firstOrNull { it == "--trim" || it.startsWith("--trim=") }
-    val trimPkg = f.nameWithoutExtension.substringBefore('_')
-    val trimOn = trimArg != null &&
-      (trimArg == "--trim=all" || MonochromeMask.TRIM_PKGS.any { it == trimPkg })
     // `--plate-subject`：把"盘是图案"的极性直接传给模型。生产这一位由彩色那本账算
     //   （`IconCropWindow.polarityOf`），台子默认 false；这一个旗只用来单独摊极性这一维。
     // `--keep-strip`：把【横幅退族】那一刀**关掉**（`MonochromeMask.dropStripFamilies`，四道门与数的
     //   来源写在 `STRIP_W_MIN` 那段）。生产默认开，所以这一臂才是"这一刀不存在时"的那一份 ——
     //   A/B 的**负对照**：不带旗的那一遍必须与这一臂逐张不同、且与上一轮的产物逐张相同。
-    val r = MonochromeMask.build(src, edge, edge, plateLayer, under, trimSubject = trimOn,
+    val r = MonochromeMask.build(src, edge, edge, plateLayer, under,
       plateIsSubject = args.contains("--plate-subject"), dropStrip = !args.contains("--keep-strip"))
     // `--cutPlate=t`：模拟第九轮「纯色盘 · 内部 · 近盘色 · 只压雾 → 归零」的波及面。
     //   **只在台子上，生产里一行都没有**（甲类参照 +5.3k/0 受伤，乙类净负，尚未落码）。

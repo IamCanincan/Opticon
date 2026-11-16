@@ -17,7 +17,7 @@ import kotlin.math.max
  *
  * 每张：A = 384 窗口（现状）；B = 彩色格窗口（拟改）；窗口完全相同时不跑模型（必为同一张）。
  * 模型输入/under/plateLayer 与 `MaskBench` 同一套（`Inputs`）；`plateSubject` 两边用同一个
- * （它本来就只读彩色窗），`trimSubject` 不参与这一维。
+ * （它本来就只读彩色窗）。
  *
  * 用法：`sh run.sh harness.WinABKtKt rec_model corpus_runtime [--edge=384]`
  */
