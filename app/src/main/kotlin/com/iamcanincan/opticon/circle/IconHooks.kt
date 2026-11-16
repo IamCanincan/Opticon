@@ -47,11 +47,8 @@ import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.Volatile
 
 // 把图标 id 挪到一个不会有真实资源的 package，它到达 Resources 时就能被认出来；
@@ -702,14 +699,6 @@ private fun themedBaselineFile(packageName: String) =
 private const val THEMED_SETTLE_MS = 1200L
 
 /**
- * 派到桌面工作线程那一步最多等这么久。超时就大声报、返回 false，不假装清掉了。
- *
- * ⚠ 别把超时当成「工作线程忙、多等等就好」：真机第一次超时是因为**顺序错了** ——
- *   在等一条被自己即将取消的重载占死的线程。现在 forceReload 排在等之前，正常应当很快。
- */
-private const val THEMED_WORKER_WAIT_MS = 8000L
-
-/**
  * 重载原因串。会原样出现在桌面自己的日志里：
  * `Launcher.Model: Loader task completed, name: [opticon-themed]` ——
  * 这是"我们那次重载真跑了"的唯一可核对签名，别改。
@@ -747,8 +736,12 @@ private const val THEMED_RELOAD_REASON = "opticon-themed"
  *   路径上反而多出一个空库。必须连着同一个文件把行删掉（[deleteIconCache] 删文件那套只在
  *   进程即将被杀时才对）。
  *
- * ⚠ 三个反射目标都是桌面私有 API，换 ROM 可能没有。任何一步失败都**大声报**并返回 false，
- *   由调用方提示去按手动按钮 —— 不静默、也不退回杀进程那条（那会把面板再掀一次）。
+ * ⚠ 三个反射目标都是桌面私有 API，换 ROM 可能没有。任何一步失败都**大声报**，
+ *   不静默、也不退回杀进程那条（那会把面板再掀一次）。
+ *
+ * 返回值只表示「**派发出去了、也请它重载了**」，不表示清缓存/删行已经做完 ——
+ * 那两步排在桌面工作线程的队列里，结果由它们跑完时自己报一行。所以返回 false
+ * 的含义是「这条路没走通，去按手动按钮」；返回 true 之后仍要看那行「工作线程做完了」。
  */
 private fun refreshLauncherIconsInProcess(context: Context, packageName: String, why: String): Boolean {
   val loader = context.classLoader
@@ -765,12 +758,16 @@ private fun refreshLauncherIconsInProcess(context: Context, packageName: String,
   }
   val tState = SystemClock.elapsedRealtime()
 
-  // ⚠ 顺序是承重的，别调换：**先派活、再 forceReload、最后才等**。
+  // ⚠ 顺序是承重的，别调换：**先派活、再 forceReload、然后就撒手**。
   //   bgLooper 就是 Executors.MODEL_EXECUTOR 的 looper（IconCache.<init> 取它存进
   //   BaseIconCache.bgLooper），而桌面自己那次 [theme-changed] 重载**也跑在这条线程上**。
-  //   上一版是「派活 → 等 8s → 才 forceReload」，等于在等一条被自己即将取消的任务占死的
-  //   线程：真机 03:48:07.858 派活、03:48:15.859 超时，stopLocked 那行出现在超时之后。
-  //   forceReload 会 stopLocked 掉占路的那次重载，工作线程随即空出来跑我们派的活。
+  //   先派活 ⇒ 我们那个 runnable 排在队列里；forceReload 排在其后 ⇒ 新任务排在它**之后**。
+  //   于是执行顺序天然是「旧任务收尾 → 清内存+删行 → 新任务重建」。
+  //
+  // ⚠ **别在这儿同步等结果**。`stopLocked` 只是置标志，正在跑的重载**不会中途退出** ——
+  //   它要把手上那批图标画完才看标志。真机 13:11:09.785 停了它，工作线程到 13:11:23.374
+  //   才空出来。等下去只会得到一个**假失败**：那个 runnable 其实还在队列里、最后照样会跑。
+  //   所以让它跑完时自己报一行（含「派发后多少 ms」）。
   //
   // ⚠ clearMemoryCache() 第一句是 assertWorkerThread()，比 Looper.myLooper() 与 bgLooper，
   //   不是那条线程就抛 —— 所以清内存与删行都放进派过去的 runnable 里。删行也放上去是因为
@@ -785,38 +782,42 @@ private fun refreshLauncherIconsInProcess(context: Context, packageName: String,
       .getDeclaredField("TABLE_NAME").apply { isAccessible = true }.get(null) as String
   }.getOrNull()
 
-  val rows = AtomicInteger(-1)
-  val note = AtomicReference("没派出去")
-  val done = CountDownLatch(1)
   var posted = false
+  val tPost = SystemClock.elapsedRealtime()
   runCatching {
     val cache = state.javaClass.getMethod("getIconCache").invoke(state) ?: error("getIconCache()=null")
     val looper = fieldOf(cache.javaClass, "bgLooper")?.get(cache) as? Looper
       ?: error("拿不到 bgLooper")
     posted = Handler(looper).post {
+      val waited = SystemClock.elapsedRealtime() - tPost
       val mem = runCatching { cache.javaClass.getMethod("clearMemoryCache").invoke(cache) }
       // ⚠ 「文件不存在」「拿不到表名」「表本来就是空的」要分开报：都返回 0 的话，
       //   下一次仍然读不出坏在哪一层（2026-11-16 前两版就是这么栽的）。
+      var rows = -1
       val db = runCatching {
         when {
           !dbFile.exists() -> "文件不存在 ${dbFile.path}"
           table == null -> "拿不到 TABLE_NAME"
           else -> SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READWRITE).use {
-            rows.set(it.delete(table, null, null))
+            rows = it.delete(table, null, null)
             "表=$table 文件${dbFile.length()}B"
           }
         }
       }
-      note.set(
-        "内存=${mem.fold({ "ok" }, { describe(it) })} 库=${db.fold({ it }, { describe(it) })}"
+      Log.i(
+        TAG,
+        "ThemedRefresh: 工作线程做完了（派发后 ${waited}ms）内存=" +
+          mem.fold({ "ok" }, { describe(it) }) +
+          " 库=" + db.fold({ it }, { describe(it) }) + " 删行=$rows"
       )
-      done.countDown()
+      // 行删掉了，下一批图标就是当前这一版管线画的 —— 戳记跟着走，否则 [warnStaleIconCache] 误报。
+      if (rows >= 0) runCatching {
+        val stamp = cacheStamp(packageName)
+        stamp.parentFile?.mkdirs()
+        stamp.writeText(algoId())
+      }
     }
-  }.onFailure {
-    note.set(describe(it))
-    done.countDown()
-  }
-  val tPost = SystemClock.elapsedRealtime()
+  }.onFailure { Log.w(TAG, "ThemedRefresh: 派活失败（${describe(it)}）") }
 
   var reload = false
   runCatching {
@@ -824,28 +825,13 @@ private fun refreshLauncherIconsInProcess(context: Context, packageName: String,
     model.javaClass.getMethod("forceReload", String::class.java).invoke(model, THEMED_RELOAD_REASON)
     reload = true
   }.onFailure { Log.w(TAG, "ThemedRefresh: 请桌面重载失败（${describe(it)}）") }
-  val tReload = SystemClock.elapsedRealtime()
-
-  val queued = posted && runCatching { done.await(THEMED_WORKER_WAIT_MS, TimeUnit.MILLISECONDS) }
-    .getOrDefault(false)
-  val tWait = SystemClock.elapsedRealtime()
-  val detail = note.get()
-  val memory = detail.startsWith("内存=ok")
-  if (!queued) Log.w(TAG, "ThemedRefresh: 工作线程 ${THEMED_WORKER_WAIT_MS}ms 内没排到")
 
   Log.i(
     TAG,
-    "ThemedRefresh: $why → $detail 删行=${rows.get()} 重载=$reload 排到=$queued" +
-      "（不杀桌面、不重启系统界面）耗时ms 句柄=${tState - t0} 派发=${tPost - tState} " +
-      "重载=${tReload - tPost} 等=${tWait - tReload}"
+    "ThemedRefresh: $why → 派发=$posted 重载=$reload 句柄=${tState - t0}ms" +
+      "（不杀桌面、不重启系统界面；清缓存/删行在其后完成，单独报一行）"
   )
-  // 行删掉了，下一批图标就是当前这一版管线画的 —— 戳记跟着走，否则 [warnStaleIconCache] 误报。
-  if (rows.get() >= 0) runCatching {
-    val stamp = cacheStamp(packageName)
-    stamp.parentFile?.mkdirs()
-    stamp.writeText(algoId())
-  }
-  return memory && rows.get() >= 0 && reload
+  return posted && reload
 }
 
 /** 反射抛的是 InvocationTargetException，真正的原因在 cause 里 —— 只报外层等于没报。 */
