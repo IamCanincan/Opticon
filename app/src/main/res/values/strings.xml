@@ -51,7 +51,6 @@
     <string name="stats_percent">%1$d%%</string>
     <string name="stats_times">次</string>
     <string name="stats_share">占 %1$d%%</string>
-    <string name="home_sub">自适应 · 动态取色 · 单色通知，三项都可以单独开关。下面一眼看全当前状态。</string>
     <string name="home_features">功能状态</string>
     <string name="home_sub_crop">老式图标做成自适应图标，形状交给系统</string>
     <string name="home_sub_mono">未适配图标的黑白极性修正</string>
@@ -92,7 +91,7 @@
 
 
     <!-- 自适应的说明卡（开关在「功能」页那一行） -->
-    <string name="circle_switch_title">自适应</string>
+    <string name="circle_switch_title">@string/tab_crop</string>
     <string name="circle_switch_body">非自适应（老式）图标直接做成自适应图标：先把图案缩放到恰好填满正方形（不裁掉任何有色像素），占比够的按边缘颜色延伸补满、不另加底盘；占比小的缩到内切圆里并铺白底。形状交给系统（桌面的「图标形状」设成什么就是什么）。快捷方式不处理，原样交给桌面。自适应图标保持原样。</string>
     <!-- 开关切换后的 Snackbar：桌面有预渲染缓存，需说明清除缓存后才会生效 -->
 
@@ -127,6 +126,9 @@
     <string name="scope_systemui_title">系统界面</string>
     <string name="scope_systemui_desc">状态栏与最近任务；通知小图标的修复在此执行。</string>
 
+    <!-- 与 tab_settings 同形但**不是同一个概念**：这里是系统「设置」应用的名字，
+         下面是本模块自己的设置页标题 —— 两者必须能各自改名，所以不做别名。
+         DuplicateStrings 这一条是刻意留着的。 -->
     <string name="scope_settings_title">设置</string>
     <string name="scope_settings_desc">设置中的应用列表。</string>
 
@@ -194,7 +196,7 @@
         单色遮罩极性修正。这条和自适应是**两个独立开关**：它管的是 Android 16 强制取色下
         桌面替「未适配」应用现场生成的那张单色遮罩，和形状无关。2026-10-26 起单色独立成页。
     -->
-    <string name="mono_switch_title">动态取色</string>
+    <string name="mono_switch_title">@string/tab_mono</string>
     <string name="mono_switch_body">在 Android 16 强制动态取色下，为未提供单色层的应用生成极性正确的单色剪影。在「功能」页关闭后由桌面自身算法处理，该类图标的明暗关系可能反转。</string>
     <!-- 单色页的示意卡：左=原图标（浅底深形），右=剪影（深形为墨，洞交给桌面主题盘） -->
     <string name="mono_effect_title">单色层示意</string>
@@ -205,7 +207,6 @@
     <string name="mono_sample_silhouette_detail">深形为墨</string>
     <!-- 效果示意图两块色块下面那行小字：左=系统原样、右=自适应化之后。用短词，别和 effect_title 重复 -->
     <string name="effect_caption_before">原样</string>
-    <string name="effect_caption_after">自适应</string>
 
     <!-- 说明 -->
     <string name="section_notes">说明</string>
@@ -258,7 +259,7 @@
 
     <!-- ============ 「单色通知」页 ============ -->
 
-    <string name="notify_switch_title">单色通知</string>
+    <string name="notify_switch_title">@string/tab_notify</string>
     <string name="notify_switch_body">在「功能」页关闭后不再处理任何通知。设置即时生效；切开关会自动重启系统界面，已显示的通知也会重建。</string>
     <!-- 通知页示意卡：左=灰白色块，右=修复后的可辨识图标 -->
     <string name="notify_effect_title">通知小图标示意</string>

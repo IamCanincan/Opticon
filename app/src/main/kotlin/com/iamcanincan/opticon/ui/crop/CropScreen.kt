@@ -106,7 +106,7 @@ private fun EffectCard() {
       EffectTile(
         modifier = Modifier.weight(1f),
         style = EffectStyle.WRAPPED,
-        title = stringResource(R.string.effect_caption_after),
+        title = stringResource(R.string.tab_crop),
         detail = stringResource(R.string.effect_sample_cropped_detail),
       )
     }

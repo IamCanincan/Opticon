@@ -145,12 +145,13 @@ internal fun MenuRow(
   shape: androidx.compose.ui.graphics.Shape,
   onClick: () -> Unit,
   iconTint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
-  trailing: (@Composable () -> Unit)? = null,
   showChevron: Boolean = true,
   /** true = 图标放在 40dp 方块里（与作用域 / 功能页那些入口行同一个语言）。 */
   tile: Boolean = false,
   tileContainer: Color = MaterialTheme.colorScheme.surfaceContainerHighest,
   tileContent: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+  /** 右侧附加内容（次数），放在箭头左边。@Composable 参数按 Compose 惯例排在最后。 */
+  trailing: (@Composable () -> Unit)? = null,
 ) {
   val scheme = MaterialTheme.colorScheme
   Card(
