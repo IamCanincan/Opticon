@@ -57,10 +57,60 @@ abstract class IconPipelineHash : ValueSource<String, IconPipelineHash.Params> {
     for (f in parameters.sources.files.sortedBy { it.name }) {
       md.update(f.name.toByteArray(Charsets.UTF_8))
       md.update(0.toByte())
-      md.update(f.readBytes())
+      md.update(Proj.codeOnly(f.readText(Charsets.UTF_8)).toByteArray(Charsets.UTF_8))
       md.update(0.toByte())
     }
     return md.digest().joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }.take(16)
+  }
+
+  /**
+   * 源码 → **只含代码**的投影：剥掉注释、行尾空白与空行，其余一个字符不动。
+   *
+   * 六态状态机：正常 / 行注释 / 块注释 / 字符串 / 三引号原始字符串 / 字符字面量。
+   * 只有"正常"态里斜线星号那一对才开注释 —— 字符串与字符里的同类符号原样保留，
+   * 否则 URL 里的双斜线会把后半行吃掉，那正是这条投影最要命的坏法。
+   * 注释换成**一个空格**而不是直接删掉：两个标识符之间的空注释若直接粘成一个词，
+   * 会伪造出一个新标识符。
+   *
+   * ⚠ 这份 KDoc 刻意不写那几种注释符号本身：Gradle 的 .kts 解析器读到块注释里出现
+   *    星号加斜线会提前闭合（2026-11-16 亲身踩过一次，报的是"Missing '}'"）。
+   *    判据在 `checkPipelineHash`：每份真源码追加注释后哈希不变、追加代码后必须变。
+   */
+  object Proj {
+    fun codeOnly(src: String): String {
+      val sb = StringBuilder(src.length)
+      var i = 0
+      var st = 0
+      fun at(k: Int): Char = if (k < src.length) src[k] else '\u0000'
+      while (i < src.length) {
+        val c = src[i]
+        when (st) {
+          0 -> when {
+            c == '/' && at(i + 1) == '/' -> { st = 1; i += 2; sb.append(' ') }
+            c == '/' && at(i + 1) == '*' -> { st = 2; i += 2; sb.append(' ') }
+            c == '"' && at(i + 1) == '"' && at(i + 2) == '"' -> { st = 4; sb.append("\"\"\""); i += 3 }
+            c == '"' -> { st = 3; sb.append(c); i++ }
+            c == '\'' -> { st = 5; sb.append(c); i++ }
+            else -> { sb.append(c); i++ }
+          }
+          1 -> if (c == '\n') { st = 0; sb.append('\n'); i++ } else i++
+          2 -> if (c == '*' && at(i + 1) == '/') { st = 0; i += 2 } else { if (c == '\n') sb.append('\n'); i++ }
+          3 -> {
+            sb.append(c)
+            if (c == '\\' && i + 1 < src.length) { sb.append(src[i + 1]); i += 2 }
+            else { if (c == '"') st = 0; i++ }
+          }
+          4 -> if (c == '"' && at(i + 1) == '"' && at(i + 2) == '"') { sb.append("\"\"\""); i += 3; st = 0 }
+          else { sb.append(c); i++ }
+          else -> {
+            sb.append(c)
+            if (c == '\\' && i + 1 < src.length) { sb.append(src[i + 1]); i += 2 }
+            else { if (c == '\'') st = 0; i++ }
+          }
+        }
+      }
+      return sb.lineSequence().map { it.trimEnd() }.filter { it.isNotEmpty() }.joinToString("\n")
+    }
   }
 }
 
@@ -68,6 +118,55 @@ val iconPipelineHash = providers.of(IconPipelineHash::class.java) {
   parameters.sources.from(
     fileTree("src/main/kotlin/com/iamcanincan/opticon/circle") { include("*.kt") }
   )
+}
+
+/**
+ * 上面那套投影的自证台：`./gradlew checkPipelineHash`。
+ *
+ * 投影只决定**缓存什么时候失效**：跑错了不会崩、不会报错，只会让你在下一次改算法之后
+ * 继续吃旧掩码。所以必须有一条能当场变红的判据，而不是"编得过就行"。
+ *
+ * 两类样本：
+ *  1. 合成 —— 注释与空行不影响投影；字符串 / 字符 / 三引号里的注释符号不是注释。
+ *  2. 真源码逐份 —— 追加注释后哈希不变、追加代码后哈希必须变。后者是"状态机卡进注释态、
+ *     后面整份被吃掉"的探针：一旦发生，追加的代码也不会改变哈希，这一条当场红。
+ */
+val checkPipelineHash = tasks.register("checkPipelineHash") {
+  val srcs = fileTree("src/main/kotlin/com/iamcanincan/opticon/circle") { include("*.kt") }
+  inputs.files(srcs)
+  doLast {
+    fun c(s: String) = IconPipelineHash.Proj.codeOnly(s)
+    fun same(a: String, b: String, why: String) =
+      check(c(a) == c(b)) { "应视为同一份代码：$why\n--- A ---\n${c(a)}\n--- B ---\n${c(b)}" }
+    fun differ(a: String, b: String, why: String) =
+      check(c(a) != c(b)) { "必须视为不同代码：$why" }
+
+    same("val a = 1 // tail\n", "val a = 1", "行注释")
+    same("/** doc */\nval a = 1\n", "val a = 1", "块注释 / KDoc")
+    same("val a = 1 /* mid */\n\n\nval b = 2", "val a = 1\nval b = 2", "行中块注释与空行")
+    differ("val s = \"http://x\"", "val s = \"http://y\"", "字符串里双斜线之后仍是代码")
+    differ("val s = \"/*a*/\"", "val s = \"/*b*/\"", "字符串里的注释符号不是注释")
+    differ("val s = \"a\\\"//b\" + 1", "val s = \"a\\\"//b\" + 2", "转义引号后面的双斜线仍在字符串里")
+    differ("val c = '/'", "val c = '*'", "字符字面量不是注释起点")
+    same("val c = '/'\n// note\n", "val c = '/'", "字符字面量后面接行注释照常剥")
+    differ("val s = \"\"\"a // b\"\"\"", "val s = \"\"\"a // c\"\"\"", "三引号原始字符串里的双斜线不算注释")
+
+    var n = 0
+    for (f in srcs.files.sortedBy { it.name }) {
+      val raw = f.readText(Charsets.UTF_8)
+      val base = c(raw)
+      // ⚠ 不能用"代码占比"当判据：`IconLabel.kt` 本来就有七成是 KDoc（363/1303），
+      //   那是最先被我自己的阈值打红的一份。改成**结构**判据：头还在、尾还在。
+      check(base.length >= 40 && base.contains("package")) {
+        "${f.name} 投影只剩 ${base.length} 字符 / 没有 package 行 —— 十有八九把代码当注释吃掉了"
+      }
+      same(raw + "\n// 追加注释\n/** 追加 KDoc */\n", raw, "${f.name} 追加注释")
+      differ(raw, raw + "\nprivate const val __hashProbe = 1\n", "${f.name} 追加代码")
+      n++
+    }
+    check(n > 10) { "只读到 $n 份源码 —— 路径或过滤器坏了（期望 circle/*.kt 全量）" }
+    println("checkPipelineHash: 合成样本 9 条 + 真源码 $n 份，全过")
+  }
 }
 
 extensions.configure<ApplicationExtension> {
