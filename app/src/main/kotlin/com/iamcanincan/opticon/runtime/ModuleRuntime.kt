@@ -279,7 +279,12 @@ object ModuleRuntime {
      * 这 2 秒里画出来的 50 张图标（33 张直接取自磁盘掩码缓存）全按「开」处理，
      * 用户看到的就是「关了也变不回来」。两处各浪费一个 TTL：跳过的那次也记了节流时刻；
      * 读到之后又等下一次 refresh 才发布。两个都在这儿解决。
+     *
+     * `@Synchronized` 是必需的：后台查询线程与热路径会同时进来，而"比值 + 写两个字段"
+     * 不是原子操作 —— 真机上同一 pid 同一毫秒会出现两条一样的 `options:`，更糟时
+     * 一份过期的回退快照能把刚发布的新值盖回去。
      */
+    @Synchronized
     private fun applyRead(read: Read, force: Boolean) {
         if (!force && read.options == current && read.source == lastSource) return
         current = read.options
