@@ -940,5 +940,10 @@ private fun wrapInner(icon: Drawable, from: String, shortcutHint: Boolean): Draw
     Log.d(TAG, "自适应 from=$from host=$clipHost : " + IconNames.of(icon) + " " +
       "${icon.intrinsicWidth}x${icon.intrinsicHeight} 无底盘 原尺寸+延伸")
   }
+  // ⚠ 这一行同时喂三样东西：统计页的「自适应」计数、按 `通道×宿主` 的射程账、
+  //   以及「第一次见到这个宿主」那行日志。2026-11-14 快捷方式整体放行那次重构把它删掉了，
+  //   函数留着、调用没了 —— 于是统计页那一格从那天起一直是 0（主人 2026-11-16 报的）。
+  //   别把它挪到上面任何一个 branch 里：只有**真要包这张图**的时候才该记一次。
+  noteWrap(from)
   return CircleIconDrawable(icon)
 }
