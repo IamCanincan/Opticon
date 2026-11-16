@@ -245,8 +245,11 @@ private const val FRESH_MS = 10 * 60 * 1000L
 /**
  * 快照按功能分成三堆（自适应 / 单色 / 通知），再给一个总数。
  *
- * ⚠ 单色 2026-11-08 才有账：进账点在 `MonochromeSynth.store`（新合成一张单色层记一次），
- *   所以它是「我们替多少张未适配图标做了单色层」；应用自带单色层的那一批我们不碰、也不计。
+ * ⚠ 「单色」的进账点是 `MonochromeSynth.noteSynthesized()`：**交出一张就记一次**，
+ *   新合成与命中缓存两条入口都算（只记新合成的话，本机磁盘缓存在手，数字会长期不动，
+ *   看着像没工作）。应用自带单色层的那一批我们不碰、也不计。
+ * ⚠ 「自适应」的进账点是 `CircleIconDrawable.noteWrap()`，只在**真要包这张图**时记一次；
+ *   2026-11-14 那次重构把它删成了没有调用点的死函数，统计页那一格因此恒为 0，11-16 修回。
  */
 private fun splitCounts(snapshot: String?): Stats4 {
   if (snapshot.isNullOrBlank()) return Stats4(0, 0, 0, 0)

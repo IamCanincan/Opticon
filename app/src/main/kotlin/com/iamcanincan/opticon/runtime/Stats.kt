@@ -4,7 +4,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * 各功能的**分支计数**，供应用侧的「统计」页画图。
+ * 各功能的**分支计数**，供应用侧的「统计」页显示三个数字（自适应 / 动态取色 / 单色通知）。
  *
  * 为什么要在宿主进程里数、再广播出去：计数发生在被注入的进程（桌面 / 系统界面），
  * 应用读不到它们的内存，也读不到它们的数据目录。实测能通的只剩一条：宿主主动把快照
