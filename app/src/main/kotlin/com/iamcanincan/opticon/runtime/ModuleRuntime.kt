@@ -49,7 +49,14 @@ object ModuleRuntime {
 
     @Volatile
     private var lastReadAt = 0L
+
+    /** 也由后台那条 provider 查询写（读到就立刻发布，见 [applyRead]），所以同样要 volatile。 */
+    @Volatile
     private var lastSource: String? = null
+
+    /** 这一趟 provider 查询是因为**没有宿主 Context** 才空的 —— 那等于没读，不能消耗节流。 */
+    @Volatile
+    private var providerSkippedNoContext = false
 
     /**
      * 当初把本模块这段代码装进内存的那份 APK。
@@ -102,6 +109,14 @@ object ModuleRuntime {
      * 也不会让高频的图标加载反复读。
      */
     private const val OPTIONS_TTL_MS = 1_000L
+
+    /**
+     * 上一趟 provider 查询因为**没有宿主 Context** 而空转时的重试间隔。
+     *
+     * 那种情况等于没读，不该吃一整个 [OPTIONS_TTL_MS]；但也不能零间隔 ——
+     * 真遇到永远拿不到 Context 的进程，就变成每个图标都往线程池排一次任务了。
+     */
+    private const val SKIP_RETRY_MS = 25L
 
     /**
      * 三条旧回退通道的重探间隔。
@@ -242,14 +257,34 @@ object ModuleRuntime {
                 logI("Config: 模块 APK = " + (a?.path ?: "<解析不到>") + "（存在=" + (a?.exists() ?: false) + "）")
             }
 
-            if (force || read.options != current || read.source != lastSource) {
-                current = read.options
-                lastSource = read.source
-                logI("options: ${read.options.describe()} (source=${read.source})")
-            }
+            applyRead(read, force)
         } finally {
             refreshing.set(false)
         }
+    }
+
+    /**
+     * 发布一份读到的配置。后台那条 provider 查询**也**走这里 —— 读到就立刻发布，
+     * 不等下一次 TTL 刷新。
+     *
+     * 为什么这很要紧（2026-11-16 真机，开关「动态取色」关着、一刀切重启后）：
+     * ```
+     * 13:36:26.796  attach → 读配置
+     * 13:36:26.798  provider skipped: no host context yet   ← Application 还没建好
+     * 13:36:27.229  第一张图标开始画（此时 current 还是默认值：三个全开）
+     * 13:36:28.257  provider ok: monoInvert=false
+     * 13:36:29.241  最后一张按「开」画完
+     * 13:36:29.257  options 才发布
+     * ```
+     * 这 2 秒里画出来的 50 张图标（33 张直接取自磁盘掩码缓存）全按「开」处理，
+     * 用户看到的就是「关了也变不回来」。两处各浪费一个 TTL：跳过的那次也记了节流时刻；
+     * 读到之后又等下一次 refresh 才发布。两个都在这儿解决。
+     */
+    private fun applyRead(read: Read, force: Boolean) {
+        if (!force && read.options == current && read.source == lastSource) return
+        current = read.options
+        lastSource = read.source
+        logI("options: ${read.options.describe()} (source=${read.source})")
     }
 
     /**
@@ -309,9 +344,19 @@ object ModuleRuntime {
         runCatching {
             providerExecutor.execute {
                 try {
-                    providerOptions = readFromProvider(m)
+                    val read = readFromProvider(m)
+                    providerOptions = read
+                    // 读到就立刻发布，不等下一次 TTL（见 [applyRead]）
+                    if (read != null) applyRead(Read(read, "provider"), force = false)
                 } finally {
                     providerQueryInFlight = false
+                    // 没有宿主 Context 等于这一趟没读 ⇒ **不消耗节流**，下一个热路径调用
+                    // （通常几毫秒后）立刻重试。进程启动时 `currentApplication()` 还没建好，
+                    // 以前这里把重试拖成了「再等一个 TTL」。
+                    if (providerSkippedNoContext) {
+                        providerQueryAt =
+                            SystemClock.elapsedRealtime() - OPTIONS_TTL_MS + SKIP_RETRY_MS
+                    }
                 }
             }
         }.onFailure {
@@ -351,9 +396,11 @@ object ModuleRuntime {
     private fun readFromProvider(m: XposedInterface): ModuleOptions? {
         val context = hostContext()
         if (context == null) {
+            providerSkippedNoContext = true
             logStateChange("provider skipped: no host context yet", warn = true)
             return null
         }
+        providerSkippedNoContext = false
         val pkg = runCatching { m.moduleApplicationInfo?.packageName }.getOrNull()
         if (pkg == null) {
             logStateChange("provider skipped: module package name unavailable", warn = true)
