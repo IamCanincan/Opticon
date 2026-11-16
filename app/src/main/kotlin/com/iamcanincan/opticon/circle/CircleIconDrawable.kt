@@ -779,6 +779,7 @@ private const val SYSTEMUI_HOST = "com.android.systemui"
  */
 private fun calledByQuickSettings(): Boolean {
   if (clipHost != SYSTEMUI_HOST) return false
+  qsWalked.incrementAndGet()
   return Thread.currentThread().stackTrace.any { it.className.startsWith(TILE_CALLERS) }
 }
 
@@ -804,6 +805,14 @@ private val wrapTally = java.util.concurrent.ConcurrentHashMap<String, Int>()
 private val wrapCount = java.util.concurrent.atomic.AtomicLong(0)
 private val wrapDumps = java.util.concurrent.atomic.AtomicLong(0)
 
+/**
+ * 磁贴判据的**成本账**（2026-11-16）：那条判据要抓整条线程堆栈，是这一层最贵的一步。
+ * `走` = 真的抓了堆栈（SystemUI 里的老式图标）；`免` = 自适应/已包过的图标提前放行、没抓。
+ * 没有这两个数，"把自适应判断提前省了堆栈钱"就只是结构推断 —— 省了多少份要看真机读数。
+ */
+private val qsWalked = java.util.concurrent.atomic.AtomicLong(0)
+private val qsAvoided = java.util.concurrent.atomic.AtomicLong(0)
+
 private fun noteWrap(from: String) {
   com.iamcanincan.opticon.runtime.Stats.bump("自适应")
   val key = "$from ← $clipHost"
@@ -813,7 +822,8 @@ private fun noteWrap(from: String) {
   if (n % RANGE_DUMP_EVERY == 0L && wrapDumps.getAndIncrement() < RANGE_DUMP_MAX) {
     val rows = wrapTally.entries.sortedByDescending { it.value }.take(8)
       .joinToString(" ; ") { "${it.key} ×${it.value}" }
-    Log.d(TAG, "自适应累计 $n 次，通道×宿主 top：$rows")
+    Log.d(TAG, "自适应累计 $n 次，通道×宿主 top：$rows" +
+      " ｜磁贴判据 走=${qsWalked.get()} 免=${qsAvoided.get()}")
   }
 }
 
@@ -914,13 +924,19 @@ fun wrapLegacyIcon(icon: Drawable, from: String, shortcutHint: Boolean = false):
 private fun wrapInner(icon: Drawable, from: String, shortcutHint: Boolean): Drawable {
   // 配置按 TTL 重读，所以界面里关掉开关后很快生效，不用重启进程。
   if (!ModuleRuntime.options().circleEnabled) return icon
+  // 已经包过的、以及**自适应图标**：都不动。自适应图标自带背景 + 前景，形状由系统 mask 定。
+  // ⚠ 这一条必须排在磁贴判据**之前**（2026-11-16）：那条判据要抓整条线程堆栈，
+  //   而 SystemUI 里取到的图标大多数是自适应的 —— 它们反正原样放行，何必先付一次堆栈钱。
+  //   两条判据对自适应图标的结论相同（都不包），换序不改任何一张图的去向。
+  if (icon is CircleIconDrawable || icon is AdaptiveIconDrawable) {
+    qsAvoided.incrementAndGet()
+    return icon
+  }
   // 射程（2026-10-21 起）：**默认全包，唯一的排除是快速设置那一路**（调用方分得开）。
   if (calledByQuickSettings()) {
     noteTileSkip(from)
     return icon
   }
-  // 已经包过的、以及**自适应图标**：都不动。自适应图标自带背景 + 前景，形状由系统 mask 定。
-  if (icon is CircleIconDrawable || icon is AdaptiveIconDrawable) return icon
 
   // 快捷方式：**整个放行**（主人 2026-11-14：「算了，你快捷方式别管了」）。
   // 桌面会按它自己那套画（老式图标 / 白底 / 形状都由它决定），我们一个像素不碰。

@@ -119,7 +119,7 @@ object NotificationIconPatch {
         pkg: String
     ): Boolean {
         val f0 = System.nanoTime()
-        ensurePackageWatch()
+        // 包更新监听由 patch() 进门时装过，这里不再重复调（forceMonochrome 只有那一个调用方）。
         // ① **两级缓存**（2026-10-22 深夜第二版）：同一条通知每次更新都会重新进来，而结论只取决于（包, 资源）。
         //   正向：我们已经造好的那张 Icon，命中直接装回 —— 不重新解码、也不重新合成。
         //   负向：上次判成「已适配 / 放弃」的，这次**连解码都不做** —— 已适配是大多数
@@ -164,7 +164,11 @@ object NotificationIconPatch {
         // ② **源退化必须在任何形状处理之前判**（2026-10-22 深夜改回）：1×1 的源被 decode 撑成整格后，
         //   颜色可能是彩的 —— 把它放进"彩色"分支就等于这一族没有兜底，屏幕上是整块实心色块。
         //   ⚠ 判据必须在**撑之前**取：`decode` 已经把 1×1 画成 96×96 了，事后量尺寸就全是一样大。
-        val srcEdge = IconBitmap.resourceEdge(context, smallIcon)
+        //   ⚠ 只有 RESOURCE 载体才有"固有尺寸"可问（2026-11-16）：其余三类（BITMAP/DATA/URI）
+        //   的 resId 是 0，这一问必然以异常收场返回 -1 —— 以前每次未命中都白付一次异常。
+        //   对它们直接给 -1，与旧行为逐位相同（-1 不在 0..2 里，退化判定只由位图尺寸那条管）。
+        val srcEdge = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+            smallIcon.type == Icon.TYPE_RESOURCE) IconBitmap.resourceEdge(context, smallIcon) else -1
         if (srcEdge in 0..2 || bitmap.width <= 2 || bitmap.height <= 2) {
             val shapedApp = appIconFallback(context, pkg)
             if (shapedApp == null) { noteRuler(pkg, "退化无兜底", bitmap, null); return false }
