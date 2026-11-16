@@ -4,8 +4,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.util.Log
-import java.io.File
-import java.io.FileOutputStream
 import androidx.compose.runtime.mutableIntStateOf
 import com.iamcanincan.opticon.runtime.ACTION_STATS
 
@@ -63,53 +61,10 @@ internal object StatsStore {
     revision.intValue++
   }
 
-  /**
-   * 追加宿主发来的**每图标明细**（`\u001e` 分隔，字段用制表符）。
-   *
-   * 落盘而不是只存内存：算法改进要看"这台机器上哪些图走了哪条支"，那必须能攒住、能导出。
-   * 量级量过：一条约 0.1~0.3 KB，一次全量重画约 685 条。
-   * ⚠ 文件封顶 [EVENT_LOG_MAX]（超了只留后半截）—— 常态几天才几 KB，封顶是防"常年不清理"。
-   */
-  fun appendEvents(context: Context, events: String) {
-    runCatching {
-      val f = File(context.filesDir, EVENT_LOG)
-      FileOutputStream(f, true).use { out ->
-        for (line in events.split('\u001e')) {
-          if (line.isBlank()) continue
-          out.write(line.toByteArray(Charsets.UTF_8))
-          out.write('\n'.code)
-        }
-      }
-      if (f.length() > EVENT_LOG_MAX) {
-        val text = f.readText()
-        val keep = text.takeLast((EVENT_LOG_MAX / 2).toInt())
-        f.writeText(keep.substringAfter('\n', keep))
-      }
-    }
-  }
-
-  /** 把明细复制到外部目录（`adb pull` 能直接拉），返回路径；没有文件返回 null。 */
-  fun exportEvents(context: Context): String? = runCatching {
-    val src = File(context.filesDir, EVENT_LOG)
-    if (!src.exists() || src.length() == 0L) return null
-    val dir = context.getExternalFilesDir(null) ?: context.filesDir
-    val dst = File(dir, "opticon-events.log")
-    src.copyTo(dst, overwrite = true)
-    dst.absolutePath
-  }.getOrNull()
-
-  private const val KEY_PERF = "perf"
-
-  /** 宿主报来的耗时账（`mono:累计ns/张数;monoCold:…`），只用来在统计页显示"每张多少 ms"。 */
-  fun savePerf(context: Context, perf: String) {
-    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_PERF, perf).apply()
-  }
-
-  fun loadPerf(context: Context): String? =
-    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_PERF, null)
-
-  private const val EVENT_LOG = "opticon-events.log"
-  private const val EVENT_LOG_MAX = 5L * 1024 * 1024
+  // 2026-11-16：「每图标明细」与「导出」一起下线（统计页只留三个数字，没人再消费那份明细）。
+  // 宿主侧同步删掉了 `Stats.event()` / `timing()` 与广播里的 `events` / `perf` 字段 ——
+  // 这条通道**两端一起关**，免得在桌面热路径上白攒字符串。旧版本留下的
+  // `opticon-events.log` / `perf` 键不再读取，也不主动删（几十 KB，不值得为它写迁移）。
 
   /** 读**所有进程**最新一份快照拼起来的视图；没有数据时返回 (null, 0)。 */
   fun load(context: Context): Pair<String?, Long> {
@@ -145,10 +100,6 @@ class StatsReceiver : BroadcastReceiver() {
     val snap = intent.getStringExtra("stats") ?: return
     val at = intent.getLongExtra("at", System.currentTimeMillis())
     StatsStore.save(context, snap, at)
-    // 每张图标一条的明细（宿主攒批发来）。没有就跳过 —— 老版本宿主不发这个字段。
-    intent.getStringExtra("perf")?.let { if (it.isNotBlank()) StatsStore.savePerf(context, it) }
-    val events = intent.getStringExtra("events")
-    if (!events.isNullOrEmpty()) StatsStore.appendEvents(context, events)
-    Log.i("Opticon", "StatsAck: 收到统计快照 ${snap.length} 字符、明细 ${events?.length ?: 0} 字符")
+    Log.i("Opticon", "StatsAck: 收到统计快照 ${snap.length} 字符")
   }
 }

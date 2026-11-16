@@ -40,17 +40,9 @@
     <string name="stats_title">各功能处理次数</string>
     <string name="stats_empty">还没有收到上报</string>
     <string name="stats_empty_title">还没有计数</string>
-    <string name="stats_empty_body">到桌面划一划、随手开几个应用；桌面、系统界面这些被注入的进程每处理 20 次回报一次，之后这里就按功能列出次数。</string>
+    <string name="stats_empty_body">被注入的进程每处理 20 次才回报一次。先在桌面划一划、随手开几个应用，数字就会自己出来；一直是 0 的话，去「作用域」看看对应的进程有没有勾上，再点一次「运维操作」。</string>
     <string name="stats_at">上次更新 %1$s（由被注入的进程上报）</string>
-    <string name="stats_refresh">刷新</string>
-    <string name="stats_by_feature">按功能</string>
-    <string name="stats_export">导出</string>
-    <string name="stats_export_done">已导出：%1$s</string>
-    <string name="stats_export_empty">还没有明细可导出（处理过图标或通知之后才会有）</string>
-    <string name="stats_total_unit">次处理</string>
-    <string name="stats_percent">%1$d%%</string>
     <string name="stats_times">次</string>
-    <string name="stats_share">占 %1$d%%</string>
     <string name="home_features">功能状态</string>
     <string name="home_sub_crop">老式图标做成自适应图标，形状交给系统</string>
     <string name="home_sub_mono">未适配图标的黑白极性修正</string>
@@ -83,9 +75,9 @@
     <string name="settings_tools_sub">清除桌面缓存、重启相关进程</string>
     <string name="settings_about_sub">版本、功能范围与检查更新</string>
     <string name="action_back">返回</string>
-    <string name="stats_role">总览占比，按功能列出来源</string>
+    <string name="stats_role">这台机器上各功能各处理了多少次</string>
     <string name="settings_role">作用域、启用验证、运维与关于</string>
-    <string name="stats_note">这些数字在说什么：自适应 = 把多少个非自适应（老式）图标做成了自适应图标（桌面 / 状态栏 / 最近任务都算）；动态取色 = 我们替应用生成单色层的张数；单色通知 · 被补 = 我们把彩色通知图标改成黑白的次数；单色通知 · 已适配 = 应用本来就给黑白的次数（我们没动）。</string>
+    <string name="stats_note">这些数字在说什么：自适应 = 把多少个非自适应（老式）图标做成了自适应图标；动态取色 = 我们替应用生成单色层的张数；单色通知 = 把彩色通知小图标改成黑白剪影的次数（应用本来就给黑白的算在内）。某一行一直不动，就看一眼「作用域」里那个进程勾没勾。</string>
 
     <!-- ============ 「自适应」页 ============ -->
 

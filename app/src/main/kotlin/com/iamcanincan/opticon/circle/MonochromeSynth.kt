@@ -161,27 +161,17 @@ internal object MonochromeSynth {
    * 是常量，所以只有第一个图标付两次。
    */
   fun forIcon(source: Drawable, shortcut: Boolean = false): Drawable? {
-    val t0 = System.nanoTime()
     // ⚠ 这把锁必须仍然是**同一个监视器**：`render` / `demote` 也是 `@Synchronized`，
     //   改成 synchronized(this) 才与它们互斥（reentrant，进来之后 render 不再等）。
     return synchronized(this) {
-      val t1 = System.nanoTime()
-      // 等锁 ≠ 干活：不拆开的话，「23ms/张」到底是模型慢、还是几百张在同一个线程上排队，
-      // 日志回答不了。`mono` 仍是总账（含等锁），这一格只作减法用。
-      Stats.timing("monoWait", t1 - t0)
       probeThread()
-      try {
-        cache[source]?.takeIf { it.shortcut == shortcut }?.let {
-          Stats.timing("monoInst", System.nanoTime() - t1)
-          return MonochromeLayer(source, it.mask).also { noteSynthesized() }
-        }
-        val mask = render(source, minOf(if (knownEdge > 0) knownEdge else MIN_EDGE, MAX_EDGE), shortcut)
-          ?: return null
-        store(source, mask, shortcut)
-        MonochromeLayer(source, mask).also { noteSynthesized() }
-      } finally {
-        Stats.timing("mono", System.nanoTime() - t0)
+      cache[source]?.takeIf { it.shortcut == shortcut }?.let {
+        return MonochromeLayer(source, it.mask).also { noteSynthesized() }
       }
+      val mask = render(source, minOf(if (knownEdge > 0) knownEdge else MIN_EDGE, MAX_EDGE), shortcut)
+        ?: return null
+      store(source, mask, shortcut)
+      MonochromeLayer(source, mask).also { noteSynthesized() }
     }
   }
 
@@ -922,10 +912,7 @@ internal object MonochromeSynth {
       // 就是这么在真机上完全看不见的：日志里只有「压不出掩码」，看不出**为什么**压不出。
       // 本项目已经吃过两次「提前 return 静默失效」的亏，异常这条同理。
       Log.w(TAG, "Mono: render threw at edge=$edge: ${it.javaClass.simpleName}: ${it.message}")
-    }.getOrNull().also {
-      // 三档各自计时（含负缓存出口）。`mono` 那本总账在 [forIcon] 里，两者相减即"等锁"。
-      Stats.timing(kind, System.nanoTime() - t0)
-    }
+    }.getOrNull()
   }
 
   /**
@@ -1040,22 +1027,8 @@ internal object MonochromeSynth {
     Log.d(TAG, "Mono: diag#$n edge=$edge sig=$sig 键=${MonoKey.hex(key)} $label ${out.report} → " +
       (if (out.mask != null) "已交出掩码" else "判据不成立，放弃合成") + geoTag(win, measured) +
       polarityTag(colour, subject))
-    // 每张图标一条「走了哪条路」的记录（同一张图只记一次），随统计广播回应用侧攒成文件。
-    // 用的是这条 diag 行里已经算好的那串读数，热路径上只多一次查表 + 拼接。
-    com.iamcanincan.opticon.runtime.Stats.event(
-      "$sig|$edge",
-    ) {
-      buildString {
-        append(System.currentTimeMillis()).append('	')
-        append(label.substringBefore(' ')).append('	')
-        append(sig).append('	')
-        append(edge).append('	')
-        append(if (out.mask != null) "mask" else "null").append('	')
-        append(out.report.take(240)).append('	')
-        // 缓存键：导出日志里的每一行都能直接对到设备上的 `<键>_<边长>.a8` 掩码文件。
-        append("键=").append(MonoKey.hex(key))
-      }
-    }
+    // 「每图标一条明细、导出成文件」那条通道 2026-11-16 随统计页的导出一起下线：
+    // 上面这行 diag 已经把同一串读数写进 logcat，明细文件没有第二个消费者。
     return n
   }
 
