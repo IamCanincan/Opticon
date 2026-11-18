@@ -116,6 +116,8 @@ fun main(args: Array<String>) {
     check("circle 进键", MonoKey.keyOf(px, under, edge, true, true, false) != k)
     // 快捷方式位（2026-10-25）：同一组像素以快捷方式身份进来时几何不同（细环那张不重排）
     check("shortcut 进键", MonoKey.keyOf(px, under, edge, true, true, true, true) != k)
+    // round 满幅圆盘位（2026-11-18）：延伸支不缩内切，几何与普通图标不同
+    check("forceExtend 进键", MonoKey.keyOf(px, under, edge, true, true, true, false, true) != k)
     check("under 进键", MonoKey.keyOf(px, null, edge, true, true, true) != k)
     // 空数组与"根本没有这一层"必须分开：否则 `rasterizeLayer` 失败那张会撞上正常那张
     check("under 空!=无", MonoKey.keyOf(px, IntArray(0), edge, true, true, true) !=
@@ -136,6 +138,7 @@ fun main(args: Array<String>) {
     check("flat flatten 进键", MonoKey.keyOfFlat(px, c, edge, true, false, true) != k)
     check("flat circle 进键", MonoKey.keyOfFlat(px, c, edge, true, true, false) != k)
     check("flat shortcut 进键", MonoKey.keyOfFlat(px, c, edge, true, true, true, true) != k)
+    check("flat forceExtend 进键", MonoKey.keyOfFlat(px, c, edge, true, true, true, false, true) != k)
     check("flat underColor 进键", MonoKey.keyOfFlat(px, c xor 0x00010000, edge, true, true, true) != k)
     // 一个像素都不能漏
     val mut = IntArray(px.size).also { px.copyInto(it) }

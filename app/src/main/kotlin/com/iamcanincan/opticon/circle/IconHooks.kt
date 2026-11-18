@@ -1071,7 +1071,10 @@ private fun hookIconLoader(xposed: XposedInterface, method: Method): Boolean =
                 }
                 replacingIcon.set(true)
                 try {
-                  return@intercept wrapLegacyIcon(passed, "Resources.${method.name}·未标记包装")
+                  return@intercept wrapLegacyIcon(
+                    passed, "Resources.${method.name}·未标记包装",
+                    roundArt = isRoundArt(args, chain.thisObject, resIdArg(args) ?: 0),
+                  )
                 } finally {
                   replacingIcon.set(false)
                 }
@@ -1113,7 +1116,11 @@ private fun hookIconLoader(xposed: XposedInterface, method: Method): Boolean =
           val res = chain.thisObject as? Resources
           val realId = restored[index] as Int
           val resPkg = res?.let { runCatching { it.getResourcePackageName(realId) }.getOrNull() }
-          wrapLegacyIcon(icon, "Resources.${method.name}·标记id", ShortcutIconResources.has(resPkg, realId))
+          wrapLegacyIcon(
+            icon, "Resources.${method.name}·标记id",
+            ShortcutIconResources.has(resPkg, realId),
+            isRoundArt(args, chain.thisObject, realId),
+          )
         } finally {
           replacingIcon.set(false)
         }
@@ -1716,6 +1723,8 @@ private fun hookShortcutIcons(xposed: XposedInterface) {
  * 做法：在这几条外面抬 [ShortcutLoad] 计数，`wrapLegacyIcon` 读到它就把这张按快捷方式画。
  * ⚠ 用进程内计数而不是 ThreadLocal：加载链不保证与调用方同线程，桌面又是单 worker 载图标，
  * 非零窗口很窄；真串了，`快捷标记(桌面在载快捷方式)` 那行会把应用图标的资源名打出来。
+ * ⚠ 2026-11-18 补：窄窗口也真串了（parsec / kimichat 桌面马赛克）——计数非零期间另一条线程
+ * 载应用图标同样命中。消费侧已加当前线程栈判据（[onShortcutStack]），计数只负责开窗口。
  */
 private fun hookShortcutIconCache(xposed: XposedInterface, classLoader: ClassLoader) {
   val iconCache = classOf("com.android.launcher3.icons.IconCache", classLoader)
@@ -1897,11 +1906,21 @@ private fun markIconResId(info: PackageItemInfo) {
     }
     info.icon = icon.marked()
   }
+  // round 资源登记（2026-11-18）：这台 ROM 把 `icon` 本身填成 roundIconRes，那份满幅圆盘
+  // 会从**标记通道**进来 —— 记下 `包名 → roundIconRes`，取图时认出它按延伸支画，
+  // 不缩、不铺白底（见 [RoundIconResources]）。登记不依赖标记成没成功：round 字段从不打标。
+  if (info is ApplicationInfo && icon != 0) {
+    val round = ROUND_ICON_RES?.let { runCatching { it.getInt(info) }.getOrNull() } ?: 0
+    if (round != 0) RoundIconResources.remember(info.packageName, round)
+  }
   // ⚠ **`roundIconRes`/`roundIcon` 刻意不标记**（2026-10-15 主人裁决后撤回）：
   // 桌面用圆形遮罩时优先取那份"圆图标"，而**那份本来就是一个完美的圆**（自适应图标自带
   // 安全区与遮罩，平台画得就对）——标记它等于把这幅从平台手里抢到我们的内切圆流程里，
   // 反而改掉它原本的样子。所以两份资源各归各的：`icon`（应用信息页那类）归我们，
   // `roundIconRes`（桌面那份）留给平台。主人原话：「adb 的桌面图标……原桌面图标就是一个完美的圆了」。
+  // ⚠ 2026-11-18 补：不标记 ≠ 它进不来。这台 ROM 把 `icon` 填成了 roundIconRes（parsec
+  //   现量），圆盘照样走标记通道 —— 靠上面那张登记表在取图时认出它、按延伸支画。
+  //   裁定不变：不改它的圆，只是不再给它缩一圈铺白底。
 }
 
 private fun markResolveInfo(info: ResolveInfo?) {
@@ -2356,6 +2375,21 @@ private fun unmarkedAppIcon(method: Method, args: List<Any?>, host: Any?): Strin
   // 真机实测这一支漏出去的（2026-10-15，清库+重启那一趟只记名单）：浙江在线 / appui /
   // 美的洗衣机 / steampy / xbud / 移动的 mc10086 —— 全是 `mipmap/…` 开头的老式位图图标。
   return if (nm.contains("/mipmap/") || nm.contains("ic_launcher") || nm.contains("appicon")) nm else null
+}
+
+/**
+ * 这次取图请求的是不是应用自己声明的 round 资源（[RoundIconResources]）—— 标记/未标记两支共用。
+ *
+ * 包名来源按硬度排：参数里的 `ApplicationInfo`（应用信息页那条 APM 路就是它，`thisObject`
+ * 不是 Resources）→ 宿主 Resources 按真实 id 反查 → 参数里的包名字符串。与 [packageFromArgs]
+ * 同一个口径：只读公开字段，不猜布局。
+ */
+private fun isRoundArt(args: List<Any?>, host: Any?, rid: Int): Boolean {
+  if (rid == 0) return false
+  val pkg = (args.firstOrNull { it is ApplicationInfo } as? ApplicationInfo)?.packageName
+    ?: (host as? Resources)?.let { runCatching { it.getResourcePackageName(rid) }.getOrNull() }
+    ?: args.firstOrNull { it is String && it.contains('.') } as? String
+  return RoundIconResources.isRound(pkg, rid)
 }
 
 /**

@@ -85,12 +85,18 @@ class CircleIconDrawable(
   icon: Drawable,
   /** 所有副本共享的渲染缓存（[getConstantState] 的副本会拿到同一个）。 */
   private val sharedCache: RenderCache = RenderCache(),
+  /**
+   * 这张是应用自己声明的 roundIcon 老式位图（满幅圆盘）：几何强制走延伸支，
+   * 不缩进内切圆、不铺白底 —— 否则给本来完美的圆套一圈白（2026-11-18 parsec 应用信息页）。
+   * 单色层跟同一个旗标（[getMonochrome]），两边几何不许分家。
+   */
+  private val forceExtend: Boolean = false,
 ) : AdaptiveIconDrawable(
   // 不要底盘（2026-11-13）：老式图标自己就是整张图，另垫一块颜色等于替应用画了个底。
   // 用透明 ColorDrawable 而不是 null：有的宿主会直接读 `getBackground()`，空着比给个会抛的更安全。
   ColorDrawable(Color.TRANSPARENT),
   // 前景：内容补满可见区，形状由桌面裁；所有副本共享同一份渲染缓存
-  BareForeground(icon, sharedCache),
+  BareForeground(icon, sharedCache, forceExtend),
 ), IconSourceCarrier {
 
   /** 原图标留一份引用，只为了 [getConstantState] 能重建出副本。 */
@@ -121,7 +127,7 @@ class CircleIconDrawable(
   override fun getMonochrome(): Drawable? {
     sourceMonochrome?.let { return it }
     if (!ModuleRuntime.options().monoInvert) return null
-    return MonochromeSynth.forIcon(sourceIcon)
+    return MonochromeSynth.forIcon(sourceIcon, forceExtend = forceExtend)
   }
 
   /**
@@ -133,7 +139,7 @@ class CircleIconDrawable(
     val src = sourceState
     return sharedState ?: object : ConstantState() {
       override fun newDrawable(): Drawable =
-        CircleIconDrawable(src?.newDrawable() ?: sourceIcon, sharedCache)
+        CircleIconDrawable(src?.newDrawable() ?: sourceIcon, sharedCache, forceExtend)
 
       override fun getChangingConfigurations(): Int = changingConfigurations
     }.also { sharedState = it }
@@ -170,6 +176,8 @@ private class BareForeground(
   private val inner: Drawable,
   /** 共享渲染缓存（同一张图标的所有副本一份）。 */
   private val shared: RenderCache = RenderCache(),
+  /** 满幅圆盘（roundIcon 老式位图）：几何强制延伸支，见 [CircleIconDrawable.forceExtend]。 */
+  private val forceExtend: Boolean = false,
 ) : Drawable(), Drawable.Callback {
 
   /** 设了 colorFilter 时不走共享缓存（滤镜是每个实例自己的）。 */
@@ -317,7 +325,7 @@ private class BareForeground(
       //    再拿填满之后的可见占比去分界（主人 2026-11-14：「不应该先将应用图标缩放到恰好
       //    不被正方形裁切时的占比吗」）。有留白的图标（PH 的圆角方形）缩满后占比就上去了。
       stage = "r3a"
-      val plan = IconGeom.planOf(px, w, h)
+      val plan = IconGeom.planOf(px, w, h, forceExtend)
       if (plan != null && geomLogLeft.decrementAndGet() >= 0) {
         // 与单色那行 `Mono: 跟彩色 … label=` **逐张配对**（同一份 [IconGeom] 出来的三个数）：
         // 对不上就是"单色与彩色不符"，别再靠肉眼看桌面。配对台 `node _harness/_geompair.cjs <logcat>`。
@@ -560,7 +568,7 @@ private class BareForeground(
   override fun getConstantState(): ConstantState? =
     inner.constantState?.let { src ->
       object : ConstantState() {
-        override fun newDrawable(): Drawable = BareForeground(src.newDrawable())
+        override fun newDrawable(): Drawable = BareForeground(src.newDrawable(), forceExtend = forceExtend)
 
         override fun getChangingConfigurations(): Int = src.changingConfigurations
       }
@@ -855,6 +863,15 @@ private val geomLogLeft = AtomicInteger(GEOM_LOG_LIMIT)
 private val zoomLogLeft = AtomicInteger(ZOOM_LOG_LIMIT)
 
 /**
+ * 「round 资源按延伸画」证据行额度（前 [ROUND_LOG_LIMIT] 张）。
+ * 这一族 = 应用自己声明了 roundIcon 老式位图、且被本机框架当 icon 交出来的那些；
+ * 名单靠这行拿（2026-11-18 parsec / kimichat 两症状的受影响族）。
+ */
+private const val ROUND_LOG_LIMIT = 40
+
+private val roundLogLeft = AtomicInteger(ROUND_LOG_LIMIT)
+
+/**
  * 桌面**正在加载快捷方式图标**的计数（[IconHooks.hookShortcutIconCache] 在这几条上加减）：
  * `IconCache.getShortcutIcon`（4 个重载）、`CacheableShortcutCachingLogic.loadIcon`、
  * `ShortcutConfigActivityInfo(…VO).getFullResIcon`。
@@ -879,6 +896,30 @@ internal object ShortcutLoad {
 
   val inFlight: Boolean get() = depth.get() > 0
 }
+
+/**
+ * 计数非零窗口内，**当前线程**是否真的走在快捷方式加载链上。
+ *
+ * 计数是进程级的（加载链不保证与调用方同线程），但桌面载快捷方式与载应用图标是两条并行的
+ * 线程：旧判据只看计数，于是窗口内另一条线程上的应用图标也被当快捷方式原样放行 —— 带 alpha
+ * 的原图被桌面画进没清底的复用 RGB 位图，透明角露出上一张图的像素（2026-11-18 真机：
+ * parsec / kimichat 桌面「马赛克」，角部噪点率 0.227 / 0.124，795 张里排前二）。
+ *
+ * 帧名单按 2026-11-14 量到的真链写，且**优先匹配没被钩的调用方帧**（getShortcutIcon /
+ * loadIcon / getFullResIcon 自己挂着钩，trampolines 下原帧不一定在栈里）：
+ * `IconCache.*Shortcut*`、`ShortcutCache*`、`ShortcutConfigActivityInfo*`、以及异步段
+ * `IconProvider` / `IconLoadRequest`。应用图标那条链（LauncherActivityInfo.getIcon）不含这些帧。
+ * 成本只在计数非零的窄窗口里付。
+ */
+private fun onShortcutStack(): Boolean =
+  Thread.currentThread().stackTrace.any { f ->
+    val c = f.className
+    (c == "com.android.launcher3.icons.IconCache" && f.methodName.contains("Shortcut", true)) ||
+      c.contains("ShortcutCachingLogic") || c.contains("ShortcutCache") ||
+      c.startsWith("com.android.launcher3.pm.ShortcutConfigActivityInfo") ||
+      c.startsWith("com.android.launcher3.icons.IconProvider") ||
+      c.startsWith("com.android.launcher3.icons.IconLoadRequest")
+  }
 
 /**
  * 快捷方式**声明过的图标资源**（`包名/资源id`）—— Resources 通道认出快捷方式的依据。
@@ -909,19 +950,59 @@ internal object ShortcutIconResources {
 }
 
 /**
+ * 应用自己声明的 **round 资源**（`包名 → roundIconRes`）—— 认出"满幅圆盘老式位图"的依据。
+ *
+ * 为什么需要（2026-11-18 parsec 应用信息页白圈）：这台 ROM 把 `ApplicationInfo.icon` 直接
+ * 填成 roundIconRes（ctor 打标记前现量 icon=0x7f020001 = manifest 的 roundIcon，而 manifest
+ * 的 icon 是 0x7f020000），于是那份"本来就是一个完美的圆"的老式圆盘从**标记通道**进了
+ * 我们的几何：可见占比 0.765 比 π/4 低一圈抗锯齿 → 被判成小占比 → 缩 0.9166 + 铺白底 =
+ * 给完美的圆套白圈。2026-10-15「round 留给平台」那条裁定的前提（icon 与 round 各走各的）
+ * 被 ROM 打破了；裁定本身不变 —— 认出它之后按**延伸支**画（角按它自己的边缘色补满，
+ * 不缩、不铺底），单色侧跟同一个旗标（[MonochromeSynth.forIcon]）。
+ *
+ * 登记点：`markIconResId` 打标记时顺手记下（只记 icon 与 round 都非 0 的应用）。
+ * 消费点：Resources/APM 取图钩子把请求还原成真实 id 后查这张表。与 [ShortcutIconResources]
+ * 同一个套路：登记与"什么时候真的去画"无关，所以不怕异步；键带包名，因为 id 只在包内唯一。
+ * 上限 [MAX] 条，超了整体清空（应用数量有限，正常一年也到不了）。
+ */
+internal object RoundIconResources {
+  private const val MAX = 4096
+  private val ids = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+  fun remember(pkg: String?, round: Int) {
+    if (pkg.isNullOrEmpty() || round == 0) return
+    if (ids.size > MAX) ids.clear()
+    ids[pkg] = round
+  }
+
+  fun isRound(pkg: String?, rid: Int): Boolean =
+    pkg != null && rid != 0 && ids[pkg] == rid
+}
+
+/**
  * 包装成自适应图标；**这一层本身绝不抛**。
  *
  * ⚠ 它被挂在宿主的取图热路径上，抛出去就是宿主崩：任何一步失败都原样放行。
  */
-fun wrapLegacyIcon(icon: Drawable, from: String, shortcutHint: Boolean = false): Drawable =
-  runCatching { wrapInner(icon, from, shortcutHint) }.getOrElse {
+fun wrapLegacyIcon(
+  icon: Drawable,
+  from: String,
+  shortcutHint: Boolean = false,
+  roundArt: Boolean = false,
+): Drawable =
+  runCatching { wrapInner(icon, from, shortcutHint, roundArt) }.getOrElse {
     if (clipFailLogged.compareAndSet(false, true)) {
       Log.w(TAG, "自适应：包装抛了，原样放行（${it.javaClass.simpleName}: ${it.message}）")
     }
     icon
   }
 
-private fun wrapInner(icon: Drawable, from: String, shortcutHint: Boolean): Drawable {
+private fun wrapInner(
+  icon: Drawable,
+  from: String,
+  shortcutHint: Boolean,
+  roundArt: Boolean,
+): Drawable {
   // 配置按 TTL 重读，所以界面里关掉开关后很快生效，不用重启进程。
   if (!ModuleRuntime.options().circleEnabled) return icon
   // 已经包过的、以及**自适应图标**：都不动。自适应图标自带背景 + 前景，形状由系统 mask 定。
@@ -943,7 +1024,7 @@ private fun wrapInner(icon: Drawable, from: String, shortcutHint: Boolean): Draw
   // 身份来源三条：① 通道名 LauncherApps.getShortcutIconDrawable；② 桌面正在载快捷方式时
   // 的计数（[ShortcutLoad]）；③ 参数里的 iconResource 登记（[ShortcutIconResources]）。
   val byChannel = from.contains("Shortcut")
-  val byLoader = !byChannel && ShortcutLoad.inFlight
+  val byLoader = !byChannel && ShortcutLoad.inFlight && onShortcutStack()
   val byResource = !byChannel && !byLoader && shortcutHint
   if (byChannel || byLoader || byResource) {
     if (shortcutMarkLogLeft.decrementAndGet() >= 0) {
@@ -961,5 +1042,11 @@ private fun wrapInner(icon: Drawable, from: String, shortcutHint: Boolean): Draw
   //   函数留着、调用没了 —— 于是统计页那一格从那天起一直是 0（主人 2026-11-16 报的）。
   //   别把它挪到上面任何一个 branch 里：只有**真要包这张图**的时候才该记一次。
   noteWrap(from)
-  return CircleIconDrawable(icon)
+  if (roundArt && roundLogLeft.decrementAndGet() >= 0) {
+    Log.d(TAG, "round 资源按延伸画 host=$clipHost from=$from : " + IconNames.of(icon))
+  }
+  return CircleIconDrawable(
+    icon,
+    forceExtend = roundArt,
+  )
 }

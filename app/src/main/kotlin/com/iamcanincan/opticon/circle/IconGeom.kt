@@ -52,8 +52,15 @@ internal object IconGeom {
     val needsRedraw: Boolean get() = abs(scale - 1f) >= 0.01f
   }
 
-  /** 全透明（一个有色格都没有）→ null，调用方按"不动几何"处理。 */
-  fun planOf(px: IntArray, w: Int, h: Int): Plan? {
+  /** 全透明（一个有色格都没有）→ null，调用方按"不动几何"处理。
+   *
+   * @param forceExtend 调用方按**资源身份**认定这张是满幅圆盘（应用自己声明的 roundIcon
+   *   老式位图）：它的可见占比天生比 π/4 低一圈抗锯齿，走铺底支会再缩一圈 + 铺白底 =
+   *   给本来完美的圆套白圈（2026-11-18 真机 parsec 应用信息页）。强制走延伸支：
+   *   角按它自己的边缘色补满，不缩、不铺底。单色侧经 [MonochromeSynth.forIcon] 跟同一个旗标，
+   *   两边落在同一块几何上。
+   */
+  fun planOf(px: IntArray, w: Int, h: Int, forceExtend: Boolean = false): Plan? {
     var l = w
     var t = h
     var r = -1
@@ -86,6 +93,7 @@ internal object IconGeom {
 
     // ③ 铺底那一支才要缩进内切圆：半径在未缩放的格子上量，所以 ①② 合成一步时
     //   总倍率里的 fillScale 正好约掉（s1 × need/(maxR·s1) = need/maxR）。
+    if (forceExtend) return Plan(fillScale, cx, cy, fill, 0f, false, false)
     if (fill >= INSCRIBED_SHARE) return Plan(fillScale, cx, cy, fill, 0f, false, false)
     var maxR2 = 0f
     for (y in t..b) {

@@ -35,7 +35,8 @@ internal object MonoKey {
   /**
    * 内容键。**输入一个都不能少**：掩码是这些值的纯函数，少一样就是「换了设置还给旧答案」。
    * 2026-10-25 起多一位 `shortcut`：同一张位图以快捷方式身份进来时，细环那张按满幅、不重排
-   * （与彩色同一条判据），掩码与普通图标身份不同。
+   * （与彩色同一条判据），掩码与普通图标身份不同。2026-11-18 起再多一位 `forceExtend`：
+   * round 满幅圆盘走延伸支、不缩内切，几何与普通图标不同（见 [RoundIconResources]）。
    *
    * 全像素扫，不抽样：抽样的漏检代价是**交出别的图标的掩码**，而这一趟只在省掉三百多毫秒的那
    * 一刻才跑，扫 147456 个 int 的钱（判据台量 ≤1 ms）与它比可以忽略。
@@ -48,11 +49,11 @@ internal object MonoKey {
    */
   fun keyOf(
     px: IntArray, under: IntArray?, edge: Int, adaptive: Boolean, flatten: Boolean, circle: Boolean,
-    shortcut: Boolean = false,
+    shortcut: Boolean = false, forceExtend: Boolean = false,
   ): Long {
     var h = edge.toLong() or (1L shl 32)
     h = mix(h, (if (adaptive) 1L else 0L) or (if (flatten) 2L else 0L) or (if (circle) 4L else 0L) or
-      (if (shortcut) 8L else 0L))
+      (if (shortcut) 8L else 0L) or (if (forceExtend) 16L else 0L))
     h = fold(h, px, 2L)
     h = fold(h, under, 3L)
     return final(h)
@@ -70,11 +71,11 @@ internal object MonoKey {
    */
   fun keyOfFlat(
     px: IntArray, underColor: Int, edge: Int, adaptive: Boolean, flatten: Boolean, circle: Boolean,
-    shortcut: Boolean = false,
+    shortcut: Boolean = false, forceExtend: Boolean = false,
   ): Long {
     var h = edge.toLong() or (1L shl 33)
     h = mix(h, (if (adaptive) 1L else 0L) or (if (flatten) 2L else 0L) or (if (circle) 4L else 0L) or
-      (if (shortcut) 8L else 0L))
+      (if (shortcut) 8L else 0L) or (if (forceExtend) 16L else 0L))
     h = fold(h, px, 2L)
     h = mix(h, 6L shl 40)
     h = mix(h, underColor.toLong() and 0xffffffffL)

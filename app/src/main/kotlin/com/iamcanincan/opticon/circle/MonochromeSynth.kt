@@ -145,8 +145,9 @@ internal object MonochromeSynth {
   /**
    * 按实例缓存的掩码要**连着走的是哪条几何**一起存：同一个 drawable 以快捷方式身份进来
    * （[shortcut] = true，细环那张按满幅）和以普通图标身份进来，掩码不是同一张。
+   * [forceExtend]（round 满幅圆盘，2026-11-18）同理：延伸支不缩内切，掩码几何不同。
    */
-  private class CachedMask(val shortcut: Boolean, val mask: Bitmap)
+  private class CachedMask(val shortcut: Boolean, val forceExtend: Boolean, val mask: Bitmap)
 
   /**
    * 给 [source] 合成一个单色层；合成不出来就返回 null，让调用方照原样走下去。
@@ -159,17 +160,17 @@ internal object MonochromeSynth {
    * 那会让桌面以为有单色图标、结果画出一片空白）。一次会话里桌面给的图层 bounds
    * 是常量，所以只有第一个图标付两次。
    */
-  fun forIcon(source: Drawable, shortcut: Boolean = false): Drawable? {
+  fun forIcon(source: Drawable, shortcut: Boolean = false, forceExtend: Boolean = false): Drawable? {
     // ⚠ 这把锁必须仍然是**同一个监视器**：`render` / `demote` 也是 `@Synchronized`，
     //   改成 synchronized(this) 才与它们互斥（reentrant，进来之后 render 不再等）。
     return synchronized(this) {
       probeThread()
-      cache[source]?.takeIf { it.shortcut == shortcut }?.let {
+      cache[source]?.takeIf { it.shortcut == shortcut && it.forceExtend == forceExtend }?.let {
         return MonochromeLayer(source, it.mask).also { noteSynthesized() }
       }
-      val mask = render(source, minOf(if (knownEdge > 0) knownEdge else MIN_EDGE, MAX_EDGE), shortcut)
+      val mask = render(source, minOf(if (knownEdge > 0) knownEdge else MIN_EDGE, MAX_EDGE), shortcut, forceExtend)
         ?: return null
-      store(source, mask, shortcut)
+      store(source, mask, shortcut, forceExtend)
       MonochromeLayer(source, mask).also { noteSynthesized() }
     }
   }
@@ -193,13 +194,13 @@ internal object MonochromeSynth {
   /** 线程普查放行条数：够看出"是不是只有一个线程"，又不至于刷屏。 */
   private const val THREAD_PROBE_LIMIT = 12
 
-  private fun store(source: Drawable, mask: Bitmap, shortcut: Boolean) {
+  private fun store(source: Drawable, mask: Bitmap, shortcut: Boolean, forceExtend: Boolean) {
     val size = mask.byteCount.toLong()
     if (cacheBytes + size > MAX_CACHE_BYTES && cache.isNotEmpty()) {
       cache.clear()
       cacheBytes = 0
     }
-    val previous = cache.put(source, CachedMask(shortcut, mask))
+    val previous = cache.put(source, CachedMask(shortcut, forceExtend, mask))
     cacheBytes += size - (previous?.mask?.byteCount?.toLong() ?: 0L)
   }
 
@@ -494,7 +495,7 @@ internal object MonochromeSynth {
    * 同一条路。模型自己是 `ThreadLocal` 缓冲、无共享状态，这把锁护的是缓存与桌面那边。
    */
   @Synchronized
-  fun render(source: Drawable, edge: Int, shortcut: Boolean = false): Bitmap? {
+  fun render(source: Drawable, edge: Int, shortcut: Boolean = false, forceExtend: Boolean = false): Bitmap? {
     if (edge <= 0) return null
     ensureSrcMap()
     val t0 = System.nanoTime()
@@ -551,7 +552,7 @@ internal object MonochromeSynth {
       // 跳过 384 光栅化与内容键（真机命中路径的大头）。概率外的一切（非 BitmapDrawable、
       // tint/shader/平铺、大图）都返回 null，照旧走慢路。
       val flags = (if (adaptive) 1 else 0) or (if (flatten) 2 else 0) or
-        (if (circle) 4 else 0) or (if (shortcut) 8 else 0)
+        (if (circle) 4 else 0) or (if (shortcut) 8 else 0) or (if (forceExtend) 16 else 0)
       val srcKey = if (adaptive && flatten) flattenFastKey(source as AdaptiveIconDrawable, edge, flags)
         else sourceFastKey(target, edge, flags, if (adaptive) bgColor else null)
       if (srcKey != null) {
@@ -679,15 +680,15 @@ internal object MonochromeSynth {
           .also { under.recycle() }
       else null
       // ── 内容缓存：到这里为止，输入已经全了 ──
-      //   掩码是 `(pixels, underPx, edge, adaptive, flatten, circle, shortcut)` 的纯函数，
-      //   这些就是键（`shortcut` 位只管几何：细环那张按满幅）。
+      //   掩码是 `(pixels, underPx, edge, adaptive, flatten, circle, shortcut, forceExtend)` 的纯函数，
+      //   这些就是键（`shortcut` 位只管几何：细环那张按满幅；`forceExtend` 位同理：round 圆盘不缩内切）。
       //   为什么这一层必须存在：桌面**每次 bind 都交一个新实例**（`getConstantState().newDrawable()`），
       //   上面那个按实例的缓存结构上命中不了 —— 真机一次重启 1594 次合成、只有 209 种内容，
       //   同一张图标最多重压 148 次，串行在一把锁上就是 760 秒。见 [MonoCache]。
       // ⚠ 键算在这里而不是 `forIcon` 里：算键要像素，而拿像素就得先光栅化。所以命中这条路
       //   仍然付一次光栅化（几毫秒），省下的是整条模型（三百多毫秒）。
-      val key = if (flatUnder) MonoKey.keyOfFlat(pixels, bgColor!!, edge, adaptive, flatten, circle, shortcut)
-        else MonoCache.keyOf(pixels, underPx, edge, adaptive, flatten, circle, shortcut)
+      val key = if (flatUnder) MonoKey.keyOfFlat(pixels, bgColor!!, edge, adaptive, flatten, circle, shortcut, forceExtend)
+        else MonoCache.keyOf(pixels, underPx, edge, adaptive, flatten, circle, shortcut, forceExtend)
       // 源内容快键与内容键一起落：下一次同一张源图 + 同一套状态直接取掩码。
       if (srcKey != null) {
         if (srcKeyMap.size >= SRC_MAP_MAX) srcKeyMap.clear()
@@ -881,7 +882,7 @@ internal object MonochromeSynth {
       //   溢出画布被切掉只影响**边缘的墨**，不改这份仿射的倍数，所以除得掉、也该除。
       //   台子：`_subj.cjs`（同一个主体）／`_pairshot.cjs`（屏上两栏）／`_zoomcmp` 已删（按包名硬配是假台子）。
       val baked = winLocal?.zoom ?: 1f
-      val fit = if (adaptive || ringBleed) null else fitLikeColor(raster, alpha, edge, label, baked)
+      val fit = if (adaptive || ringBleed) null else fitLikeColor(raster, alpha, edge, label, baked, forceExtend)
       val fitted = fit?.first
       val shaped = fitted ?: alpha
       val placed = if (adaptive || ringBleed) alpha else intoVisibleArea(shaped, edge)
@@ -1516,11 +1517,11 @@ internal object MonochromeSynth {
    *   `窗=` / `交=` 把另外两个数一起带进留档，三方乘不乘得回去在日志里就能验。
    */
   private fun fitLikeColor(
-    raster: Bitmap, alpha: Bitmap, edge: Int, label: String, baked: Float,
+    raster: Bitmap, alpha: Bitmap, edge: Int, label: String, baked: Float, forceExtend: Boolean = false,
   ): Pair<Bitmap?, String>? {
     val px = IntArray(edge * edge)
     raster.getPixels(px, 0, edge, 0, 0, edge, edge)
-    val plan = IconGeom.planOf(px, edge, edge) ?: return null
+    val plan = IconGeom.planOf(px, edge, edge, forceExtend) ?: return null
     val applied = plan.scale / baked
     val note = "scale=" + ((plan.scale * 100).toInt() / 100f) +
       " fill=" + ((plan.fill * 100).toInt() / 100f) + " 支=" + (if (plan.plate) "铺底" else "延伸") +

@@ -143,8 +143,8 @@ internal object MonoCache {
   /** 内容键：见 [MonoKey.keyOf]，那些输入就是掩码的全部输入。 */
   fun keyOf(
     px: IntArray, under: IntArray?, edge: Int, adaptive: Boolean, flatten: Boolean, circle: Boolean,
-    shortcut: Boolean = false,
-  ): Long = MonoKey.keyOf(px, under, edge, adaptive, flatten, circle, shortcut)
+    shortcut: Boolean = false, forceExtend: Boolean = false,
+  ): Long = MonoKey.keyOf(px, under, edge, adaptive, flatten, circle, shortcut, forceExtend)
 
   /**
    * 磁盘层是否已经就绪。用来区分**“还没有表文件”**与**“Context 还没来”**：后者不能把
