@@ -358,6 +358,11 @@ private class BareForeground(
         inner.setBounds(view)
         bitmap.getPixels(px, 0, w, 0, 0, w, h)
       }
+      // ⓪ 源图自带的噪边：parsec 的 round PNG 最外圈 α255 实心环自己就是噪的
+      //    （r87 逐度 18↔56 交替、r86 光滑），种子踩上去就被径向复制成放射条纹，
+      //    bleedEdgeColor 还会把这份噪色沿 AA 坡往外带。先把**带噪的**实心边界环
+      //    换成内侧光滑色；光滑环与细笔画一格不动（差 ≤2 不写、窗内无实心核不写）。
+      stage = "r3c"; cleanRim(px, w, h)
       // 分界（同一个 [IconGeom] 算的，单色那边读的是同一份）：可见占比 >= 内切圆占正方形的
       // 面积比（[INSCRIBED_SHARE]）走正常延伸；小于它的缩进内切圆 + **铺白底**（主人 2026-11-14：「铺上白底」）。
       stage = "r3b"
@@ -389,6 +394,80 @@ private class BareForeground(
       throw t
     } finally {
       rendering = false
+    }
+  }
+
+  /**
+   * 把**带噪的**实心边界环换成内侧光滑色（2026-11-18 parsec 放射条纹的根因刀）。
+   *
+   * 判据三层，保证射程只落在噪环上：
+   * ① 只碰 α255 且 7×7 窗内有 α<255 的格（实心外三格壳——噪环可能有两圈，
+   *    只认最外一圈会漏掉内圈那行全 α255 邻域的噪格）；
+   * ② 取 7×7 窗内"光滑核"（到透明处切比雪夫距离 ≥4 的实心）的平均色——噪环内侧就是光滑的；
+   *    窗内没有实心核（1~2px 细笔画）⇒ 不写，真细节一格不动；
+   * ③ 与现色差 ≤2 ⇒ 不写（光滑环/±1 抖动逐字节不变）。
+   */
+  private fun cleanRim(px: IntArray, w: Int, h: Int) {
+    val n = w * h
+    fun alpha(i: Int) = px[i] ushr 24
+    // 到最近 α<255 的切比雪夫距离（两遍 chamfer）。噪环住在深度 1..3 的壳里，
+    // 深度 ≥4 的实心才是光滑核——只按 alpha 认核会把噪环内圈那行全 α255 的噪格也当核。
+    val depth = IntArray(n) { if (alpha(it) < 255) 0 else 1 shl 20 }
+    for (y in 0 until h) for (x in 0 until w) {
+      val i = y * w + x
+      if (depth[i] == 0) continue
+      var d = depth[i]
+      for (dy in -1..0) for (dx in -1..1) {
+        if (dy == 0 && dx >= 0) continue
+        val nx = x + dx
+        val ny = y + dy
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+        d = minOf(d, depth[ny * w + nx] + 1)
+      }
+      depth[i] = d
+    }
+    for (y in h - 1 downTo 0) for (x in w - 1 downTo 0) {
+      val i = y * w + x
+      if (depth[i] == 0) continue
+      var d = depth[i]
+      for (dy in 0..1) for (dx in -1..1) {
+        if (dy == 0 && dx <= 0) continue
+        val nx = x + dx
+        val ny = y + dy
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+        d = minOf(d, depth[ny * w + nx] + 1)
+      }
+      depth[i] = d
+    }
+    val snapshot = px.copyOf()
+    for (i in 0 until n) {
+      if (alpha(i) != 255 || depth[i] > 3) continue
+      val x = i % w
+      val y = i / w
+      var sr = 0
+      var sg = 0
+      var sb = 0
+      var cnt = 0
+      for (dy in -3..3) for (dx in -3..3) {
+        val nx = x + dx
+        val ny = y + dy
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+        val j = ny * w + nx
+        if (depth[j] < 4) continue
+        sr += (snapshot[j] shr 16) and 0xFF
+        sg += (snapshot[j] shr 8) and 0xFF
+        sb += snapshot[j] and 0xFF
+        cnt++
+      }
+      if (cnt == 0) continue
+      val r = sr / cnt
+      val g = sg / cnt
+      val b = sb / cnt
+      val dr = Math.abs(r - ((snapshot[i] shr 16) and 0xFF))
+      val dg = Math.abs(g - ((snapshot[i] shr 8) and 0xFF))
+      val db = Math.abs(b - (snapshot[i] and 0xFF))
+      if (dr <= 2 && dg <= 2 && db <= 2) continue
+      px[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
     }
   }
 
