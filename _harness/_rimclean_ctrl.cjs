@@ -1,7 +1,10 @@
 // cleanRim 的正/负对照（镜像生产 cleanRim，逐字同判据）：
 // 正：噪实心环盘（r=R-1/R 两圈 α255 带 ±20 噪）⇒ 环逐度相邻 ≤2，且补色场条纹 ≤2；
-// 负：光滑环盘 / ±1 抖动环盘 / 2px 细笔画 ⇒ 逐字节不变。
+// 负：光滑环盘 / ±1 抖动环盘 / 2px 细笔画 ⇒ 逐字节不变；
+// 负：满幅实色+内部近不透明抖动噪点（α254/250，米家/QQ 2026-11-19「好糊」根因）⇒ 一格不写。
+// RIMSEED=255 可把种子退回旧口径做变异对照（新负对照应当红）；默认 250 = 生产口径。
 const fs = require('fs');
+const SEED = +process.env.RIMSEED || 250;
 const S = 256, C = S / 2, R = 110;
 function disc(noise, dither) {
   const px = new Int32Array(S * S);
@@ -29,7 +32,7 @@ function stroke() {
 function cleanRim(px) {
   const n = S * S, A = i => px[i] >>> 24;
   const depth = new Int32Array(n);
-  for (let i = 0; i < n; i++) depth[i] = A(i) < 255 ? 0 : 1 << 20;
+  for (let i = 0; i < n; i++) depth[i] = A(i) < SEED ? 0 : 1 << 20;
   for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
     const i = y * S + x;
     if (!depth[i]) continue;
@@ -115,6 +118,23 @@ for (const [tag, px] of [['光滑环', disc(false, false)], ['±1抖动环', dis
   for (let i = 0; i < cp.length; i++) if (cp[i] !== px[i]) d++;
   console.log('负对照 ' + tag + ' 写格=' + w + ' 差异=' + d);
   if (d !== 0 || w !== 0) { console.log('  ✗ 负对照被误伤'); bad++; }
+}
+// 负对照：满幅实色 + 内部近不透明抖动噪点（无透明外圈）⇒ 噪点不是边界，一格不写
+{
+  const px = new Int32Array(S * S);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const bar = Math.abs(x - C) <= 30 && y > 50 && y < 206;
+    const v = bar ? 255 : 100;
+    const h = (x * 73856093) ^ (y * 19349663);
+    const a = h % 23 === 0 ? 254 : (h % 29 === 0 ? 250 : 255);
+    px[y * S + x] = (a << 24) | (v << 16) | (v << 8) | v;
+  }
+  const cp = px.slice();
+  const w = cleanRim(cp);
+  let d = 0;
+  for (let i = 0; i < cp.length; i++) if (cp[i] !== px[i]) d++;
+  console.log('负对照 内部抖动噪点(满幅) 写格=' + w + ' 差异=' + d);
+  if (d !== 0 || w !== 0) { console.log('  ✗ 内部噪点被当边界，实色边被改写'); bad++; }
 }
 console.log(bad === 0 ? 'cleanRim 对照全过' : '对照红 ' + bad + ' 条');
 process.exit(bad === 0 ? 0 : 1);
