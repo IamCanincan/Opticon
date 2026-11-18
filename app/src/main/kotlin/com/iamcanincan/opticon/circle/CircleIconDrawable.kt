@@ -252,10 +252,27 @@ private class BareForeground(
   }
 
   private fun drawInner(canvas: Canvas) {
-    canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
     val view = visibleRect()
     if (view.isEmpty) return
     drawFilled(canvas, view)
+    // 外圈 1/6 安全环填实（2026-11-18 parsec 桌面马赛克）：drawFilled 只贴里圈 view，
+    // 外圈若留透明，桌面把这张画进它**复用的位图池**时，上一张的像素会从外圈透出来成角部
+    // 噪点（真机 flatten 输入 trans%=3、四角 ffffff00/ff000001；好的纯色图标 trans%=0）。
+    // 用里圈渲染出的边缘色（图标自己的颜色，不是另垫底盘，守 2026-11-13「不要底盘」）整张
+    // 铺实再重贴里圈，交出去的位图外圈就没有透明像素。外圈在屏幕上被桌面遮罩裁掉，只影响
+    // 落库那张全幅位图。alpha<255（淡入淡出）时不填，保持透明。
+    if (alpha == 255) {
+      val b = cache.bitmap
+      if (b != null && !b.isRecycled) {
+        val px = IntArray(1)
+        b.getPixels(px, 0, 1, 0, 0, 1, 1)
+        val edge = px[0]
+        if ((edge ushr 24) == 255) {
+          canvas.drawColor(edge)
+          drawFilled(canvas, view)
+        }
+      }
+    }
   }
 
   /**
@@ -607,7 +624,8 @@ internal const val CIRCLE_FIT = 0.88f
 /**
  * 算"边角该填什么颜色"。返回与 [px] 等长的数组：0 = 不填，其余 = 要铺的 ARGB。
  *
- * 颜色取**最近的轮廓边界点**：从八邻里有 outside 格的实色格（α≥[SOLID_ALPHA]）做多源 BFS，
+ * 颜色取**最近的轮廓边界点**：从八邻里有 outside/soft 格的实色格（α≥[SOLID_ALPHA]）做多源 BFS
+ * （soft = 从 outside 洪泛进来的 α<SOLID_ALPHA 渐隐坡，软边轮廓靠它才选得出种子），
  * 每个边界点带自己的颜色往外拓；等距波前相遇按种子数加权平均（角上不再是谁先到谁赢的硬缝）。
  *
  * ⚠ 旧版取"行向 + 列向各一条边线的平均"，2026-11-16 量出两种接缝（主人：「交界处还是不够平滑」）：
@@ -649,7 +667,30 @@ private fun computeFill(px: IntArray, w: Int, h: Int): IntArray {
     if (y + 1 < h) mark(i + w)
   }
 
-  // 2) 种子：八邻里有 outside 格的实色格 —— 真实轮廓边界，不是行/列极值
+  // 1b) 软边通行证：从 outside 出发洪泛整条 α<255 的渐隐坡（只作通路，不作种子）。
+  //     parsec 那类轮廓是 6 格宽的 α 坡（21→204→255），贴 outside 的那格 α=33 不是实色，
+  //     旧种子判据（八邻有 outside 的实色格）在整条软边弧上**一个种子都选不出**，
+  //     底角只能借顶弧硬边的浅色种子 ⇒ 补色 34 贴局部边色 11 = 主人看到的色差。
+  //     soft 供选种子与波前通行（种子在坡内侧），但只往 outside 格写色 ⇒ 补色区域逐格不变；
+  //     硬边图 soft==outside ⇒ 零差异。
+  val soft = ByteArray(n)
+  var sp2 = 0
+  for (i in 0 until n) if (outside[i] == 1.toByte()) { soft[i] = 1; work[sp2++] = i }
+  while (sp2 > 0) {
+    val i = work[--sp2]
+    val x = i % w
+    val y = i / w
+    if (x > 0 && soft[i - 1] == 0.toByte() && (px[i - 1] ushr 24) < 255) { soft[i - 1] = 1; work[sp2++] = i - 1 }
+    if (x + 1 < w && soft[i + 1] == 0.toByte() && (px[i + 1] ushr 24) < 255) { soft[i + 1] = 1; work[sp2++] = i + 1 }
+    if (y > 0 && soft[i - w] == 0.toByte() && (px[i - w] ushr 24) < 255) { soft[i - w] = 1; work[sp2++] = i - w }
+    if (y + 1 < h && soft[i + w] == 0.toByte() && (px[i + w] ushr 24) < 255) { soft[i + w] = 1; work[sp2++] = i + w }
+  }
+
+  // 2) 种子：八邻里有 outside/soft 格的**全实色**格 —— 真实轮廓边界，不是行/列极值。
+  //    ⚠ 2026-11-18：阈值曾为 SOLID_ALPHA(160)，把 α 坡上的半透明格也当种子；那些格的
+  //    straight-alpha 色 = 预乘÷α，低 α 处 rounding 噪声被放大成 25..62 锯齿（真机环向
+  //    读数 r=126/128），被径向链拉成放射亮条。只认 α=255 的实心边（环向光滑），
+  //    一个都选不出时退回 160 兜底（防整张空补色）。
   val dist = IntArray(n) { -1 }
   val sumR = IntArray(n)
   val sumG = IntArray(n)
@@ -657,25 +698,29 @@ private fun computeFill(px: IntArray, w: Int, h: Int): IntArray {
   val cnt = IntArray(n)
   var head = 0
   var tail = 0
-  for (i in 0 until n) {
-    if ((px[i] ushr 24) < SOLID_ALPHA) continue
-    val x = i % w
-    val y = i / w
-    var seed = false
-    for (dy in -1..1) for (dx in -1..1) {
-      if (dx == 0 && dy == 0) continue
-      val nx = x + dx
-      val ny = y + dy
-      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
-      if (outside[ny * w + nx] == 1.toByte()) seed = true
+  for (threshold in intArrayOf(255, SOLID_ALPHA)) {
+    for (i in 0 until n) {
+      if ((px[i] ushr 24) < threshold) continue
+      val x = i % w
+      val y = i / w
+      var seed = false
+      for (dy in -1..1) for (dx in -1..1) {
+        if (dx == 0 && dy == 0) continue
+        val nx = x + dx
+        val ny = y + dy
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+        if (soft[ny * w + nx] == 1.toByte()) seed = true
+      }
+      if (!seed) continue
+      dist[i] = 0
+      cnt[i] = 1
+      sumR[i] = (px[i] shr 16) and 0xFF
+      sumG[i] = (px[i] shr 8) and 0xFF
+      sumB[i] = px[i] and 0xFF
+      work[tail++] = i
     }
-    if (!seed) continue
-    dist[i] = 0
-    cnt[i] = 1
-    sumR[i] = (px[i] shr 16) and 0xFF
-    sumG[i] = (px[i] shr 8) and 0xFF
-    sumB[i] = px[i] and 0xFF
-    work[tail++] = i
+    if (tail > 0) break
+    java.util.Arrays.fill(dist, -1)
   }
 
   // 3) BFS 往外拓（八邻）。等距波前相遇按种子数累加、最后平均 ——
@@ -691,7 +736,9 @@ private fun computeFill(px: IntArray, w: Int, h: Int): IntArray {
       val ny = y + dy
       if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
       val j = ny * w + nx
-      if (outside[j] != 1.toByte()) continue
+      // 波前可以穿过 soft 渐隐坡（软边种子在坡内侧，不放行就一步也迈不进补色区），
+      // 但第 4 步只往 outside 格写色 ⇒ 补色区域逐格不变。
+      if (soft[j] != 1.toByte()) continue
       if (dist[j] < 0) {
         dist[j] = d
         cnt[j] = cnt[i]
@@ -700,10 +747,15 @@ private fun computeFill(px: IntArray, w: Int, h: Int): IntArray {
         sumB[j] = sumB[i]
         work[tail++] = j
       } else if (dist[j] == d) {
-        cnt[j] += cnt[i]
-        sumR[j] += sumR[i]
-        sumG[j] += sumG[i]
-        sumB[j] += sumB[i]
+        // ⚠ 2026-11-18 修溢出：旧写法 cnt[j]+=cnt[i]、sum+=sum[i] 把父格已累加的计数整份
+        //   再加进来，cnt 数的是"最短路径条数"而非种子数，随距离指数爆炸（parsec 底角
+        //   d=196 时 cnt=4.78 亿、sum 负穿 Int → 补色变黄/黑垃圾 = 桌面马赛克）。
+        //   改为只加父格的**平均色**、cnt 只 +1：cnt 恒 ≤4、sum 恒 ≤1020，永不溢出；
+        //   单种子区域（cnt=1）逐字不变，等距相遇仍是平滑平均（无硬缝）。
+        cnt[j] += 1
+        sumR[j] += (sumR[i] + cnt[i] / 2) / cnt[i]
+        sumG[j] += (sumG[i] + cnt[i] / 2) / cnt[i]
+        sumB[j] += (sumB[i] + cnt[i] / 2) / cnt[i]
       }
     }
   }
@@ -717,11 +769,44 @@ private fun computeFill(px: IntArray, w: Int, h: Int): IntArray {
         ((sumB[i] + cnt[i] / 2) / cnt[i])
     }
   }
-
-  // 5) 再往图标里垫 2 格：盖住图标自己那圈抗锯齿边（alpha 1..254）。
-  //    不垫的话，第二遍把图标叠上去时那圈半透明像素露出的是宿主底色 —— 屏幕上就是一条浅缝。
+  // 4b) 补色场盒抹两遍 3×3：种子自带 ±1 抖动（盘边 17/18 交替）会被径向单亲链原样
+  //     复制成放射条纹（2026-11-18 主人真机：「为什么有那种放射性的条纹」）。
+  //     盒抹对线性渐变无损（邻域均值=自身），只杀抖动与等距波前的 rounding 缝。
   val snapshot = IntArray(n)
   repeat(2) {
+    System.arraycopy(fill, 0, snapshot, 0, n)
+    for (i in 0 until n) {
+      if (outside[i] != 1.toByte() || snapshot[i] == 0) continue
+      val x = i % w
+      val y = i / w
+      var sr = 0
+      var sg = 0
+      var sb = 0
+      var c2 = 0
+      for (dy in -1..1) for (dx in -1..1) {
+        val nx = x + dx
+        val ny = y + dy
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+        val c = snapshot[ny * w + nx]
+        if (c == 0) continue
+        sr += (c shr 16) and 0xFF
+        sg += (c shr 8) and 0xFF
+        sb += c and 0xFF
+        c2++
+      }
+      fill[i] = (0xFF shl 24) or ((sr / c2) shl 16) or ((sg / c2) shl 8) or (sb / c2)
+    }
+  }
+
+  // 5) 再往图标里垫：盖住图标自己那圈抗锯齿边（alpha 1..254）。
+  //    不垫的话，第二遍把图标叠上去时那圈半透明像素露出的是宿主底色 —— 屏幕上就是一条浅缝。
+  //    ⚠ 2026-11-18：固定 2 格盖不住 parsec 那类 6 格宽的软边坡（剩下 4 格仍半透明，
+  //    叠在全局底色上又是一圈浅环）⇒ 改成"垫到不再长"，上限 8 格；硬边图 1~2 格即停 ⇒ 零差异。
+  var pass = 0
+  var added = true
+  while (added && pass < 8) {
+    added = false
+    pass++
     System.arraycopy(fill, 0, snapshot, 0, n)
     for (i in 0 until n) {
       if (fill[i] != 0) continue
@@ -744,7 +829,10 @@ private fun computeFill(px: IntArray, w: Int, h: Int): IntArray {
       if (x + 1 < w) near(i + 1)
       if (y > 0) near(i - w)
       if (y + 1 < h) near(i + w)
-      if (cnt2 > 0) fill[i] = (0xFF shl 24) or ((sr / cnt2) shl 16) or ((sg / cnt2) shl 8) or (sb / cnt2)
+      if (cnt2 > 0) {
+        fill[i] = (0xFF shl 24) or ((sr / cnt2) shl 16) or ((sg / cnt2) shl 8) or (sb / cnt2)
+        added = true
+      }
     }
   }
   return fill
