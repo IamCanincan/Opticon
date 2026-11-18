@@ -1078,6 +1078,26 @@ private fun hookIconLoader(xposed: XposedInterface, method: Method): Boolean =
                 } finally {
                   replacingIcon.set(false)
                 }
+              } else if (who == null && passed !is AdaptiveIconDrawable) {
+                // 快捷方式补包（主人 2026-11-19：「快捷方式也要自适应」）：这批资源
+                // （通讯录 logo_quick_contacts_*、Poweramp app_shortcut_playlist、
+                // shortcut-config activity）在 unmarkedAppIcon 里返回 null，旧版原样漏出。
+                // 两条判据认：资源表 / 桌面载快捷方式窗口+当前线程栈；宿主自家资源仍按名字排除。
+                val res = chain.thisObject as? Resources
+                val rid = resIdArg(args) ?: 0
+                val pkg = res?.let { runCatching { it.getResourcePackageName(rid) }.getOrNull() }
+                if (ShortcutIconResources.has(pkg, rid) || (ShortcutLoad.inFlight && onShortcutStack())) {
+                  val nm = resourceName(res, rid)
+                  if (nm.isNotEmpty() && !nm.isHostSystemResource()) {
+                    IconNames.remember(passed, nm)
+                    replacingIcon.set(true)
+                    try {
+                      return@intercept wrapLegacyIcon(passed, "Resources.${method.name}·快捷方式")
+                    } finally {
+                      replacingIcon.set(false)
+                    }
+                  }
+                }
               }
             }
             return@intercept passed
@@ -1111,15 +1131,10 @@ private fun hookIconLoader(xposed: XposedInterface, method: Method): Boolean =
           //   （`pm:包名`）；两类出口都取不到才真不登记。
           val named = resourceName(chain.thisObject as? Resources, restored[index] as Int)
           IconNames.remember(icon, named.ifEmpty { packageFromArgs(args) })
-          // 快捷方式那一批（通讯录快捷联系人 / Poweramp 播放列表…）只从这里认：这张 drawable 的
-          // 资源 id 被登记成了某条快捷方式的 `iconResource`（见 [ShortcutIconResources]）。
-          val res = chain.thisObject as? Resources
           val realId = restored[index] as Int
-          val resPkg = res?.let { runCatching { it.getResourcePackageName(realId) }.getOrNull() }
           wrapLegacyIcon(
             icon, "Resources.${method.name}·标记id",
-            ShortcutIconResources.has(resPkg, realId),
-            isRoundArt(args, chain.thisObject, realId),
+            roundArt = isRoundArt(args, chain.thisObject, realId),
           )
         } finally {
           replacingIcon.set(false)
@@ -1720,11 +1735,9 @@ private fun hookShortcutIcons(xposed: XposedInterface) {
  * `IconCache.getShortcutIcon` 与 `CacheableShortcutCachingLogic.loadIcon` 一次都不出现
  * （前一版只挂这两条，装机 0 命中）—— 所以真正兜住的是 `getFullResIcon`。
  *
- * 做法：在这几条外面抬 [ShortcutLoad] 计数，`wrapLegacyIcon` 读到它就把这张按快捷方式画。
+ * 做法：在这几条外面抬 [ShortcutLoad] 计数，Resources 钩子读到它就把漏出的快捷方式资源补包。
  * ⚠ 用进程内计数而不是 ThreadLocal：加载链不保证与调用方同线程，桌面又是单 worker 载图标，
- * 非零窗口很窄；真串了，`快捷标记(桌面在载快捷方式)` 那行会把应用图标的资源名打出来。
- * ⚠ 2026-11-18 补：窄窗口也真串了（parsec / kimichat 桌面马赛克）——计数非零期间另一条线程
- * 载应用图标同样命中。消费侧已加当前线程栈判据（[onShortcutStack]），计数只负责开窗口。
+ * 非零窗口很窄；计数只负责开窗口，当前线程是否真在快捷方式链上由 [onShortcutStack] 判。
  */
 private fun hookShortcutIconCache(xposed: XposedInterface, classLoader: ClassLoader) {
   val iconCache = classOf("com.android.launcher3.icons.IconCache", classLoader)
@@ -1777,6 +1790,29 @@ private fun rememberShortcutIconResource(args: List<Any?>) {
   }.getOrDefault(0)
   if (resId != 0) ShortcutIconResources.remember(info.`package`, resId)
 }
+
+/**
+ * 计数非零窗口内，**当前线程**是否真的走在快捷方式加载链上。
+ *
+ * 计数是进程级的（加载链不保证与调用方同线程），桌面载快捷方式与载应用图标是两条并行线程：
+ * 只看计数会把窗口内另一条线程上的图也认成快捷方式（2026-11-18 真机串过号）。
+ *
+ * 帧名单按 2026-11-14 量到的真链写，且**优先匹配没被钩的调用方帧**（getShortcutIcon /
+ * loadIcon / getFullResIcon 自己挂着钩，trampolines 下原帧不一定在栈里）：
+ * `IconCache.*Shortcut*`、`ShortcutCache*`、`ShortcutConfigActivityInfo*`、以及异步段
+ * `IconProvider` / `IconLoadRequest`。应用图标那条链（LauncherActivityInfo.getIcon）不含这些帧。
+ * 成本只在计数非零的窄窗口里付。2026-11-19 起认错的后果只是"多包一张本该原样的图"
+ * （快捷方式与应用图标同一套画法），宿主自家资源另按名字排除。
+ */
+private fun onShortcutStack(): Boolean =
+  Thread.currentThread().stackTrace.any { f ->
+    val c = f.className
+    (c == "com.android.launcher3.icons.IconCache" && f.methodName.contains("Shortcut", true)) ||
+      c.contains("ShortcutCachingLogic") || c.contains("ShortcutCache") ||
+      c.startsWith("com.android.launcher3.pm.ShortcutConfigActivityInfo") ||
+      c.startsWith("com.android.launcher3.icons.IconProvider") ||
+      c.startsWith("com.android.launcher3.icons.IconLoadRequest")
+  }
 
 /**
  * 这张快捷方式图标是不是**整张透明**（alpha 恒 0）。

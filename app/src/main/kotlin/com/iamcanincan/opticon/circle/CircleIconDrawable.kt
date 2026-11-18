@@ -1007,14 +1007,6 @@ private const val WRAP_LOG_LIMIT = 200
 
 private val wrapLogLeft = AtomicInteger(WRAP_LOG_LIMIT)
 
-/**
- * "桌面在载快捷方式"这条判据的**证据行**：前 [SHORTCUT_MARK_LOG_LIMIT] 张打一条，
- * 带环境（host / from）与资源名 —— 它同时是误伤的报警器（打在一个应用图标上就是串号了）。
- */
-private const val SHORTCUT_MARK_LOG_LIMIT = 40
-
-private val shortcutMarkLogLeft = AtomicInteger(SHORTCUT_MARK_LOG_LIMIT)
-
 /** 「圆内缩」证据行额度（前 [ZOOM_LOG_LIMIT] 张，带半径与倍率）。 */
 private const val ZOOM_LOG_LIMIT = 40
 
@@ -1065,30 +1057,6 @@ internal object ShortcutLoad {
 }
 
 /**
- * 计数非零窗口内，**当前线程**是否真的走在快捷方式加载链上。
- *
- * 计数是进程级的（加载链不保证与调用方同线程），但桌面载快捷方式与载应用图标是两条并行的
- * 线程：旧判据只看计数，于是窗口内另一条线程上的应用图标也被当快捷方式原样放行 —— 带 alpha
- * 的原图被桌面画进没清底的复用 RGB 位图，透明角露出上一张图的像素（2026-11-18 真机：
- * parsec / kimichat 桌面「马赛克」，角部噪点率 0.227 / 0.124，795 张里排前二）。
- *
- * 帧名单按 2026-11-14 量到的真链写，且**优先匹配没被钩的调用方帧**（getShortcutIcon /
- * loadIcon / getFullResIcon 自己挂着钩，trampolines 下原帧不一定在栈里）：
- * `IconCache.*Shortcut*`、`ShortcutCache*`、`ShortcutConfigActivityInfo*`、以及异步段
- * `IconProvider` / `IconLoadRequest`。应用图标那条链（LauncherActivityInfo.getIcon）不含这些帧。
- * 成本只在计数非零的窄窗口里付。
- */
-private fun onShortcutStack(): Boolean =
-  Thread.currentThread().stackTrace.any { f ->
-    val c = f.className
-    (c == "com.android.launcher3.icons.IconCache" && f.methodName.contains("Shortcut", true)) ||
-      c.contains("ShortcutCachingLogic") || c.contains("ShortcutCache") ||
-      c.startsWith("com.android.launcher3.pm.ShortcutConfigActivityInfo") ||
-      c.startsWith("com.android.launcher3.icons.IconProvider") ||
-      c.startsWith("com.android.launcher3.icons.IconLoadRequest")
-  }
-
-/**
  * 快捷方式**声明过的图标资源**（`包名/资源id`）—— Resources 通道认出快捷方式的依据。
  *
  * 为什么需要：桌面的一部分快捷方式图标是从 `Resources.getDrawableForDensity` 出来的
@@ -1098,6 +1066,7 @@ private fun onShortcutStack(): Boolean =
  * 登记点：凡是拿到 `ShortcutInfo` 的钩子（`LauncherApps.getShortcutIconDrawable` 的参数、
  * 桌面 `IconCache.getShortcutIcon` 的参数）都把 `iconResource` 记下来 —— 与"什么时候真的去画"
  * 无关，所以不怕异步。Resources 钩子把请求还原成真实 id 后查这张表。
+ * 2026-11-19 起认出是为了**补包进自适应**（主人：「快捷方式也要自适应」）；11-14~11-18 曾反过来用于整体放行。
  *
  * 键是"包名/id"而不是 id 本身：资源 id 只在包内唯一。
  * 上限 [MAX] 条，超了整体清空（快捷方式数量有限，正常一年也到不了）。
@@ -1154,10 +1123,9 @@ internal object RoundIconResources {
 fun wrapLegacyIcon(
   icon: Drawable,
   from: String,
-  shortcutHint: Boolean = false,
   roundArt: Boolean = false,
 ): Drawable =
-  runCatching { wrapInner(icon, from, shortcutHint, roundArt) }.getOrElse {
+  runCatching { wrapInner(icon, from, roundArt) }.getOrElse {
     if (clipFailLogged.compareAndSet(false, true)) {
       Log.w(TAG, "自适应：包装抛了，原样放行（${it.javaClass.simpleName}: ${it.message}）")
     }
@@ -1167,7 +1135,6 @@ fun wrapLegacyIcon(
 private fun wrapInner(
   icon: Drawable,
   from: String,
-  shortcutHint: Boolean,
   roundArt: Boolean,
 ): Drawable {
   // 配置按 TTL 重读，所以界面里关掉开关后很快生效，不用重启进程。
@@ -1186,20 +1153,9 @@ private fun wrapInner(
     return icon
   }
 
-  // 快捷方式：**整个放行**（主人 2026-11-14：「算了，你快捷方式别管了」）。
-  // 桌面会按它自己那套画（老式图标 / 白底 / 形状都由它决定），我们一个像素不碰。
-  // 身份来源三条：① 通道名 LauncherApps.getShortcutIconDrawable；② 桌面正在载快捷方式时
-  // 的计数（[ShortcutLoad]）；③ 参数里的 iconResource 登记（[ShortcutIconResources]）。
-  val byChannel = from.contains("Shortcut")
-  val byLoader = !byChannel && ShortcutLoad.inFlight && onShortcutStack()
-  val byResource = !byChannel && !byLoader && shortcutHint
-  if (byChannel || byLoader || byResource) {
-    if (shortcutMarkLogLeft.decrementAndGet() >= 0) {
-      Log.d(TAG, "快捷方式放行(" + (if (byChannel) "通道" else if (byLoader) "桌面在载" else "资源表") +
-        ") host=$clipHost from=$from : " + IconNames.of(icon))
-    }
-    return icon
-  }
+  // 快捷方式不再排除（主人 2026-11-19：「快捷方式也要自适应」，推翻 11-14「别管了」）：
+  // 与应用图标同一套两分支。Resources 通道漏出去的那批由 IconHooks 按 ShortcutIconResources /
+  // ShortcutLoad 认出来补包，这里不再需要认快捷方式。
   if (wrapLogLeft.decrementAndGet() >= 0) {
     Log.d(TAG, "自适应 from=$from host=$clipHost : " + IconNames.of(icon) + " " +
       "${icon.intrinsicWidth}x${icon.intrinsicHeight} 无底盘 原尺寸+延伸")
