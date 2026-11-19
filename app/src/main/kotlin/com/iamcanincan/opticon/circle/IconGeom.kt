@@ -8,8 +8,10 @@ import kotlin.math.sqrt
  *
  * 三步（主人 2026-11-14 原话定下的口径）：
  *  ① 把内容缩放到**恰好不被正方形裁掉任何一个有色像素**（[INSCRIBED_SHARE] 之前先做这一步）；
- *  ② 按填满之后**可见格占整张光栅的比例**分档：≥ π/4 走边角延伸，< π/4 要铺底；
- *  ③ 铺底那一支再缩到**内切圆不会裁掉任何一个有色像素**（留 [CIRCLE_FIT] 余量）。
+ *  ② 按填满之后**可见格占整张光栅的比例**分档：≥ [INSCRIBED_SHARE]（π/4 调小到 0.778）走边角延伸，
+ *    小于它要铺底；新翻进延伸那一档里整块墨都淡的（白盘白字）仍否决回铺底（见 [PALE_VETO_TOP]）；
+ *  ③ 铺底那一支再缩到**内切圆不会裁掉任何一个有色像素**（留 [CIRCLE_FIT] 余量；
+ *    实心核是正圆的除外 —— 它恰好就是内切圆，再缩就是给完美的圆套一圈底）。
  *
  * 为什么要抽成一份：单色层必须落在与彩色同一块几何上，否则主题图标与彩色图标一大一小
  * （主人 2026-11-14：「单色图标和彩色图标不符」）。原先单色那边把这三段**重抄了一遍**，
@@ -94,7 +96,12 @@ internal object IconGeom {
     // ③ 铺底那一支才要缩进内切圆：半径在未缩放的格子上量，所以 ①② 合成一步时
     //   总倍率里的 fillScale 正好约掉（s1 × need/(maxR·s1) = need/maxR）。
     if (forceExtend) return Plan(fillScale, cx, cy, fill, 0f, false, false)
-    if (fill >= INSCRIBED_SHARE) return Plan(fillScale, cx, cy, fill, 0f, false, false)
+    // ② 延伸支。挪线新翻进来的那一档 [INSCRIBED_SHARE, PALE_VETO_TOP) 里，整块墨都淡的
+    //   （白盘白字正圆）补白角会把字藏进白里 ⇒ 否决延伸、落铺底（黑底、正圆不缩）。
+    //   旧线以上早已延伸的行不受这条否决（射程只在新档），混色的照常延伸。
+    if (fill >= INSCRIBED_SHARE &&
+      !(fill < PALE_VETO_TOP && uniformPaleInk(px, w, h))
+    ) return Plan(fillScale, cx, cy, fill, 0f, false, false)
     var maxR2 = 0f
     for (y in t..b) {
       val dy = y + 0.5f - cy
@@ -109,8 +116,109 @@ internal object IconGeom {
     val maxR = sqrt(maxR2)
     val radius = maxR * fillScale
     val need = minOf(w, h) / 2f * CIRCLE_FIT
-    val shrunk = radius > need
+    // 正圆核本来就恰好是内切圆，再按 CIRCLE_FIT 缩就是给完美的圆套一圈底（主人 2026-11-19
+    // 点名学习通正圆快捷方式「缩小的圆垫在底上」）。认圆只数实心格（主人：「半透明不能算
+    // 有色像素」—— 用在认圆这一步；全局名单不动：半透明白盘那一族的盘本身就是半透明画的）。
+    val shrunk = radius > need && !roundCore(px, w, h)
     val scale = if (shrunk) need / maxR else fillScale
     return Plan(scale, cx, cy, fill, radius, true, shrunk)
   }
+
+  /** 实心核（α=255）是不是正圆：面积比 ≈ π/4 + 半径签名摆幅 ≈ 1 + 外框方。
+   *  三轴各自量过分离度：星形面积比 ~0.4、圆角方 ≥0.85、满方 1；星形/圆角方/满方的
+   *  半径摆幅 ≥1.3；正圆的摆幅只有像素量化（±1.5px）与源图量化放大（实测 ≤2%）。 */
+  private fun roundCore(px: IntArray, w: Int, h: Int): Boolean {
+    var l = w
+    var t = h
+    var r = -1
+    var b = -1
+    var vis = 0
+    for (y in 0 until h) {
+      val row = y * w
+      for (x in 0 until w) {
+        if ((px[row + x] ushr 24) < 255) continue
+        vis++
+        if (x < l) l = x
+        if (x > r) r = x
+        if (y < t) t = y
+        if (y > b) b = y
+      }
+    }
+    if (r < 0) return false
+    val bw = r - l + 1
+    val bh = b - t + 1
+    if (abs(bw - bh) > maxOf(1, (bw * 0.02f).toInt())) return false
+    val share = vis.toFloat() / (bw * bh)
+    if (share < CIRCLE_AREA_LO || share > CIRCLE_AREA_HI) return false
+    val cx = (l + r + 1) / 2f
+    val cy = (t + b + 1) / 2f
+    val half = bw / 2f
+    var rMin = Float.MAX_VALUE
+    var rMax = 0f
+    for (k in 0 until CIRCLE_RAYS) {
+      val th = k * Math.PI.toFloat() * 2f / CIRCLE_RAYS
+      val dx = kotlin.math.cos(th)
+      val dy = kotlin.math.sin(th)
+      var last = 0f
+      var d = 1f
+      while (d <= half * 1.6f + 2f) {
+        val x = Math.round(cx + dx * d)
+        val y = Math.round(cy + dy * d)
+        if (x < 0 || y < 0 || x >= w || y >= h) break
+        if ((px[y * w + x] ushr 24) >= 255) last = d
+        d += 0.5f
+      }
+      if (last < half * 0.8f) return false
+      if (last < rMin) rMin = last
+      if (last > rMax) rMax = last
+    }
+    return rMax / rMin <= 1f + CIRCLE_SWING_PX / half + CIRCLE_SWING_SRC
+  }
+
+  /** 整块墨都淡（p10 与中位都偏亮）= 白盘白字那种：延伸补白角会把淡字藏进白里。
+   *  与铺底换黑底那条（[CircleIconDrawable.inkTooLightForWhite]）共用同一份直方图，
+   *  但这里要 p10 **和** 中位两条都过 —— 只看 p10 会误伤"白字+深色块"（pdd 中位 255 但 p10 低）。 */
+  private fun uniformPaleInk(px: IntArray, w: Int, h: Int): Boolean {
+    val (p10, med) = inkLumPercentiles(px, w, h) ?: return false
+    return p10 >= PLATE_LIGHT_P10 && med >= PALE_VETO_MED
+  }
+
+  /** 实心格（α≥[SOLID_ALPHA]）亮度的 (p10, 中位)；一个实心格都没有 → null。
+   *  亮度 = 0.2126r+0.7152g+0.0722b，直方图一遍不排序。彩色铺底换黑底与几何延伸淡墨否决
+   *  共用这一份（主人 2026-11-15：一个模块不许两套主张）。 */
+  internal fun inkLumPercentiles(px: IntArray, w: Int, h: Int): Pair<Int, Int>? {
+    val hist = IntArray(256)
+    var n = 0
+    for (i in 0 until w * h) {
+      val p = px[i]
+      if ((p ushr 24) < SOLID_ALPHA) continue
+      val r = (p ushr 16) and 255
+      val g = (p ushr 8) and 255
+      val b = p and 255
+      hist[(0.2126 * r + 0.7152 * g + 0.0722 * b).toInt().coerceIn(0, 255)]++
+      n++
+    }
+    if (n == 0) return null
+    var p10 = -1
+    var med = -1
+    var acc = 0
+    for (v in 0..255) {
+      acc += hist[v]
+      if (p10 < 0 && acc >= n / 10) p10 = v
+      if (med < 0 && acc >= n / 2) { med = v; break }
+    }
+    return Pair(p10, med)
+  }
+
+  /** 正圆面积比带：实测正圆族 0.754~0.803（四档），π/4=0.7854 居中；上下各留一格量化。 */
+  private const val CIRCLE_AREA_LO = 0.74f
+  private const val CIRCLE_AREA_HI = 0.81f
+
+  /** 半径 march 的取整噪声 ±1.5px（步长 0.5 + round 各半格）。 */
+  private const val CIRCLE_SWING_PX = 3f
+
+  /** 源图量化被放大后的摆幅项：学习通实测 2%（384/768 档），留到 3%。 */
+  private const val CIRCLE_SWING_SRC = 0.03f
+
+  private const val CIRCLE_RAYS = 36
 }

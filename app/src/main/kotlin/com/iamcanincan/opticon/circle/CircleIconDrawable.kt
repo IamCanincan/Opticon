@@ -452,27 +452,11 @@ private class BareForeground(
   /** 墨的亮度 p10 ≥ [PLATE_LIGHT_P10] = 整片墨偏亮、白底上看不见 ⇒ 铺黑底（菜鸟快捷方式）。
    *  用 p10 不用中位：中位会把"白字+深色块"（pdd p10=52.5、中位 255）也算亮，
    *  那种深色块在白底上看得见、不该换底。阈值 206 摆在候选铺底行 p10 的空档 192↔220 中间
-   *  （145 行现量）；菜鸟四张 p10=238.6 在档上。直方图一遍，不排序。 */
+   *  （145 行现量）；菜鸟四张 p10=238.6 在档上。直方图与 [IconGeom] 的延伸淡墨否决共用
+   *  [IconGeom.inkLumPercentiles] 一份，别各数各的。 */
   private fun inkTooLightForWhite(px: IntArray, w: Int, h: Int): Boolean {
-    val hist = IntArray(256)
-    var n = 0
-    for (i in 0 until w * h) {
-      val p = px[i]
-      if ((p ushr 24) < SOLID_ALPHA) continue
-      val r = (p ushr 16) and 255
-      val g = (p ushr 8) and 255
-      val b = p and 255
-      hist[(0.2126 * r + 0.7152 * g + 0.0722 * b).toInt().coerceIn(0, 255)]++
-      n++
-    }
-    if (n == 0) return false
-    val want = n / 10
-    var acc = 0
-    for (v in 0..255) {
-      acc += hist[v]
-      if (acc >= want) return v >= PLATE_LIGHT_P10
-    }
-    return false
+    val p10 = IconGeom.inkLumPercentiles(px, w, h)?.first ?: return false
+    return p10 >= PLATE_LIGHT_P10
   }
 
   /** 有色格外接框 `[l,t,r,b]`（与 [IconGeom.planOf] 同一条 α 线）；全透明 = null。 */
@@ -779,11 +763,20 @@ private class BareForeground(
  */
 internal const val ALPHA_MIN = 8
 
-/** 取边色时优先用"够实"的格：抗锯齿边色被拉出去就是一道浅色接缝。 */
-private const val SOLID_ALPHA = 160
+/** 取边色时优先用"够实"的格：抗锯齿边色被拉出去就是一道浅色接缝。
+ *  ⚠ [IconGeom.inkLumPercentiles] 也吃它（淡墨判据两边必须数同一批格子）—— 所以不是 private。 */
+internal const val SOLID_ALPHA = 160
 
-/** 铺底支换黑底的墨亮度 p10 门槛（见 [CircleIconDrawable.inkTooLightForWhite]）。 */
-private const val PLATE_LIGHT_P10 = 206
+/** 铺底支换黑底的墨亮度 p10 门槛（见 [CircleIconDrawable.inkTooLightForWhite]）。
+ *  ⚠ [IconGeom] 的延伸淡墨否决也吃它 —— 不是 private。 */
+internal const val PLATE_LIGHT_P10 = 206
+
+/** 延伸淡墨否决的中位门槛：p10 与中位**都**偏亮 = 整块墨都淡
+ *  （白盘白字那种），补白角会把字藏进白里 ⇒ 仍留铺底（黑底）。中位 250 摆在实测空档
+ *  246↔253 中间：混色延伸行（chrome/美团/饿了么/推特…）中位最高 246，整块淡的铺底行
+ *  （学习通/文件/devcheck…）最低 253。只用 p10 会把"白字+深色块"（pdd p10=52 中位 255）
+ *  误判 —— 那种深色块在白角上看得见，不该否决。 */
+internal const val PALE_VETO_MED = 250
 
 /** 判"深色毛边"的亮度上限：源图透明区是黑 RGB 时，放大出来的边实测 (2,21,29) ≈ 15。 */
 private const val RIM_LUM = 60
@@ -792,11 +785,26 @@ private const val RIM_LUM = 60
 private const val RIM_DELTA = 40
 
 /**
- * 内切圆占正方形的**面积比**：π/4 ≈ 0.785。
+ * 内切圆占正方形的**面积比**：π/4 ≈ 0.7854。
  * 可见占比 >= 它的图标（贴边实心那种）走正常延伸；小于它的缩进内切圆 + 垫对比底
  * （主人 2026-11-14：「大于那个占比，还是正常延伸」）。
+ *
+ * ⚠ 2026-11-19 主人「那就稍微将占比调小点」：0.785 → **0.778**。π/4 的真值是 0.7854，
+ * 旧数 0.785 只留 0.0004 余量，而格子量出来的正圆占比因抗锯齿/源量化 shortfall 0.003~0.007
+ * （学习通正圆 96 档 0.7859 在线上、192/384/768 档 0.7840/0.7798/0.7794 全在线下 ⇒ 同一张
+ * 圆随尺寸翻支）。0.778 摆在实测空档 **0.773↔0.7794** 中间：非圆铺底行最高 0.773
+ * （audiofx/appui），正圆行最低 0.7794（768 档）—— 新线把整族正圆收进延伸，又不碰非圆。
+ * 0.773/0.7794 是量出来的，0.778 是我选的空档中点。
  */
-internal const val INSCRIBED_SHARE = 0.785f
+internal const val INSCRIBED_SHARE = 0.778f
+
+/**
+ * 延伸淡墨否决只作用在**这次挪线新翻进来的那一档** `[INSCRIBED_SHARE, PALE_VETO_TOP)`：
+ * 旧线 0.785 以上早已延伸的行（chrome/美团/glimpse…）一个不动，免得"稍微调小"变成重排整族。
+ * 这一档里整块墨都淡的（学习通正圆白盘白字、文件管理器）若延伸，补出来的白角会把淡字藏进
+ * 白里 ⇒ 否决延伸、仍走铺底（黑底，正圆不缩）。混色的（消息 p10=50、混元 154）照常延伸。
+ */
+internal const val PALE_VETO_TOP = 0.785f
 
 /**
  * 小占比那一支缩进内切圆之后，内容最大半径占圆半径的多少（= 圆边留多少余量）。
