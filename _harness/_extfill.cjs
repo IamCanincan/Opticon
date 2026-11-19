@@ -1,7 +1,9 @@
 // 离线复现彩色「边角延伸」管线（CircleIconDrawable.renderInto 的 r3..r7），量交界处色差。
 // 两臂：--mode=rowcol（旧：行/列边色平均，负对照）/ --mode=local（新：轮廓边界多源 BFS）。
 // --mode=prod = 生产 computeFill 逐字镜像（含 soft/α255 种子/cnt 防溢出/盒抹/step5）；
-// 叠 --slots = 设计留缝臂（unmarkSlots）。local/local2 是 11-18 前旧臂，只作历史负对照。
+// 叠 --slots = 设计留缝臂（unmarkSlots）；叠 --wc = 烤白角臂（stripWhiteCorners + 开火后二次 cleanRim）。
+// cleanRim 也是逐字镜像（r3c 位置 + --wc 开火后那遍）；缺它时盘缘噪点会当补色种子放射条纹。
+// local/local2 是 11-18 前旧臂，只作历史负对照。
 // ⚠ 直接给 png/目录时包名过滤只收**不存在的路径**参数（旧版把路径自己当过滤词 ⇒ 静默 0 张）。
 // 用法：node _harness/_extfill.cjs [--mode=rowcol|local] [--size=256] [--zoom] [--out=目录]
 //       (--geom=<geom.tsv> --index=<index.tsv> | <png 或目录…>) [包名子串…]
@@ -39,6 +41,7 @@ const S = +(args.find(a => a.startsWith('--size='))?.slice(7) || 256);
 const ZOOM = args.includes('--zoom');
 const MODE = args.find(a => a.startsWith('--mode='))?.slice(7) || 'rowcol';
 const SLOTS = args.includes('--slots');
+const WC = args.includes('--wc');
 const OUT = args.find(a => a.startsWith('--out='))?.slice(6);
 const needles = args.filter(a => !a.startsWith('--') && !fs.existsSync(a));
 
@@ -407,6 +410,116 @@ function unmarkSlots(px, w, h, outside) {
 }
 // 生产 computeFill 逐字移植（2026-11-19 版：soft 通行证 + α255 种子 + cnt 平均防溢出 + 盒抹两遍）。
 // local/local2 是 11-18 之前的旧臂，只作历史负对照，别拿它们当生产镜像。
+// 生产 cleanRim 逐字镜像（RGBA 字节口径）：噪环壳（到 α<250 切比雪夫深度 1..3）换内侧光滑核色。
+function cleanRim(px, w, h) {
+  const n = w * h;
+  const al = i => px[i * 4 + 3];
+  const depth = new Int32Array(n);
+  for (let i = 0; i < n; i++) depth[i] = al(i) < 250 ? 0 : 1 << 20;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    if (depth[i] === 0) continue;
+    let d = depth[i];
+    for (let dy = -1; dy <= 0; dy++) for (let dx = -1; dx <= 1; dx++) {
+      if (dy === 0 && dx >= 0) continue;
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+      d = Math.min(d, depth[ny * w + nx] + 1);
+    }
+    depth[i] = d;
+  }
+  for (let y = h - 1; y >= 0; y--) for (let x = w - 1; x >= 0; x--) {
+    const i = y * w + x;
+    if (depth[i] === 0) continue;
+    let d = depth[i];
+    for (let dy = 0; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      if (dy === 0 && dx <= 0) continue;
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+      d = Math.min(d, depth[ny * w + nx] + 1);
+    }
+    depth[i] = d;
+  }
+  const snap = px.slice();
+  for (let i = 0; i < n; i++) {
+    if (al(i) !== 255 || depth[i] > 3) continue;
+    const x = i % w, y = (i / w) | 0;
+    let sr = 0, sg = 0, sb = 0, cnt = 0;
+    for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+      const j = ny * w + nx;
+      if (depth[j] < 4) continue;
+      sr += snap[j * 4]; sg += snap[j * 4 + 1]; sb += snap[j * 4 + 2]; cnt++;
+    }
+    if (cnt === 0) continue;
+    const r = Math.trunc(sr / cnt), g = Math.trunc(sg / cnt), b = Math.trunc(sb / cnt);
+    if (Math.abs(r - snap[i * 4]) <= 2 && Math.abs(g - snap[i * 4 + 1]) <= 2 && Math.abs(b - snap[i * 4 + 2]) <= 2) continue;
+    px[i * 4] = r; px[i * 4 + 1] = g; px[i * 4 + 2] = b; px[i * 4 + 3] = 255;
+  }
+}
+// 生产 stripBakedWhiteCorners 逐字镜像（RGBA 字节口径）：四角同余中性白块清零 α。
+function stripWhiteCorners(px, w, h) {
+  const n = w * h;
+  const white = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const j = i * 4;
+    if (px[j + 3] < 128) continue;
+    const r = px[j], g = px[j + 1], b = px[j + 2];
+    const mn = Math.min(r, g, b);
+    if (mn >= 235 && Math.max(r, g, b) - mn <= 12) white[i] = 1;
+  }
+  const lab = new Int32Array(n).fill(-1);
+  const stack = new Int32Array(n);
+  const sides = [], sizes = [];
+  for (let s = 0; s < n; s++) {
+    if (!white[s] || lab[s] >= 0) continue;
+    const id = sides.length;
+    let sp = 0, size = 0, mask = 0;
+    stack[sp++] = s; lab[s] = id;
+    while (sp > 0) {
+      const i = stack[--sp]; size++;
+      const x = i % w, y = (i / w) | 0;
+      if (y === 0) mask |= 1;
+      if (y === h - 1) mask |= 2;
+      if (x === 0) mask |= 4;
+      if (x === w - 1) mask |= 8;
+      if (x > 0 && white[i - 1] && lab[i - 1] < 0) { lab[i - 1] = id; stack[sp++] = i - 1; }
+      if (x + 1 < w && white[i + 1] && lab[i + 1] < 0) { lab[i + 1] = id; stack[sp++] = i + 1; }
+      if (y > 0 && white[i - w] && lab[i - w] < 0) { lab[i - w] = id; stack[sp++] = i - w; }
+      if (y + 1 < h && white[i + w] && lab[i + w] < 0) { lab[i + w] = id; stack[sp++] = i + w; }
+    }
+    sides.push(mask); sizes.push(size);
+  }
+  const want = [5, 9, 6, 10];
+  const pick = [-1, -1, -1, -1];
+  for (let id = 0; id < sides.length; id++) for (let k = 0; k < 4; k++) if (sides[id] === want[k]) pick[k] = id;
+  if (pick.some(p => p < 0)) return 0;
+  const sz = pick.map(p => sizes[p]);
+  if (Math.max(...sz) / Math.min(...sz) > 1.15 || Math.min(...sz) < n * 0.005) return 0;
+  const kill = new Uint8Array(sides.length);
+  for (const p of pick) kill[p] = 1;
+  const zeroed = new Uint8Array(n);
+  let un = 0;
+  for (let i = 0; i < n; i++) if (lab[i] >= 0 && kill[lab[i]]) { px[i * 4 + 3] = 0; zeroed[i] = 1; un++; }
+  for (let pass = 0; pass < 4; pass++) {
+    let grew = false;
+    for (let i = 0; i < n; i++) {
+      if (zeroed[i]) continue;
+      const j = i * 4;
+      if (px[j + 3] < 128) continue;
+      const r = px[j], g = px[j + 1], b = px[j + 2];
+      const mn = Math.min(r, g, b);
+      if (mn < 150 || Math.max(r, g, b) - mn > 110) continue;
+      const x = i % w, y = (i / w) | 0;
+      const near = (x > 0 && zeroed[i - 1]) || (x + 1 < w && zeroed[i + 1]) ||
+        (y > 0 && zeroed[i - w]) || (y + 1 < h && zeroed[i + w]);
+      if (near) { px[j + 3] = 0; zeroed[i] = 1; un++; grew = true; }
+    }
+    if (!grew) break;
+  }
+  return un;
+}
 function computeFillProd(px, w, h, slots) {
   const n = w * h, fill = new Int32Array(n);
   const outside = new Uint8Array(n), work = new Int32Array(n);
@@ -590,6 +703,8 @@ for (const { pkg, file } of jobs) {
   const plan = planOf(px, S, S);
   if (!plan || plan.plate) { console.log(`非延伸 ${pkg} fill=${plan ? plan.fill.toFixed(2) : '-'}`); continue; }
   if (Math.abs(plan.scale - 1) >= 0.01) px = redraw(px, S, S, plan);
+  cleanRim(px, S, S);
+  if (WC && stripWhiteCorners(px, S, S) > 0) cleanRim(px, S, S);
   bleedEdgeColor(px, S, S);
   deFringe(px, S, S);
   const cf = MODE === 'prod' ? computeFillProd(px, S, S, SLOTS) : MODE === 'local' ? computeFillLocal(px, S, S) : MODE === 'local2' ? computeFillLocal2(px, S, S) : computeFill(px, S, S);

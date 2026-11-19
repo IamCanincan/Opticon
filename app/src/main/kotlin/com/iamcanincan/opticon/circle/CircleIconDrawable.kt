@@ -398,6 +398,12 @@ private class BareForeground(
         bitmap.setPixels(px, 0, w, 0, 0, w, h)
         return
       }
+      // ⓪ 源图烤进的白角背景（圆贴在不透明白方块上）：白角是 α255 实像素，洪泛进不去 ⇒
+      //    延伸只填透明处、白角原样留下（微信接龙管家）。四角同余白块认成背景清零，见函数 KDoc。
+      //    清完再跑一遍 cleanRim：r3c 那遍看到的是白角环，盘缘噪点没被清 ⇒ 会当补色种子放射条纹。
+      //    只在开火时跑（射程=接龙家族），成本不摊到每张延伸图标。
+      stage = "r3w"
+      if (stripBakedWhiteCorners(px, w, h) > 0) cleanRim(px, w, h)
       // ① 抗锯齿边色渗透：源 PNG 的透明处常是"黑色带 alpha"，直接叠在补边上就是一条黑线。
       stage = "r4"; bleedEdgeColor(px, w, h); deFringe(px, w, h)
       stage = "r5"
@@ -1024,6 +1030,101 @@ private fun slotFringe(px: IntArray, outside: ByteArray, j: Int) {
     px[j] = px[j] and 0x00FFFFFF
     outside[j] = 2
   }
+}
+
+/** 源图把圆烤在不透明白方块上时（微信接龙管家快捷方式），白角是 α255 实像素：
+ * planOf 的可见占比把白角算进去 ⇒ 走延伸支，但 computeFill 只填**透明**外面 ⇒ 白角原样留下。
+ * 这里把「内切圆的白色补集」认成背景清零 α，交给后面的 bleedEdgeColor/computeFill 按边缘色补满。
+ *
+ * 判据 = 中性白（min≥235 且 max−min≤12、α≥128）的 4-连通块里，**四个角各有一块、
+ * 每块恰好碰两条相邻边、四块面积同余（max/min≤1.15）且每块≥0.5% 光栅**。
+ * 这是「圆/圆角方贴在白底上」的几何签名；设计白底不长这样：
+ * 易班熊的右上白底 1 块、translate 1 块、kazumi/高德 2 块、白盘环碰四边 —— 全不满足。
+ * ⚠ 第一版「碰两相邻边就清」在离线语料开火 6 张设计白底（易班 60331 格=熊的背景），已否。
+ * 白→盘色的不透明渐隐环同清（只从已清零格往外长，min≥150 且 spread≤110，最多 4 环）：
+ * 留着会当 computeFill 种子把四角补色拉向白（正对照看图=米色角）。清完调用方再跑一遍
+ * cleanRim：r3c 那遍看到的是白角环，盘缘噪点没清 ⇒ 放射条纹（正对照第二版看图抓到）。
+ * 射程现量：349 张源（runtime 语料+201 快捷方式+微信/bili 设备源）只开火接龙管家两代源图；
+ * 141 张延伸合成负对照带/不带 --wc 逐字节相同。
+ */
+private fun stripBakedWhiteCorners(px: IntArray, w: Int, h: Int): Int {
+  val n = w * h
+  val white = ByteArray(n)
+  for (i in 0 until n) {
+    val p = px[i]
+    if ((p ushr 24) < 128) continue
+    val r = (p ushr 16) and 255
+    val g = (p ushr 8) and 255
+    val b = p and 255
+    val mn = minOf(r, g, b)
+    if (mn >= 235 && maxOf(r, g, b) - mn <= 12) white[i] = 1
+  }
+  val lab = IntArray(n) { -1 }
+  val stack = IntArray(n)
+  val sides = ArrayList<Int>()
+  val sizes = ArrayList<Int>()
+  for (s in 0 until n) {
+    if (white[s] != 1.toByte() || lab[s] >= 0) continue
+    val id = sides.size
+    var sp = 0
+    var size = 0
+    var mask = 0
+    stack[sp++] = s
+    lab[s] = id
+    while (sp > 0) {
+      val i = stack[--sp]
+      size++
+      val x = i % w
+      val y = i / w
+      if (y == 0) mask = mask or 1
+      if (y == h - 1) mask = mask or 2
+      if (x == 0) mask = mask or 4
+      if (x == w - 1) mask = mask or 8
+      if (x > 0 && white[i - 1] == 1.toByte() && lab[i - 1] < 0) { lab[i - 1] = id; stack[sp++] = i - 1 }
+      if (x + 1 < w && white[i + 1] == 1.toByte() && lab[i + 1] < 0) { lab[i + 1] = id; stack[sp++] = i + 1 }
+      if (y > 0 && white[i - w] == 1.toByte() && lab[i - w] < 0) { lab[i - w] = id; stack[sp++] = i - w }
+      if (y + 1 < h && white[i + w] == 1.toByte() && lab[i + w] < 0) { lab[i + w] = id; stack[sp++] = i + w }
+    }
+    sides.add(mask)
+    sizes.add(size)
+  }
+  // 碰边掩码：T=1 B=2 L=4 R=8 ⇒ 四角块 = TL5 / TR9 / BL6 / BR10
+  val want = intArrayOf(5, 9, 6, 10)
+  val pick = IntArray(4) { -1 }
+  for (id in sides.indices) for (k in 0..3) if (sides[id] == want[k]) pick[k] = id
+  if (pick.any { it < 0 }) return 0
+  val sz = pick.map { sizes[it] }
+  if (sz.max() / sz.min().toDouble() > 1.15 || sz.min() < n * 0.005) return 0
+  val kill = BooleanArray(sides.size)
+  for (id in pick) kill[id] = true
+  val zeroed = ByteArray(n)
+  var un = 0
+  for (i in 0 until n) {
+    if (lab[i] >= 0 && kill[lab[i]]) { px[i] = px[i] and 0x00FFFFFF; zeroed[i] = 1; un++ }
+  }
+  // 白→盘色的不透明渐隐环留着会当 computeFill 的种子，把四角补色拉向白（正对照看图=米色角）。
+  // 只从已清零格往外长：min≥150 且 spread≤110 才认（环实测 min225..241/spread13..30，
+  // 盘黄 min76/spread179 在第一层就停住），最多 4 环。
+  for (pass in 0 until 4) {
+    var grew = false
+    for (i in 0 until n) {
+      if (zeroed[i] == 1.toByte()) continue
+      val p = px[i]
+      if ((p ushr 24) < 128) continue
+      val r = (p ushr 16) and 255
+      val g = (p ushr 8) and 255
+      val b = p and 255
+      val mn = minOf(r, g, b)
+      if (mn < 150 || maxOf(r, g, b) - mn > 110) continue
+      val x = i % w
+      val y = i / w
+      val near = (x > 0 && zeroed[i - 1] == 1.toByte()) || (x + 1 < w && zeroed[i + 1] == 1.toByte()) ||
+        (y > 0 && zeroed[i - w] == 1.toByte()) || (y + 1 < h && zeroed[i + w] == 1.toByte())
+      if (near) { px[i] = p and 0x00FFFFFF; zeroed[i] = 1; un++; grew = true }
+    }
+    if (!grew) break
+  }
+  return un
 }
 
 /** 「包装自身抛了」只报一次（每张图标一行会把日志刷满）。 */
