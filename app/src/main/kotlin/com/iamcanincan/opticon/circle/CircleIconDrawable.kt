@@ -5,7 +5,9 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ColorFilter
 import android.graphics.PixelFormat
+import android.graphics.Paint
 import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.ColorDrawable
@@ -32,6 +34,7 @@ private val VIEW_PORT_SCALE = 1f / (1f + 2f * AdaptiveIconDrawable.getExtraInset
 class RenderCache {
   var bitmap: Bitmap? = null
   var canvas: Canvas? = null
+  var holes: Bitmap? = null
   var w = 0
   var h = 0
   var alpha = 255
@@ -42,6 +45,7 @@ class RenderCache {
   fun reset() {
     bitmap = null
     canvas = null
+    holes = null
     w = 0
     h = 0
   }
@@ -186,6 +190,12 @@ private class BareForeground(
   private val cache: RenderCache
     get() = if (hasFilter) (local ?: RenderCache().also { local = it }) else shared
 
+  /** 把铺底的 edge 色从封闭镂空里抠掉（见 drawInner）。
+   *  ⚠ 必须 DST_OUT 不能 CLEAR：CLEAR 的公式是 [0,0]，**不看源 alpha**、整块绘制矩形全清
+   *  （2026-11-19 真机：全透明掩码也把整张图标抠空 → 233 张落库全透明黑块）。 */
+  private val holePaint =
+    Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) }
+
   init {
     // 源图标自己 invalidate（会动的图标、状态变化）时把缓存作废，否则会冻在第一帧。
     inner.callback = this
@@ -261,6 +271,12 @@ private class BareForeground(
     // 用里圈渲染出的边缘色（图标自己的颜色，不是另垫底盘，守 2026-11-13「不要底盘」）整张
     // 铺实再重贴里圈，交出去的位图外圈就没有透明像素。外圈在屏幕上被桌面遮罩裁掉，只影响
     // 落库那张全幅位图。alpha<255（淡入淡出）时不填，保持透明。
+    // ⚠ 铺完必须把**封闭镂空**用 DST_OUT 掩码抠回透明（2026-11-19 主人：「outlook 的查看日历
+    //   为什么变成了蓝色的一整块」）：那张矢量五个反绕圆点在渲染里是 α0，blit 不覆盖底下像素，
+    //   整张铺色会把洞垫成实色 → 圆点消失、整块蓝。掩码 = 渲染的 α0 格（随渲染缓存）。
+    // ⚠ 也不能省掉铺色改成只 clipOutRect 铺外圈（同日第二版，已否）：那样 view 内的半透明像素
+    //   会叠在桌面**复用位图池的上一张残影**上（真机 pixdiff：audioplayer 60% 格随池漂、
+    //   大半透明图标被白残影染成白整块）。铺 edge 色才是确定的合成底。
     if (alpha == 255) {
       val b = cache.bitmap
       if (b != null && !b.isRecycled) {
@@ -270,6 +286,8 @@ private class BareForeground(
         if ((edge ushr 24) == 255) {
           canvas.drawColor(edge)
           drawFilled(canvas, view)
+          val m = cache.holes
+          if (m != null && !m.isRecycled) canvas.drawBitmap(m, null, view, holePaint)
         }
       }
     }
@@ -333,7 +351,7 @@ private class BareForeground(
     var stage = "r0"
     rendering = true
     try {
-      stage = "r1"; bitmap.eraseColor(Color.TRANSPARENT)
+      stage = "r1"; bitmap.eraseColor(Color.TRANSPARENT); cache.holes = null
       stage = "r2"; drawIcon(layer, w, h, view)
       stage = "r3"
       val px = IntArray(w * h)
@@ -388,6 +406,11 @@ private class BareForeground(
       stage = "r6"; composeOver(px, fill)
       stage = "r7"
       bitmap.setPixels(px, 0, w, 0, 0, w, h)
+      // 封闭镂空掩码：渲染里 α0 的格（computeFill 只填得到从四边洪泛可达的外面，
+      // 围在图标内部的洞走不到 ⇒ 留 α0）。drawInner 铺完 edge 底后拿它 DST_OUT 抠回透明。
+      val hm = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+      hm.setPixels(IntArray(w * h) { if ((px[it] ushr 24) == 0) Color.BLACK else 0 }, 0, w, 0, 0, w, h)
+      cache.holes = hm
       stage = "r8"
     } catch (t: Throwable) {
       Log.w(TAG, "渲染阶段: " + stage, t)
