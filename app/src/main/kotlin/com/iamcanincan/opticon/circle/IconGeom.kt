@@ -9,7 +9,8 @@ import kotlin.math.sqrt
  * 三步（主人 2026-11-14 原话定下的口径）：
  *  ① 把内容缩放到**恰好不被正方形裁掉任何一个有色像素**（[INSCRIBED_SHARE] 之前先做这一步）；
  *  ② 按填满之后**可见格占整张光栅的比例**分档：≥ [INSCRIBED_SHARE]（π/4 调小到 0.778）走边角延伸，
- *    小于它要铺底；新翻进延伸那一档里整块墨都淡的（白盘白字）仍否决回铺底（见 [PALE_VETO_TOP]）；
+ *    小于它要铺底；但**认出的正圆直接延伸**（占比在小格上被抗锯齿吃掉，不该由它答圆该不该延伸）；
+ *    新翻进延伸那一档里连笔画都白的（白盘白字）仍否决回铺底（见 [PALE_VETO_TOP]）；
  *  ③ 铺底那一支再缩到**内切圆不会裁掉任何一个有色像素**（留 [CIRCLE_FIT] 余量；
  *    实心核是正圆的除外 —— 它恰好就是内切圆，再缩就是给完美的圆套一圈底）。
  *
@@ -96,12 +97,21 @@ internal object IconGeom {
     // ③ 铺底那一支才要缩进内切圆：半径在未缩放的格子上量，所以 ①② 合成一步时
     //   总倍率里的 fillScale 正好约掉（s1 × need/(maxR·s1) = need/maxR）。
     if (forceExtend) return Plan(fillScale, cx, cy, fill, 0f, false, false)
-    // ② 延伸支。挪线新翻进来的那一档 [INSCRIBED_SHARE, PALE_VETO_TOP) 里，整块墨都淡的
-    //   （白盘白字正圆）补白角会把字藏进白里 ⇒ 否决延伸、落铺底（黑底、正圆不缩）。
-    //   旧线以上早已延伸的行不受这条否决（射程只在新档），混色的照常延伸。
+    // ② 延伸支。挪线新翻进来的那一档 [INSCRIBED_SHARE, PALE_VETO_TOP) 里，连笔画都白的
+    //   （白盘白字，p5≥206）补白角会把字藏进白里 ⇒ 否决延伸、落铺底（黑底）。白盘灰字的
+    //   （学习通 p5=109）不拦。旧线以上早已延伸的行不受这条否决（它们的角补的是自己的边色，
+    //   未必是白，全量否决会把 chrome/glimpse/chatgpt 这些好好的延伸行误推回铺底）。
     if (fill >= INSCRIBED_SHARE &&
       !(fill < PALE_VETO_TOP && uniformPaleInk(px, w, h))
     ) return Plan(fillScale, cx, cy, fill, 0f, false, false)
+    // 占比线以下的正圆直接救进延伸：占比这把尺在小格上被抗锯齿/源量化吃掉（真机快捷方式
+    //   87 档学习通 fill=0.768 < 0.778，四档 96/192/384/768 量不到这一档），而正圆"本来就是
+    //   内切圆"，该不该延伸不该由占比答 ⇒ 认圆就延伸（主人 2026-11-20：「要一整块白底」）。
+    //   连笔画都白的正圆仍不救（白上白看不见）。占比线只管非圆。
+    val circle = roundCore(px, w, h)
+    if (fill < INSCRIBED_SHARE && circle && !uniformPaleInk(px, w, h)) {
+      return Plan(fillScale, cx, cy, fill, 0f, false, false)
+    }
     var maxR2 = 0f
     for (y in t..b) {
       val dy = y + 0.5f - cy
@@ -119,7 +129,7 @@ internal object IconGeom {
     // 正圆核本来就恰好是内切圆，再按 CIRCLE_FIT 缩就是给完美的圆套一圈底（主人 2026-11-19
     // 点名学习通正圆快捷方式「缩小的圆垫在底上」）。认圆只数实心格（主人：「半透明不能算
     // 有色像素」—— 用在认圆这一步；全局名单不动：半透明白盘那一族的盘本身就是半透明画的）。
-    val shrunk = radius > need && !roundCore(px, w, h)
+    val shrunk = radius > need && !circle
     val scale = if (shrunk) need / maxR else fillScale
     return Plan(scale, cx, cy, fill, radius, true, shrunk)
   }
@@ -175,17 +185,18 @@ internal object IconGeom {
     return rMax / rMin <= 1f + CIRCLE_SWING_PX / half + CIRCLE_SWING_SRC
   }
 
-  /** 整块墨都淡（p10 与中位都偏亮）= 白盘白字那种：延伸补白角会把淡字藏进白里。
-   *  与铺底换黑底那条（[CircleIconDrawable.inkTooLightForWhite]）共用同一份直方图，
-   *  但这里要 p10 **和** 中位两条都过 —— 只看 p10 会误伤"白字+深色块"（pdd 中位 255 但 p10 低）。 */
+  /** 连最暗的那一小撮墨都淡（p5 ≥ [PLATE_LIGHT_P10]）= 白盘**白字**那种：延伸补白角会把字
+   *  藏进白里 ⇒ 否决延伸。看 p5 不看 p10/中位：p10/中位量的是"盘白不白"，会把"白盘**灰字**"
+   *  （学习通 p5=109，灰字白底看得见）也误拦；p5 量"有没有任何看得见的深色笔画"，全白才拦
+   *  （文件前景 p5=239、菜鸟 p5≈238）。空档 109↔238，206 摆中间。 */
   private fun uniformPaleInk(px: IntArray, w: Int, h: Int): Boolean {
-    val (p10, med) = inkLumPercentiles(px, w, h) ?: return false
-    return p10 >= PLATE_LIGHT_P10 && med >= PALE_VETO_MED
+    val (p5, _) = inkLumPercentiles(px, w, h) ?: return false
+    return p5 >= PLATE_LIGHT_P10
   }
 
-  /** 实心格（α≥[SOLID_ALPHA]）亮度的 (p10, 中位)；一个实心格都没有 → null。
-   *  亮度 = 0.2126r+0.7152g+0.0722b，直方图一遍不排序。彩色铺底换黑底与几何延伸淡墨否决
-   *  共用这一份（主人 2026-11-15：一个模块不许两套主张）。 */
+  /** 实心格（α≥[SOLID_ALPHA]）亮度的 (p5, p10)；一个实心格都没有 → null。
+   *  亮度 = 0.2126r+0.7152g+0.0722b，直方图一遍不排序。彩色铺底换黑底（吃 p10）与几何延伸
+   *  淡墨否决（吃 p5）共用这一份（主人 2026-11-15：一个模块不许两套主张）。 */
   internal fun inkLumPercentiles(px: IntArray, w: Int, h: Int): Pair<Int, Int>? {
     val hist = IntArray(256)
     var n = 0
@@ -199,15 +210,15 @@ internal object IconGeom {
       n++
     }
     if (n == 0) return null
+    var p5 = -1
     var p10 = -1
-    var med = -1
     var acc = 0
     for (v in 0..255) {
       acc += hist[v]
-      if (p10 < 0 && acc >= n / 10) p10 = v
-      if (med < 0 && acc >= n / 2) { med = v; break }
+      if (p5 < 0 && acc >= n / 20) p5 = v
+      if (p10 < 0 && acc >= n / 10) { p10 = v; break }
     }
-    return Pair(p10, med)
+    return Pair(p5, p10)
   }
 
   /** 正圆面积比带：实测正圆族 0.754~0.803（四档），π/4=0.7854 居中；上下各留一格量化。 */

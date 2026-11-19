@@ -455,7 +455,7 @@ private class BareForeground(
    *  （145 行现量）；菜鸟四张 p10=238.6 在档上。直方图与 [IconGeom] 的延伸淡墨否决共用
    *  [IconGeom.inkLumPercentiles] 一份，别各数各的。 */
   private fun inkTooLightForWhite(px: IntArray, w: Int, h: Int): Boolean {
-    val p10 = IconGeom.inkLumPercentiles(px, w, h)?.first ?: return false
+    val p10 = IconGeom.inkLumPercentiles(px, w, h)?.second ?: return false
     return p10 >= PLATE_LIGHT_P10
   }
 
@@ -767,16 +767,11 @@ internal const val ALPHA_MIN = 8
  *  ⚠ [IconGeom.inkLumPercentiles] 也吃它（淡墨判据两边必须数同一批格子）—— 所以不是 private。 */
 internal const val SOLID_ALPHA = 160
 
-/** 铺底支换黑底的墨亮度 p10 门槛（见 [CircleIconDrawable.inkTooLightForWhite]）。
- *  ⚠ [IconGeom] 的延伸淡墨否决也吃它 —— 不是 private。 */
+/** 淡墨门槛 206，两条判据共用但吃不同分位（见 [IconGeom.inkLumPercentiles]）：
+ *  铺底换黑底吃 **p10**（[CircleIconDrawable.inkTooLightForWhite]）；延伸淡墨否决吃 **p5**
+ *  （[IconGeom] uniformPaleInk，连最暗 5% 都淡才拦，白盘灰字放行）。206 摆在 p10 空档
+ *  192↔220、p5 空档 109↔238 中间。⚠ 不是 private：IconGeom 也吃它。 */
 internal const val PLATE_LIGHT_P10 = 206
-
-/** 延伸淡墨否决的中位门槛：p10 与中位**都**偏亮 = 整块墨都淡
- *  （白盘白字那种），补白角会把字藏进白里 ⇒ 仍留铺底（黑底）。中位 250 摆在实测空档
- *  246↔253 中间：混色延伸行（chrome/美团/饿了么/推特…）中位最高 246，整块淡的铺底行
- *  （学习通/文件/devcheck…）最低 253。只用 p10 会把"白字+深色块"（pdd p10=52 中位 255）
- *  误判 —— 那种深色块在白角上看得见，不该否决。 */
-internal const val PALE_VETO_MED = 250
 
 /** 判"深色毛边"的亮度上限：源图透明区是黑 RGB 时，放大出来的边实测 (2,21,29) ≈ 15。 */
 private const val RIM_LUM = 60
@@ -801,8 +796,9 @@ internal const val INSCRIBED_SHARE = 0.778f
 /**
  * 延伸淡墨否决只作用在**这次挪线新翻进来的那一档** `[INSCRIBED_SHARE, PALE_VETO_TOP)`：
  * 旧线 0.785 以上早已延伸的行（chrome/美团/glimpse…）一个不动，免得"稍微调小"变成重排整族。
- * 这一档里整块墨都淡的（学习通正圆白盘白字、文件管理器）若延伸，补出来的白角会把淡字藏进
- * 白里 ⇒ 否决延伸、仍走铺底（黑底，正圆不缩）。混色的（消息 p10=50、混元 154）照常延伸。
+ * 这一档里**连笔画都白**的（文件前景白文件夹、菜鸟淡蓝框，p5≥206）若延伸，补出来的白角会把
+ * 字藏进白里 ⇒ 否决延伸、仍走铺底（黑底）。**白盘灰字**的学习通 p5=109 不拦 ⇒ 延伸成一整块
+ * 白底灰字（主人 2026-11-20：「要一整块白底」）。混色的（消息 p10=50、混元 154）照常延伸。
  */
 internal const val PALE_VETO_TOP = 0.785f
 
