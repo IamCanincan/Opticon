@@ -409,8 +409,14 @@ private class BareForeground(
         }
         // ① 抗锯齿边色渗透：源 PNG 的透明处常是"黑色带 alpha"，直接叠在底盘上就是一圈黑边。
         stage = "r4s"; bleedEdgeColor(px, w, h)
-        // ② 铺**白底**。不延伸 —— 透明处一律由底承担。
-        stage = "r5s"; composeOverColor(px, Color.WHITE)
+        // ② 铺底。不延伸 —— 透明处一律由底承担。默认白底（主人 2026-11-14）；
+        //    墨自己整片偏亮时白底=看不见（菜鸟快捷方式 p10=238.6）⇒ 换黑底（主人 2026-11-19）。
+        stage = "r5s"
+        val light = inkTooLightForWhite(px, w, h)
+        if (plateLogLeft.decrementAndGet() >= 0) {
+          Log.d(TAG, "铺底色 host=$clipHost 底=" + (if (light) "黑" else "白") + " : " + IconNames.of(inner))
+        }
+        composeOverColor(px, if (light) Color.BLACK else Color.WHITE)
         stage = "r6s"
         bitmap.setPixels(px, 0, w, 0, 0, w, h)
         return
@@ -441,6 +447,32 @@ private class BareForeground(
     } finally {
       rendering = false
     }
+  }
+
+  /** 墨的亮度 p10 ≥ [PLATE_LIGHT_P10] = 整片墨偏亮、白底上看不见 ⇒ 铺黑底（菜鸟快捷方式）。
+   *  用 p10 不用中位：中位会把"白字+深色块"（pdd p10=52.5、中位 255）也算亮，
+   *  那种深色块在白底上看得见、不该换底。阈值 206 摆在候选铺底行 p10 的空档 192↔220 中间
+   *  （145 行现量）；菜鸟四张 p10=238.6 在档上。直方图一遍，不排序。 */
+  private fun inkTooLightForWhite(px: IntArray, w: Int, h: Int): Boolean {
+    val hist = IntArray(256)
+    var n = 0
+    for (i in 0 until w * h) {
+      val p = px[i]
+      if ((p ushr 24) < SOLID_ALPHA) continue
+      val r = (p ushr 16) and 255
+      val g = (p ushr 8) and 255
+      val b = p and 255
+      hist[(0.2126 * r + 0.7152 * g + 0.0722 * b).toInt().coerceIn(0, 255)]++
+      n++
+    }
+    if (n == 0) return false
+    val want = n / 10
+    var acc = 0
+    for (v in 0..255) {
+      acc += hist[v]
+      if (acc >= want) return v >= PLATE_LIGHT_P10
+    }
+    return false
   }
 
   /** 有色格外接框 `[l,t,r,b]`（与 [IconGeom.planOf] 同一条 α 线）；全透明 = null。 */
@@ -749,6 +781,9 @@ internal const val ALPHA_MIN = 8
 
 /** 取边色时优先用"够实"的格：抗锯齿边色被拉出去就是一道浅色接缝。 */
 private const val SOLID_ALPHA = 160
+
+/** 铺底支换黑底的墨亮度 p10 门槛（见 [CircleIconDrawable.inkTooLightForWhite]）。 */
+private const val PLATE_LIGHT_P10 = 206
 
 /** 判"深色毛边"的亮度上限：源图透明区是黑 RGB 时，放大出来的边实测 (2,21,29) ≈ 15。 */
 private const val RIM_LUM = 60
@@ -1266,6 +1301,9 @@ private const val GEOM_LOG_LIMIT = 300
 private val geomLogLeft = AtomicInteger(GEOM_LOG_LIMIT)
 
 private val zoomLogLeft = AtomicInteger(ZOOM_LOG_LIMIT)
+
+/** 「铺底色 底=黑/白」证据行额度（前 [GEOM_LOG_LIMIT] 张铺底支）。 */
+private val plateLogLeft = AtomicInteger(GEOM_LOG_LIMIT)
 
 /**
  * 「round 资源按延伸画」证据行额度（前 [ROUND_LOG_LIMIT] 张）。
