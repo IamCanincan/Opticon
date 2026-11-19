@@ -1,5 +1,8 @@
 // 离线复现彩色「边角延伸」管线（CircleIconDrawable.renderInto 的 r3..r7），量交界处色差。
 // 两臂：--mode=rowcol（旧：行/列边色平均，负对照）/ --mode=local（新：轮廓边界多源 BFS）。
+// --mode=prod = 生产 computeFill 逐字镜像（含 soft/α255 种子/cnt 防溢出/盒抹/step5）；
+// 叠 --slots = 设计留缝臂（unmarkSlots）。local/local2 是 11-18 前旧臂，只作历史负对照。
+// ⚠ 直接给 png/目录时包名过滤只收**不存在的路径**参数（旧版把路径自己当过滤词 ⇒ 静默 0 张）。
 // 用法：node _harness/_extfill.cjs [--mode=rowcol|local] [--size=256] [--zoom] [--out=目录]
 //       (--geom=<geom.tsv> --index=<index.tsv> | <png 或目录…>) [包名子串…]
 // 接缝读数：补边色 vs 相邻实色图标格的最大通道差（硬接缝 α≥250 / 软边 160..249），
@@ -35,8 +38,9 @@ const args = process.argv.slice(2);
 const S = +(args.find(a => a.startsWith('--size='))?.slice(7) || 256);
 const ZOOM = args.includes('--zoom');
 const MODE = args.find(a => a.startsWith('--mode='))?.slice(7) || 'rowcol';
+const SLOTS = args.includes('--slots');
 const OUT = args.find(a => a.startsWith('--out='))?.slice(6);
-const needles = args.filter(a => !a.startsWith('--'));
+const needles = args.filter(a => !a.startsWith('--') && !fs.existsSync(a));
 
 function rgba(img) {
   const { w, h, chans, out } = img, n = w * h, r = new Uint8ClampedArray(n * 4);
@@ -345,6 +349,172 @@ function computeFillLocal2(px, w, h) {
   }
   return { fill, outside };
 }
+// 设计留缝：上下（或左右）被实色夹住、且连续长度≥半边长的透明通道 = 图标自己的缝
+// （outlook 查看日历那根横档），不是背景 ⇒ 从 outside 退标，不补色、留 α0 交镂空掩码。
+// 通道厚度 = 到上/下实色距离之和（α≥160，与种子兜底同数）；厚度≤边长/8（384⇒48，
+// 盖住放大后 27px 的横档）且连续长度≥半边长 = 设计缝。半厚口径会漏缝的首尾几行（D=24 时 26.7 厚的缝只退中间 17 行）。
+function unmarkSlots(px, w, h, outside) {
+  const n = w * h, D = Math.max(4, Math.round(w / 8)), BIG = 1 << 28;
+  const a = new Int32Array(n), b = new Int32Array(n);
+  const ink = i => px[i * 4 + 3] >= 160;
+  for (let x = 0; x < w; x++) {
+    let t = BIG;
+    for (let y = 0; y < h; y++) { const i = y * w + x; a[i] = t; t = ink(i) ? 0 : t + 1; }
+    t = BIG;
+    for (let y = h - 1; y >= 0; y--) { const i = y * w + x; b[i] = t; t = ink(i) ? 0 : t + 1; }
+  }
+  let un = 0;
+  const slot = new Uint8Array(n);
+  const sandV = i => outside[i] === 1 && a[i] + b[i] <= D + 1;
+  for (let y = 0; y < h; y++) {
+    let x = 0;
+    while (x < w) {
+      if (!sandV(y * w + x)) { x++; continue; }
+      let x2 = x; while (x2 < w && sandV(y * w + x2)) x2++;
+      if (x2 - x >= w / 2) for (let xx = x; xx < x2; xx++) { outside[y * w + xx] = 2; slot[y * w + xx] = 1; un++; }
+      x = x2;
+    }
+  }
+  for (let y = 0; y < h; y++) {
+    let t = BIG;
+    for (let x = 0; x < w; x++) { const i = y * w + x; a[i] = t; t = ink(i) ? 0 : t + 1; }
+    t = BIG;
+    for (let x = w - 1; x >= 0; x--) { const i = y * w + x; b[i] = t; t = ink(i) ? 0 : t + 1; }
+  }
+  const sandH = i => outside[i] === 1 && a[i] + b[i] <= D + 1;
+  for (let x = 0; x < w; x++) {
+    let y = 0;
+    while (y < h) {
+      if (!sandH(y * w + x)) { y++; continue; }
+      let y2 = y; while (y2 < h && sandH(y2 * w + x)) y2++;
+      if (y2 - y >= h / 2) for (let yy = y; yy < y2; yy++) { outside[yy * w + x] = 2; slot[yy * w + x] = 1; un++; }
+      y = y2;
+    }
+  }
+  // 缝缘一圈 α 渐隐格也归 α0：它们不在 outside 里 ⇒ 补色场在它们是 0，composeOver
+  // 会把半透明压在黑底上 = 缝上下两条黑细线（384 正对照看图抓到的）。缝是直边，抹渐隐无锯齿代价。
+  // ⚠ 只抹**退标过的缝**的缘，不碰封闭圆点那族的渐隐（那族压在蓝底上是已验收的样子）。
+  for (let i = 0; i < n; i++) {
+    if (!slot[i]) continue;
+    const x = i % w, y = (i / w) | 0;
+    for (const j of [x > 0 ? i - 1 : -1, x + 1 < w ? i + 1 : -1, y > 0 ? i - w : -1, y + 1 < h ? i + w : -1]) {
+      if (j < 0) continue;
+      const al = A(px, j);
+      if (al > 8 && al < 255) { px[j * 4 + 3] = 0; outside[j] = 2; }
+    }
+  }
+  return un;
+}
+// 生产 computeFill 逐字移植（2026-11-19 版：soft 通行证 + α255 种子 + cnt 平均防溢出 + 盒抹两遍）。
+// local/local2 是 11-18 之前的旧臂，只作历史负对照，别拿它们当生产镜像。
+function computeFillProd(px, w, h, slots) {
+  const n = w * h, fill = new Int32Array(n);
+  const outside = new Uint8Array(n), work = new Int32Array(n);
+  let sp = 0;
+  const mark = i => { if (!outside[i] && A(px, i) <= 8) { outside[i] = 1; work[sp++] = i; } };
+  for (let x = 0; x < w; x++) { mark(x); mark((h - 1) * w + x); }
+  for (let y = 0; y < h; y++) { mark(y * w); mark(y * w + w - 1); }
+  while (sp > 0) {
+    const i = work[--sp], x = i % w, y = (i / w) | 0;
+    if (x > 0) mark(i - 1); if (x + 1 < w) mark(i + 1);
+    if (y > 0) mark(i - w); if (y + 1 < h) mark(i + w);
+  }
+  const slotN = slots ? unmarkSlots(px, w, h, outside) : 0;
+  const soft = new Uint8Array(n);
+  let sp2 = 0;
+  for (let i = 0; i < n; i++) if (outside[i] === 1) { soft[i] = 1; work[sp2++] = i; }
+  while (sp2 > 0) {
+    const i = work[--sp2], x = i % w, y = (i / w) | 0;
+    const pass = j => { if (!soft[j] && A(px, j) < 255) { soft[j] = 1; work[sp2++] = j; } };
+    if (x > 0) pass(i - 1); if (x + 1 < w) pass(i + 1);
+    if (y > 0) pass(i - w); if (y + 1 < h) pass(i + w);
+  }
+  const dist = new Int32Array(n).fill(-1);
+  const sumR = new Int32Array(n), sumG = new Int32Array(n), sumB = new Int32Array(n), cnt = new Int32Array(n);
+  let head = 0, tail = 0;
+  const NB = [-1, 1, -w, w, -w - 1, -w + 1, w - 1, w + 1];
+  for (const threshold of [255, 160]) {
+    for (let i = 0; i < n; i++) {
+      if (A(px, i) < threshold) continue;
+      const x = i % w, y = (i / w) | 0;
+      let seed = false;
+      for (const d of NB) {
+        const j = i + d;
+        if (j < 0 || j >= n) continue;
+        const jx = j % w, jy = (j / w) | 0;
+        if (Math.abs(jx - x) > 1 || Math.abs(jy - y) > 1) continue;
+        if (soft[j]) { seed = true; break; }
+      }
+      if (!seed) continue;
+      dist[i] = 0; cnt[i] = 1;
+      sumR[i] = px[i * 4]; sumG[i] = px[i * 4 + 1]; sumB[i] = px[i * 4 + 2];
+      work[tail++] = i;
+    }
+    if (tail > 0) break;
+    dist.fill(-1);
+  }
+  while (head < tail) {
+    const i = work[head++], x = i % w, y = (i / w) | 0, d = dist[i] + 1;
+    for (const off of NB) {
+      const j = i + off;
+      if (j < 0 || j >= n) continue;
+      const jx = j % w, jy = (j / w) | 0;
+      if (Math.abs(jx - x) > 1 || Math.abs(jy - y) > 1) continue;
+      if (!soft[j]) continue;
+      if (dist[j] < 0) {
+        dist[j] = d; cnt[j] = cnt[i];
+        sumR[j] = sumR[i]; sumG[j] = sumG[i]; sumB[j] = sumB[i];
+        work[tail++] = j;
+      } else if (dist[j] === d) {
+        cnt[j] += 1;
+        sumR[j] += Math.trunc((sumR[i] + Math.trunc(cnt[i] / 2)) / cnt[i]);
+        sumG[j] += Math.trunc((sumG[i] + Math.trunc(cnt[i] / 2)) / cnt[i]);
+        sumB[j] += Math.trunc((sumB[i] + Math.trunc(cnt[i] / 2)) / cnt[i]);
+      }
+    }
+  }
+  for (let i = 0; i < n; i++) {
+    if (outside[i] === 1 && dist[i] >= 0) {
+      fill[i] = (0xFF000000 | (Math.trunc((sumR[i] + Math.trunc(cnt[i] / 2)) / cnt[i]) << 16) |
+        (Math.trunc((sumG[i] + Math.trunc(cnt[i] / 2)) / cnt[i]) << 8) |
+        Math.trunc((sumB[i] + Math.trunc(cnt[i] / 2)) / cnt[i])) | 0;
+    }
+  }
+  const snap = new Int32Array(n);
+  for (let pass = 0; pass < 2; pass++) {
+    snap.set(fill);
+    for (let i = 0; i < n; i++) {
+      if (outside[i] !== 1 || snap[i] === 0) continue;
+      const x = i % w, y = (i / w) | 0;
+      let sr = 0, sg = 0, sb = 0, c2 = 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        const c = snap[ny * w + nx];
+        if (!c) continue;
+        sr += (c >> 16) & 255; sg += (c >> 8) & 255; sb += c & 255; c2++;
+      }
+      fill[i] = (0xFF000000 | (Math.trunc(sr / c2) << 16) | (Math.trunc(sg / c2) << 8) | Math.trunc(sb / c2)) | 0;
+    }
+  }
+  // 5) 再往图标里垫（α<250 且 fill=0，4 邻有补色，垫到不再长、上限 8 遍）。
+  //    ⚠ 缝格/缝缘（outside=2）跳过：不跳的话 step5 从缝口把横档逐环吃回去。
+  let pass5 = 0, added5 = true;
+  while (added5 && pass5 < 8) {
+    added5 = false; pass5++;
+    snap.set(fill);
+    for (let i = 0; i < n; i++) {
+      if (fill[i] !== 0 || A(px, i) >= 250 || outside[i] === 2) continue;
+      const x = i % w, y = (i / w) | 0;
+      let sr = 0, sg = 0, sb = 0, c2 = 0;
+      const near = j => { const c = snap[j]; if (!c) return; sr += (c >> 16) & 255; sg += (c >> 8) & 255; sb += c & 255; c2++; };
+      if (x > 0) near(i - 1); if (x + 1 < w) near(i + 1);
+      if (y > 0) near(i - w); if (y + 1 < h) near(i + w);
+      if (c2 > 0) { fill[i] = (0xFF000000 | (Math.trunc(sr / c2) << 16) | (Math.trunc(sg / c2) << 8) | Math.trunc(sb / c2)) | 0; added5 = true; }
+    }
+  }
+  return { fill, outside, slots: slotN };
+}
 function composeOver(px, fill) {
   const out = px.slice();
   for (let i = 0; i < px.length / 4; i++) {
@@ -399,7 +569,7 @@ if (geomArg && indexArg) {
     jobs.push({ pkg, file: f });
   }
 } else {
-  for (const a of args.filter(x => !x.startsWith('--'))) {
+  for (const a of args.filter(x => !x.startsWith('--') && fs.existsSync(x))) {
     const st = fs.statSync(a);
     const files = st.isDirectory()
       ? fs.readdirSync(a).filter(f => f.endsWith('.png') && !f.includes('preview') && !f.endsWith('_modelbg.png') && !f.endsWith('_winab.png') && !f.endsWith('_ab.png')).sort().map(f => path.join(a, f))
@@ -422,7 +592,8 @@ for (const { pkg, file } of jobs) {
   if (Math.abs(plan.scale - 1) >= 0.01) px = redraw(px, S, S, plan);
   bleedEdgeColor(px, S, S);
   deFringe(px, S, S);
-  const { fill, outside } = MODE === 'local' ? computeFillLocal(px, S, S) : MODE === 'local2' ? computeFillLocal2(px, S, S) : computeFill(px, S, S);
+  const cf = MODE === 'prod' ? computeFillProd(px, S, S, SLOTS) : MODE === 'local' ? computeFillLocal(px, S, S) : MODE === 'local2' ? computeFillLocal2(px, S, S) : computeFill(px, S, S);
+  const { fill, outside } = cf;
   // 接缝：补边格 vs 相邻实色图标格（α≥250 硬台阶 / 160..249 软边）
   const hard = [], soft = [], band = [];
   let worst = { d: -1, i: -1 };
@@ -445,15 +616,16 @@ for (const { pkg, file } of jobs) {
   }
   const composed = composeOver(px, fill);
   fs.writeFileSync(`${OUTD}/${pkg}.png`, encPNG(S, S, composed));
-  rows.push({ pkg, hard, soft, band, worst, fill, outside, px, composed });
+  rows.push({ pkg, hard, soft, band, worst, fill, outside, px, composed, slots: cf.slots || 0 });
 }
 rows.sort((a, b) => (q(b.hard, 0.9) || 0) - (q(a.hard, 0.9) || 0));
 console.log(`延伸支 ${rows.length} 张 @${S}px（接缝=补边色 vs 相邻图标格色，最大通道差）`);
 console.log('pkg                          硬接缝n  中位  p90  max  >30占比  软边p90  补边内带p90');
 for (const r of rows) {
   const over = r.hard.filter(d => d > 30).length;
-  console.log(`${r.pkg.padEnd(30)} ${String(r.hard.length).padStart(6)} ${q(r.hard, 0.5).toFixed(0).padStart(4)} ${q(r.hard, 0.9).toFixed(0).padStart(4)} ${q(r.hard, 1).toFixed(0).padStart(4)} ${(r.hard.length ? (over / r.hard.length * 100).toFixed(0) : '0').padStart(6)}% ${q(r.soft, 0.9).toFixed(0).padStart(7)} ${q(r.band, 0.9).toFixed(0).padStart(10)}`);
+  console.log(`${r.pkg.padEnd(30)} ${String(r.hard.length).padStart(6)} ${q(r.hard, 0.5).toFixed(0).padStart(4)} ${q(r.hard, 0.9).toFixed(0).padStart(4)} ${q(r.hard, 1).toFixed(0).padStart(4)} ${(r.hard.length ? (over / r.hard.length * 100).toFixed(0) : '0').padStart(6)}% ${q(r.soft, 0.9).toFixed(0).padStart(7)} ${q(r.band, 0.9).toFixed(0).padStart(10)}${MODE === 'prod' ? ' 缝=' + String(r.slots).padStart(6) : ''}`);
 }
+if (MODE === 'prod') fs.writeFileSync('D:/tmp/ext_slots.tsv', rows.map(r => `${r.pkg}\t${r.slots}`).join('\n') + '\n');
 fs.writeFileSync('D:/tmp/ext_rows.tsv', rows.map(r => `${r.pkg}\t${r.hard.length}\t${q(r.hard, 0.5).toFixed(1)}\t${q(r.hard, 0.9).toFixed(1)}\t${q(r.hard, 1).toFixed(1)}\t${q(r.soft, 0.9).toFixed(1)}\t${q(r.band, 0.9).toFixed(1)}\t${r.worst.i}`).join('\n') + '\n');
 if (ZOOM) {
   // 前 6 张：整图 + 最坏接缝 64×64 放大 4 倍

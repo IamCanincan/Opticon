@@ -774,6 +774,10 @@ private fun computeFill(px: IntArray, w: Int, h: Int): IntArray {
     if (y + 1 < h) mark(i + w)
   }
 
+  // 1a) 设计留缝退标（见 [unmarkDesignSlots]）：横档两端通外面，不退标就被当背景填实。
+  //     缝格标 outside=2（不是 0）：第 5 步往图标里垫色时靠它跳过，否则从缝口把缝逐环吃回去。
+  unmarkDesignSlots(px, w, h, outside)
+
   // 1b) 软边通行证：从 outside 出发洪泛整条 α<255 的渐隐坡（只作通路，不作种子）。
   //     parsec 那类轮廓是 6 格宽的 α 坡（21→204→255），贴 outside 的那格 α=33 不是实色，
   //     旧种子判据（八邻有 outside 的实色格）在整条软边弧上**一个种子都选不出**，
@@ -918,6 +922,7 @@ private fun computeFill(px: IntArray, w: Int, h: Int): IntArray {
     for (i in 0 until n) {
       if (fill[i] != 0) continue
       if ((px[i] ushr 24) >= 250) continue
+      if (outside[i] == 2.toByte()) continue
       val x = i % w
       val y = i / w
       var sr = 0
@@ -943,6 +948,82 @@ private fun computeFill(px: IntArray, w: Int, h: Int): IntArray {
     }
   }
   return fill
+}
+
+/**
+ * 设计留缝：上下（或左右）被实色夹住、厚度 ≤ 边长/8 且连续长度 ≥ 半边长的透明通道
+ * = 图标自己的缝（主人 2026-11-19：「查看日历那个镂空的横档呢」——outlook 日历顶块与
+ * 身体之间那根横档），不是背景 ⇒ 从 outside 退标成 2，不补色、留 α0 交镂空掩码抠回透明。
+ * 缝两端通外面，第 1 步洪泛会把它当外面填实 = 横档消失；封闭圆点那族不走这里（本就不是 outside）。
+ *
+ * ⚠ 厚度 = 到上/下实色距离之**和**（α≥[SOLID_ALPHA]，与种子兜底同数），不是半厚：
+ *   半厚口径 D 会漏缝的首尾几行（384 档 D=24 时 27px 厚的缝只退中间 17行，缝上下留蓝条）。
+ * ⚠ 缝缘一圈 α 渐隐格也归 α0 并标 2：它们不在 outside 里 ⇒ 补色场在它们是 0，composeOver
+ *   把半透明压黑底 = 缝上下两条黑细线（384 正对照看图抓到）。缝是直边，抹渐隐无锯齿代价；
+ *   **不碰封闭圆点那族的渐隐**（那族压在蓝底上是已验收的样子）。
+ * 射程现量：四份语料 293 张延伸支只开火日历 1 张（离线台 `_extfill.cjs --mode=prod --slots`）。
+ */
+private fun unmarkDesignSlots(px: IntArray, w: Int, h: Int, outside: ByteArray): Int {
+  val n = w * h
+  val d = maxOf(4, Math.round(w / 8f))
+  val big = 1 shl 28
+  val a = IntArray(n)
+  val b = IntArray(n)
+  fun ink(i: Int) = (px[i] ushr 24) >= SOLID_ALPHA
+  for (x in 0 until w) {
+    var t = big
+    for (y in 0 until h) { val i = y * w + x; a[i] = t; t = if (ink(i)) 0 else t + 1 }
+    t = big
+    for (y in h - 1 downTo 0) { val i = y * w + x; b[i] = t; t = if (ink(i)) 0 else t + 1 }
+  }
+  val slot = ByteArray(n)
+  var un = 0
+  fun sandV(i: Int) = outside[i] == 1.toByte() && a[i] + b[i] <= d + 1
+  for (y in 0 until h) {
+    var x = 0
+    while (x < w) {
+      if (!sandV(y * w + x)) { x++; continue }
+      var x2 = x
+      while (x2 < w && sandV(y * w + x2)) x2++
+      if (x2 - x >= w / 2) for (xx in x until x2) { val i = y * w + xx; outside[i] = 2; slot[i] = 1; un++ }
+      x = x2
+    }
+  }
+  for (y in 0 until h) {
+    var t = big
+    for (x in 0 until w) { val i = y * w + x; a[i] = t; t = if (ink(i)) 0 else t + 1 }
+    t = big
+    for (x in w - 1 downTo 0) { val i = y * w + x; b[i] = t; t = if (ink(i)) 0 else t + 1 }
+  }
+  fun sandH(i: Int) = outside[i] == 1.toByte() && a[i] + b[i] <= d + 1
+  for (x in 0 until w) {
+    var y = 0
+    while (y < h) {
+      if (!sandH(y * w + x)) { y++; continue }
+      var y2 = y
+      while (y2 < h && sandH(y2 * w + x)) y2++
+      if (y2 - y >= h / 2) for (yy in y until y2) { val i = yy * w + x; outside[i] = 2; slot[i] = 1; un++ }
+      y = y2;
+    }
+  }
+  for (i in 0 until n) {
+    if (slot[i] != 1.toByte()) continue
+    val x = i % w
+    val y = i / w
+    if (x > 0) slotFringe(px, outside, i - 1)
+    if (x + 1 < w) slotFringe(px, outside, i + 1)
+    if (y > 0) slotFringe(px, outside, i - w)
+    if (y + 1 < h) slotFringe(px, outside, i + w)
+  }
+  return un
+}
+
+private fun slotFringe(px: IntArray, outside: ByteArray, j: Int) {
+  val al = px[j] ushr 24
+  if (al in 9..254) {
+    px[j] = px[j] and 0x00FFFFFF
+    outside[j] = 2
+  }
 }
 
 /** 「包装自身抛了」只报一次（每张图标一行会把日志刷满）。 */
