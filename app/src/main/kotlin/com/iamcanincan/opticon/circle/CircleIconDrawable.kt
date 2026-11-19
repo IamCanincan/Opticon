@@ -369,12 +369,29 @@ private class BareForeground(
           " 支=" + (if (plan.plate) "铺底" else "延伸") + " : " + IconNames.of(inner))
       }
       if (plan != null && plan.needsRedraw) {
+        val before = bboxOf(px, w, h)
         val nb = plan.bounds(w, h)
         bitmap.eraseColor(Color.TRANSPARENT)
         inner.setBounds(Math.round(nb[0]), Math.round(nb[1]), Math.round(nb[2]), Math.round(nb[3]))
         inner.draw(layer)
         inner.setBounds(view)
         bitmap.getPixels(px, 0, w, 0, 0, w, h)
+        // 写死尺寸的层（layer-list 固定 dp + gravity）不随外框缩放：重画后外接框一格没动
+        // ⇒ 拉外框对它无效（DeepSeek 快捷方式：图案留原地、四周被补色铺满 = 满幅底+小图案）。
+        // 补一次画布整体缩放：canvas 变换作用于所有 draw 操作，固定层也跟着放大。
+        // 只对"重画没生效"的图开火 ⇒ 随外框缩放的图逐格不变。
+        val after = bboxOf(px, w, h)
+        if (before != null && after != null && before.contentEquals(after)) {
+          bitmap.eraseColor(Color.TRANSPARENT)
+          val save = layer.save()
+          layer.translate(w / 2f - plan.cx * plan.scale, h / 2f - plan.cy * plan.scale)
+          layer.scale(plan.scale, plan.scale)
+          inner.setBounds(0, 0, w, h)
+          inner.draw(layer)
+          layer.restoreToCount(save)
+          inner.setBounds(view)
+          bitmap.getPixels(px, 0, w, 0, 0, w, h)
+        }
       }
       // ⓪ 源图自带的噪边：parsec 的 round PNG 最外圈 α255 实心环自己就是噪的
       //    （r87 逐度 18↔56 交替、r86 光滑），种子踩上去就被径向复制成放射条纹，
@@ -424,6 +441,25 @@ private class BareForeground(
     } finally {
       rendering = false
     }
+  }
+
+  /** 有色格外接框 `[l,t,r,b]`（与 [IconGeom.planOf] 同一条 α 线）；全透明 = null。 */
+  private fun bboxOf(px: IntArray, w: Int, h: Int): IntArray? {
+    var l = w
+    var t = h
+    var r = -1
+    var b = -1
+    for (y in 0 until h) {
+      val row = y * w
+      for (x in 0 until w) {
+        if ((px[row + x] ushr 24) <= ALPHA_MIN) continue
+        if (x < l) l = x
+        if (x > r) r = x
+        if (y < t) t = y
+        if (y > b) b = y
+      }
+    }
+    return if (r < 0) null else intArrayOf(l, t, r, b)
   }
 
   /**
