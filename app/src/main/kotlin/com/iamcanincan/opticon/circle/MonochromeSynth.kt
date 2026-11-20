@@ -886,32 +886,13 @@ internal object MonochromeSynth {
       val fitted = fit?.first
       val shaped = fitted ?: alpha
       val placed = if (adaptive || ringBleed) alpha else intoVisibleArea(shaped, edge)
-      // ── 延伸支补底（2026-11-20 第二版）：只在图标自己的轮廓内翻负片 ──
-      // 轮廓（源图 alpha）与掩码走**同一套** fit + intoVisibleArea，几何才跟彩色对得上；
-      // 轮廓外保持透明 ⇒ 四角交给主题底，不会像第一版那样填成整块方砖。
-      val tileInv = !adaptive && !ringBleed && tileInvertWanted(out.report, fit?.second)
-      val delivered = if (tileInv) {
-        val sil = silhouetteOf(raster, edge)
-        val inv = invertWithin(alpha, sil, edge)
-        sil.recycle()
-        val fInv = fitLikeColor(raster, inv, edge, label, baked, forceExtend, quiet = true)?.first ?: inv
-        val pInv = intoVisibleArea(fInv, edge)
-        if (fInv !== inv) inv.recycle()
-        if (pInv !== fInv) fInv.recycle()
-        if (tileInvLogLeft.decrementAndGet() >= 0) {
-          Log.d(TAG, "Mono: 延伸补底(轮廓内) 底占=" + reportField(out.report, "底占=") +
-            " 框内=" + reportField(out.report, "框内=") + " edge=$edge label=$label")
-        }
-        pInv
-      } else placed
-      if (tileInv) placed.recycle()
       // ⚠ 这一趟多花的钱（判据台 `_harness/CostKt.kt`，62 张真机语料 @edge=384，取七遍最快一趟）：
       //   `of` 中位 **0.54 ms**（**每张都跑**，因为它内部先降到 128 才扫，与画布多大无关 —— 与真机
       //   彩色那一趟 0.60 ms 同一档）；`reframe` 中位 **2.24 ms**，只有开了窗口的 **13/62**
       //   张跑到。分母是同一条语料上的合成主路（中位 332 ms）→ **整趟加的成本 0.8%，每张必付的那半 0.2%**。
       //   ⚠ 绝对毫秒是 PC JVM 的数，手机上另有倍数（`intoVisibleArea` 是 Canvas 调用，台子量不到）——
       //   所以这条只当**比值**用，别拿 0.54 ms 当真机读数。
-      noteDiagnosis(edge, label, raster, delivered)
+      noteDiagnosis(edge, label, raster, placed)
       raster.recycle()
       if (placed !== shaped) shaped.recycle()
       if (shaped !== alpha) alpha.recycle()
@@ -919,11 +900,11 @@ internal object MonochromeSynth {
       // 命中时返回的必须与屏幕上的是同一个东西，否则「判据吃的那张」与「屏上那张」又分家。
       // `label` 只进归属索引（[MonoCache.noteOwner]），不参与键、不参与判定。
       // `geom` 同理，进 `geom.tsv`：命中路径靠它把这三个数再打一次（见 [noteCached]）。
-      MonoCache.store(key, edge, delivered, label, fit?.second ?: "")
+      MonoCache.store(key, edge, placed, label, fit?.second ?: "")
       // 冷合成分段（光栅 / 键 / 准备 / 判据 / 交付）；每 32 次一行，见 [noteColdSplit]。
       noteColdSplit(tRaster - t0, tKey - tRaster, tBuild0 - tKey, tBuildDone - tBuild0,
         System.nanoTime() - tBuildDone)
-      delivered
+      placed
     }.onFailure {
       // ⚠ 这一条不能省：上面整个块包在 runCatching 里，任何异常都会被 `getOrNull()` 变成一个
       // 正常的 null 出口 —— 而 null 在功能上就是「放弃合成、桌面照旧」，不崩、不报错。
@@ -1537,7 +1518,6 @@ internal object MonochromeSynth {
    */
   private fun fitLikeColor(
     raster: Bitmap, alpha: Bitmap, edge: Int, label: String, baked: Float, forceExtend: Boolean = false,
-    quiet: Boolean = false,
   ): Pair<Bitmap?, String>? {
     val px = IntArray(edge * edge)
     raster.getPixels(px, 0, edge, 0, 0, edge, edge)
@@ -1546,7 +1526,7 @@ internal object MonochromeSynth {
     val note = "scale=" + ((plan.scale * 100).toInt() / 100f) +
       " fill=" + ((plan.fill * 100).toInt() / 100f) + " 支=" + (if (plan.plate) "铺底" else "延伸") +
       " 窗=" + ((baked * 100).toInt() / 100f) + " 交=" + ((applied * 100).toInt() / 100f)
-    if (!quiet && fitLogLeft.decrementAndGet() >= 0) {
+    if (fitLogLeft.decrementAndGet() >= 0) {
       Log.d(TAG, "Mono: 跟彩色 $note edge=$edge label=$label")
     }
     if (applied in 0.99f..1.01f) return Pair(null, note)
@@ -1565,58 +1545,6 @@ internal object MonochromeSynth {
       source, null, Rect(inset, inset, edge - inset, edge - inset),
       Paint(Paint.FILTER_BITMAP_FLAG)
     )
-    return out
-  }
-
-  private val tileInvLogLeft = java.util.concurrent.atomic.AtomicInteger(300)
-
-  /** 这一张要不要补底：只认合成、非自适应、延伸支、且「整块盘 + 小字」。见 [TILE_PLATE_MIN]。 */
-  private fun tileInvertWanted(report: String, note: String?): Boolean {
-    if (note == null || !note.contains("支=延伸")) return false
-    val plate = reportField(report, "底占=") ?: return false
-    val glyph = reportField(report, "框内=") ?: return false
-    return plate >= TILE_PLATE_MIN && glyph <= TILE_GLYPH_MAX
-  }
-
-  private fun reportField(report: String, key: String): Float? {
-    val i = report.indexOf(key); if (i < 0) return null
-    var j = i + key.length
-    while (j < report.length && (report[j].isDigit() || report[j] == '.')) j++
-    return report.substring(i + key.length, j).toFloatOrNull()
-  }
-
-  /** 源图自己的不透明轮廓（圆 / 圆角方那块底），ALPHA_8：轮廓内 255、轮廓外 0。 */
-  private fun silhouetteOf(raster: Bitmap, edge: Int): Bitmap {
-    val px = IntArray(edge * edge)
-    raster.getPixels(px, 0, edge, 0, 0, edge, edge)
-    val out = Bitmap.createBitmap(edge, edge, Bitmap.Config.ALPHA_8)
-    val stride = out.rowBytes
-    val buf = ByteArray(stride * edge)
-    var read = 0
-    for (y in 0 until edge) {
-      val row = y * stride
-      for (x in 0 until edge) buf[row + x] = if ((px[read++] ushr 24) >= 128) 255.toByte() else 0
-    }
-    out.copyPixelsFromBuffer(ByteBuffer.wrap(buf))
-    return out
-  }
-
-  /** 只在轮廓内翻负片：轮廓内 `255-α`（底成墨、字镂空），轮廓外保持 0（交给主题底）。 */
-  private fun invertWithin(mask: Bitmap, sil: Bitmap, edge: Int): Bitmap {
-    val stride = mask.rowBytes
-    val mbuf = ByteArray(stride * edge)
-    mask.copyPixelsToBuffer(ByteBuffer.wrap(mbuf))
-    val sbuf = ByteArray(stride * edge)
-    sil.copyPixelsToBuffer(ByteBuffer.wrap(sbuf))
-    for (y in 0 until edge) {
-      val row = y * stride
-      for (x in 0 until edge) {
-        val i = row + x
-        mbuf[i] = if (sbuf[i].toInt() and 255 > 0) (255 - (mbuf[i].toInt() and 255)).toByte() else 0
-      }
-    }
-    val out = Bitmap.createBitmap(edge, edge, Bitmap.Config.ALPHA_8)
-    out.copyPixelsFromBuffer(ByteBuffer.wrap(mbuf))
     return out
   }
 
@@ -1656,23 +1584,6 @@ internal object MonochromeSynth {
    * 另外三条线稿 29–32%）。见 [render] 里那一次重算；`0.5` 取在两组之间，离两边都远。
    */
   private const val RING_DISH_FILL = 0.5f
-
-  /**
-   * 延伸支「整块盘 + 小字」补底（2026-11-20 第二版，轮廓内翻）。
-   *
-   * 彩色那支会把图标自己的底（圆 / 圆角方）交成一整块、字压在上面；单色只有一种墨色，
-   * 掩码里那块底是透明的 ⇒ 屏上只剩字飘在主题底上。补法 = **只在图标自己的不透明轮廓内**
-   * 把掩码翻成负片（底交成墨、字镂空），轮廓外保持透明交给主题底。
-   *
-   * 🔴 第一版（`fec27c0`，已 revert `318d9ee`）对**整帧**翻，把轮廓外的透明四角也填成墨，
-   *   圆标被填成整块方砖，主人「原本好的图标也都坏了」。第二版用源图 alpha 当轮廓闸住四角。
-   *
-   * 阈值：`框内<=0.12` 落在实测空档（这一族 <=0.11、下一档 0.13+）；`底占>=0.80` 是**选的**
-   * （0.88→0.86→0.84 连续、无干净空档），保守排除透明底线稿。离线四联图验过不砖：
-   * clash/telegram 圆、unionpay 圆角方、chaoxing 圆（`D:/tmp/q_*.png`）。
-   */
-  private const val TILE_PLATE_MIN = 0.80f
-  private const val TILE_GLYPH_MAX = 0.12f
 
   /** 掩码外接框（取长边）占画布的比例；空掩码 = 0。 */
   private fun maskFill(mask: IntArray, edge: Int): Float {
