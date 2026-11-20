@@ -886,24 +886,13 @@ internal object MonochromeSynth {
       val fitted = fit?.first
       val shaped = fitted ?: alpha
       val placed = if (adaptive || ringBleed) alpha else intoVisibleArea(shaped, edge)
-      // 延伸支「整块盘+小字」翻负片：把延伸填出来的那块底交成墨、字镂空，与彩色同构。
-      // 必须在 intoVisibleArea **之后**翻：翻完角也是墨，底才铺满整张画布（先翻再收会把底缩进去）。
-      val tileInv = !adaptive && !ringBleed && tileInvertWanted(out.report, fit?.second)
-      val delivered = if (tileInv) invertAlpha(placed, edge) else placed
-      if (tileInv) {
-        placed.recycle()
-        if (tileInvLogLeft.decrementAndGet() >= 0) {
-          Log.d(TAG, "Mono: 延伸翻负片 底占=" + reportField(out.report, "底占=") +
-            " 框内=" + reportField(out.report, "框内=") + " edge=$edge label=$label")
-        }
-      }
       // ⚠ 这一趟多花的钱（判据台 `_harness/CostKt.kt`，62 张真机语料 @edge=384，取七遍最快一趟）：
       //   `of` 中位 **0.54 ms**（**每张都跑**，因为它内部先降到 128 才扫，与画布多大无关 —— 与真机
       //   彩色那一趟 0.60 ms 同一档）；`reframe` 中位 **2.24 ms**，只有开了窗口的 **13/62**
       //   张跑到。分母是同一条语料上的合成主路（中位 332 ms）→ **整趟加的成本 0.8%，每张必付的那半 0.2%**。
       //   ⚠ 绝对毫秒是 PC JVM 的数，手机上另有倍数（`intoVisibleArea` 是 Canvas 调用，台子量不到）——
       //   所以这条只当**比值**用，别拿 0.54 ms 当真机读数。
-      noteDiagnosis(edge, label, raster, delivered)
+      noteDiagnosis(edge, label, raster, placed)
       raster.recycle()
       if (placed !== shaped) shaped.recycle()
       if (shaped !== alpha) alpha.recycle()
@@ -911,11 +900,11 @@ internal object MonochromeSynth {
       // 命中时返回的必须与屏幕上的是同一个东西，否则「判据吃的那张」与「屏上那张」又分家。
       // `label` 只进归属索引（[MonoCache.noteOwner]），不参与键、不参与判定。
       // `geom` 同理，进 `geom.tsv`：命中路径靠它把这三个数再打一次（见 [noteCached]）。
-      MonoCache.store(key, edge, delivered, label, fit?.second ?: "")
+      MonoCache.store(key, edge, placed, label, fit?.second ?: "")
       // 冷合成分段（光栅 / 键 / 准备 / 判据 / 交付）；每 32 次一行，见 [noteColdSplit]。
       noteColdSplit(tRaster - t0, tKey - tRaster, tBuild0 - tKey, tBuildDone - tBuild0,
         System.nanoTime() - tBuildDone)
-      delivered
+      placed
     }.onFailure {
       // ⚠ 这一条不能省：上面整个块包在 runCatching 里，任何异常都会被 `getOrNull()` 变成一个
       // 正常的 null 出口 —— 而 null 在功能上就是「放弃合成、桌面照旧」，不崩、不报错。
@@ -1559,57 +1548,6 @@ internal object MonochromeSynth {
     return out
   }
 
-  /** 「Mono: 延伸翻负片」证据行额度（与跟彩色那行各 300 张）。 */
-  private val tileInvLogLeft = java.util.concurrent.atomic.AtomicInteger(300)
-
-  /**
-   * 延伸支里「一整块盘 + 小字」那一族，把掩码 alpha 翻过来交（底=墨、字=镂空）。
-   *
-   * 为什么：彩色延伸把四角透明处补成边色 ⇒ 屏幕上是一整块底 + 字；而单色掩码只有墨/透明两态，
-   * 盘被判成底=透明 ⇒ 上屏只剩字浮在主题底上，那块"延伸填出来的底"没有对应的墨（主人 2026-11-20
-   * 点名学习通）。翻负片后 = 一整块墨底 + 镂空字，与彩色同构（bili/钉钉/美团/云闪付/audioplayer
-   * 离线三联图逐张看过；audioplayer 因此和它彩色的黑盘白三角对上）。
-   *
-   * 只射**我们合成**的非自适应延伸支：已适配单色层的应用根本进不到 [render]（透传），自适应源
-   * 在调用处就被排除。铺底支不翻（它本来就缩进内切圆 + 由底承担）。
-   *
-   * 两个门槛（离线 190 张延伸支配模型读数现量）：
-   *  · [TILE_GLYPH_MAX] 框内 ≤ 0.12：字/图案只占小头。族内实测 ≤0.11，下一档 0.13 起（steamlink/
-   *    audioplayer shuffle/ele），0.12 摆在这条缝里。
-   *  · [TILE_PLATE_MIN] 底占 ≥ 0.80：盘占大头。这条**没有干净空档**（0.88→0.86→0.84 连续），
-   *    0.80 是我选的保守线，用来把"透明底细线稿"（底占低、框内也小）挡在外面 —— 那种翻负片会
-   *    变成几乎整块实心墨 + 一条细缝，不是底+字。
-   */
-  private fun tileInvertWanted(report: String, note: String?): Boolean {
-    if (note == null || !note.contains("支=延伸")) return false
-    val plate = reportField(report, "底占=") ?: return false
-    val glyph = reportField(report, "框内=") ?: return false
-    return plate >= TILE_PLATE_MIN && glyph <= TILE_GLYPH_MAX
-  }
-
-  /** 判据行里 `键=数` 的那个数；没有/不是数 → null。不用 Regex，冷合成路径上省一次分配。 */
-  private fun reportField(report: String, key: String): Float? {
-    val i = report.indexOf(key)
-    if (i < 0) return null
-    var j = i + key.length
-    while (j < report.length && (report[j].isDigit() || report[j] == '.')) j++
-    return report.substring(i + key.length, j).toFloatOrNull()
-  }
-
-  /** ALPHA_8 逐字节取反（255-α），按 [Bitmap.getRowBytes] 的行距写、padding 不动。 */
-  private fun invertAlpha(source: Bitmap, edge: Int): Bitmap {
-    val stride = source.rowBytes
-    val buf = ByteArray(stride * edge)
-    source.copyPixelsToBuffer(java.nio.ByteBuffer.wrap(buf))
-    for (y in 0 until edge) {
-      val row = y * stride
-      for (x in 0 until edge) buf[row + x] = (255 - (buf[row + x].toInt() and 255)).toByte()
-    }
-    val out = Bitmap.createBitmap(edge, edge, Bitmap.Config.ALPHA_8)
-    out.copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(buf))
-    return out
-  }
-
   /**
    * ARGB_8888（白色 + alpha）→ ALPHA_8。
    *
@@ -1646,12 +1584,6 @@ internal object MonochromeSynth {
    * 另外三条线稿 29–32%）。见 [render] 里那一次重算；`0.5` 取在两组之间，离两边都远。
    */
   private const val RING_DISH_FILL = 0.5f
-
-  /** 延伸翻负片：盘占下限。无干净空档，0.80 为保守选线（挡透明底细线稿），见 [tileInvertWanted]。 */
-  private const val TILE_PLATE_MIN = 0.80f
-
-  /** 延伸翻负片：字/图案占上限。族内 ≤0.11、下一档 0.13 起，0.12 摆在缝里，见 [tileInvertWanted]。 */
-  private const val TILE_GLYPH_MAX = 0.12f
 
   /** 掩码外接框（取长边）占画布的比例；空掩码 = 0。 */
   private fun maskFill(mask: IntArray, edge: Int): Float {
