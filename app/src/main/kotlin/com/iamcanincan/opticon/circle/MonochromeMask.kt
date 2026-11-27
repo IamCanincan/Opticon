@@ -1235,8 +1235,15 @@ internal object MonochromeMask {
       // 【剪影】整幅插画：没有"图案/背景"可分，整幅做浓淡交出去就是一张灰照片。
       //   这一档改交剪影（[artSilhouette]）；只有墨铺满整格 ≥ [ART_COVER] 的那几张走到。
       val m = baseOut.mask ?: return baseOut
-      if (inkCover(m, w, h) < ART_COVER) return baseOut
-      val sil = artSilhouette(pixels, w, h)
+      val ground = s.modelGround
+      // A varied outline that leaves most of the mark exposed is weak evidence of a backing.
+      // Preserve the fill of full illustrations even if the reference pass kept mainly contours.
+      val exposedArtwork = !plateIsLayer && !plateIsSubject && under == null &&
+        ground?.hyp == 2 && ground.enclosed <= 15 && ground.spread >= 65 &&
+        !s.rimDomOn && s.preTonalSeen?.on == true &&
+        ground.gN + ground.iN >= w * h * ART_COVER
+      if (!exposedArtwork && inkCover(m, w, h) < ART_COVER) return baseOut
+      val sil = artSilhouette(pixels, w, h, exposedArtwork)
       var x0 = w; var y0 = h; var x1 = -1; var y1 = -1
       for (y in 0 until h) {
         val row = y * w
@@ -1669,9 +1676,6 @@ internal object MonochromeMask {
     //   小黑盒 / 美团 / 抖音 / 索尼（淡膜都是 0）、拼多多（3）。
     //   写成相对量（`r < s`）而不是"满幅淡膜 > 4 才搬"：后者多引入一个绝对阈值，实测会把
     //   尺寸翻从 5 涨到 8（第十闸红），而它挡的东西这一条同样挡得住。
-    // ⚠ 代价是一条性质又红了：`平涂底 + 白字 → 不许走这一支`（判据 0/90/54）。那条性质断言的是
-    //   **入场侧**的事（一张 90% 单色的图不该被当成连续调），选支只是碰巧替它兜着；
-    //   要选支继续兜，就得允许"淡膜不降也搬" —— 那正是上面 azure 那条口子。已放进底线名单。
     return r.first < s.first &&
       r.first <= PICK_SOFT_MAX && r.second * 100 >= s.second * PICK_INK_MIN &&
       r.second <= PICK_INK_MAX
@@ -1851,7 +1855,7 @@ internal object MonochromeMask {
     //   所以提到这一趟之前算 —— 下面并进来的两段要以它为门槛（满幅支不建 cDep、也不做敲亮）。
     // ⚠ `tonalSeen` 只为**报告**留着：以前 `?.takeIf { it.on }` 直接把没开火的那个对象丢掉，
     //   于是 `跨=` 只在开火时印得出来 —— 第十闸摊四档边长时发现"离阈值多远"永远看不见，
-    //   而换支恰恰发生在**没开火**那几张身上（2026-10-17）。开火判据一个字没动，还是 `tonal.on`。
+    //   而换支恰恰发生在**没开火**那几张身上（2026-10-17）。
     val tonalSeen: Tonal?
     if (forceRef) tonalSeen = null
     else if (s.preTonal) tonalSeen = s.preTonalSeen
@@ -1861,7 +1865,10 @@ internal object MonochromeMask {
       s.preTonalSeen = tonalSeen; s.preTonalWhy = why[0]; s.preTonal = true
     }
     val tonalWhy = IntArray(1) { if (forceRef) 3 else s.preTonalWhy }
-    val tonal = tonalSeen?.takeIf { it.on }
+    // Dark artwork on a light backing keeps its luminance detail. For a flat image
+    // with bright artwork or several backing colors, use the separated regions.
+    val useFlatRegions = under == null && (ground.iL > ground.gL || ground.families > 1)
+    val tonal = tonalSeen?.takeIf { it.on && !(useFlatRegions && it.flatArtwork) }
     // 【敲亮】与【cDep】的第一段都只需要同一批非底格子，与明度直方图**同框同序**。
     //   原来这是三趟独立的整框扫描（JFR 上三段加起来 ~6%）。并成一趟之后，`cDep` 那一格
     //   要的参照亮度直接用这里已经算出的 `rfl`，不再为它单独调一次 `refLight`。
@@ -1999,7 +2006,8 @@ internal object MonochromeMask {
     // 2.5) 这一张能不能**拿自己的调子当浓度**（满幅插画那一类，没有参照可谈）？
     //   是的话下面第 3 步的混轴、第 4 步的发档与抬顶全部让路。判据与方向各一条：
     //
-    //   ① **开火只看跨度**（[TONAL_SPAN_MIN]）。纹理与平涂那两道 2026-10-08 拆掉 —— 它们挡住的
+    //   ① 明度跨度是连续调的基础判据（[TONAL_SPAN_MIN]）。平涂亮字和多色拼底优先保留区域分离结果。
+    //     早期独立的纹理和平涂门槛在 2026-10-08 拆掉 —— 它们挡住的
     //     正是逐张看图判"变好"的那批（驾考 纹理 17、azure 18、易班 13、微博 8）。
     //     跨度这道是**结构性**守卫而非阈值：真机上被"全开"弄空的那 6 张，跨度全是 0~7
     //     （支付宝 1、钉钉 0、翻译 7）—— 一块白剪影坐在空气上本来就没有调子可言，
@@ -3232,13 +3240,10 @@ internal object MonochromeMask {
     ((((p shr 16) and 0xff) / 24) shl 10) or ((((p shr 8) and 0xff) / 24) shl 5) or ((p and 0xff) / 24)
 
   /** 判据产物。[lo]/[hi] 是这张自己亮度的 p5/p95（L\\*×64），[span] = hi−lo。 */
-  internal class Tonal(val tex: Int, val flat: Int, val span: Int, val lo: Int, val hi: Int) {
-    /** **开火判据只有一处定义**，就在这里 —— 2026-10-08 起只剩跨度那道（结构性守卫：
-     *  一块白剪影坐在空气上没有调子可言，而这一支的斜坡会把最亮的白直接归零 = 屏幕上整个不画）。
-     *  ⚠ [tex] 与 [flat] **仍然照算**，但只给 `_harness/TonalGateKt` 那台定线台看"下一张是谁会被放进来"；
-     *    它们不再是判据。**别把这条 getter 改回三条 AND** —— 那会让定线台重新和模型脱节
-     *    （2026-10-08 就脱过一次：台子报 `c.on`、模型用 `span >=`，于是"走这一支的 N 张"
-     *    数的是已经不存在的规则）。规则要挪，就挪这一行。 */
+  internal class Tonal(
+    val tex: Int, val flat: Int, val span: Int, val lo: Int, val hi: Int,
+    val flatArtwork: Boolean,
+  ) {
     val on: Boolean get() = span >= TONAL_SPAN_MIN
   }
 
@@ -3265,7 +3270,7 @@ internal object MonochromeMask {
   internal fun tonalClass(pixels: IntArray, w: Int, h: Int, box: Rect, why: IntArray? = null): Tonal? {
     val bw = box.width()
     val bh = box.height()
-    // 格子只服务纹理与主色这两条**报告用**的量，所以它按框缩；跨度走的是逐像素直方图，与格子无关。
+    // 网格用于识别平涂区域，明度跨度由逐像素直方图给出。
     val n = minOf(TONAL_GRID, bw, bh)
     if (n < 2) { why?.set(0, 1); return null }
     val cL = IntArray(n * n); val cR = IntArray(n * n); val cG = IntArray(n * n)
@@ -3320,10 +3325,13 @@ internal object MonochromeMask {
     if (pairs == 0L) { why?.set(0, 4); return null }
     val lo = percentile(hist, opq, LUM_LOW_PCT) shl 6
     val hi = percentile(hist, opq, LUM_HIGH_PCT) shl 6
+    val texture = (mid * 100 / pairs).toInt()
+    // A few flat regions can span the full luminance range, even when there's no continuous tone.
+    val flatArtwork = texture <= 4 && share.values.sortedDescending().take(3).sum() * 100 >= cells * 95
     return Tonal(
-      (mid * 100 / pairs).toInt(),
+      texture,
       (share.values.maxOrNull() ?: 0) * 100 / cells,
-      (hi - lo) shr 6, lo, hi
+      (hi - lo) shr 6, lo, hi, flatArtwork,
     )
   }
 
@@ -4940,9 +4948,15 @@ internal object MonochromeMask {
       //   四周全是空气 —— "什么都是底"不可能是对的，**岛本身就是图形**。所以豁免加一条前提。
       val island = box.width().toLong() * box.height() * 100L <=
         w.toLong() * h * GROUND_ISLAND_PCT.toLong()
-      if ((p.share < PLATE_ALL_SHARE || (p.families <= 1 && !island)) && !vacuous(s, p, box)) return p
+      // Keep a thick, flat backing when the flood leaves contrasting artwork behind.
+      // A high coverage ratio alone also occurs on gradients, so require evidence of flat regions.
+      val vacuousPlate = vacuous(s, p, box)
+      val flatBacking = !vacuousPlate && p.share >= PLATE_ALL_SHARE && p.families > 1 &&
+        p.iN > 0 && p.thick * 8 >= minOf(box.width(), box.height()) &&
+        tonalClass(pixels, w, h, box)?.flatArtwork == true
+      if (!vacuousPlate && (p.share < PLATE_ALL_SHARE || (p.families <= 1 && !island) || flatBacking)) return p
       if (p.share >= PLATE_ALL_SHARE && p.families > 1) s.veto = s.veto or 16
-      if (vacuous(s, p, box)) s.veto = s.veto or 1
+      if (vacuousPlate) s.veto = s.veto or 1
       h1share = p.share; h1thick = p.thick; h1fams = p.families; h1ink = p.iN
     }
     // 只被「底比墨小」挡住的那个 H2 候选，留到**最后**再决定要不要用（见下面 air 之前那一段）。
@@ -7083,7 +7097,7 @@ internal object MonochromeMask {
    * 分位按**这张自己的**不透明像素算（不自带阈值）：同一张图换尺寸/换设备答案不变。
    * 边界用 `[A_BOX]` 判"有没有画东西"（与内容外接框同一条线）。
    */
-  private fun artSilhouette(px: IntArray, w: Int, h: Int): IntArray {
+  private fun artSilhouette(px: IntArray, w: Int, h: Int, exposedArtwork: Boolean): IntArray {
     val n = w * h
     val hist = IntArray(256)
     var opaque = 0
@@ -7097,7 +7111,7 @@ internal object MonochromeMask {
       opaque++
     }
     if (opaque == 0) return IntArray(n)
-    // 每段的上界（含）：按分位落到具体亮度上，最后一段一定给满。
+    // Each cut includes its upper bound.
     val cuts = IntArray(ART_CUTS.size)
     var acc = 0
     var ci = 0
@@ -7106,17 +7120,27 @@ internal object MonochromeMask {
       while (ci < ART_CUTS.size && acc >= (opaque * ART_CUTS[ci]).toInt()) cuts[ci++] = v
     }
     while (ci < cuts.size) cuts[ci++] = 255
+    // Keep a broad, nearly flat midtone intact when both cuts land inside it.
+    if (exposedArtwork && cuts[1] - cuts[0] <= 8) {
+      val dark = percentile(hist, opaque, 15)
+      val light = percentile(hist, opaque, 85)
+      if (cuts[0] - dark >= 12 && light - cuts[1] >= 12) {
+        cuts[0] = (dark + cuts[0]) / 2
+        cuts[1] = (cuts[1] + light) / 2
+      }
+    }
     val out = IntArray(n)
     for (i in 0 until n) {
       val p = px[i]
-      if ((p ushr 24) < A_BOX) continue
+      val sourceAlpha = p ushr 24
+      if (sourceAlpha < A_BOX) continue
       val r = (p shr 16) and 0xff
       val g = (p shr 8) and 0xff
       val b = p and 0xff
       val l = (r * 299 + g * 587 + b * 114) / 1000
       var band = 0
       while (band < cuts.size && l > cuts[band]) band++
-      val a = ART_ALPHA[band]
+      val a = if (exposedArtwork) (ART_ALPHA[band] * sourceAlpha + 127) / 255 else ART_ALPHA[band]
       if (a > 0) out[i] = a shl 24
     }
     return out

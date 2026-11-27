@@ -5,16 +5,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.InvertColors
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
@@ -37,22 +34,13 @@ import com.iamcanincan.opticon.ui.OpticonCard
 import com.iamcanincan.opticon.ui.GroupGap
 import com.iamcanincan.opticon.ui.GroupTitle
 import com.iamcanincan.opticon.ui.MenuRow
-import com.iamcanincan.opticon.ui.PageRole
 import com.iamcanincan.opticon.ui.SubPage
 import com.iamcanincan.opticon.ui.timeHm
 import com.iamcanincan.opticon.ui.groupRowShape
 import com.iamcanincan.opticon.ui.ScreenList
 import com.iamcanincan.opticon.ui.stats.StatsStore
 
-/**
- * **主页 = 状态页**，版式对齐 KernelSU 管理器的首页（2026-11-07 主人："还是太丑了"）：
- *
- * - 顶部一张**紧凑状态卡**（图标 + 一行结论 + 一行数据 + 右侧小胶囊），不是一大块空数字；
- * - 下面是**灰图标 + 标题/副标题**的列表，图标不再带彩色底块；
- * - 卡片统一 20dp 圆角、行间 8dp 缝 —— 与他机上那页的规格一致。
- *
- * 分工不变：主页只读状态；开关在「功能」，明细在「统计」，配置与排障在「设置」。
- */
+/** 主页展示模块运行状态和功能详情入口。 */
 @Composable
 internal fun HomeScreen(onOpen: (SubPage) -> Unit) {
   val context = LocalContext.current
@@ -69,59 +57,53 @@ internal fun HomeScreen(onOpen: (SubPage) -> Unit) {
   val fresh = at != 0L && System.currentTimeMillis() - at < FRESH_MS
 
   ScreenList {
-    item { PageRole(stringResource(R.string.home_role)) }
-
-    // 状态卡：图标 + 一行结论 + 一行数据 + 右侧胶囊（同 KernelSU 的"工作中 / 版本 / LKM"）
     item {
       OpticonCard(
-        padding = 0.dp,
+        padding = 18.dp,
         containerColor = if (fresh) scheme.primaryContainer else scheme.surfaceContainerHigh,
         contentColor = if (fresh) scheme.onPrimaryContainer else scheme.onSurface,
         shape = MaterialTheme.shapes.extraLarge,
         border = null,
       ) {
         Row(
-          modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
           verticalAlignment = Alignment.CenterVertically,
         ) {
           Icon(
             imageVector = if (fresh) Icons.Default.CheckCircle else Icons.Default.Schedule,
             contentDescription = null,
             tint = if (fresh) scheme.onPrimaryContainer else scheme.onSurfaceVariant,
-            modifier = Modifier.size(28.dp),
+            modifier = Modifier.size(24.dp),
           )
-          Spacer(modifier = Modifier.size(14.dp))
-          Column(modifier = Modifier.weight(1f)) {
-            Text(
-              text = stringResource(if (fresh) R.string.home_state_ok else R.string.home_state_idle),
-              style = MaterialTheme.typography.titleMedium,
-              fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-              text = when {
-                at == 0L -> stringResource(R.string.home_total_none)
-                fresh -> stringResource(R.string.home_state_total, total, timeHm(at))
-                else -> stringResource(R.string.home_state_stale, timeHm(at), total)
-              },
-              style = MaterialTheme.typography.bodyMedium,
-              color =
-                (if (fresh) scheme.onPrimaryContainer else scheme.onSurfaceVariant).copy(alpha = 0.8f),
-            )
-          }
-          // weight(1f) 的文字列不会自己留缝：状态那句会折行，不留这道 10dp 就顶到胶囊上。
-          Spacer(modifier = Modifier.width(10.dp))
+          Text(
+            text = stringResource(if (fresh) R.string.home_state_ok else R.string.home_state_idle),
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.weight(1f),
+          )
           Box(
             modifier = Modifier
-              .background(scheme.primary, RoundedCornerShape(50))
+              .background(scheme.secondaryContainer, RoundedCornerShape(50))
               .padding(horizontal = 10.dp, vertical = 4.dp),
           ) {
             Text(
               text = stringResource(R.string.home_state_chip, onCount),
               style = MaterialTheme.typography.labelMedium,
-              color = scheme.onPrimary,
+              color = scheme.onSecondaryContainer,
             )
           }
         }
+        Text(
+          text = when {
+            at == 0L -> stringResource(R.string.home_total_none)
+            fresh -> stringResource(R.string.home_state_total, total, timeHm(at))
+            else -> stringResource(R.string.home_state_stale, timeHm(at), total)
+          },
+          style = MaterialTheme.typography.bodyMedium,
+          color = if (fresh) scheme.onPrimaryContainer else scheme.onSurfaceVariant,
+          modifier = Modifier.padding(top = 6.dp),
+        )
       }
     }
 
@@ -142,23 +124,22 @@ internal fun HomeScreen(onOpen: (SubPage) -> Unit) {
       }
     }
 
-    item { GroupTitle(stringResource(R.string.home_tips)) }
-
-    // 底部这一组是"常见疑问"：原来是页面底部一行小字，下面半屏全是空白（主人："每个板块都好空"）。
-    // 顶栏收回普通高度后，两行提示也能完整落在药丸上方（之前大标题栏时第二行会被压住）。
     item {
-      Column(verticalArrangement = Arrangement.spacedBy(GroupGap)) {
-        TipRow(
-          icon = Icons.Default.Refresh,
-          title = R.string.home_tip_stale_title,
-          body = R.string.home_tip_stale_body,
-          shape = groupRowShape(0, 2),
+      Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.Top,
+      ) {
+        Icon(
+          imageVector = Icons.Default.Refresh,
+          contentDescription = null,
+          tint = scheme.onSurfaceVariant,
+          modifier = Modifier.size(20.dp),
         )
-        TipRow(
-          icon = Icons.Default.Info,
-          title = R.string.home_tip_count_title,
-          body = R.string.home_tip_count_body,
-          shape = groupRowShape(1, 2),
+        Text(
+          text = stringResource(R.string.home_tip_stale_body),
+          style = MaterialTheme.typography.bodyMedium,
+          color = scheme.onSurfaceVariant,
         )
       }
     }
@@ -211,33 +192,6 @@ private fun FeatureRow(
   )
 }
 
-
-/** 提示行：灰图标 + 标题 + 一行解释，与功能行同一套版式（没有右侧胶囊）。 */
-@Composable
-private fun TipRow(icon: ImageVector, title: Int, body: Int, shape: androidx.compose.ui.graphics.Shape) {
-  OpticonCard(shape = shape, border = null, padding = 0.dp, containerColor = MaterialTheme.colorScheme.surfaceContainerHigh) {
-    Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Icon(
-        imageVector = icon,
-        contentDescription = null,
-        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.size(24.dp),
-      )
-      Spacer(modifier = Modifier.size(14.dp))
-      Column(modifier = Modifier.weight(1f)) {
-        Text(stringResource(title), style = MaterialTheme.typography.titleMedium)
-        Text(
-          text = stringResource(body),
-          style = MaterialTheme.typography.bodyMedium,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-      }
-    }
-  }
-}
 
 /** 「近期有回报」的窗口：宿主每 20 次计数才回报一次，10 分钟内有回报就算在跑。 */
 private const val FRESH_MS = 10 * 60 * 1000L

@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ColorFilter
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.PorterDuff
@@ -18,6 +19,7 @@ import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.InsetDrawable
 import android.graphics.drawable.LayerDrawable
 import android.util.Log
+import com.iamcanincan.opticon.BuildConfig
 
 import com.iamcanincan.opticon.runtime.ModuleRuntime
 import com.iamcanincan.opticon.runtime.TAG
@@ -572,7 +574,13 @@ internal object MonochromeSynth {
       val label = describe(source, adaptive)
       // ⚠ 整张那一路**不能**用 `rasterize(source)`：`AdaptiveIconDrawable.draw()` 按视口画，
       //   会把图标放大 1.5 倍再裁掉四边（主人 2026-10-09「不少图标被裁切放大了」）。
-      val raster = if (flatten) rasterizeLayers(source, edge) else rasterize(target, edge)
+      // Fixed-size children in layered shortcuts can ignore the bounds used by the model.
+      // Read their actual color placement before deciding which pixels carry ink.
+      val sharedGeometry = if (!adaptive && circle && source is LayerDrawable) {
+        legacyGeometry(source, edge, forceExtend)
+      } else null
+      val raster = sharedGeometry?.rasterForInk(edge)
+        ?: if (flatten) rasterizeLayers(source, edge) else rasterize(target, edge)
       if (raster == null) {
         noteGiveUp(edge, label, "光栅化失败")
         return@runCatching null
@@ -635,6 +643,7 @@ internal object MonochromeSynth {
       // `DeckKt` 上已核对为等价，改它只会动 taobao/me.ele 的掩码形状。
       val win by lazy(LazyThreadSafetyMode.NONE) {
         when {
+          sharedGeometry != null -> null
           fgOnly -> null
           adaptive -> winMeasured
           ringBleed -> winMeasured
@@ -680,7 +689,7 @@ internal object MonochromeSynth {
           .also { under.recycle() }
       else null
       // ── 内容缓存：到这里为止，输入已经全了 ──
-      //   掩码是 `(pixels, underPx, edge, adaptive, flatten, circle, shortcut, forceExtend)` 的纯函数，
+      //   掩码是 `(pixels, underPx, edge, adaptive, flatten, circle, shortcut, forceExtend, placed)` 的纯函数，
       //   这些就是键（`shortcut` 位只管几何：细环那张按满幅；`forceExtend` 位同理：round 圆盘不缩内切）。
       //   为什么这一层必须存在：桌面**每次 bind 都交一个新实例**（`getConstantState().newDrawable()`），
       //   上面那个按实例的缓存结构上命中不了 —— 真机一次重启 1594 次合成、只有 209 种内容，
@@ -688,7 +697,8 @@ internal object MonochromeSynth {
       // ⚠ 键算在这里而不是 `forIcon` 里：算键要像素，而拿像素就得先光栅化。所以命中这条路
       //   仍然付一次光栅化（几毫秒），省下的是整条模型（三百多毫秒）。
       val key = if (flatUnder) MonoKey.keyOfFlat(pixels, bgColor!!, edge, adaptive, flatten, circle, shortcut, forceExtend)
-        else MonoCache.keyOf(pixels, underPx, edge, adaptive, flatten, circle, shortcut, forceExtend)
+        else MonoCache.keyOf(pixels, underPx, edge, adaptive, flatten, circle, shortcut, forceExtend,
+          placed = sharedGeometry != null)
       // 源内容快键与内容键一起落：下一次同一张源图 + 同一套状态直接取掩码。
       if (srcKey != null) {
         if (srcKeyMap.size >= SRC_MAP_MAX) srcKeyMap.clear()
@@ -812,7 +822,7 @@ internal object MonochromeSynth {
       // 就对不上"哪一行判据是哪一个带回来的 PNG"。见 [MonoDump.sigOf]。
       val sig = MonoDump.sigOf(pxIn, edge, edge)
       val id = noteBranch(edge, sig, label, out, win, key, winMeasured, winColour?.win, plateSubject)
-      val isWatched = MonoDump.watched(label)
+      val isWatched = BuildConfig.DEBUG && MonoDump.watched(label)
       // ⚠ **变体标记必须进带回来的那个名字。** 桌面会把**同一张图标按不同尺寸再画一遍**：
       //   真机实测（`live2.txt`，2026-10-11 20:34–21:39）translate 在 `edge=384` 下有两种前景层
       //   —— `@432x432 intrinsic=288x288`（45 次）与 `@425x425 intrinsic=283x283`（3 次），
@@ -847,60 +857,50 @@ internal object MonochromeSynth {
       // ⚠ 但只按 `suspicious` 会把他**点名**的那几张漏掉：一块灰框在形状体检里是"规整、连通、
       // 面积合适"的好形状，一个可疑指标都不触发 —— 而它恰恰是要看的东西。所以点名的必带。
       // 带不带还得过预算那一关，见 [MonoDump.maybe] 里 `WATCH_RESERVE_KB` 那一段。
-      if (isWatched || (MonoDump.AUTO_SUSPICIOUS && MonoDump.suspicious(out))) dump()
+      if (BuildConfig.DEBUG && (isWatched || (MonoDump.AUTO_SUSPICIOUS && MonoDump.suspicious(out)))) dump()
       val ramp = out.mask
+      // 独立纯色盘可以直接清掉露底像素；有图案的背景层由上面的模型结合两层判定。
+      val cleanPlate = if (adaptive && ramp != null && underPx != null && underIn != null)
+        cleanAdaptivePlate(pxIn, ramp, underPx, underIn, edge, inset)
+      else null
       if (ramp == null) {
         // 判据不成立 = 这张以后再问还是一样，记个负缓存（只进内存，见 [MonoCache]）。
         MonoCache.store(key, edge, null)
         raster.recycle()
         return@runCatching null
       }
-      // 掩码这一步**不再搬位置**：输入已经是裁圆调好的那一张，判出来的墨天然就在那个尺寸上。
-      // （这里原来挂着甲那一刀 —— 判完再 resample 交付掩码。2026-10-15 撤，理由见上面那段。）
-      val alpha = toAlphaMask(ramp, edge, edge)
-      // 非自适应图标的内容是满幅的，而它在图层 bounds 里只该占中间那 2/3（可见区），
-      // 所以掩码算完**之后**才缩进 —— 顺序反了就会踩 [rasterize] 上面那个坑。
-      // 快捷方式**逐张**定，不按整类（2026-10-25）：
-      //  · 细环 + 图案在圆内那一档（[IconCropWindow.shortcutFullBleed]，彩色按满幅画）→ **不收**。
-      //    它的窗口把盘的**安全区**铺到整张图层，倍率实测 0.665；而可见区/图层正好是 2/3 ——
-      //    这一步换算已经由窗口做掉了，再收就是两遍（主人已验收的拼多多大小就是这一档）。
-      //  · 其余非自适应（彩色按窗口铺进槽位）→ **收一道**。之前把快捷方式整类豁免掉，
-      //    高德/菜鸟/淘宝/微信这些就大了 1.5 倍（主人：「有的快捷图标放大过头了」）。
-      // 自适应**不收**：它的 `reframe` 目标本来就是可见区（[visibleInset]），再收也是两遍。
-      // `pm:包名`（没有 `/`）是 PackageManager 拿的应用图标，与普通非自适应图标同一口径。
-      // 单色要跟上彩色那边的几何（2026-11-14）：彩色现在会先把内容缩放到恰好填满正方形，
-      // 小占比那一支再缩进内切圆；这里按同样的比例缩一遍，否则主题图标与彩色图标对不上。
-      //
-      // 🔴 **窗口那一刀两边都要除回去**（`baked = win.zoom`，不分缩/放）。装机对账（**同一个主体**的
-      //   幅面比 = 单色主体 ÷ 彩色洪泛掉底后的主体，台子 `_subj.cjs`）：
-      //   · 缩进侧 easytier 0.574 / 账上 `窗=0.570`、wenku8 0.713 / `0.702`、kodi 0.838 / `0.833`；
-      //   · 放大侧 webapk 1.214 / `窗=1.208` ⇒ **1.214 ÷ 1.208 = 1.005**。
-      //   两侧残差各自正好等于自己的 `窗` ⇒ 这是同一条律，不是两个病。
-      //   ⚠ 我先前写"放大那一侧这个因子看不见"（2026-11-15 晚），那是**拿错分母测的**：当时比的是
-      //   "单色 ÷ 彩色整张"，而彩色常常是一整块底 + 图案 ⇒ 那个比值量的是"图案占自己不画底时的几成"，
-      //   跟几何对不对无关（webapk 0.438 就是这么被误读成"剪影太小"的）。
-      //   溢出画布被切掉只影响**边缘的墨**，不改这份仿射的倍数，所以除得掉、也该除。
-      //   台子：`_subj.cjs`（同一个主体）／`_pairshot.cjs`（屏上两栏）／`_zoomcmp` 已删（按包名硬配是假台子）。
-      val baked = winLocal?.zoom ?: 1f
-      val fit = if (adaptive || ringBleed) null else fitLikeColor(raster, alpha, edge, label, baked, forceExtend)
-      val fitted = fit?.first
-      val shaped = fitted ?: alpha
-      val placed = if (adaptive || ringBleed) alpha else intoVisibleArea(shaped, edge)
-      // ⚠ 这一趟多花的钱（判据台 `_harness/CostKt.kt`，62 张真机语料 @edge=384，取七遍最快一趟）：
-      //   `of` 中位 **0.54 ms**（**每张都跑**，因为它内部先降到 128 才扫，与画布多大无关 —— 与真机
-      //   彩色那一趟 0.60 ms 同一档）；`reframe` 中位 **2.24 ms**，只有开了窗口的 **13/62**
-      //   张跑到。分母是同一条语料上的合成主路（中位 332 ms）→ **整趟加的成本 0.8%，每张必付的那半 0.2%**。
-      //   ⚠ 绝对毫秒是 PC JVM 的数，手机上另有倍数（`intoVisibleArea` 是 Canvas 调用，台子量不到）——
-      //   所以这条只当**比值**用，别拿 0.54 ms 当真机读数。
+      if (cleanPlate != null) Log.i(TAG, "Mono: adaptive solid background removed edge=$edge label=$label")
+      val baseMask = cleanPlate ?: ramp
+      val chroma = if (CHROMA_TRIAL_APPLY) ChromaThreeTone.separate(pxIn, baseMask, edge) else null
+      if (chroma != null && chroma.pairs > 0) {
+        Log.i(TAG, "Mono: chroma detail pairs=${chroma.pairs} edge=$edge label=$label")
+      }
+      val alpha = toAlphaMask(chroma?.mask ?: baseMask, edge, edge)
+      val line = when {
+        GOOGLE_MONO -> googleMonoMask(processedPixels(raster, pxIn, edge, winLocal?.zoom ?: 1f), alpha, bgColor, edge)
+        LINE_ART_ALL -> regionFillMask(pxIn, alpha, edge)
+        else -> null
+      }
+      val ink = line ?: alpha
+      val placement = if (!adaptive && circle) {
+        placeLikeColor(source, ink, edge, winLocal, forceExtend, label, sharedGeometry)
+      } else {
+        null
+      }
+      val placed = placement?.first ?: when {
+        adaptive && winLocal != null -> restoreAdaptiveLayer(ink, edge, inset, winLocal)
+        adaptive || ringBleed -> ink
+        else -> intoVisibleArea(ink, edge)
+      }
       noteDiagnosis(edge, label, raster, placed)
       raster.recycle()
-      if (placed !== shaped) shaped.recycle()
-      if (shaped !== alpha) alpha.recycle()
+      if (line != null && placed !== line) line.recycle()
+      if (placed !== alpha) alpha.recycle()
       // 存的是**交出去那一张**（几何与位置都在里面了），不是模型刚算完的那张 ——
       // 命中时返回的必须与屏幕上的是同一个东西，否则「判据吃的那张」与「屏上那张」又分家。
       // `label` 只进归属索引（[MonoCache.noteOwner]），不参与键、不参与判定。
       // `geom` 同理，进 `geom.tsv`：命中路径靠它把这三个数再打一次（见 [noteCached]）。
-      MonoCache.store(key, edge, placed, label, fit?.second ?: "")
+      MonoCache.store(key, edge, placed, label, placement?.second ?: "")
       // 冷合成分段（光栅 / 键 / 准备 / 判据 / 交付）；每 32 次一行，见 [noteColdSplit]。
       noteColdSplit(tRaster - t0, tKey - tRaster, tBuild0 - tKey, tBuildDone - tBuild0,
         System.nanoTime() - tBuildDone)
@@ -1473,10 +1473,7 @@ internal object MonochromeSynth {
    * 写错会让内容在可见区里只占 2/3、四周空一圈。`AdaptiveIconDrawable` 自己用的也是
    * 同一个式子（`frac = (1 − VIEW_PORT_SCALE) / 2`），两处口径一致。
    */
-  private fun visibleInset(edge: Int): Int {
-    val f = AdaptiveIconDrawable.getExtraInsetFraction()
-    return (edge * f / (1f + 2f * f)).toInt()
-  }
+  private fun visibleInset(edge: Int): Int = adaptiveVisibleInset(edge)
 
   /**
    * 把**满幅口径**算出来的掩码缩进**可见区**，四周留透明。
@@ -1504,38 +1501,593 @@ internal object MonochromeSynth {
   /** 「Mono: 跟彩色」证据行额度（与彩色那行 `自适应几何` 各 300 张，两边要配成对）。 */
   private val fitLogLeft = java.util.concurrent.atomic.AtomicInteger(300)
 
-  /** 命中路径那行 `Mono: 跟彩色(留档)` 的额度（一次重启 1200 次命中，全打会淹掉日志）。 */
+  /** 「Mono: 跟彩色(留档)」的日志额度。 */
   private val geomEchoLeft = java.util.concurrent.atomic.AtomicInteger(300)
 
-  /**
-   * 返回 `Pair(缩放后的掩码 | null 表示不用动, 那一行证据)`。
-   * 第二项**无论用没用到都要**带出去 —— 它进 `geom.tsv`，命中路径靠它配表（见 [noteCached]）。
-   *
-   * @param baked 这份掩码**已经**带着的那道窗口缩量（`win.zoom`，缩进那一侧才有；其余为 1）。
-   *   真正要乘到掩码上的是 `plan.scale / baked`：`plan.scale` 是彩色相对**原始内容**的倍数，
-   *   而掩码相对原始内容已经在 `baked` 上了。`scale=` 那一格照旧印彩色的原值（配表吃它），
-   *   `窗=` / `交=` 把另外两个数一起带进留档，三方乘不乘得回去在日志里就能验。
-   */
-  private fun fitLikeColor(
-    raster: Bitmap, alpha: Bitmap, edge: Int, label: String, baked: Float, forceExtend: Boolean = false,
-  ): Pair<Bitmap?, String>? {
-    val px = IntArray(edge * edge)
-    raster.getPixels(px, 0, edge, 0, 0, edge, edge)
-    val plan = IconGeom.planOf(px, edge, edge, forceExtend) ?: return null
-    val applied = plan.scale / baked
-    val note = "scale=" + ((plan.scale * 100).toInt() / 100f) +
-      " fill=" + ((plan.fill * 100).toInt() / 100f) + " 支=" + (if (plan.plate) "铺底" else "延伸") +
-      " 窗=" + ((baked * 100).toInt() / 100f) + " 交=" + ((applied * 100).toInt() / 100f)
+  private fun placeLikeColor(
+    source: Drawable, ink: Bitmap, edge: Int, window: IconCropWindow.Window?,
+    forceExtend: Boolean, label: String, sharedGeometry: LegacyIconGeometry?,
+  ): Pair<Bitmap, String> {
+    val inset = visibleInset(edge)
+    val visible = edge - 2 * inset
+    val size = legacyRenderSize(visible, forceExtend)
+    val geometry = sharedGeometry ?: legacyGeometry(source, edge, forceExtend)
+    val plan = geometry.plan
+    val windowScale = modelWindowScale(edge.toFloat(), window)
+    val result = geometry.renderInk(ink, window, alreadyPlaced = sharedGeometry != null)
+    val mask = toAlphaMask(result, size, size)
+    val placed = try {
+      intoVisibleArea(mask, edge)
+    } finally {
+      mask.recycle()
+    }
+    val note = "scale=${plan?.scale ?: 1f} fill=${plan?.fill ?: 0f}" +
+      " 支=${if (plan?.plate == false) "延伸" else "铺底"} 窗=$windowScale grid=$size"
     if (fitLogLeft.decrementAndGet() >= 0) {
       Log.d(TAG, "Mono: 跟彩色 $note edge=$edge label=$label")
     }
-    if (applied in 0.99f..1.01f) return Pair(null, note)
-    val out = Bitmap.createBitmap(edge, edge, Bitmap.Config.ALPHA_8)
+    return placed to note
+  }
+
+  private fun legacyGeometry(source: Drawable, edge: Int, forceExtend: Boolean): LegacyIconGeometry {
+    val size = legacyRenderSize(edge - 2 * visibleInset(edge), forceExtend)
+    val raster = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+    return try {
+      drawLegacyIconGeometry(source, raster, Canvas(raster), forceExtend)
+    } finally {
+      raster.recycle()
+    }
+  }
+
+  /** Undo the analysis window before returning ink to the original adaptive layer. */
+  private fun restoreAdaptiveLayer(
+    ink: Bitmap, edge: Int, inset: Int, window: IconCropWindow.Window,
+  ): Bitmap {
+    val visible = edge - 2 * inset
+    val inverseScale = edge / (visible * modelWindowScale(edge.toFloat(), window))
+    val transform = Matrix().apply {
+      setScale(inverseScale, inverseScale)
+      postTranslate(
+        (window.l + window.r - inverseScale) * edge / 2f,
+        (window.t + window.b - inverseScale) * edge / 2f,
+      )
+    }
+    return Bitmap.createBitmap(edge, edge, Bitmap.Config.ALPHA_8).also {
+      Canvas(it).drawBitmap(ink, transform, Paint(Paint.FILTER_BITMAP_FLAG))
+    }
+  }
+
+  private fun scaleArgb(source: Bitmap, plan: IconGeom.Plan, applied: Float, edge: Int): Bitmap {
+    val out = Bitmap.createBitmap(edge, edge, Bitmap.Config.ARGB_8888)
     val m = android.graphics.Matrix()
     m.postScale(applied, applied, plan.cx, plan.cy)
     m.postTranslate(edge / 2f - plan.cx, edge / 2f - plan.cy)
-    Canvas(out).drawBitmap(alpha, m, Paint(Paint.FILTER_BITMAP_FLAG))
-    return Pair(out, note)
+    Canvas(out).drawBitmap(source, m, Paint(Paint.FILTER_BITMAP_FLAG))
+    return out
+  }
+
+  /** **线稿实验开关**（主人 2026-11-21：「未适配的全做成线稿版」「线条要清晰一点」）。
+   *  射程 = 所有走合成的非自适应图标；自适应（宿主自己画 mono）与快捷方式满幅支不动。
+   *  量过的反例：实心标识会变空心描边、插画会丢暗部——这是主人点名试的版本，先上屏看整体。 */
+  private const val LINE_ART_ALL = false
+
+  private const val CHROMA_TRIAL_APPLY = true
+
+  /** **按彩色通道同一条几何把图标处理一遍**（主人 2026-11-23：「为什么不能用我自适应处理后的图标」）：
+   *  planOf 缩放（按 a=plan.scale/baked 缩放）→ strip 白角 → deFringe 毛边。
+   *  返回处理后的像素（与彩色重画后的画面同一帧），供 Google 算法当输入。 */
+  private fun processedPixels(raster: Bitmap, srcWin: IntArray, edge: Int, baked: Float): IntArray {
+    val px = IntArray(edge * edge)
+    raster.getPixels(px, 0, edge, 0, 0, edge, edge)
+    val plan = IconGeom.planOf(px, edge, edge) ?: return srcWin.copyOf()
+    val applied = plan.scale / baked
+    val out = IntArray(edge * edge)
+    if (applied in 0.99f..1.01f) {
+      System.arraycopy(srcWin, 0, out, 0, edge * edge)
+    } else {
+      val tmp = Bitmap.createBitmap(edge, edge, Bitmap.Config.ARGB_8888)
+      tmp.setPixels(srcWin, 0, edge, 0, 0, edge, edge)
+      val fin = scaleArgb(tmp, plan, applied, edge)
+      tmp.recycle()
+      fin.getPixels(out, 0, edge, 0, 0, edge, edge)
+      fin.recycle()
+    }
+    IconGeom.stripBakedWhiteCorners(out, edge, edge)
+    IconGeom.deFringe(out, edge, edge)
+    return out
+  }
+  /** **Google 官方算法**（AOSP MonochromeIconFactory，Android 15/16 QPR2 强制主题用的那套）：
+   *  1. 压平到**黑底**；2. 单通道 = (r+g+b)/3；3. 全图 min/max 拉满；
+   *  4. 上/下边缘带平均值 >0.5 ⇒ 反相（边缘亮=底亮=主体暗）。
+   *  主人 2026-11-23：「那要不还是用 Google 官方的吧」——实测过输出是黑白照片级，这里照办上屏。 */
+  private const val GOOGLE_MONO = false
+
+  private fun googleMonoMask(srcPx: IntArray, vote: Bitmap, plate: Int?, edge: Int): Bitmap? {
+    val n = edge * edge
+    val vp = IntArray(n)
+    vote.getPixels(vp, 0, edge, 0, 0, edge, edge)
+    // 输入 = **自适应处理后的画面**：图标压到自己的底盘颜色上（底色未知时用白）。
+    val pc = plate ?: 0xFFFFFFFF.toInt()
+    val pr = (pc shr 16) and 0xFF
+    val pg = (pc shr 8) and 0xFF
+    val pb = pc and 0xFF
+    val a = IntArray(n) { i ->
+      val p = srcPx[i]
+      val al = p ushr 24
+      val r = ((p shr 16) and 0xFF) * al / 255 + pr * (255 - al) / 255
+      val g = ((p shr 8) and 0xFF) * al / 255 + pg * (255 - al) / 255
+      val b = (p and 0xFF) * al / 255 + pb * (255 - al) / 255
+      (r + g + b) / 3
+    }
+    var min = 255
+    var max = 0
+    for (v in a) { if (v < min) min = v; if (v > max) max = v }
+    if (min >= max) return null
+    val range = (max - min).toFloat()
+    // 极性判定：**用旧掩码**（它知道谁是墨）——墨像素平均亮度高于底层 ⇒ 亮=墨，否则暗=墨。
+    // 不再依赖底颜色/边缘带（2026-11-23 真机：钉钉/抖音/大众点评因此被翻成"底上墨"）。
+    var inkSum = 0L
+    var inkCnt = 0
+    var nonSum = 0L
+    var nonCnt = 0
+    for (i in 0 until n) {
+      if ((vp[i] ushr 24) >= 128) { inkSum += a[i]; inkCnt++ } else { nonSum += a[i]; nonCnt++ }
+    }
+    val flip = if (inkCnt > 0 && nonCnt > 0) (inkSum / inkCnt) < (nonSum / nonCnt) else false
+    val src = Bitmap.createBitmap(edge, edge, Bitmap.Config.ALPHA_8)
+    val buf = ByteArray(src.rowBytes * edge)
+    var ink = 0
+    for (y in 0 until edge) for (x in 0 until edge) {
+      val i = y * edge + x
+      val p2 = ((a[i] - min) * 255f / range).toInt().coerceIn(0, 255)
+      val v = if (flip) 255 - p2 else p2
+      if (v > 0) ink++
+      buf[y * src.rowBytes + x] = v.toByte()
+    }
+    if (ink == 0) {
+      src.recycle()
+      return null
+    }
+    src.copyPixelsFromBuffer(ByteBuffer.wrap(buf))
+    return src
+  }
+
+  /** **线稿（主人 2026-11-23：「前面几个还行」的那个版本）**：
+   *  k-means(k=10) 分区 → 碎区 <0.8% 并回 → 相邻两块色差 L1≥40 画 1px 线，**不膨格**。
+   *  后面那些"填实/并档/平底"的改动全部不再走这条。 */
+  private fun outlineMask(srcPx: IntArray, edge: Int): Bitmap? {
+    val n = edge * edge
+    val K = 10
+    val step = (edge / 96).coerceAtLeast(1)
+    val pr = IntArray(K)
+    val pg = IntArray(K)
+    val pb = IntArray(K)
+    for (k in 0 until K) {
+      val idx = (k * n / K).coerceIn(0, n - 1)
+      pr[k] = (srcPx[idx] shr 16) and 0xFF
+      pg[k] = (srcPx[idx] shr 8) and 0xFF
+      pb[k] = srcPx[idx] and 0xFF
+    }
+    repeat(6) {
+      val ar = LongArray(K)
+      val ag = LongArray(K)
+      val ab = LongArray(K)
+      val ac = IntArray(K)
+      var y = 0
+      while (y < edge) {
+        var x = 0
+        while (x < edge) {
+          val p = srcPx[y * edge + x]
+          val r = (p shr 16) and 0xFF
+          val g = (p shr 8) and 0xFF
+          val b = p and 0xFF
+          var best = 0
+          var bd = Int.MAX_VALUE
+          for (k in 0 until K) {
+            val dr = r - pr[k]; val dg = g - pg[k]; val db = b - pb[k]
+            val d = dr * dr + dg * dg + db * db
+            if (d < bd) { bd = d; best = k }
+          }
+          ar[best] += r; ag[best] += g; ab[best] += b; ac[best]++
+          x += step
+        }
+        y += step
+      }
+      for (k in 0 until K) if (ac[k] > 0) {
+        pr[k] = (ar[k] / ac[k]).toInt(); pg[k] = (ag[k] / ac[k]).toInt(); pb[k] = (ab[k] / ac[k]).toInt()
+      }
+    }
+    val lab = ByteArray(n)
+    for (i in 0 until n) {
+      val p = srcPx[i]
+      val r = (p shr 16) and 0xFF
+      val g = (p shr 8) and 0xFF
+      val b = p and 0xFF
+      var best = 0
+      var bd = Int.MAX_VALUE
+      for (k in 0 until K) {
+        val dr = r - pr[k]; val dg = g - pg[k]; val db = b - pb[k]
+        val d = dr * dr + dg * dg + db * db
+        if (d < bd) { bd = d; best = k }
+      }
+      lab[i] = best.toByte()
+    }
+    val area = IntArray(K)
+    for (i in 0 until n) area[lab[i].toInt()]++
+    val minArea = (n * 8 / 1000).coerceAtLeast(40)
+    val remap = IntArray(K) { it }
+    for (c in 0 until K) {
+      if (area[c] >= minArea) continue
+      var best = -1
+      var bd = Int.MAX_VALUE
+      for (o in 0 until K) {
+        if (o == c || area[o] < minArea) continue
+        val d = java.lang.Math.abs(pr[c] - pr[o]) + java.lang.Math.abs(pg[c] - pg[o]) + java.lang.Math.abs(pb[c] - pb[o])
+        if (d < bd) { bd = d; best = o }
+      }
+      if (best >= 0) remap[c] = best
+    }
+    for (i in 0 until n) lab[i] = remap[lab[i].toInt()].toByte()
+    val src = Bitmap.createBitmap(edge, edge, Bitmap.Config.ALPHA_8)
+    val buf = ByteArray(src.rowBytes * edge)
+    var ink = 0
+    for (y in 0 until edge) for (x in 0 until edge) {
+      val i = y * edge + x
+      val l = lab[i].toInt()
+      var on = false
+      if (x + 1 < edge) {
+        val o = lab[i + 1].toInt()
+        if (o != l) {
+          val d = java.lang.Math.abs(pr[l] - pr[o]) + java.lang.Math.abs(pg[l] - pg[o]) + java.lang.Math.abs(pb[l] - pb[o])
+          if (d >= 40) on = true
+        }
+      }
+      if (!on && y + 1 < edge) {
+        val o = lab[i + edge].toInt()
+        if (o != l) {
+          val d = java.lang.Math.abs(pr[l] - pr[o]) + java.lang.Math.abs(pg[l] - pg[o]) + java.lang.Math.abs(pb[l] - pb[o])
+          if (d >= 40) on = true
+        }
+      }
+      if (on) { ink++; buf[y * src.rowBytes + x] = 255.toByte() }
+    }
+    if (ink == 0) {
+      src.recycle()
+      return null
+    }
+    src.copyPixelsFromBuffer(ByteBuffer.wrap(buf))
+    return src
+  }
+
+  /** **颜色分区线稿**（主人 2026-11-21：「勾勒得不够细致，有一丝色差就应该画线」）：
+   *  1. k-means(k=14) 把画压成色块（在 96 格采样上迭代，全分辨率只做归类）；
+   *  2. **相邻两块颜色 L1 差 ≥ [lineCut] 才画 1px 线** —— 渐变被量化出的色带差 <18 不画，
+   *     不出"扫描线"假纹；真色块边界（差 30+）一条不漏；
+   *  3. 膨一格：384 的 1px 线缩到桌面 256 会掉。 */
+  private val lineCut = 40
+
+  private fun lineArtMask(srcPx: IntArray, edge: Int): Bitmap? {
+    val n = edge * edge
+    val K = 10
+    val step = (edge / 96).coerceAtLeast(1)
+    val pr = IntArray(K)
+    val pg = IntArray(K)
+    val pb = IntArray(K)
+    for (k in 0 until K) {
+      val idx = (k * n / K).coerceIn(0, n - 1)
+      pr[k] = (srcPx[idx] shr 16) and 0xFF
+      pg[k] = (srcPx[idx] shr 8) and 0xFF
+      pb[k] = srcPx[idx] and 0xFF
+    }
+    repeat(6) {
+      val ar = LongArray(K)
+      val ag = LongArray(K)
+      val ab = LongArray(K)
+      val ac = IntArray(K)
+      var y = 0
+      while (y < edge) {
+        var x = 0
+        while (x < edge) {
+          val p = srcPx[y * edge + x]
+          val r = (p shr 16) and 0xFF
+          val g = (p shr 8) and 0xFF
+          val b = p and 0xFF
+          var best = 0
+          var bd = Int.MAX_VALUE
+          for (k in 0 until K) {
+            val dr = r - pr[k]; val dg = g - pg[k]; val db = b - pb[k]
+            val d = dr * dr + dg * dg + db * db
+            if (d < bd) { bd = d; best = k }
+          }
+          ar[best] += r; ag[best] += g; ab[best] += b; ac[best]++
+          x += step
+        }
+        y += step
+      }
+      for (k in 0 until K) if (ac[k] > 0) {
+        pr[k] = (ar[k] / ac[k]).toInt(); pg[k] = (ag[k] / ac[k]).toInt(); pb[k] = (ab[k] / ac[k]).toInt()
+      }
+    }
+    val lab = ByteArray(n)
+    for (i in 0 until n) {
+      val p = srcPx[i]
+      val r = (p shr 16) and 0xFF
+      val g = (p shr 8) and 0xFF
+      val b = p and 0xFF
+      var best = 0
+      var bd = Int.MAX_VALUE
+      for (k in 0 until K) {
+        val dr = r - pr[k]; val dg = g - pg[k]; val db = b - pb[k]
+        val d = dr * dr + dg * dg + db * db
+        if (d < bd) { bd = d; best = k }
+      }
+      lab[i] = best.toByte()
+    }
+    // 碎区并回最近的大色块（面积 <0.4%）：插画的纹理就是"线太密"的来源。
+    val area = IntArray(K)
+    for (i in 0 until n) area[lab[i].toInt()]++
+    val minArea = 1
+    val remap = IntArray(K) { it }
+    for (c in 0 until K) {
+      if (area[c] >= minArea) continue
+      var best = -1
+      var bd = Int.MAX_VALUE
+      for (o in 0 until K) {
+        if (o == c || area[o] < minArea) continue
+        val d = java.lang.Math.abs(pr[c] - pr[o]) + java.lang.Math.abs(pg[c] - pg[o]) + java.lang.Math.abs(pb[c] - pb[o])
+        if (d < bd) { bd = d; best = o }
+      }
+      if (best >= 0) remap[c] = best
+    }
+    for (i in 0 until n) lab[i] = remap[lab[i].toInt()].toByte()
+    // 底 = 碰**透明外沿**或画布边的连通色块，并成一个标签(-1)：
+    // 线稿里"哪块是底"就看这一条（主人 2026-11-21：「底不是就好判断了吗」），
+    // 底内部再花也不画线，只画"底 vs 内容"的轮廓。
+    val comp = IntArray(n) { -1 }
+    val stack = IntArray(n)
+    var nc = 0
+    for (start in 0 until n) {
+      if (comp[start] >= 0) continue
+      val lb = lab[start]
+      var sp = 0
+      stack[sp++] = start
+      comp[start] = nc
+      var touch = false
+      val members = ArrayList<Int>(256)
+      while (sp > 0) {
+        val i = stack[--sp]
+        members.add(i)
+        val x = i % edge
+        val y = i / edge
+        if (x == 0 || y == 0 || x == edge - 1 || y == edge - 1) touch = true
+        if (!touch) {
+          if (x > 0 && (srcPx[i - 1] ushr 24) <= 8) touch = true
+          if (!touch && x + 1 < edge && (srcPx[i + 1] ushr 24) <= 8) touch = true
+          if (!touch && y > 0 && (srcPx[i - edge] ushr 24) <= 8) touch = true
+          if (!touch && y + 1 < edge && (srcPx[i + edge] ushr 24) <= 8) touch = true
+        }
+        fun push(j: Int) { if (comp[j] < 0 && lab[j] == lb) { comp[j] = nc; stack[sp++] = j } }
+        if (x > 0) push(i - 1)
+        if (x + 1 < edge) push(i + 1)
+        if (y > 0) push(i - edge)
+        if (y + 1 < edge) push(i + edge)
+      }
+      if (touch) for (i in members) lab[i] = (-1).toByte()
+      nc++
+    }
+    fun far(a: Int, b2: Int): Boolean =
+      java.lang.Math.abs(pr[a] - pr[b2]) + java.lang.Math.abs(pg[a] - pg[b2]) + java.lang.Math.abs(pb[a] - pb[b2]) >= lineCut
+    val line = ByteArray(n)
+    for (y in 0 until edge) for (x in 0 until edge) {
+      val i = y * edge + x
+      val l = lab[i].toInt()
+      if (x + 1 < edge) {
+        val o = lab[i + 1].toInt()
+        if (o != l) { if (l < 0 || o < 0) line[i] = 1 else if (far(l, o)) line[i] = 1 }
+      }
+      if (y + 1 < edge) {
+        val o = lab[i + edge].toInt()
+        if (o != l) { if (l < 0 || o < 0) line[i] = 1 else if (far(l, o)) line[i] = 1 }
+      }
+    }
+    val src = Bitmap.createBitmap(edge, edge, Bitmap.Config.ALPHA_8)
+    val buf = ByteArray(src.rowBytes * edge)
+    var ink = 0
+    for (y in 0 until edge) for (x in 0 until edge) {
+      val i = y * edge + x
+      // 不膨格（2026-11-21 主人「还是太密了」）：膨一格会让相邻边界粘成黑块。
+      if (line[i] == 1.toByte()) { ink++; buf[y * src.rowBytes + x] = 255.toByte() }
+    }
+    if (ink == 0) {                // 整张一格线都没有（纯平色）：交回原路线，别交空图标
+      src.recycle()
+      return null
+    }
+    src.copyPixelsFromBuffer(ByteBuffer.wrap(buf))
+    return src
+  }
+
+  /** **主体上墨 + 细分割切边**（主人 2026-11-21：「上墨应相邻的一边上一边不上墨」）：
+   *  1. k-means(k=12) 把画压成色块（96 格采样迭代，全分辨率归类；碎区 <0.8% 并回大块）；
+   *  2. 每块按**现有判据的逐像素墨量票决**（票 ≥ 一半才上墨）——一块实心、邻块空，
+   *     不会出现"线两边都空"的空心框；
+   *  3. 边缘落在色块边界上 ⇒ 比像素级干净，细节由 k 与碎区阈值控制。 */
+  private fun regionFillMask(srcPx: IntArray, vote: Bitmap, edge: Int): Bitmap? {
+    val n = edge * edge
+    val vp = IntArray(n)
+    vote.getPixels(vp, 0, edge, 0, 0, edge, edge)
+    val K = 32
+    val step = (edge / 96).coerceAtLeast(1)
+    val pr = IntArray(K)
+    val pg = IntArray(K)
+    val pb = IntArray(K)
+    for (k in 0 until K) {
+      val idx = (k * n / K).coerceIn(0, n - 1)
+      pr[k] = (srcPx[idx] shr 16) and 0xFF
+      pg[k] = (srcPx[idx] shr 8) and 0xFF
+      pb[k] = srcPx[idx] and 0xFF
+    }
+    repeat(6) {
+      val ar = LongArray(K)
+      val ag = LongArray(K)
+      val ab = LongArray(K)
+      val ac = IntArray(K)
+      var y = 0
+      while (y < edge) {
+        var x = 0
+        while (x < edge) {
+          val p = srcPx[y * edge + x]
+          val r = (p shr 16) and 0xFF
+          val g = (p shr 8) and 0xFF
+          val b = p and 0xFF
+          var best = 0
+          var bd = Int.MAX_VALUE
+          for (k in 0 until K) {
+            val dr = r - pr[k]; val dg = g - pg[k]; val db = b - pb[k]
+            val d = dr * dr + dg * dg + db * db
+            if (d < bd) { bd = d; best = k }
+          }
+          ar[best] += r; ag[best] += g; ab[best] += b; ac[best]++
+          x += step
+        }
+        y += step
+      }
+      for (k in 0 until K) if (ac[k] > 0) {
+        pr[k] = (ar[k] / ac[k]).toInt(); pg[k] = (ag[k] / ac[k]).toInt(); pb[k] = (ab[k] / ac[k]).toInt()
+      }
+    }
+    val lab = ByteArray(n)
+    val edgeCnt = IntArray(K)
+    val devSum = LongArray(K)
+    for (i in 0 until n) {
+      val p = srcPx[i]
+      val r = (p shr 16) and 0xFF
+      val g = (p shr 8) and 0xFF
+      val b = p and 0xFF
+      var best = 0
+      var bd = Int.MAX_VALUE
+      for (k in 0 until K) {
+        val dr = r - pr[k]; val dg = g - pg[k]; val db = b - pb[k]
+        val d = dr * dr + dg * dg + db * db
+        if (d < bd) { bd = d; best = k }
+      }
+      lab[i] = best.toByte()
+      devSum[best] += bd.toLong()
+      val x = i % edge
+      val y = i / edge
+      if (x == 0 || y == 0 || x == edge - 1 || y == edge - 1) edgeCnt[best]++
+    }
+    // 碎区并回最近的大块（<0.8%）：插画纹理不参与切边。
+    val area = IntArray(K)
+    for (i in 0 until n) area[lab[i].toInt()]++
+    val minArea = 1
+    val remap = IntArray(K) { it }
+    for (c in 0 until K) {
+      if (area[c] >= minArea) continue
+      var best = -1
+      var bd = Int.MAX_VALUE
+      for (o in 0 until K) {
+        if (o == c || area[o] < minArea) continue
+        val d = java.lang.Math.abs(pr[c] - pr[o]) + java.lang.Math.abs(pg[c] - pg[o]) + java.lang.Math.abs(pb[c] - pb[o])
+        if (d < bd) { bd = d; best = o }
+      }
+      if (best >= 0) remap[c] = best
+    }
+    for (i in 0 until n) lab[i] = remap[lab[i].toInt()].toByte()
+    // 每块区域的浓度 = 判据在该区的平均墨量（"别的颜色"变成不同灰度，边缘仍是色块切边）。
+    val sumA = LongArray(K)
+    val pxCnt = IntArray(K)
+    for (i in 0 until n) {
+      val c = lab[i].toInt()
+      pxCnt[c]++
+      sumA[c] += (vp[i] ushr 24).toLong()
+    }
+    val tone = IntArray(K) { if (pxCnt[it] == 0) 0 else (sumA[it] / pxCnt[it]).toInt() }
+    // 满幅方底：**碰外沿 + 面积≥25% + 自色平坦**的那个最大块判成底（不依赖透明像素），
+    // 连同与它同色（L1<24）的碎块一起透明 —— 主人 2026-11-21 方底图标被整块涂实的修法。
+    val area2 = IntArray(K)
+    val ec2 = IntArray(K)
+    val dv2 = LongArray(K)
+    for (i in 0 until n) {
+      val c = lab[i].toInt()
+      area2[c]++
+      val p = srcPx[i]
+      val dr = ((p shr 16) and 0xFF) - pr[c]
+      val dg = ((p shr 8) and 0xFF) - pg[c]
+      val db = (p and 0xFF) - pb[c]
+      dv2[c] += (dr * dr + dg * dg + db * db).toLong()
+      val xx = i % edge
+      val yy = i / edge
+      if (xx == 0 || yy == 0 || xx == edge - 1 || yy == edge - 1) ec2[c]++
+    }
+    var plate = -1
+    var plateArea = 0
+    for (c in 0 until K) {
+      if (ec2[c] == 0) continue
+      if (area2[c] * 4 < n || tone[c] <= 0) continue
+      if (dv2[c] > area2[c] * 3L * 400) continue      // 不平坦：不是底
+      if (area2[c] > plateArea) { plateArea = area2[c]; plate = c }
+    }
+    if (plate >= 0) {
+      tone[plate] = 0
+      for (c in 0 until K) {
+        if (c == plate || tone[c] <= 0) continue
+        val l1 = java.lang.Math.abs(pr[c] - pr[plate]) + java.lang.Math.abs(pg[c] - pg[plate]) + java.lang.Math.abs(pb[c] - pb[plate])
+        if (l1 < 24) tone[c] = 0
+      }
+    }
+    // **三档 + 相邻块不同档**（主人 2026-11-23：「颜色最多应只能用三档」「分割出来的各个块
+    // 肯定要上不同的颜色」）：主体区按色块暗度分 3 箱，再做贪心图着色 —— 相邻两块强制不同档
+    // （面积大的先定），块与块才看得出来。
+    run {
+      // 分档用**旧判据的浓度**（它已含极性：亮色字形也算墨），不用绝对亮度 ——
+      // 用亮度会把钉钉/滴滴这种亮色字形判成浅档（2026-11-23 真机）。
+      val want = IntArray(K) { c ->
+        if (tone[c] <= 0) -1 else if (tone[c] >= 170) 0 else if (tone[c] >= 85) 1 else 2
+      }
+      val adj = Array(K) { BooleanArray(K) }
+      for (i in 0 until n) {
+        val a = lab[i].toInt()
+        val x = i % edge
+        if (x + 1 < edge) { val b2 = lab[i + 1].toInt(); if (a != b2) { adj[a][b2] = true; adj[b2][a] = true } }
+        if ((i / edge) + 1 < edge) { val b2 = lab[i + edge].toInt(); if (a != b2) { adj[a][b2] = true; adj[b2][a] = true } }
+      }
+      val lv = IntArray(K) { -1 }
+      val order = (0 until K).filter { tone[it] > 0 }.sortedByDescending { area2[it] }
+      for (c in order) {
+        var best = -1
+        var bestErr = Int.MAX_VALUE
+        for (cand in 0..2) {
+          var ok = true
+          for (o in 0 until K) if (adj[c][o] && lv[o] == cand) { ok = false; break }
+          if (!ok) continue
+          val err = java.lang.Math.abs(cand - want[c].coerceAtLeast(0))
+          if (err < bestErr) { bestErr = err; best = cand }
+        }
+        if (best < 0) best = want[c].coerceIn(0, 2)
+        lv[c] = best
+      }
+      for (c in 0 until K) tone[c] = when {
+        lv[c] < 0 -> 0
+        lv[c] == 0 -> 255
+        lv[c] == 1 -> 170
+        else -> 90
+      }
+    }
+    val src = Bitmap.createBitmap(edge, edge, Bitmap.Config.ALPHA_8)
+    val buf = ByteArray(src.rowBytes * edge)
+    var ink = 0
+    for (y in 0 until edge) for (x in 0 until edge) {
+      val i = y * edge + x
+      val a = tone[lab[i].toInt()]
+      if (a > 0) ink++
+      buf[y * src.rowBytes + x] = a.toByte()
+    }
+    if (ink == 0) {
+      src.recycle()
+      return null
+    }
+    src.copyPixelsFromBuffer(ByteBuffer.wrap(buf))
+    return src
   }
 
   private fun intoVisibleArea(source: Bitmap, edge: Int): Bitmap {
@@ -1577,6 +2129,37 @@ internal object MonochromeSynth {
     }
     mask.copyPixelsFromBuffer(ByteBuffer.wrap(bytes))
     return mask
+  }
+
+  /** A flat background layer and matching composite pixels identify the exposed plate. */
+  private fun cleanAdaptivePlate(
+    source: IntArray, mask: IntArray, originalBg: IntArray, bg: IntArray, edge: Int, inset: Int
+  ): IntArray? {
+    val side = edge - inset * 2
+    val area = side * side
+    val plate = originalBg[edge / 2 * edge + edge / 2]
+    if (plate ushr 24 != 255) return null
+    var exposed = 0
+    var subject = 0
+    var retained = 0
+    for (y in inset until edge - inset) for (x in inset until edge - inset) {
+      val i = y * edge + x
+      // A background layer with any distinct content may itself carry part of the logo.
+      if (originalBg[i] != plate) return null
+      if (bg[i] != plate || source[i] ushr 24 != 255) continue
+      val distance = maxOf(
+        kotlin.math.abs((source[i] shr 16 and 255) - (plate shr 16 and 255)),
+        kotlin.math.abs((source[i] shr 8 and 255) - (plate shr 8 and 255)),
+        kotlin.math.abs((source[i] and 255) - (plate and 255))
+      )
+      if (distance == 0) exposed++
+      if (distance >= 24) {
+        subject++
+        if (mask[i] ushr 24 >= 96) retained++
+      }
+    }
+    if (exposed * 2 < area || subject * 20 < area || retained * 5 < subject * 4) return null
+    return IntArray(mask.size) { i -> if (bg[i] == plate && source[i] == plate) 0 else mask[i] }
   }
 
   /**

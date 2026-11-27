@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -48,6 +49,8 @@ import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -120,7 +123,9 @@ internal fun GroupTitle(text: String) {
     text = text,
     style = MaterialTheme.typography.titleSmallEmphasized,
     color = MaterialTheme.colorScheme.primary,
-    modifier = Modifier.padding(start = 16.dp, bottom = 8.dp),
+    modifier = Modifier
+      .padding(start = 16.dp, end = 16.dp)
+      .semantics { heading() },
   )
 }
 
@@ -246,20 +251,20 @@ internal fun ScreenList(content: LazyListScope.() -> Unit) {
   val listState = rememberLazyListState()
   val forward = listState.canScrollForward
   LaunchedEffect(forward) { NavScrollGate.canScrollForward = forward }
-  LazyColumn(
-    state = listState,
-    modifier = Modifier.fillMaxSize(),
-    contentPadding = PaddingValues(
-      start = 16.dp,
-      end = 16.dp,
-      top = 4.dp,
-      // 末尾让出悬浮药丸那一段，否则滚到底时最后一张卡会被它压住。
-      // 二级页没有药丸 → 外壳把 [LocalNavSpace] 置 0，不留那段空白。
-      bottom = 24.dp + LocalNavSpace.current,
-    ),
-    verticalArrangement = Arrangement.spacedBy(13.dp),
-    content = content,
-  )
+  Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+    LazyColumn(
+      state = listState,
+      modifier = Modifier.widthIn(max = 640.dp).fillMaxSize(),
+      contentPadding = PaddingValues(
+        start = 16.dp,
+        end = 16.dp,
+        top = 4.dp,
+        bottom = 24.dp + LocalNavSpace.current,
+      ),
+      verticalArrangement = Arrangement.spacedBy(13.dp),
+      content = content,
+    )
+  }
 }
 
 /**

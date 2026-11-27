@@ -284,6 +284,7 @@ private fun installHooks(xposed: XposedInterface, classLoader: ClassLoader, pack
     // 纯合成：未适配图标的单色层由我们出，桌面因此不会进它自己的 Factory。
     // 下面那条不是兜底、是**漏接计数** —— 它非零就说明上面那条没接住，屏幕上会是反的。
     hookSynthesizedMonochrome(xposed)
+    hookHostForcedMonochrome(xposed, classLoader)
     hookMaskFallThrough(xposed, classLoader)
     warnStaleIconCache(packageName)
   } else {
@@ -1474,8 +1475,17 @@ private fun hookPixelLauncher(xposed: XposedInterface, classLoader: ClassLoader)
   val drawFullBleedField =
     fieldOf(iconOptionsClass, "drawFullBleed")
       ?: run {
-        // 这个开关是承重的：拿不到它，桌面图标四角会出现黑色方角。留痕。
-        Log.w(TAG, "Launcher: IconOptions.drawFullBleed not found")
+        // AOSP's Java factory draws AdaptiveIconDrawable directly with the device mask.
+        // Keep that path intact, including its scale, shadow and archive handling.
+        val nativeDraw = MemberLookup.findMethod(
+          baseIconFactoryClass, "drawIconBitmap", Canvas::class.java, Drawable::class.java,
+          Float::class.javaPrimitiveType!!, Int::class.javaPrimitiveType!!, Bitmap::class.java,
+        )
+        if (nativeDraw != null && nativeDraw.returnType == Void.TYPE) {
+          Log.i(TAG, "Launcher: using native adaptive icon drawing")
+        } else {
+          missing("Launcher", "IconOptions.drawFullBleed or native drawIconBitmap")
+        }
         return
       }
 
@@ -1992,6 +2002,70 @@ private fun spoken(name: String, hooked: Int) {
 /** [classOf] / [fieldOf] 找不到目标时的留痕，写法是 `?: return missing("名字", "缺什么")`。 */
 private fun missing(name: String, what: String) {
   Log.w(TAG, "$name: 找不到 $what —— 这条通道在本进程没生效")
+}
+
+/** 保留桌面对单色层的主题着色。Opticon 无法合成时，由桌面显示原彩色图标。 */
+private fun hookHostForcedMonochrome(xposed: XposedInterface, classLoader: ClassLoader) {
+  if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+  val name = "Mono: host forced monochrome"
+  val controller = firstClassOf(
+    listOf("com.android.launcher3", "com.google.android.apps.nexuslauncher")
+      .map { "$it.icons.mono.MonoIconThemeController" },
+    classLoader,
+  ) ?: return missing(name, "MonoIconThemeController")
+  // Kotlin 的默认参数构造最终调用 (boolean, Function1)。功能开关变更会重启桌面。
+  val constructor = declaredConstructors(controller).singleOrNull {
+    val params = it.parameterTypes
+    params.size == 2 && params[0] == Boolean::class.javaPrimitiveType &&
+      params[1].name == "kotlin.jvm.functions.Function1"
+  }
+  if (constructor == null) {
+    hookFlagBasedMonochrome(xposed, controller, classLoader)
+    return
+  }
+  runCatching {
+    xposed.hook(constructor).intercept { chain ->
+      if (chain.args[0] == true && ModuleRuntime.options().monoInvert) {
+        Log.i(TAG, "$name disabled for Opticon")
+        chain.proceed(arrayOf(false, chain.args[1]))
+      } else {
+        chain.proceed()
+      }
+    }
+    spoken(name, 1)
+  }.onFailure { Log.w(TAG, "$name: hook failed", it) }
+}
+
+/** AOSP's newer controller uses a flag for its fallback. Preserve its native clip for valid layers. */
+@androidx.annotation.RequiresApi(Build.VERSION_CODES.TIRAMISU)
+private fun hookFlagBasedMonochrome(
+  xposed: XposedInterface,
+  controller: Class<*>,
+  classLoader: ClassLoader,
+) {
+  val name = "Mono: flag-based controller"
+  val bitmapInfo = classOf("${controller.packageName.substringBeforeLast(".mono")}.BitmapInfo", classLoader)
+    ?: return missing(name, "BitmapInfo")
+  val select = MemberLookup.findMethod(
+    controller, "getMonochromeDrawable", AdaptiveIconDrawable::class.java, bitmapInfo,
+  )?.takeIf { it.returnType == Drawable::class.java }
+    ?: return missing(name, "getMonochromeDrawable(AdaptiveIconDrawable, BitmapInfo)")
+  val clipped = classOf(controller.name + "\$ClippedMonoDrawable", classLoader)
+    ?.takeIf { Drawable::class.java.isAssignableFrom(it) }
+    ?: return missing(name, "ClippedMonoDrawable")
+  runCatching {
+    val constructor = clipped.getDeclaredConstructor(Drawable::class.java).apply { isAccessible = true }
+    xposed.hook(select).intercept { chain ->
+      val icon = chain.args.firstOrNull() as? AdaptiveIconDrawable
+      if (icon == null || !ModuleRuntime.options().monoInvert) {
+        return@intercept chain.proceed()
+      }
+      // This getter returns the app's layer or Opticon's synthesis via the existing hook.
+      // A null result keeps the icon in color and skips the desktop's forced generation.
+      icon.monochrome?.let { constructor.newInstance(it) }
+    }
+    spoken(name, 1)
+  }.onFailure { Log.w(TAG, "$name: hook failed", it) }
 }
 
 /**

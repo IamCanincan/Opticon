@@ -40,7 +40,6 @@ import com.iamcanincan.opticon.ui.ScreenList
  * 2026-10-26 三个功能分页：单色与通知各自独立成页；作用域 / 步骤 / 验证 / 运维在「模块」页。
  * 2026-11-13 换口径：原来这一页讲"裁成正圆"，主人定了「图标裁圆应该去掉，转为将非自适应图标
  * 优化为自适应图标」—— 现在讲的是包装（填满正方形 + 边缘延伸 / 稀疏铺白底 + 系统 mask）。
- * 2026-11-14 起快捷方式整个放行，效果卡第四格与「原样」同款画法。
  *
  * 顶栏与底部导航让出的空间由外壳扣掉（`OpticonApp` 里的 `Modifier.padding(inner)`），
  * 这里只管列表自己的边距 —— 各页共用同一份脚手架，见 [ScreenList]。
@@ -87,11 +86,10 @@ fun CropScreen() {
  *
  * ⚠ 样本只是**示意图**，不是真实图标渲染：原样那块用中性圆角方表示老式图标（一张方图）；
  * 自适应那格用主色圆示意「铺满图层、系统裁形」；透明底那格用白盘示意「缩进内切圆 + 铺白底」；
- * 快捷方式那格与「原样」同款 —— 那一路整个放行，我们一个像素不碰。
+ * 快捷方式也沿用自适应图标的布局。
  */
 @Composable
 private fun EffectCard() {
-  val scheme = MaterialTheme.colorScheme
   OpticonCard {
     Row(
       modifier = Modifier.fillMaxWidth(),
@@ -128,17 +126,11 @@ private fun EffectCard() {
         detail = stringResource(R.string.effect_caption_shortcut),
       )
     }
-    Spacer(modifier = Modifier.height(18.dp))
-    Text(
-      text = stringResource(R.string.effect_title),
-      style = MaterialTheme.typography.titleMedium,
-      color = scheme.onSurface,
-    )
-    Spacer(modifier = Modifier.height(6.dp))
+    Spacer(modifier = Modifier.height(14.dp))
     Text(
       text = stringResource(R.string.effect_body),
       style = MaterialTheme.typography.bodyMedium,
-      color = scheme.onSurfaceVariant,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
   }
 }
@@ -207,19 +199,15 @@ private fun EffectTile(
             modifier = Modifier.size(20.dp),
           )
         }
-      // 快捷方式：整个放行（2026-11-14），与「原样」同一款画法，只换图形。
       EffectStyle.SHORTCUT ->
         Box(
-          modifier = Modifier.size(40.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(scheme.surfaceVariant)
-            .border(1.dp, scheme.outline, RoundedCornerShape(14.dp)),
+          modifier = Modifier.size(40.dp).clip(CircleShape).background(scheme.primary),
           contentAlignment = Alignment.Center,
         ) {
           Icon(
             imageVector = Icons.Default.Bolt,
             contentDescription = null,
-            tint = scheme.onSurfaceVariant,
+            tint = scheme.onPrimary,
             modifier = Modifier.size(22.dp),
           )
         }

@@ -154,7 +154,13 @@ cat bench/reg/flat.txt
 [ "$(grep -c "^FLAT n=[1-9]" bench/reg/flat.txt)" = "2" ] || { echo "!! 平色饼台没数出两条 —— 语料或驱动坏了"; exit 1; }
 
 echo "== 6/7 兼容性台 =="
-run harness.CompatKtKt 96,192,384,768 | grep "合计" | tee bench/reg/compat.txt
+run harness.CompatKtKt 96,192,384,768 > bench/reg/compat_raw.txt
+grep "合计" bench/reg/compat_raw.txt | tee bench/reg/compat.txt
+if ! grep -Eq 'GAP=0 +FAIL=0[[:space:]]*$' bench/reg/compat.txt; then
+  grep -E ' (GAP|FAIL) ' bench/reg/compat_raw.txt || true
+  echo "!! 兼容性台有未覆盖或失败的用例，详见 bench/reg/compat_raw.txt"
+  exit 1
+fi
 
 # —— 第七闸：**主人肉眼报的那 15 张**（`named.txt`）。这是台子里唯一一份不是我们自己口径的判据。
 # ⚠ **主口径必须是装机那一张（`$CORPUS`=rec_model，自适应里有背景层的那批交的是合成图 + under）**。

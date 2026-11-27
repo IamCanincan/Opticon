@@ -49,11 +49,11 @@ internal object MonoKey {
    */
   fun keyOf(
     px: IntArray, under: IntArray?, edge: Int, adaptive: Boolean, flatten: Boolean, circle: Boolean,
-    shortcut: Boolean = false, forceExtend: Boolean = false,
+    shortcut: Boolean = false, forceExtend: Boolean = false, placed: Boolean = false,
   ): Long {
     var h = edge.toLong() or (1L shl 32)
     h = mix(h, (if (adaptive) 1L else 0L) or (if (flatten) 2L else 0L) or (if (circle) 4L else 0L) or
-      (if (shortcut) 8L else 0L) or (if (forceExtend) 16L else 0L))
+      (if (shortcut) 8L else 0L) or (if (forceExtend) 16L else 0L) or (if (placed) 32L else 0L))
     h = fold(h, px, 2L)
     h = fold(h, under, 3L)
     return final(h)

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <string name="app_name">Opticon</string>
 
     <!--
@@ -36,7 +36,7 @@
     <string name="tab_home">主页</string>
     <string name="tab_features">功能</string>
     <string name="tab_stats">统计</string>
-    <string name="tab_settings">设置</string>
+    <string name="tab_settings" tools:ignore="DuplicateStrings">设置</string>
     <string name="stats_title">各功能处理次数</string>
     <string name="stats_empty">还没有收到上报</string>
     <string name="stats_empty_title">还没有计数</string>
@@ -44,21 +44,16 @@
     <string name="stats_at">上次更新 %1$s（由被注入的进程上报）</string>
     <string name="stats_times">次</string>
     <string name="home_features">功能状态</string>
-    <string name="home_sub_crop">老式图标做成自适应图标，形状交给系统</string>
-    <string name="home_sub_mono">未适配图标的黑白极性修正</string>
+    <string name="home_sub_crop">适配老式图标与快捷方式</string>
+    <string name="home_sub_mono">自动生成主题图标的单色层</string>
     <string name="home_sub_notify">通知小图标改成黑白剪影</string>
-    <string name="home_role">当前状态</string>
     <string name="home_state_ok">运行中</string>
     <string name="home_state_idle">等待上报</string>
     <string name="home_state_total">共 %1$d 次处理 · %2$s 上报</string>
     <string name="home_state_stale">上次上报 %1$s · 共 %2$d 次</string>
     <string name="home_state_chip">%1$d 项开启</string>
     <string name="home_count">%1$d 次</string>
-    <string name="home_tips">提示</string>
-    <string name="home_tip_stale_title">改完开关没变化？</string>
-    <string name="home_tip_stale_body">现在改完开关会自动清缓存 / 重启对应的界面进程；万一还是没变化，到「设置 → 运维操作」手动按一次。</string>
-    <string name="home_tip_count_title">这些数字是什么？</string>
-    <string name="home_tip_count_body">桌面、系统界面等被注入的进程各处理了多少次，每 20 次回报一次；三个数字都在「统计」页。</string>
+    <string name="home_tip_stale_body">图标未刷新时，可在「设置 → 运维操作」中清理图标缓存。</string>
     <string name="home_total_none">桌面、系统界面这些进程每处理 20 次回报一次，稍等就有数字。</string>
     <string name="features_role">三个功能的开关；每个功能的说明与效果从主页那一行进去</string>
     <string name="features_group">三个功能</string>
@@ -67,8 +62,8 @@
     <string name="features_all_off">全部关闭</string>
     <string name="features_all_hint">三个功能一起开 / 关；排查时先全关最省事。</string>
     <string name="features_note_group">开关什么时候生效</string>
-    <string name="features_effect_title">约一秒内生效</string>
-    <string name="features_effect_body">开关写入后模块每秒重读一次配置：新画的图标、新收到的通知立刻按新设置处理。三个开关里任意一个动了，都会清一次桌面缓存并重启桌面、系统界面与设置等进程，图标和通知随之重画（桌面会闪一下）。另外，桌面自己的「主题图标」开关一变，模块也会自动让图标重画，不用再手动按 —— 这一条不重启任何进程，样式面板可以一直开着，预览也不会断。万一仍没变化，到「设置 → 运维操作」手动按一次。</string>
+    <string name="features_effect_title">自动刷新</string>
+    <string name="features_effect_body">更改模块开关会清理桌面缓存并重启相关进程。切换桌面的「主题图标」时，图标会在桌面进程内重画。</string>
     <string name="settings_scope_sub">会画应用图标的进程清单（在框架管理器中勾选）</string>
     <string name="settings_setup_title">启用与验证</string>
     <string name="settings_setup_sub">四步启用、一条 adb 命令验证</string>
@@ -84,7 +79,7 @@
 
     <!-- 自适应的说明卡（开关在「功能」页那一行） -->
     <string name="circle_switch_title">@string/tab_crop</string>
-    <string name="circle_switch_body">非自适应（老式）图标直接做成自适应图标：先把图案缩放到恰好填满正方形（不裁掉任何有色像素），占比够的按边缘颜色延伸补满、不另加底盘；占比小的缩到内切圆里并铺白底。形状交给系统（桌面的「图标形状」设成什么就是什么）。快捷方式不处理，原样交给桌面。自适应图标保持原样。</string>
+    <string name="circle_switch_body">将老式应用图标和快捷方式转成自适应图标。保留原图比例，最终轮廓跟随桌面的「图标形状」设置。</string>
     <!-- 开关切换后的 Snackbar：桌面有预渲染缓存，需说明清除缓存后才会生效 -->
 
     <!-- 状态卡 -->
@@ -121,7 +116,7 @@
     <!-- 与 tab_settings 同形但**不是同一个概念**：这里是系统「设置」应用的名字，
          下面是本模块自己的设置页标题 —— 两者必须能各自改名，所以不做别名。
          DuplicateStrings 这一条是刻意留着的。 -->
-    <string name="scope_settings_title">设置</string>
+    <string name="scope_settings_title" tools:ignore="DuplicateStrings">设置</string>
     <string name="scope_settings_desc">设置中的应用列表。</string>
 
     <string name="scope_settings_intelligence_title">设置智能建议</string>
@@ -174,15 +169,14 @@
 
     <!-- 效果示意（形状对比图）-->
     <string name="section_effect">效果</string>
-    <string name="effect_title">老式图标 → 自适应图标</string>
-    <string name="effect_body">非自适应图标直接做成自适应图标：先把图案缩放到恰好填满正方形（不裁掉任何有色像素）；占比够的按边缘颜色延伸补满、不另加底盘，占比小的缩进内切圆并铺一块白底。形状交给系统按桌面的「图标形状」裁切。满幅的图标一个像素不动；自适应图标与快捷方式都原样放行。</string>
+    <string name="effect_body">满幅图形沿原轮廓补边，稀疏图形缩进安全区并加对比底色。</string>
     <!-- 效果示意四格：标题一行 + 细节一行；原样/自适应是主对照，透明底/快捷方式是两档说明 -->
     <string name="effect_sample_original_detail">非自适应</string>
     <string name="effect_sample_cropped_detail">满幅 · 系统裁形</string>
     <string name="effect_sample_shrink_title">透明底图标</string>
-    <string name="effect_caption_shrink">缩进圆内 · 铺白底</string>
+    <string name="effect_caption_shrink">缩进安全区 · 对比底色</string>
     <string name="effect_sample_shortcut_title">快捷方式</string>
-    <string name="effect_caption_shortcut">原样交给桌面</string>
+    <string name="effect_caption_shortcut">同样适配</string>
 
     <!--
         单色遮罩极性修正。这条和自适应是**两个独立开关**：它管的是 Android 16 强制取色下
@@ -202,16 +196,16 @@
 
     <!-- 说明 -->
     <string name="section_notes">说明</string>
-    <string name="note_adaptive">自适应图标不再改动；形状由系统遮罩决定（桌面设成圆，它就是圆）。只有非自适应（老式）图标会被做成自适应图标。</string>
+    <string name="note_adaptive">应用已提供自适应图标时，沿用其原有彩色图层。</string>
     <string name="note_tiles">快速设置磁贴不参与这一路。</string>
     <string name="note_mono_scope">已提供单色层的应用，那张单色层将原样透传，模块不改它的像素。</string>
     <string name="note_mono_cache">剪影按图标内容缓存于宿主应用的缓存目录（上限 48 MB，系统存储不足时可能被清除）。模块版本或图标内容变更后缓存自动失效；升级后的首次重启加载会较慢。</string>
-    <string name="note_launcher3">Android 16 及以上不再让桌面给我们的图标补白板；老式图标做成自适应图标后背景层是空的，图案的透明处由模块自己补满（边缘色或白底），不另垫一块颜色。</string>
+    <string name="note_launcher3">启用动态取色后，模块生成的单色层沿用彩色图标的主体布局与补边方向。</string>
     <string name="note_themed_icon">本应用图标包含 monochrome 层；在 Android 13 及以上启动器启用“主题图标”时，将按壁纸取色渲染。</string>
 
     <!-- 关于页：功能范围（覆盖什么、有意排除什么） -->
     <string name="section_range">功能范围</string>
-    <string name="range_crop">自适应：所有已注入进程中的非自适应应用图标；快速设置磁贴与快捷方式除外（快捷方式原样交给桌面）。</string>
+    <string name="range_crop">自适应：已注入进程中的老式应用图标，以及桌面支持的快捷方式图标。</string>
     <string name="range_mono">动态取色：未提供单色层的自适应图标；已提供者原样透传。</string>
     <string name="range_notify">单色通知：新通知、通知行与状态栏重建；已适配应用跳过，大图与头像不处理。</string>
     <string name="range_scope">作用域由框架管理器决定；未注入的进程不受影响。</string>

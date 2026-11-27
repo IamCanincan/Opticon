@@ -36,8 +36,10 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -100,10 +102,14 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.invisibleToUser
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -335,6 +341,8 @@ fun OpticonApp() {
         }
     )
     val pageTitle = subPage?.let { stringResource(it.titleRes) } ?: rootTitle
+    val compactBar = landscape || subPage != null
+    val showNav = navVisible && subPage == null
 
     // 首次打开就把默认配置落盘。放在外壳而不是各页面里：一开始打开的是「主页」，而模块侧有
     // 几条回退通道要先认「这份文件是不是 Opticon 的配置」—— 判据是
@@ -403,9 +411,13 @@ fun OpticonApp() {
     )
     Box(modifier = Modifier.fillMaxSize().background(pageBackground)) {
         Scaffold(
-            modifier = Modifier
-                .nestedScroll(scrollBehavior.nestedScrollConnection)
-                .nestedScroll(navScrollConnection),
+            modifier = if (subPage != null) {
+                Modifier
+            } else {
+                Modifier
+                    .nestedScroll(scrollBehavior.nestedScrollConnection)
+                    .nestedScroll(navScrollConnection)
+            },
             containerColor = Color.Transparent,
             topBar = {
                 val barColors = TopAppBarDefaults.topAppBarColors(
@@ -416,8 +428,7 @@ fun OpticonApp() {
                 )
                 val titleSlot: @Composable () -> Unit = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        // 二级页不画品牌标记：那个位置让给返回箭头，标题更贴近内容一点。
-                        if (subPage == null) {
+                        if (subPage == null && (pagerState.currentPage == TAB_HOME || nearHome)) {
                             BrandMark()
                             Spacer(Modifier.width(12.dp))
                         }
@@ -436,9 +447,12 @@ fun OpticonApp() {
                                 Text(
                                     text = title,
                                     style =
-                                        if (landscape) MaterialTheme.typography.titleLarge
+                                        if (compactBar) MaterialTheme.typography.titleLarge
                                         else MaterialTheme.typography.headlineMedium,
                                     color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.semantics { heading() },
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
                                 )
                             }
                         }
@@ -482,9 +496,7 @@ fun OpticonApp() {
                     }
                 }
 
-                // ⚠ 横屏必须换成 64dp 的紧凑栏：`LargeFlexibleTopAppBar` 在 360dp 高的横屏上
-                //   要吃掉近一半高度（2026-11-08 截到的现场），标题也换成 titleLarge。
-                if (landscape) {
+                if (compactBar) {
                     TopAppBar(
                         colors = barColors,
                         title = titleSlot,
@@ -580,7 +592,7 @@ fun OpticonApp() {
             entries = NavEntries,
             // 二级页藏起底栏：这一页不属于任何一格，留着反而让人以为自己在某一格里。
             // 回一级页靠顶栏的返回箭头或系统返回键。
-            visible = navVisible && subPage == null,
+            visible = showNav,
             onSelect = { index -> scope.launch { pagerState.animateScrollToPage(index) } },
             // ⚠ `navigationBarsPadding()` 不能省：本 Activity 是 edge-to-edge
             // （`enableEdgeToEdge()` + 系统栏透明），外层 Box 一直铺到屏幕底边，
@@ -593,16 +605,16 @@ fun OpticonApp() {
                 .padding(bottom = NavBottomInset),
         )
 
-        // ⚠ Snackbar 必须放在悬浮底栏**之上**：这里既靠后绘制（z 序压过药丸），
-        // 又把位置抬到药丸上方（药丸顶边 24 + 64 = 88dp、阴影到 ~98dp，抬到 104dp 留间隙）。
-        // 否则默认贴底的 Snackbar 会被药丸挡住 / 截断（清缓存提示就中过招）。
-        // ⚠ 导航栏那一段同理要先让开：这个数是**相对药丸**定的，药丸抬多高它就得抬多高，
-        // 否则两者的相对位置会随导航方式（三键 / 手势）变来变去。
         SnackbarHost(
             hostState = snackbarHostState,
             modifier = Modifier.align(Alignment.BottomCenter)
                 .navigationBarsPadding()
-                .padding(bottom = 104.dp),
+                .padding(bottom = if (subPage == null) {
+                    NavBottomInset + NavItemHeight + NavPadding * 2 + 12.dp
+                } else {
+                    12.dp
+                })
+                .widthIn(max = 640.dp),
         )
 
         // 自动检查到新版才弹：正文就是「关于」页那块结果 chip 的同一句话（发现新版本 X（当前 Y））。
@@ -759,11 +771,12 @@ private fun FloatingNavBar(
             shape = RoundedCornerShape((NavItemHeight + NavPadding * 2) / 2),
             color = scheme.surfaceContainer,
             border = BorderStroke(1.dp, scheme.outlineVariant.copy(alpha = 0.38f)),
-            shadowElevation = 10.dp,
+            shadowElevation = 4.dp,
         ) {
             Row(
                 modifier = Modifier
                     .padding(NavPadding)
+                    .selectableGroup()
                     // 坐标相对 Row 的内容区（padding 之内），和鼠标/手指的 x 同一坐标系
                     .pointerInput(selectedIndex, visible) {
                         if (!visible) return@pointerInput
@@ -957,7 +970,10 @@ private fun NavItem(
         // 「当前在哪一页」只靠高亮是给不了读屏用户的：不加 `selected`，四格在 TalkBack 里
         // 读起来一模一样（README 那句「当前在哪一页由底栏高亮表示」对视觉成立，对无障碍不成立）。
         modifier = Modifier
-            .semantics { selected = isSelected }
+            .semantics {
+                selected = isSelected
+                role = Role.Tab
+            }
             .onGloballyPositioned { onWidth(it.size.width) }
             .graphicsLayer {
                 scaleX = pressScale
